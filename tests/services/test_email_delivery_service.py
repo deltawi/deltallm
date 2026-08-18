@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from src.email.models import EmailConfigurationError, EmailDeliveryError, PreparedEmail
+from src.email.models import (
+    EmailConfigurationError,
+    EmailDeliveryDisposition,
+    EmailDeliveryError,
+    PreparedEmail,
+)
 from src.email.providers import ResendEmailProvider, SMTPEmailProvider, SendGridEmailProvider
 from src.services.email_delivery_service import EmailDeliveryService
 
@@ -34,7 +39,9 @@ def _config(**overrides):
 
 
 def _delivery_service(**overrides) -> EmailDeliveryService:
-    return EmailDeliveryService(config_getter=lambda: _config(**overrides), http_client=httpx.AsyncClient())
+    return EmailDeliveryService(
+        config_getter=lambda: _config(**overrides), http_client=httpx.AsyncClient()
+    )
 
 
 @pytest.mark.asyncio
@@ -63,7 +70,9 @@ def test_validate_current_config_requires_sender_address() -> None:
 def test_validate_current_config_requires_absolute_email_base_url() -> None:
     service = _delivery_service(email_base_url="/relative")
 
-    with pytest.raises(EmailConfigurationError, match="email_base_url must be an absolute http\\(s\\) URL"):
+    with pytest.raises(
+        EmailConfigurationError, match="email_base_url must be an absolute http\\(s\\) URL"
+    ):
         service.validate_current_config()
 
 
@@ -130,7 +139,9 @@ async def test_resend_provider_returns_provider_message_id() -> None:
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        provider = ResendEmailProvider(client, {"api_key": "re_test", "base_url": "https://api.resend.com"})
+        provider = ResendEmailProvider(
+            client, {"api_key": "re_test", "base_url": "https://api.resend.com"}
+        )
         result = await provider.send(
             PreparedEmail(
                 kind="test",
@@ -186,7 +197,9 @@ async def test_sendgrid_provider_splits_display_name_from_address() -> None:
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        provider = SendGridEmailProvider(client, {"api_key": "sg_test", "base_url": "https://api.sendgrid.com"})
+        provider = SendGridEmailProvider(
+            client, {"api_key": "sg_test", "base_url": "https://api.sendgrid.com"}
+        )
         result = await provider.send(
             PreparedEmail(
                 kind="test",
@@ -241,7 +254,9 @@ async def test_resend_provider_marks_rate_limit_errors_retriable() -> None:
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        provider = ResendEmailProvider(client, {"api_key": "re_test", "base_url": "https://api.resend.com"})
+        provider = ResendEmailProvider(
+            client, {"api_key": "re_test", "base_url": "https://api.resend.com"}
+        )
         with pytest.raises(EmailDeliveryError) as exc_info:
             await provider.send(
                 PreparedEmail(
@@ -266,7 +281,9 @@ async def test_sendgrid_provider_marks_bad_request_non_retriable() -> None:
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        provider = SendGridEmailProvider(client, {"api_key": "sg_test", "base_url": "https://api.sendgrid.com"})
+        provider = SendGridEmailProvider(
+            client, {"api_key": "sg_test", "base_url": "https://api.sendgrid.com"}
+        )
         with pytest.raises(EmailDeliveryError) as exc_info:
             await provider.send(
                 PreparedEmail(
@@ -281,3 +298,30 @@ async def test_sendgrid_provider_marks_bad_request_non_retriable() -> None:
 
     assert exc_info.value.retriable is False
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_http_transport_failure_has_unknown_delivery_outcome() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError("connection lost after request write", request=request)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        provider = ResendEmailProvider(
+            client,
+            {"api_key": "re_test", "base_url": "https://api.resend.com"},
+        )
+        with pytest.raises(EmailDeliveryError) as exc_info:
+            await provider.send(
+                PreparedEmail(
+                    kind="test",
+                    provider="resend",
+                    to_addresses=("user@example.com",),
+                    from_address="DeltaLLM <noreply@example.com>",
+                    subject="subject",
+                    text_body="body",
+                )
+            )
+
+    assert exc_info.value.retriable is False
+    assert exc_info.value.disposition is EmailDeliveryDisposition.OUTCOME_UNKNOWN

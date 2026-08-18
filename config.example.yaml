@@ -59,6 +59,51 @@ general_settings:
   redis_url: os.environ/REDIS_URL
   db_pool_size: 20
   db_pool_timeout: 30
+  # Reject overload before prompt, guardrail, and budget work. Enable after sizing
+  # these limits below the measured safe database/upstream concurrency envelope.
+  gateway_preflight_capacity_enabled: false
+  gateway_preflight_global_max_parallel: 300
+  gateway_preflight_org_max_parallel: 100
+  gateway_preflight_lease_ttl_seconds: 30
+  # The outbox mode durably accepts one small event on the request path and
+  # applies idempotent spend/ledger updates in a bounded background worker.
+  spend_ingestion_mode: legacy
+  spend_ingestion_batch_size: 100
+  spend_ingestion_flush_interval_ms: 100
+  spend_ingestion_lease_seconds: 30
+  spend_ingestion_max_attempts: 10
+  spend_ingestion_worker_enabled: true
+  spend_ingestion_max_pending_events: 100000
+  spend_ingestion_overload_policy: sync_fallback
+  spend_ingestion_fallback_max_concurrency: 1
+  spend_ingestion_fallback_max_waiters: 8
+  spend_ingestion_fallback_queue_timeout_ms: 100
+  spend_ingestion_fallback_execution_timeout_seconds: 2
+  spend_ingestion_completed_retention_hours: 1
+  spend_ingestion_failed_retention_days: 30
+  spend_ingestion_cleanup_interval_seconds: 60
+  spend_ingestion_cleanup_batch_size: 1000
+  spend_ingestion_cleanup_max_batches_per_run: 10
+  spend_ingestion_cleanup_time_budget_seconds: 2
+  telemetry_db_pool_size: 5
+  telemetry_db_pool_timeout_seconds: 2
+  telemetry_worker_startup_timeout_seconds: 5
+  telemetry_shutdown_drain_timeout_seconds: 20
+  audit_ingestion_mode: legacy
+  audit_ingestion_worker_enabled: true
+  audit_ingestion_batch_size: 100
+  audit_ingestion_flush_interval_ms: 100
+  audit_ingestion_lease_seconds: 30
+  audit_ingestion_max_attempts: 10
+  audit_ingestion_max_pending_events: 100000
+  audit_ingestion_required_reserve: 10000
+  audit_ingestion_completed_retention_hours: 1
+  audit_ingestion_failed_retention_days: 30
+  audit_ingestion_cleanup_interval_seconds: 60
+  audit_ingestion_cleanup_batch_size: 1000
+  audit_ingestion_cleanup_max_batches_per_run: 10
+  audit_ingestion_cleanup_time_budget_seconds: 2
+  budget_enforcement_query_timeout_seconds: 2
   # Reserve database capacity for gateway traffic by bounding expensive UI reports locally
   # and across every API worker connected to the same PostgreSQL database.
   spend_reporting_max_concurrency: 2
@@ -152,6 +197,12 @@ general_settings:
   # email_reply_to: support@example.com
   # email_base_url: http://localhost:4002
   # email_worker_enabled: true
+  # email_worker_batch_size: 10
+  # email_worker_max_concurrency: 3
+  # email_worker_delivery_lease_seconds: 60
+  # email_worker_audit_lease_seconds: 30
+  # email_worker_startup_timeout_seconds: 5
+  # email_worker_shutdown_drain_timeout_seconds: 20
   # email_max_attempts: 5
   # email_retry_initial_seconds: 60
   # email_retry_max_seconds: 3600
@@ -249,13 +300,27 @@ general_settings:
   # health_check_model: gpt-4o-mini
   # prometheus_endpoint: /metrics
   # metrics_retention_days: 30
+  # Prompt resolution caches both hits and misses to keep the request path off SQL.
+  # prompt_negative_cache_enabled: false
+  # prompt_cache_l1_ttl_seconds: 30
+  # prompt_cache_l2_ttl_seconds: 300
+  # prompt_negative_l1_ttl_seconds: 5
+  # prompt_negative_l2_ttl_seconds: 30
+  # prompt_cache_l1_max_entries: 10000
+  # prompt_singleflight_max_keys: 256
+  # prompt_singleflight_timeout_seconds: 2
+  # Prompt render metadata uses the policy-aware audit ingress. Outbox mode
+  # accepts the required record through the isolated telemetry pool.
+  # Start with shadow, verify zero mismatches, then switch to combined.
+  # budget_enforcement_query_mode: legacy
+  # budget_enforcement_shadow_sample_rate: 0.01
 
 deltallm_settings:
   # Keep callback and guardrail config minimal in the starter file.
-  success_callback:
-    - prometheus
-  failure_callback:
-    - prometheus
+  # Request, token, spend, cache, and latency metrics are emitted natively.
+  # Configure callbacks only for external sinks or custom integrations.
+  success_callback: []
+  failure_callback: []
   turn_off_message_logging: false
 
   # Optional S3 callback target for request logs or exports.

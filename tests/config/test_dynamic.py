@@ -11,6 +11,7 @@ from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import (
     DynamicConfigManager,
     DynamicConfigPersistenceError,
+    DynamicConfigRestartRequiredError,
     DynamicConfigValidationError,
 )
 from src.config_runtime.models import ModelHotReloadManager
@@ -311,7 +312,9 @@ async def test_dynamic_config_polling_reloads_db_changes_without_pubsub():
     await manager.initialize()
 
     try:
-        db.config_value["router_settings"] = RouterSettings(routing_strategy="weighted").model_dump()
+        db.config_value["router_settings"] = RouterSettings(
+            routing_strategy="weighted"
+        ).model_dump()
         for _ in range(20):
             if called:
                 break
@@ -390,6 +393,77 @@ async def test_dynamic_config_update_validates_before_db_write():
 
 
 @pytest.mark.asyncio
+async def test_dynamic_config_rejects_startup_only_ingestion_mode_change() -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+
+    with pytest.raises(DynamicConfigRestartRequiredError, match="audit_ingestion_mode"):
+        await manager.update_config(
+            {"general_settings": {"audit_ingestion_mode": "outbox"}},
+            updated_by="test",
+        )
+
+    assert manager.get_app_config().general_settings.audit_ingestion_mode == "legacy"
+    assert db.config_value == {}
+    await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("prompt_singleflight_max_keys", 512),
+        ("email_worker_delivery_lease_seconds", 90),
+        ("email_worker_enabled", False),
+    ),
+)
+async def test_dynamic_config_rejects_startup_owned_worker_changes(
+    field_name: str,
+    value: object,
+) -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+
+    with pytest.raises(DynamicConfigRestartRequiredError, match=field_name):
+        await manager.update_config(
+            {"general_settings": {field_name: value}},
+            updated_by="test",
+        )
+
+    assert db.config_value == {}
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_subscriber_failure_restores_last_known_good_config() -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    observed: list[str] = []
+
+    async def subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        strategy = config.router_settings.routing_strategy
+        observed.append(strategy)
+        if strategy == "weighted":
+            raise RuntimeError("runtime rejected candidate")
+
+    manager.subscribe(subscriber)
+
+    with pytest.raises(RuntimeError, match="runtime rejected candidate"):
+        await manager.update_config(
+            {"router_settings": {"routing_strategy": "weighted"}},
+            updated_by="test",
+        )
+
+    assert manager.get_app_config().router_settings.routing_strategy == "simple-shuffle"
+    assert db.config_value == {}
+    assert observed == ["weighted", "simple-shuffle"]
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_dynamic_config_poll_db_failure_records_failed_not_unchanged(monkeypatch):
     events: list[dict[str, str]] = []
     monkeypatch.setattr(
@@ -458,7 +532,9 @@ async def test_dynamic_config_pubsub_failure_keeps_polling_and_records_metric(mo
     await manager.initialize()
 
     try:
-        db.config_value["router_settings"] = RouterSettings(routing_strategy="weighted").model_dump()
+        db.config_value["router_settings"] = RouterSettings(
+            routing_strategy="weighted"
+        ).model_dump()
         for _ in range(20):
             if manager.get_app_config().router_settings.routing_strategy == "weighted":
                 break
@@ -503,7 +579,9 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
-    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_handler = HealthEndpointHandler(
+        deployment_registry=deployment_registry, state_backend=state_backend
+    )
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
@@ -546,7 +624,9 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
         }
     )
 
-    await manager._on_config_change(updated_cfg, {"added": [], "removed": [], "modified": ["model_list", "router_settings"]})
+    await manager._on_config_change(
+        updated_cfg, {"added": [], "removed": [], "modified": ["model_list", "router_settings"]}
+    )
 
     assert "gpt-4.1-mini" in app.state.model_registry
     assert app.state.router.strategy == RoutingStrategy.WEIGHTED
@@ -588,7 +668,9 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
-    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_handler = HealthEndpointHandler(
+        deployment_registry=deployment_registry, state_backend=state_backend
+    )
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
@@ -691,7 +773,9 @@ async def test_model_hot_reload_manager_reloads_runtime_on_model_updated_event()
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
-    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_handler = HealthEndpointHandler(
+        deployment_registry=deployment_registry, state_backend=state_backend
+    )
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
@@ -787,7 +871,9 @@ async def test_model_hot_reload_manager_invalidates_route_group_l1_cache_on_mode
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
-    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_handler = HealthEndpointHandler(
+        deployment_registry=deployment_registry, state_backend=state_backend
+    )
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
@@ -873,7 +959,13 @@ async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
         salt_key="test-salt",
     )
     initial_model_registry = {
-        "gpt-4o-mini": [{"deployment_id": "old-dep", "deltallm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {}}]
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "old-dep",
+                "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {},
+            }
+        ]
     }
     deployment_registry = build_deployment_registry(initial_model_registry)
     state_backend = RedisStateBackend(redis=None)
@@ -890,7 +982,9 @@ async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
-    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_handler = HealthEndpointHandler(
+        deployment_registry=deployment_registry, state_backend=state_backend
+    )
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,

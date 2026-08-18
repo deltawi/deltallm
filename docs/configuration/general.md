@@ -77,6 +77,12 @@ general_settings:
   email_reply_to: support@example.com
   email_base_url: http://localhost:4002
   email_worker_enabled: true
+  email_worker_batch_size: 10
+  email_worker_max_concurrency: 3
+  email_worker_delivery_lease_seconds: 60
+  email_worker_audit_lease_seconds: 30
+  email_worker_startup_timeout_seconds: 5
+  email_worker_shutdown_drain_timeout_seconds: 20
   email_max_attempts: 5
   email_retry_initial_seconds: 60
   email_retry_max_seconds: 3600
@@ -167,6 +173,12 @@ general_settings:
   embeddings_batch_gc_interval_seconds: 86400
   embeddings_batch_gc_scan_limit: 200
   audit_enabled: true
+  audit_ingestion_mode: legacy
+  audit_ingestion_worker_enabled: true
+  audit_ingestion_batch_size: 100
+  audit_ingestion_flush_interval_ms: 100
+  audit_ingestion_max_pending_events: 100000
+  audit_ingestion_required_reserve: 10000
   audit_retention_worker_enabled: true
   audit_retention_interval_seconds: 86400
   audit_retention_scan_limit: 500
@@ -201,6 +213,25 @@ Recommended steady state:
 | `database_url` | — | PostgreSQL connection string |
 | `db_pool_size` | `20` | Maximum database connection pool size |
 | `db_pool_timeout` | `30` | Connection pool timeout in seconds |
+| `telemetry_db_pool_size` | `5` | Size of the separate Prisma pool used by durable spend and audit ingestion |
+| `telemetry_db_pool_timeout_seconds` | `2` | Connection-acquisition timeout for the telemetry pool |
+| `telemetry_worker_startup_timeout_seconds` | `5` | Maximum time an expected spend or audit worker may take to reconcile capacity and signal readiness |
+| `telemetry_shutdown_drain_timeout_seconds` | `20` | Total spend/audit drain and cancellation deadline during process shutdown |
+| `spend_ingestion_mode` | `legacy` | `legacy` writes spend synchronously; `outbox` durably enqueues and bulk-applies spend in the telemetry pool |
+| `spend_ingestion_batch_size` | `100` | Maximum spend events claimed and committed per worker transaction |
+| `spend_ingestion_flush_interval_ms` | `100` | Idle poll interval for the spend outbox worker |
+| `spend_ingestion_max_pending_events` | `100000` | Hard cluster-wide bound for active spend outbox rows |
+| `spend_ingestion_overload_policy` | `sync_fallback` | At capacity, either use a concurrency-bounded synchronous write or return a controlled `503` with `fail_closed` |
+| `spend_ingestion_fallback_max_concurrency` | `1` | Maximum synchronous fallback transactions executing in one process |
+| `spend_ingestion_fallback_max_waiters` | `8` | Maximum requests allowed to wait for a synchronous fallback slot in one process; excess requests receive `503` |
+| `spend_ingestion_fallback_queue_timeout_ms` | `100` | Maximum time a fallback request may wait for an execution slot |
+| `spend_ingestion_fallback_execution_timeout_seconds` | `2` | Deadline covering the fallback transaction and exact spend update |
+| `spend_ingestion_completed_retention_hours` | `1` | Retain completed spend outbox rows before bounded cleanup |
+| `spend_ingestion_failed_retention_days` | `30` | Compatibility setting; required spend failures are retained as `blocked` until operator replay and are never deleted by retention cleanup |
+| `spend_ingestion_cleanup_interval_seconds` | `60` | Interval for the independent spend terminal-row maintenance task |
+| `spend_ingestion_cleanup_batch_size` | `1000` | Rows deleted by each spend cleanup query |
+| `spend_ingestion_cleanup_max_batches_per_run` | `10` | Maximum cleanup pages drained per maintenance run |
+| `spend_ingestion_cleanup_time_budget_seconds` | `2` | Wall-clock budget for one spend cleanup run |
 | `spend_reporting_max_concurrency` | `2` | Maximum cache-miss spend reports executing concurrently per API worker |
 | `spend_reporting_global_max_concurrency` | `2` | Maximum reporting transactions executing across all workers connected to the same PostgreSQL database |
 | `spend_reporting_queue_timeout_seconds` | `10` | Maximum time a spend report waits for a reporting query slot |
@@ -208,16 +239,21 @@ Recommended steady state:
 | `spend_reporting_redis_timeout_seconds` | `0.5` | Per-operation Redis deadline for reporting cache coordination before falling back to a guarded database load |
 | `spend_reporting_v2_enabled` | `false` | Enables gated team and personal usage views after the reporting-v2 database and fleet rollout is complete |
 
-Pool settings are applied by appending Prisma's `connection_limit` and `pool_timeout` query parameters to the effective database URL at startup.
+Pool settings are applied by appending Prisma's `connection_limit` and `pool_timeout` query parameters to the effective database URL at startup. Durable telemetry uses a second Prisma manager and therefore cannot consume request-pool connections. Database URLs, pool settings, and ingestion modes are startup-only: the admin API returns `409 restart_required` if a dynamic update changes them. Batch, capacity, retry, and cleanup settings may be reloaded where supported.
 
 Keep both reporting concurrency limits comfortably below the database pool size so gateway authentication, spend writes, and control-plane operations retain database capacity. PostgreSQL advisory-lock slots enforce the global limit without blocking, while the per-worker limit bounds local queues. Cache hits do not consume reporting query slots. Reporting concurrency and timeout settings are applied to subsequent report loads when dynamic configuration changes; active loads retain the immutable limits with which they started.
 
 Leave `spend_reporting_v2_enabled` disabled during the initial rolling deployment. Follow the [scoped usage reporting rollout](../deployment/usage-reporting-v2.md) before enabling it.
 
 Environment overrides:
+
 - `DELTALLM_DATABASE_URL`
 - `DELTALLM_DB_POOL_SIZE`
 - `DELTALLM_DB_POOL_TIMEOUT`
+- `DELTALLM_TELEMETRY_DB_POOL_SIZE`
+- `DELTALLM_TELEMETRY_DB_POOL_TIMEOUT_SECONDS`
+- `DELTALLM_SPEND_INGESTION_MODE`
+- `DELTALLM_AUDIT_INGESTION_MODE`
 
 If those overrides are unset, DeltaLLM falls back to `general_settings.database_url`, `general_settings.db_pool_size`, and `general_settings.db_pool_timeout`. If no application-level database URL is configured, it will still honor the raw `DATABASE_URL` environment variable used by Prisma.
 
@@ -273,6 +309,12 @@ Email delivery is optional but required for:
 | `email_reply_to` | — | Optional reply-to address |
 | `email_base_url` | — | Base URL used in invite and password-reset links |
 | `email_worker_enabled` | `true` | Run the internal outbox worker |
+| `email_worker_batch_size` | `10` | Maximum delivery and delivery-audit records claimed in one worker pass |
+| `email_worker_max_concurrency` | `3` | Maximum delivery records processed concurrently in one process |
+| `email_worker_delivery_lease_seconds` | `60` | Renewable fenced lease for one external email-delivery attempt |
+| `email_worker_audit_lease_seconds` | `30` | Renewable fenced lease for one required delivery-audit attempt |
+| `email_worker_startup_timeout_seconds` | `5` | Maximum time for an enabled email worker to start and signal readiness |
+| `email_worker_shutdown_drain_timeout_seconds` | `20` | Total deadline for the worker to drain and cancel owned tasks during shutdown |
 | `email_max_attempts` | `5` | Max outbox delivery attempts |
 | `email_retry_initial_seconds` | `60` | Initial retry backoff |
 | `email_retry_max_seconds` | `3600` | Max retry backoff |
@@ -294,6 +336,19 @@ Recommended rollout:
 
 If `email_enabled: true`, `email_base_url` must be an absolute `http://` or `https://` URL. DeltaLLM fails email bootstrap when it is missing or relative.
 
+Delivery claims are fenced with a worker ID, a unique claim token, and a renewable
+lease. A transport failure after bytes may have reached the provider moves the row
+to `delivery_unknown`; it is never retried automatically. A platform administrator
+must confirm the provider result, then resolve it as `sent` or `failed` through
+`POST /ui/api/email/outbox/{email_id}/resolve-delivery`. Required delivery-audit
+records move to `blocked` after retry exhaustion, fail readiness, and can be replayed
+after investigation through
+`POST /ui/api/email/outbox/{email_id}/delivery-audit/replay`. Both operator actions
+persist their required audit in the same database transaction as the state change.
+Email enablement and worker lifecycle, capacity, lease, startup, and shutdown
+settings are startup-only; the admin settings API returns `409 restart_required`
+when a dynamic update attempts to change them.
+
 ## Cache Settings
 
 | Setting | Default | Description |
@@ -303,6 +358,8 @@ If `email_enabled: true`, `email_base_url` must be an absolute `http://` or `htt
 | `cache_ttl` | `3600` | Cache entry time-to-live in seconds |
 | `cache_max_size` | `10000` | Maximum entries for memory cache |
 | `stream_cache_max_bytes` | `262144` | Max buffered streaming response bytes before streaming cache is disabled for that stream |
+| `prompt_singleflight_max_keys` | `256` | Maximum distinct prompt-resolution cache misses admitted per process; callers for an existing key share its task |
+| `prompt_singleflight_timeout_seconds` | `2` | Deadline for an owned prompt-resolution cache-miss task before it fails with a controlled service-unavailable response |
 | `stream_cache_max_fragments` | `2048` | Max buffered streaming content fragments before streaming cache is disabled for that stream |
 | `failover_event_history_size` | `1000` | Max in-memory failover events retained per instance for `/health/fallback-events` |
 
@@ -467,6 +524,10 @@ These settings retain the historical `embeddings_batch_*` names for compatibilit
 
 For Helm deployments with more than one replica, configure `embeddings_batch_storage_backend: s3` and the matching S3 bucket settings before enabling batch. Local batch storage is intended for development and single-replica deployments only.
 
+The prompt singleflight key bound and timeout are startup-owned. Changing either
+through dynamic configuration returns `409 restart_required`; roll the deployment
+to apply a new bound consistently.
+
 Batch execution honors the same model access, budget, callback, guardrail, rate-limit, and max-parallel policies as synchronous gateway requests. For multi-replica deployments, run Redis and configure `redis_url` so rate-limit counters, max-parallel slots, and model-group backpressure are shared across workers. Without Redis, persistent Postgres state still prevents duplicate item ownership, but in-memory counters and backpressure are local to each replica.
 
 ## Audit Settings
@@ -476,8 +537,26 @@ Audit events are written to Postgres and can be queried via the Admin Audit API.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `audit_enabled` | `true` | Enable audit logging (audit events + payload metadata) |
+| `audit_ingestion_mode` | `legacy` | `legacy` synchronously persists required audit and prompt-render records while queuing only best-effort audit events in process; production should use `outbox` to durably accept required records through the dedicated telemetry pool |
+| `audit_ingestion_worker_enabled` | `true` | Claim and persist durable audit outbox records in this process |
+| `audit_ingestion_batch_size` | `100` | Maximum durable audit records committed in one worker transaction |
+| `audit_ingestion_flush_interval_ms` | `100` | Idle poll interval for the durable audit worker |
+| `audit_ingestion_lease_seconds` | `30` | Claim lease duration before another worker may recover a record |
+| `audit_ingestion_max_attempts` | `10` | Attempts before required records become operator-visible `blocked` work and best-effort records become terminally failed |
+| `audit_ingestion_max_pending_events` | `100000` | Hard cluster-wide bound for queued, retrying, processing, and blocked required audit records |
+| `audit_ingestion_required_reserve` | `10000` | Capacity reserved for required compliance records; best-effort records cannot consume it |
+| `audit_ingestion_completed_retention_hours` | `1` | Retain completed audit outbox records before bounded cleanup |
+| `audit_ingestion_failed_retention_days` | `30` | Retain terminal failed best-effort audit records; blocked required records are never deleted automatically |
+| `audit_ingestion_cleanup_interval_seconds` | `60` | Interval for the independent audit terminal-row maintenance task |
+| `audit_ingestion_cleanup_batch_size` | `1000` | Rows deleted by each audit cleanup query |
+| `audit_ingestion_cleanup_max_batches_per_run` | `10` | Maximum cleanup pages drained per maintenance run |
+| `audit_ingestion_cleanup_time_budget_seconds` | `2` | Wall-clock budget for one audit cleanup run |
 | `audit_retention_worker_enabled` | `true` | Enable background audit retention cleanup loop |
 | `audit_retention_interval_seconds` | `86400` | Cleanup loop interval in seconds |
 | `audit_retention_scan_limit` | `500` | Max expired rows processed per cleanup pass |
 | `audit_metadata_retention_days` | `365` | Default retention for audit events (metadata) |
 | `audit_payload_retention_days` | `90` | Default retention for audit payloads (request/response bodies when stored) |
+
+With durable ingestion enabled, required audit and prompt-render events never use the in-memory queue. Prompt renders and their best-effort resolution audit share one policy-aware enqueue transaction: one lock-only SQL statement followed by one batched policy/capacity decision and insert statement using a fresh PostgreSQL snapshot. At capacity, required writes fail closed with a controlled `503`; best-effort events are explicitly dropped and counted after their non-reserved capacity is exhausted. A best-effort audit dependency failure is also counted and dropped without changing request or external-side-effect correctness, while required persistence remains fail-closed. In `legacy` mode, required records are persisted synchronously while only best-effort records use the bounded compatibility queue. Exhausted required outbox records remain `blocked`, consume capacity, and require platform-admin replay after investigation. Organization content-policy changes take a database advisory lock, redact active and blocked envelopes when storage is disabled, and publish on an application/environment/schema-scoped Redis channel so every replica evicts its local policy cache. The database policy check remains authoritative if Redis is unavailable. Readiness checks the dedicated telemetry pool and expected workers; repeated worker failures remain readiness-fatal even while the supervised loop attempts recovery.
+
+Apply the telemetry migrations and follow the [durable telemetry rollout](../deployment/telemetry-ingestion-rollout.md) before changing either ingestion mode.

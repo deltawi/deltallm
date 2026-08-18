@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import UTC, datetime
-import json
 import logging
 import secrets
 from time import perf_counter
@@ -31,6 +30,10 @@ from src.api.admin.endpoints.common import (
 )
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
+from src.db.organization_admin import (
+    OrganizationAdminRepository,
+    OrganizationPersistenceValues,
+)
 from src.db.route_groups import RouteGroupRepository
 from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
 from src.middleware.admin import require_admin_permission
@@ -190,8 +193,7 @@ async def _shadow_tier_callable_target_bindings(
             str(policy.callable_key or "").strip()
             for policy in policies
             if bool(getattr(policy, "enabled", True))
-            and str(getattr(policy, "access_mode", "allow") or "").strip().lower()
-            == "allow"
+            and str(getattr(policy, "access_mode", "allow") or "").strip().lower() == "allow"
             and str(getattr(policy, "callable_key", "") or "").strip()
         }
     )
@@ -401,20 +403,28 @@ def _optional_bool(value: Any, field_name: str) -> bool | None:
         return None
     if isinstance(value, bool):
         return value
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a boolean")
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a boolean"
+    )
 
 
 def _optional_float(value: Any, field_name: str) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a number")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a number"
+        )
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a number") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a number"
+        ) from exc
     if parsed < 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 0")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 0"
+        )
     return parsed
 
 
@@ -422,7 +432,9 @@ def _optional_budget_duration(value: Any, field_name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a string")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a string"
+        )
     normalized = value.strip()
     if not normalized:
         return None
@@ -462,14 +474,20 @@ def _optional_datetime(value: Any, field_name: str) -> datetime | None:
     if isinstance(value, datetime):
         return _as_utc_datetime(value)
     if not isinstance(value, str):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an ISO 8601 datetime")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be an ISO 8601 datetime",
+        )
     normalized = value.strip()
     if not normalized:
         return None
     try:
         parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an ISO 8601 datetime") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be an ISO 8601 datetime",
+        ) from exc
     return _as_utc_datetime(parsed)
 
 
@@ -485,17 +503,31 @@ def _resolve_budget_reset_fields(
         reset_at = _coerce_budget_reset_datetime(existing.get("budget_reset_at"))
         return duration, reset_at
 
-    duration_raw = payload["budget_duration"] if "budget_duration" in payload else existing.get("budget_duration")
-    reset_at_raw = payload["budget_reset_at"] if "budget_reset_at" in payload else existing.get("budget_reset_at")
+    duration_raw = (
+        payload["budget_duration"]
+        if "budget_duration" in payload
+        else existing.get("budget_duration")
+    )
+    reset_at_raw = (
+        payload["budget_reset_at"]
+        if "budget_reset_at" in payload
+        else existing.get("budget_reset_at")
+    )
     duration = _optional_budget_duration(duration_raw, "budget_duration")
     reset_at = _optional_datetime(reset_at_raw, "budget_reset_at")
 
     if duration is None and reset_at is None:
         return None, None
     if duration is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="budget_duration is required when budget_reset_at is set")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="budget_duration is required when budget_reset_at is set",
+        )
     if reset_at is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="budget_reset_at is required when budget_duration is set")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="budget_reset_at is required when budget_duration is set",
+        )
     return duration, reset_at
 
 
@@ -553,7 +585,9 @@ def _apply_budget_reset_metadata(
     next_metadata = dict(metadata) if isinstance(metadata, dict) else {}
     if _budget_duration_unit(duration) == "mo" and reset_at is not None:
         raw_budget_reset_settings = next_metadata.get(_BUDGET_RESET_METADATA_KEY)
-        budget_reset_settings = dict(raw_budget_reset_settings) if isinstance(raw_budget_reset_settings, dict) else {}
+        budget_reset_settings = (
+            dict(raw_budget_reset_settings) if isinstance(raw_budget_reset_settings, dict) else {}
+        )
         budget_reset_settings[_MONTHLY_ANCHOR_DAY_KEY] = _as_utc_datetime(reset_at).day
         next_metadata[_BUDGET_RESET_METADATA_KEY] = budget_reset_settings
     else:
@@ -572,18 +606,29 @@ def _validate_model_limit_dict(value: Any, field_name: str) -> dict[str, int] | 
     result: dict[str, int] = {}
     for k, v in value.items():
         if not isinstance(k, str) or not k.strip():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} keys must be non-empty strings")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} keys must be non-empty strings",
+            )
         try:
             int_val = int(v)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} values must be integers")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} values must be integers",
+            )
         if int_val < 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} values must be non-negative")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} values must be non-negative",
+            )
         result[k.strip()] = int_val
     return result if result else None
 
 
-def _audit_retention_metadata(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def _audit_retention_metadata(
+    payload: dict[str, Any], existing: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     metadata: dict[str, Any] = {}
     raw_metadata = payload.get("metadata")
     if isinstance(raw_metadata, dict):
@@ -601,7 +646,9 @@ def _audit_retention_metadata(payload: dict[str, Any], existing: dict[str, Any] 
             metadata_changed = True
             continue
         if value < 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 1")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 1"
+            )
         metadata[field_name] = value
         metadata_changed = True
 
@@ -657,7 +704,10 @@ async def _validate_org_route_group_binding_payloads(
     if not binding_payloads:
         return
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Route group repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Route group repository unavailable",
+        )
 
     for item in binding_payloads:
         if await repository.get_group(item["group_key"]) is None:
@@ -679,22 +729,34 @@ def _validate_org_callable_target_binding_payloads(
                 detail=f"callable_target_bindings.callable_key does not exist: {item['callable_key']}",
             )
 
+
 def _normalize_route_group_binding_payloads(payload: Any) -> list[dict[str, Any]]:
     if payload is None:
         return []
     if not isinstance(payload, list):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings must be an array")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings must be an array"
+        )
 
     normalized: list[dict[str, Any]] = []
     for item in payload:
         if not isinstance(item, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings entries must be objects")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="route_group_bindings entries must be objects",
+            )
         group_key = str(item.get("group_key") or "").strip()
         if not group_key:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings.group_key is required")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="route_group_bindings.group_key is required",
+            )
         metadata = item.get("metadata")
         if metadata is not None and not isinstance(metadata, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings.metadata must be an object")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="route_group_bindings.metadata must be an object",
+            )
         normalized.append(
             {
                 "group_key": group_key,
@@ -713,18 +775,30 @@ def _normalize_callable_target_binding_payloads(payload: Any) -> list[dict[str, 
     if payload is None:
         return []
     if not isinstance(payload, list):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings must be an array")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="callable_target_bindings must be an array",
+        )
 
     normalized: list[dict[str, Any]] = []
     for item in payload:
         if not isinstance(item, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings entries must be objects")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="callable_target_bindings entries must be objects",
+            )
         callable_key = str(item.get("callable_key") or "").strip()
         if not callable_key:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings.callable_key is required")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="callable_target_bindings.callable_key is required",
+            )
         metadata = item.get("metadata")
         if metadata is not None and not isinstance(metadata, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings.metadata must be an object")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="callable_target_bindings.metadata must be an object",
+            )
         normalized.append(
             {
                 "callable_key": callable_key,
@@ -770,7 +844,10 @@ async def _sync_org_route_group_bindings(
 ) -> list[dict[str, Any]]:
     repository = route_repo or route_group_repository(request)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Route group repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Route group repository unavailable",
+        )
     callable_repository = callable_binding_repo or callable_target_binding_repository(request)
 
     await _validate_org_route_group_binding_payloads(repository, binding_payloads=binding_payloads)
@@ -795,7 +872,9 @@ async def _sync_org_route_group_bindings(
                 scope_id=organization_id,
             )
             for callable_binding in callable_bindings:
-                await callable_repository.delete_binding(callable_binding.callable_target_binding_id)
+                await callable_repository.delete_binding(
+                    callable_binding.callable_target_binding_id
+                )
 
     for group_key, item in desired_by_group.items():
         await repository.upsert_binding(
@@ -822,7 +901,9 @@ async def _sync_org_route_group_bindings(
     return [to_json_value(asdict(binding)) for binding in bindings]
 
 
-async def _list_org_route_group_bindings(request: Request, organization_id: str) -> list[dict[str, Any]]:
+async def _list_org_route_group_bindings(
+    request: Request, organization_id: str
+) -> list[dict[str, Any]]:
     return await list_scope_route_group_bindings(
         request,
         scope_type="organization",
@@ -842,7 +923,10 @@ async def _sync_org_callable_target_bindings(
 ) -> list[dict[str, Any]]:
     repository = callable_binding_repo or callable_target_binding_repository(request)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Callable target binding repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Callable target binding repository unavailable",
+        )
 
     current_catalog = catalog or callable_catalog(request)
     _validate_org_callable_target_binding_payloads(
@@ -882,7 +966,10 @@ async def _sync_org_callable_target_bindings(
             enabled=item["enabled"],
             metadata=item["metadata"],
         )
-        if route_repository is not None and await route_repository.get_group(callable_key) is not None:
+        if (
+            route_repository is not None
+            and await route_repository.get_group(callable_key) is not None
+        ):
             await route_repository.upsert_binding(
                 callable_key,
                 scope_type="organization",
@@ -899,7 +986,9 @@ async def _sync_org_callable_target_bindings(
     return [to_json_value(asdict(binding)) for binding in bindings]
 
 
-async def _list_org_callable_target_bindings(request: Request, organization_id: str) -> list[dict[str, Any]]:
+async def _list_org_callable_target_bindings(
+    request: Request, organization_id: str
+) -> list[dict[str, Any]]:
     repository = callable_target_binding_repository(request)
     if repository is None:
         return []
@@ -911,7 +1000,9 @@ async def _list_org_callable_target_bindings(request: Request, organization_id: 
     return [to_json_value(asdict(binding)) for binding in bindings]
 
 
-async def _build_org_asset_visibility_preview(request: Request, organization_id: str) -> dict[str, Any]:
+async def _build_org_asset_visibility_preview(
+    request: Request, organization_id: str
+) -> dict[str, Any]:
     return await build_asset_visibility_preview(request, organization_id=organization_id)
 
 
@@ -924,7 +1015,9 @@ async def list_organizations(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_READ
+    )
     db = db_or_503(request)
 
     clauses: list[str] = []
@@ -936,11 +1029,16 @@ async def list_organizations(
             params.extend(scope.org_ids)
             clauses.append(f"o.organization_id IN ({ph})")
         else:
-            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+            return {
+                "data": [],
+                "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+            }
 
     if search:
         params.append(f"%{search}%")
-        clauses.append(f"(o.organization_name ILIKE ${len(params)} OR o.organization_id ILIKE ${len(params)})")
+        clauses.append(
+            f"(o.organization_name ILIKE ${len(params)} OR o.organization_id ILIKE ${len(params)})"
+        )
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -985,18 +1083,28 @@ async def list_organizations(
             )
             for organization in organizations
         ],
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
-@router.get("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+@router.get(
+    "/ui/api/organizations/{organization_id}",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
+)
 async def get_organization(
     request: Request,
     organization_id: str,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_READ
+    )
     db = db_or_503(request)
     rows = await db.query_raw(
         """
@@ -1021,12 +1129,19 @@ async def get_organization(
         service_policy=service_policies.get(organization_id),
     )
     if isinstance(payload, dict):
-        payload["route_group_bindings"] = await _list_org_route_group_bindings(request, organization_id)
-        payload["callable_target_bindings"] = await _list_org_callable_target_bindings(request, organization_id)
+        payload["route_group_bindings"] = await _list_org_route_group_bindings(
+            request, organization_id
+        )
+        payload["callable_target_bindings"] = await _list_org_callable_target_bindings(
+            request, organization_id
+        )
     return payload
 
 
-@router.get("/ui/api/organizations/{organization_id}/asset-visibility", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+@router.get(
+    "/ui/api/organizations/{organization_id}/asset-visibility",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
+)
 async def get_organization_asset_visibility(
     request: Request,
     organization_id: str,
@@ -1064,7 +1179,10 @@ async def get_organization_asset_visibility(
     )
 
 
-@router.get("/ui/api/organizations/{organization_id}/asset-access", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/organizations/{organization_id}/asset-access",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def get_organization_asset_access(
     request: Request,
     organization_id: str,
@@ -1095,11 +1213,16 @@ async def get_organization_asset_access(
         access_group_limit=access_group_limit,
         access_group_offset=access_group_offset,
     )
-    response["auto_follow_catalog"] = await get_organization_auto_follow_catalog(db, organization_id)
+    response["auto_follow_catalog"] = await get_organization_auto_follow_catalog(
+        db, organization_id
+    )
     return response
 
 
-@router.put("/ui/api/organizations/{organization_id}/asset-access", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.put(
+    "/ui/api/organizations/{organization_id}/asset-access",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def update_organization_asset_access(
     request: Request,
     organization_id: str,
@@ -1134,6 +1257,7 @@ async def update_organization_asset_access(
                 ),
             )
     auto_follow_catalog = bool(payload.get("select_all_selectable", False))
+
     async def _apply_asset_access(
         db_client: Any,
         *,
@@ -1154,7 +1278,9 @@ async def update_organization_asset_access(
             "reload_after_write": False,
         }
         if "selected_access_group_keys" in payload:
-            asset_access_payload["selected_access_group_keys"] = payload["selected_access_group_keys"]
+            asset_access_payload["selected_access_group_keys"] = payload[
+                "selected_access_group_keys"
+            ]
         await sync_scope_asset_access_state(request, **asset_access_payload)
         await set_organization_auto_follow_catalog(
             db_client,
@@ -1166,8 +1292,12 @@ async def update_organization_asset_access(
         async with db.tx() as tx:
             await _apply_asset_access(
                 tx,
-                callable_repository=_callable_target_binding_repository_for_request(request, db_client=tx),
-                access_group_repository=_callable_target_access_group_repository_for_request(request, db_client=tx),
+                callable_repository=_callable_target_binding_repository_for_request(
+                    request, db_client=tx
+                ),
+                access_group_repository=_callable_target_access_group_repository_for_request(
+                    request, db_client=tx
+                ),
                 route_repository=_route_group_repository_for_request(request, db_client=tx),
             )
     else:
@@ -1185,6 +1315,9 @@ async def update_organization_asset_access(
         organization_id=organization_id,
     )
     response["auto_follow_catalog"] = auto_follow_catalog
+    audit_service = getattr(request.app.state, "audit_service", None)
+    if audit_service is not None:
+        await audit_service.invalidate_content_storage_policy_distributed(organization_id)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -1197,7 +1330,10 @@ async def update_organization_asset_access(
     return response
 
 
-@router.post("/ui/api/organizations", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post(
+    "/ui/api/organizations",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def create_organization(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
@@ -1211,10 +1347,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     # an existing legacy organization to migrate merely because an older client
     # still uses this endpoint for updates.
     existing_organization = False
-    if (
-        tier_policy_mode in {"shadow", "enforce"}
-        and payload.get("primary_tier") is None
-    ):
+    if tier_policy_mode in {"shadow", "enforce"} and payload.get("primary_tier") is None:
         existing_rows = await db.query_raw(
             """
             SELECT organization_id
@@ -1253,9 +1386,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         )
     organization_name_raw = payload.get("organization_name")
     organization_name = (
-        str(organization_name_raw).strip()
-        if organization_name_raw is not None
-        else None
+        str(organization_name_raw).strip() if organization_name_raw is not None else None
     )
     if primary_tier_fields is not None and not organization_name:
         raise HTTPException(
@@ -1265,7 +1396,10 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     max_budget = _optional_float(payload.get("max_budget"), "max_budget")
     soft_budget = _optional_float(payload.get("soft_budget"), "soft_budget")
     if max_budget is not None and soft_budget is not None and soft_budget > max_budget:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="soft_budget must be less than or equal to max_budget")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="soft_budget must be less than or equal to max_budget",
+        )
     reset_fields_provided = "budget_duration" in payload or "budget_reset_at" in payload
     budget_duration, budget_reset_at = _resolve_budget_reset_fields(payload)
     budget_reset_at_storage = _budget_reset_storage_value(budget_reset_at)
@@ -1295,8 +1429,12 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         reset_at=budget_reset_at,
         reset_fields_provided=True,
     )
-    route_group_bindings = _normalize_route_group_binding_payloads(payload.get("route_group_bindings"))
-    callable_target_bindings = _normalize_callable_target_binding_payloads(payload.get("callable_target_bindings"))
+    route_group_bindings = _normalize_route_group_binding_payloads(
+        payload.get("route_group_bindings")
+    )
+    callable_target_bindings = _normalize_callable_target_binding_payloads(
+        payload.get("callable_target_bindings")
+    )
     if primary_tier_fields is not None and (route_group_bindings or callable_target_bindings):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1306,7 +1444,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     route_repo = _route_group_repository_for_request(request)
     callable_binding_repo = _callable_target_binding_repository_for_request(request)
     catalog = callable_catalog(request)
-    await _validate_org_route_group_binding_payloads(route_repo, binding_payloads=route_group_bindings)
+    await _validate_org_route_group_binding_payloads(
+        route_repo, binding_payloads=route_group_bindings
+    )
     _validate_org_callable_target_binding_payloads(
         binding_payloads=callable_target_bindings,
         catalog=catalog,
@@ -1325,89 +1465,31 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             )
 
     async def _apply_create(db_client: Any, *, route_repository, callable_repository):  # noqa: ANN001, ANN202
-        await db_client.execute_raw(
-            """
-            INSERT INTO deltallm_organizationtable (
-                id,
-                organization_id,
-                organization_name,
-                max_budget,
-                soft_budget,
-                budget_duration,
-                budget_reset_at,
-                spend,
-                rpm_limit,
-                tpm_limit,
-                rph_limit,
-                rpd_limit,
-                tpd_limit,
-                model_rpm_limit,
-                model_tpm_limit,
-                audit_content_storage_enabled,
-                metadata,
-                created_at,
-                updated_at
+        persisted_organization = await OrganizationAdminRepository(db_client).upsert(
+            OrganizationPersistenceValues(
+                organization_id=organization_id,
+                organization_name=organization_name,
+                max_budget=max_budget,
+                soft_budget=soft_budget,
+                budget_duration=budget_duration,
+                budget_reset_at=budget_reset_at_storage,
+                rpm_limit=rpm_limit,
+                tpm_limit=tpm_limit,
+                rph_limit=rph_limit,
+                rpd_limit=rpd_limit,
+                tpd_limit=tpd_limit,
+                model_rpm_limit=model_rpm_limit,
+                model_tpm_limit=model_tpm_limit,
+                audit_content_storage_enabled=bool(audit_content_storage_enabled),
+                metadata=metadata,
+            ),
+            reset_fields_provided=reset_fields_provided,
+        )
+        if persisted_organization is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
             )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6::timestamp, 0, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14, $15::jsonb, NOW(), NOW())
-            ON CONFLICT (organization_id)
-            DO UPDATE SET
-                organization_name = EXCLUDED.organization_name,
-                max_budget = EXCLUDED.max_budget,
-                soft_budget = EXCLUDED.soft_budget,
-                budget_duration = CASE
-                    WHEN $16::boolean THEN EXCLUDED.budget_duration
-                    ELSE deltallm_organizationtable.budget_duration
-                END,
-                budget_reset_at = CASE
-                    WHEN $16::boolean THEN EXCLUDED.budget_reset_at
-                    ELSE deltallm_organizationtable.budget_reset_at
-                END,
-                rpm_limit = EXCLUDED.rpm_limit,
-                tpm_limit = EXCLUDED.tpm_limit,
-                rph_limit = EXCLUDED.rph_limit,
-                rpd_limit = EXCLUDED.rpd_limit,
-                tpd_limit = EXCLUDED.tpd_limit,
-                model_rpm_limit = EXCLUDED.model_rpm_limit,
-                model_tpm_limit = EXCLUDED.model_tpm_limit,
-                audit_content_storage_enabled = EXCLUDED.audit_content_storage_enabled,
-                metadata = CASE
-                    WHEN NOT $16::boolean
-                    THEN NULLIF(COALESCE(deltallm_organizationtable.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb), '{}'::jsonb)
-                    WHEN EXCLUDED.budget_duration IS NULL OR EXCLUDED.budget_duration NOT LIKE '%mo'
-                    THEN NULLIF((COALESCE(deltallm_organizationtable.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb)) - '_budget_reset', '{}'::jsonb)
-                    ELSE NULLIF(COALESCE(deltallm_organizationtable.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb), '{}'::jsonb)
-                END,
-                updated_at = NOW()
-            """,
-            organization_id,
-            organization_name,
-            max_budget,
-            soft_budget,
-            budget_duration,
-            budget_reset_at_storage,
-            rpm_limit,
-            tpm_limit,
-            rph_limit,
-            rpd_limit,
-            tpd_limit,
-            json.dumps(model_rpm_limit) if model_rpm_limit else None,
-            json.dumps(model_tpm_limit) if model_tpm_limit else None,
-            bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
-            metadata if metadata is not None else None,
-            reset_fields_provided,
-        )
-        persisted_rows = await db_client.query_raw(
-            """
-            SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
-            FROM deltallm_organizationtable
-            WHERE organization_id = $1
-            LIMIT 1
-            """,
-            organization_id,
-        )
-        if not persisted_rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        response_payload = _organization_response_payload(dict(persisted_rows[0]))
+        response_payload = _organization_response_payload(dict(persisted_organization))
         assignment = None
         scheduled_cache_invalidation = None
         shadow_access_mirrored = False
@@ -1420,7 +1502,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             )
             if assignment is None:
                 raise TierAdminNotFoundError("Tier assignment not found")
-            cache_invalidation_service = getattr(request.app.state, "cache_invalidation_service", None)
+            cache_invalidation_service = getattr(
+                request.app.state, "cache_invalidation_service", None
+            )
             scheduled_cache_invalidation = await enqueue_org_tier_assignment_cache_invalidation(
                 db_client,
                 organization_id=organization_id,
@@ -1487,7 +1571,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
                 ) = await _apply_create(
                     tx,
                     route_repository=_route_group_repository_for_request(request, db_client=tx),
-                    callable_repository=_callable_target_binding_repository_for_request(request, db_client=tx),
+                    callable_repository=_callable_target_binding_repository_for_request(
+                        request, db_client=tx
+                    ),
                 )
         else:
             (
@@ -1560,6 +1646,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
                 organization_id,
                 response["service_policy"],
             )
+    audit_service = getattr(request.app.state, "audit_service", None)
+    if audit_service is not None:
+        await audit_service.invalidate_content_storage_policy_distributed(organization_id)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -1572,7 +1661,10 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     return response
 
 
-@router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+@router.put(
+    "/ui/api/organizations/{organization_id}",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))],
+)
 async def update_organization(
     request: Request,
     organization_id: str,
@@ -1582,7 +1674,9 @@ async def update_organization(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE
+    )
     _reject_organization_tier_policy_update_fields(
         payload,
         is_platform_admin=scope.is_platform_admin,
@@ -1610,10 +1704,17 @@ async def update_organization(
         existing_service_policies.get(organization_id, {}).get("tier_authoritative")
     )
     organization_name = payload.get("organization_name", existing.get("organization_name"))
-    max_budget = _optional_float(payload.get("max_budget", existing.get("max_budget")), "max_budget")
-    soft_budget = _optional_float(payload.get("soft_budget", existing.get("soft_budget")), "soft_budget")
+    max_budget = _optional_float(
+        payload.get("max_budget", existing.get("max_budget")), "max_budget"
+    )
+    soft_budget = _optional_float(
+        payload.get("soft_budget", existing.get("soft_budget")), "soft_budget"
+    )
     if max_budget is not None and soft_budget is not None and soft_budget > max_budget:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="soft_budget must be less than or equal to max_budget")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="soft_budget must be less than or equal to max_budget",
+        )
     reset_fields_provided = "budget_duration" in payload or "budget_reset_at" in payload
     budget_duration, budget_reset_at = _resolve_budget_reset_fields(payload, existing=existing)
     budget_reset_at_storage = _budget_reset_storage_value(budget_reset_at)
@@ -1632,7 +1733,9 @@ async def update_organization(
         payload.get("audit_content_storage_enabled", existing.get("audit_content_storage_enabled")),
         "audit_content_storage_enabled",
     )
-    existing_metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else None
+    existing_metadata = (
+        existing.get("metadata") if isinstance(existing.get("metadata"), dict) else None
+    )
     metadata = _audit_retention_metadata(payload, existing_metadata)
     route_group_bindings = (
         _normalize_route_group_binding_payloads(payload.get("route_group_bindings"))
@@ -1645,9 +1748,8 @@ async def update_organization(
         else None
     )
     if tier_authoritative:
-        if (
-            ("model_rpm_limit" in payload and model_rpm_limit)
-            or ("model_tpm_limit" in payload and model_tpm_limit)
+        if ("model_rpm_limit" in payload and model_rpm_limit) or (
+            "model_tpm_limit" in payload and model_tpm_limit
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1664,8 +1766,12 @@ async def update_organization(
                     "tier policy is authoritative; configure model access on the tier"
                 ),
             )
-    _validate_route_group_callable_target_overlap(route_group_bindings or [], callable_target_bindings or [])
-    if (route_group_bindings is not None or callable_target_bindings is not None) and not scope.is_platform_admin:
+    _validate_route_group_callable_target_overlap(
+        route_group_bindings or [], callable_target_bindings or []
+    )
+    if (
+        route_group_bindings is not None or callable_target_bindings is not None
+    ) and not scope.is_platform_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only platform admins can update asset bootstrap bindings",
@@ -1674,7 +1780,9 @@ async def update_organization(
     callable_binding_repo = _callable_target_binding_repository_for_request(request)
     catalog = callable_catalog(request)
     if route_group_bindings is not None:
-        await _validate_org_route_group_binding_payloads(route_repo, binding_payloads=route_group_bindings)
+        await _validate_org_route_group_binding_payloads(
+            route_repo, binding_payloads=route_group_bindings
+        )
     if callable_target_bindings is not None:
         _validate_org_callable_target_binding_payloads(
             binding_payloads=callable_target_bindings,
@@ -1696,56 +1804,31 @@ async def update_organization(
     )
 
     async def _apply_update(db_client: Any, *, route_repository, callable_repository):  # noqa: ANN001, ANN202
-        await db_client.execute_raw(
-            """
-            UPDATE deltallm_organizationtable
-            SET organization_name = $1,
-                max_budget = $2,
-                soft_budget = $3,
-                budget_duration = $4,
-                budget_reset_at = $5::timestamp,
-                rpm_limit = $6,
-                tpm_limit = $7,
-                rph_limit = $8,
-                rpd_limit = $9,
-                tpd_limit = $10,
-                model_rpm_limit = $11::jsonb,
-                model_tpm_limit = $12::jsonb,
-                audit_content_storage_enabled = $13,
-                metadata = $14::jsonb,
-                updated_at = NOW()
-            WHERE organization_id = $15
-            """,
-            organization_name,
-            max_budget,
-            soft_budget,
-            budget_duration,
-            budget_reset_at_storage,
-            rpm_limit,
-            tpm_limit,
-            rph_limit,
-            rpd_limit,
-            tpd_limit,
-            json.dumps(model_rpm_limit) if model_rpm_limit else None,
-            json.dumps(model_tpm_limit) if model_tpm_limit else None,
-            bool(audit_content_storage_enabled),
-            metadata if metadata is not None else None,
-            organization_id,
+        updated_organization = await OrganizationAdminRepository(db_client).update(
+            OrganizationPersistenceValues(
+                organization_id=organization_id,
+                organization_name=organization_name,
+                max_budget=max_budget,
+                soft_budget=soft_budget,
+                budget_duration=budget_duration,
+                budget_reset_at=budget_reset_at_storage,
+                rpm_limit=rpm_limit,
+                tpm_limit=tpm_limit,
+                rph_limit=rph_limit,
+                rpd_limit=rpd_limit,
+                tpd_limit=tpd_limit,
+                model_rpm_limit=model_rpm_limit,
+                model_tpm_limit=model_tpm_limit,
+                audit_content_storage_enabled=bool(audit_content_storage_enabled),
+                metadata=metadata,
+            )
         )
-        updated_rows = await db_client.query_raw(
-            """
-            SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
-            FROM deltallm_organizationtable
-            WHERE organization_id = $1
-            LIMIT 1
-            """,
-            organization_id,
-        )
-        if not updated_rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        updated_organization = dict(updated_rows[0])
+        if updated_organization is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+            )
         updated_payload = _organization_response_payload(
-            updated_organization,
+            dict(updated_organization),
             capabilities=build_organization_capabilities(scope, updated_organization),
         )
         if isinstance(updated_payload, dict):
@@ -1765,7 +1848,9 @@ async def update_organization(
                     request,
                     organization_id=organization_id,
                     binding_payloads=callable_target_bindings,
-                    protected_callable_keys={item["group_key"] for item in (route_group_bindings or [])},
+                    protected_callable_keys={
+                        item["group_key"] for item in (route_group_bindings or [])
+                    },
                     callable_binding_repo=callable_repository,
                     route_repo=route_repository,
                     catalog=catalog,
@@ -1780,7 +1865,9 @@ async def update_organization(
             updated = await _apply_update(
                 tx,
                 route_repository=_route_group_repository_for_request(request, db_client=tx),
-                callable_repository=_callable_target_binding_repository_for_request(request, db_client=tx),
+                callable_repository=_callable_target_binding_repository_for_request(
+                    request, db_client=tx
+                ),
             )
     else:
         updated = await _apply_update(
@@ -1810,6 +1897,9 @@ async def update_organization(
             await key_service.invalidate_keys_for_org(organization_id)
         except Exception:
             pass
+    audit_service = getattr(request.app.state, "audit_service", None)
+    if audit_service is not None:
+        await audit_service.invalidate_content_storage_policy_distributed(organization_id)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -1824,7 +1914,10 @@ async def update_organization(
     return updated
 
 
-@router.get("/ui/api/organizations/{organization_id}/members", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+@router.get(
+    "/ui/api/organizations/{organization_id}/members",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
+)
 async def list_organization_members(request: Request, organization_id: str) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -1859,7 +1952,10 @@ async def list_organization_members(request: Request, organization_id: str) -> l
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.get("/ui/api/organizations/{organization_id}/member-candidates", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+@router.get(
+    "/ui/api/organizations/{organization_id}/member-candidates",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
+)
 async def list_organization_member_candidates(
     request: Request,
     organization_id: str,
@@ -1868,10 +1964,14 @@ async def list_organization_member_candidates(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> list[dict[str, Any]]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_READ
+    )
     db = db_or_503(request)
     if not scope.is_platform_admin and organization_id not in scope.org_ids:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
 
     # Privacy-by-default: do not return broad account listings.
     # Callers must provide an exact user identifier (case-insensitive).
@@ -1884,7 +1984,9 @@ async def list_organization_member_candidates(
 
     params.append(normalized_search)
     # Exact (case-insensitive) matching on either email or account_id.
-    clauses.append(f"(lower(email) = lower(${len(params)}) OR lower(account_id::text) = lower(${len(params)}))")
+    clauses.append(
+        f"(lower(email) = lower(${len(params)}) OR lower(account_id::text) = lower(${len(params)}))"
+    )
     if not scope.is_platform_admin:
         params.append(organization_id)
         clauses.append(
@@ -1910,8 +2012,13 @@ async def list_organization_member_candidates(
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/organizations/{organization_id}/members", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
-async def add_organization_member(request: Request, organization_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/organizations/{organization_id}/members",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))],
+)
+async def add_organization_member(
+    request: Request, organization_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
     account_id = payload.get("account_id")
@@ -1936,7 +2043,9 @@ async def add_organization_member(request: Request, organization_id: str, payloa
         if rows:
             account_id = rows[0].get("account_id")
     if not account_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="account_id or known email is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="account_id or known email is required"
+        )
     account_rows = await db.query_raw(
         "SELECT account_id FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
         account_id,
@@ -1967,7 +2076,9 @@ async def add_organization_member(request: Request, organization_id: str, payloa
         organization_id,
     )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed"
+        )
     response = to_json_value(dict(rows[0]))
     await emit_admin_mutation_audit(
         request=request,
@@ -1981,8 +2092,13 @@ async def add_organization_member(request: Request, organization_id: str, payloa
     return response
 
 
-@router.delete("/ui/api/organizations/{organization_id}/members/{membership_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
-async def remove_organization_member(request: Request, organization_id: str, membership_id: str) -> dict[str, Any]:
+@router.delete(
+    "/ui/api/organizations/{organization_id}/members/{membership_id}",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))],
+)
+async def remove_organization_member(
+    request: Request, organization_id: str, membership_id: str
+) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -1996,7 +2112,9 @@ async def remove_organization_member(request: Request, organization_id: str, mem
         organization_id,
     )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization membership not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization membership not found"
+        )
     account_id = rows[0].get("account_id")
     removed_team_memberships = await db.execute_raw(
         """
@@ -2030,7 +2148,10 @@ async def remove_organization_member(request: Request, organization_id: str, mem
     return response
 
 
-@router.get("/ui/api/organizations/{organization_id}/teams", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+@router.get(
+    "/ui/api/organizations/{organization_id}/teams",
+    dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
+)
 async def list_organization_teams(request: Request, organization_id: str) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(

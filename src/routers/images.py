@@ -12,7 +12,11 @@ from src.billing.cost import compute_billing_result
 from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
+from src.middleware.rate_limit import (
+    _release_rate_limits,
+    acquire_parallel_limits_for_payload,
+    check_and_acquire_rate_limits_for_payload,
+)
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -31,6 +35,7 @@ from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
@@ -43,13 +48,14 @@ from src.routers.routing_decision import (
     resolve_failure_target,
     update_served_route_decision,
 )
-from src.routers.utils import enforce_budget_if_configured, fire_and_forget
+from src.routers.utils import enforce_budget_if_configured
 from src.services.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,
     get_tier_policy_mode_from_app,
 )
+from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
 
 router = APIRouter(prefix="/v1", tags=["images"])
 
@@ -84,6 +90,7 @@ async def _execute_image_generation(
     )
 
     from src.routers.utils import apply_default_params
+
     apply_default_params(upstream_payload, deployment.model_info)
 
     upstream_start = perf_counter()
@@ -91,7 +98,9 @@ async def _execute_image_generation(
         f"{api_base}/images/generations",
         headers=headers,
         json=upstream_payload,
-        timeout=build_upstream_request_timeout_for_request(request, configured_timeout_seconds(params.get("timeout"))),
+        timeout=build_upstream_request_timeout_for_request(
+            request, configured_timeout_seconds(params.get("timeout"))
+        ),
     )
     if response.status_code >= 400:
         raise httpx.HTTPStatusError(
@@ -119,25 +128,39 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         audit_action=AuditAction.IMAGE_GENERATION_REQUEST,
     )
     auth = request.state.user_api_key
+    await acquire_preflight_capacity(request, auth=auth)
     ensure_model_allowed(
         auth,
         payload.model,
-        callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        callable_target_grant_service=getattr(
+            request.app.state, "callable_target_grant_service", None
+        ),
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),
         tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
-    await enforce_budget_if_configured(request, model=payload.model, auth=auth)
-
-    callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
-    await check_and_acquire_rate_limits_for_payload(
-        request,
-        model=payload.model,
-        payload=request_data,
+    await acquire_parallel_limits_for_payload(request, model=payload.model, payload=request_data)
+    try:
+        await enforce_budget_if_configured(request, model=payload.model, auth=auth)
+    except Exception:
+        await _release_rate_limits(request)
+        await release_preflight_capacity(request)
+        raise
+
+    callback_manager: CallbackManager = getattr(
+        request.app.state, "callback_manager", CallbackManager()
     )
+    try:
+        await check_and_acquire_rate_limits_for_payload(
+            request,
+            model=payload.model,
+            payload=request_data,
+        )
+    finally:
+        await release_preflight_capacity(request)
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
@@ -150,7 +173,9 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
     capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
-    primary_api_base = str(primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
+    primary_api_base = str(
+        primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)
+    ).rstrip("/")
 
     def track_attempt(deployment):  # noqa: ANN001
         capture_attempted_deployment(request, deployment)
@@ -169,7 +194,6 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
-        await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
         api_provider = resolve_provider(served_deployment.deltallm_params)
 
         api_latency_ms = data.pop("_api_latency_ms", 0)
@@ -208,15 +232,25 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             None if provider_billing.unpriced_reason is not None else provider_billing.cost
         )
         increment_request(
-            model=payload.model, api_provider=api_provider,
-            api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=200,
+            model=payload.model,
+            api_provider=api_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            status_code=200,
         )
         increment_spend(
-            model=payload.model, api_provider=api_provider,
-            api_key=auth.api_key, user=auth.user_id, team=auth.team_id, spend=request_cost,
+            model=payload.model,
+            api_provider=api_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            spend=request_cost,
         )
-        fire_and_forget(
+        await enqueue_request_log_write(
+            request,
             request.app.state.spend_tracking_service.log_spend(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -245,20 +279,37 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 cache_hit=False,
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
-            )
+            ),
         )
-        observe_request_latency(model=payload.model, api_provider=api_provider, status_code=200, latency_seconds=perf_counter() - request_start)
-        observe_api_latency(model=payload.model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000)
-        callback_payload = build_standard_logging_payload(
-            call_type="image_generation", request_id=request_id, model=payload.model,
-            deployment_model=deployment_model, request_payload=request_data, response_obj=data,
-            user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
-            api_base=api_base, response_cost=request_cost, api_latency_ms=api_latency_ms,
+        observe_request_latency(
+            model=payload.model,
             api_provider=api_provider,
-            turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+            status_code=200,
+            latency_seconds=perf_counter() - request_start,
+        )
+        observe_api_latency(
+            model=payload.model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000
+        )
+        callback_payload = build_standard_logging_payload(
+            call_type="image_generation",
+            request_id=request_id,
+            model=payload.model,
+            deployment_model=deployment_model,
+            request_payload=request_data,
+            response_obj=data,
+            user_api_key_dict=auth.model_dump(mode="json"),
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
+            api_base=api_base,
+            response_cost=request_cost,
+            api_latency_ms=api_latency_ms,
+            api_provider=api_provider,
+            turn_off_message_logging=bool(
+                getattr(request.app.state, "turn_off_message_logging", False)
+            ),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.IMAGE_GENERATION_REQUEST,
@@ -285,23 +336,33 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
     except httpx.HTTPError as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
-        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
-        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(
-            failure_deployment_id,
-            success=False,
-            error=str(exc),
-            exc=exc,
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get(
+            "model"
         )
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
-        increment_request(model=payload.model, api_provider=failure_provider, api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=status_code)
-        increment_request_failure(model=payload.model, api_provider=failure_provider, error_type=exc.__class__.__name__)
-        observe_request_latency(model=payload.model, api_provider=failure_provider, status_code=status_code, latency_seconds=perf_counter() - request_start)
-        enqueue_request_log_write(
+        increment_request(
+            model=payload.model,
+            api_provider=failure_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            status_code=status_code,
+        )
+        increment_request_failure(
+            model=payload.model, api_provider=failure_provider, error_type=exc.__class__.__name__
+        )
+        observe_request_latency(
+            model=payload.model,
+            api_provider=failure_provider,
+            status_code=status_code,
+            latency_seconds=perf_counter() - request_start,
+        )
+        await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -325,9 +386,9 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 end_time=datetime.now(tz=UTC),
                 http_status_code=status_code,
                 exc=exc,
-            )
+            ),
         )
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.IMAGE_GENERATION_REQUEST,
@@ -353,20 +414,16 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         raise InvalidRequestError(message=f"Image generation request failed: {exc}") from exc
     except Exception as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
-        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
-        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(
-            failure_deployment_id,
-            success=False,
-            error=str(exc),
-            exc=exc,
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get(
+            "model"
         )
         status_code = int(getattr(exc, "status_code", 500) or 500)
-        enqueue_request_log_write(
+        await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -390,9 +447,9 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 end_time=datetime.now(tz=UTC),
                 http_status_code=status_code,
                 exc=exc,
-            )
+            ),
         )
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.IMAGE_GENERATION_REQUEST,

@@ -16,7 +16,9 @@ router = APIRouter(prefix="/v1", tags=["files"])
 def _batch_service_or_404(request: Request):
     service = getattr(request.app.state, "batch_service", None)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch files API is disabled")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Batch files API is disabled"
+        )
     return service
 
 
@@ -31,7 +33,7 @@ async def create_file(
     try:
         service = _batch_service_or_404(request)
         created = await service.create_file(auth=auth, upload=file, purpose=purpose)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.FILE_CREATE_REQUEST,
@@ -42,13 +44,17 @@ async def create_file(
             api_key=auth.api_key,
             resource_type="file",
             resource_id=created.get("id") if isinstance(created, dict) else None,
-            request_payload={"purpose": purpose, "filename": file.filename, "content_type": file.content_type},
+            request_payload={
+                "purpose": purpose,
+                "filename": file.filename,
+                "content_type": file.content_type,
+            },
             response_payload=created if isinstance(created, dict) else None,
             metadata={"route": request.url.path},
         )
         return created
     except Exception as exc:
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.FILE_CREATE_REQUEST,
@@ -58,7 +64,11 @@ async def create_file(
             organization_id=getattr(auth, "organization_id", None),
             api_key=auth.api_key,
             resource_type="file",
-            request_payload={"purpose": purpose, "filename": file.filename, "content_type": file.content_type},
+            request_payload={
+                "purpose": purpose,
+                "filename": file.filename,
+                "content_type": file.content_type,
+            },
             error=exc,
             metadata={"route": request.url.path},
         )
@@ -82,7 +92,7 @@ async def get_file(request: Request, file_id: str):
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File access denied")
         response = request.app.state.batch_service.file_to_response(record)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.FILE_READ_REQUEST,
@@ -99,7 +109,7 @@ async def get_file(request: Request, file_id: str):
         )
         return response
     except Exception as exc:
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.FILE_READ_REQUEST,
@@ -124,7 +134,7 @@ async def get_file_content(request: Request, file_id: str):
     try:
         service = _batch_service_or_404(request)
         content = await service.get_file_content(file_id=file_id, auth=auth)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.FILE_CONTENT_READ_REQUEST,
@@ -141,7 +151,7 @@ async def get_file_content(request: Request, file_id: str):
         )
         return Response(content=content, media_type="application/jsonl")
     except Exception as exc:
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.FILE_CONTENT_READ_REQUEST,

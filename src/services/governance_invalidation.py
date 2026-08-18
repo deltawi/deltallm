@@ -10,7 +10,7 @@ from uuid import uuid4
 logger = logging.getLogger(__name__)
 
 GOVERNANCE_INVALIDATION_CHANNEL = "governance_invalidation"
-_ALLOWED_TARGETS = frozenset({"callable_target", "mcp", "tier_policy"})
+_ALLOWED_TARGETS = frozenset({"callable_target", "mcp", "prompt", "route_groups", "tier_policy"})
 
 
 class GovernanceInvalidationApplyError(RuntimeError):
@@ -30,6 +30,8 @@ class GovernanceInvalidationService:
         tier_policy_service: Any | None = None,
         mcp_registry_service: Any | None = None,
         mcp_governance_service: Any | None = None,
+        prompt_registry_service: Any | None = None,
+        route_group_reload: Any | None = None,
         channel_name: str = GOVERNANCE_INVALIDATION_CHANNEL,
         remote_apply_delay_seconds: float = 0.05,
         remote_retry_delay_seconds: float = 1.0,
@@ -39,6 +41,8 @@ class GovernanceInvalidationService:
         self.tier_policy_service = tier_policy_service
         self.mcp_registry_service = mcp_registry_service
         self.mcp_governance_service = mcp_governance_service
+        self.prompt_registry_service = prompt_registry_service
+        self.route_group_reload = route_group_reload
         self.channel_name = channel_name
         self.remote_apply_delay_seconds = max(float(remote_apply_delay_seconds), 0.0)
         self.remote_retry_delay_seconds = max(
@@ -231,6 +235,20 @@ class GovernanceInvalidationService:
                     logger.warning("failed applying MCP governance invalidation: %s", exc)
             if target_failed:
                 failed_targets.append("mcp")
+        if "prompt" in targets:
+            service = self.prompt_registry_service
+            if service is not None and callable(getattr(service, "refresh_namespace_epoch", None)):
+                try:
+                    await service.refresh_namespace_epoch()
+                except Exception as exc:
+                    failed_targets.append("prompt")
+                    logger.warning("failed applying prompt invalidation: %s", exc)
+        if "route_groups" in targets and callable(self.route_group_reload):
+            try:
+                await self.route_group_reload()
+            except Exception as exc:
+                failed_targets.append("route_groups")
+                logger.warning("failed applying route-group invalidation: %s", exc)
         return tuple(failed_targets)
 
     @staticmethod

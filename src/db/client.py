@@ -5,6 +5,20 @@ from typing import Any
 from src.config import DatabaseConnectionSettings
 
 
+def is_prisma_transaction_client(client: object | None) -> bool:
+    """Return whether *client* is already bound to a Prisma transaction."""
+
+    if client is None:
+        return False
+    checker = getattr(client, "is_transaction", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return False
+
+
 class PrismaClientManager:
     def __init__(self) -> None:
         self.client: Any | None = None
@@ -28,3 +42,4 @@ class PrismaClientManager:
 
 
 prisma_manager = PrismaClientManager()
+telemetry_prisma_manager = PrismaClientManager()

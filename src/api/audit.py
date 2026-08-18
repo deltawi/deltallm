@@ -6,11 +6,17 @@ from typing import Any
 from fastapi import Request
 
 from src.audit.actions import AuditAction, normalize_audit_action
+from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
 from src.auth.roles import Permission, has_platform_permission
 from src.db.repositories import AuditRepository
 from src.middleware.platform_auth import get_platform_auth_context
-from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
+from src.services.audit_service import (
+    AuditEventInput,
+    AuditPayloadInput,
+    AuditService,
+    enqueue_audit_event,
+)
 
 _SENSITIVE_KEYS = {
     "password",
@@ -43,7 +49,12 @@ def redact_sensitive(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             lowered = str(key).lower()
-            if lowered in _SENSITIVE_KEYS or "password" in lowered or "secret" in lowered or "token" in lowered:
+            if (
+                lowered in _SENSITIVE_KEYS
+                or "password" in lowered
+                or "secret" in lowered
+                or "token" in lowered
+            ):
                 redacted[str(key)] = "***REDACTED***"
             else:
                 redacted[str(key)] = redact_sensitive(item)
@@ -64,17 +75,29 @@ def _permission_context(request: Request, scope: Any | None = None) -> dict[str,
     if auth_ctx is None:
         return {"is_platform_admin": False, "org_ids": [], "team_ids": []}
     return {
-        "is_platform_admin": has_platform_permission(getattr(auth_ctx, "role", None), Permission.PLATFORM_ADMIN),
-        "org_ids": [str(item.get("organization_id")) for item in auth_ctx.organization_memberships if item.get("organization_id")],
-        "team_ids": [str(item.get("team_id")) for item in auth_ctx.team_memberships if item.get("team_id")],
+        "is_platform_admin": has_platform_permission(
+            getattr(auth_ctx, "role", None), Permission.PLATFORM_ADMIN
+        ),
+        "org_ids": [
+            str(item.get("organization_id"))
+            for item in auth_ctx.organization_memberships
+            if item.get("organization_id")
+        ],
+        "team_ids": [
+            str(item.get("team_id")) for item in auth_ctx.team_memberships if item.get("team_id")
+        ],
     }
 
 
-def _should_sync_control_audit(request: Request, action: str | AuditAction, *, critical: bool) -> bool:
+def _should_sync_control_audit(
+    request: Request, action: str | AuditAction, *, critical: bool
+) -> bool:
     if not critical:
         return False
 
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     if general_settings is None:
         return True
 
@@ -116,7 +139,9 @@ async def emit_control_audit_event(
         return
 
     auth_ctx = get_platform_auth_context(request)
-    resolved_actor_id = actor_id or (getattr(auth_ctx, "account_id", None) if auth_ctx is not None else None)
+    resolved_actor_id = actor_id or (
+        getattr(auth_ctx, "account_id", None) if auth_ctx is not None else None
+    )
     permission = _permission_context(request, scope=scope)
     event_metadata = dict(metadata or {})
     event_metadata.setdefault("route", request.url.path)
@@ -124,9 +149,13 @@ async def emit_control_audit_event(
 
     payloads: list[AuditPayloadInput] = []
     if request_payload is not None:
-        payloads.append(AuditPayloadInput(kind="request", content_json=redact_sensitive(request_payload)))
+        payloads.append(
+            AuditPayloadInput(kind="request", content_json=redact_sensitive(request_payload))
+        )
     if response_payload is not None:
-        payloads.append(AuditPayloadInput(kind="response", content_json=redact_sensitive(response_payload)))
+        payloads.append(
+            AuditPayloadInput(kind="response", content_json=redact_sensitive(response_payload))
+        )
 
     event = AuditEventInput(
         action=normalize_audit_action(action),
@@ -155,4 +184,11 @@ async def emit_control_audit_event(
     elif _should_sync_control_audit(request, action, critical=critical):
         await audit_service.record_event_sync(event, payloads=payloads)
     else:
-        audit_service.record_event(event, payloads=payloads, critical=critical)
+        await enqueue_audit_event(
+            audit_service,
+            event,
+            payloads=payloads,
+            delivery_class=(
+                AuditDeliveryClass.REQUIRED if critical else AuditDeliveryClass.BEST_EFFORT
+            ),
+        )

@@ -23,6 +23,7 @@ from src.api.admin.endpoints import (
     service_accounts_router,
     spend_router,
     teams_router,
+    telemetry_ingestion_router,
     tier_capacity_router,
     tier_policy_preview_router,
     tiers_router,
@@ -44,6 +45,7 @@ admin_router.include_router(models_router)
 admin_router.include_router(named_credentials_router)
 admin_router.include_router(service_accounts_router)
 admin_router.include_router(teams_router)
+admin_router.include_router(telemetry_ingestion_router)
 admin_router.include_router(users_router)
 admin_router.include_router(organizations_router)
 admin_router.include_router(organization_tier_assignments_router)

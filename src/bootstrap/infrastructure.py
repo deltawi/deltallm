@@ -8,12 +8,22 @@ from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
 from src.batch import BatchRepository
-from src.config import get_settings, resolve_database_settings, resolve_salt_key
-from src.config_runtime import DynamicConfigManager, SecretResolver, build_app_config, load_yaml_dict
+from src.config import (
+    get_settings,
+    resolve_database_settings,
+    resolve_salt_key,
+    resolve_telemetry_database_settings,
+)
+from src.config_runtime import (
+    DynamicConfigManager,
+    SecretResolver,
+    build_app_config,
+    load_yaml_dict,
+)
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
-from src.db.client import prisma_manager
+from src.db.client import prisma_manager, telemetry_prisma_manager
 from src.db.email import EmailOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
@@ -39,6 +49,7 @@ class InfrastructureRuntime:
     dynamic_config_manager: DynamicConfigManager
     http_client: httpx.AsyncClient
     control_http_client: httpx.AsyncClient
+    telemetry_database_connected: bool = False
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -51,6 +62,15 @@ def _build_redis_client(settings: Any, cfg: Any) -> Redis:
     port = cfg.general_settings.redis_port or settings.redis_port
     password = cfg.general_settings.redis_password or settings.redis_password
     return Redis(host=host, port=port, password=password, decode_responses=True)
+
+
+def _startup_setting(general_settings: Any, settings: Any, field_name: str, default: Any) -> Any:
+    fields_set = getattr(general_settings, "model_fields_set", None)
+    if fields_set is None or field_name in fields_set:
+        value = getattr(general_settings, field_name, None)
+        if value is not None:
+            return value
+    return getattr(settings, field_name, default)
 
 
 async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
@@ -81,6 +101,26 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.app_config = cfg
     app.state.salt_key = resolve_salt_key(cfg, settings)
 
+    spend_ingestion_mode = str(
+        _startup_setting(cfg.general_settings, settings, "spend_ingestion_mode", "legacy")
+    )
+    audit_ingestion_mode = str(
+        _startup_setting(cfg.general_settings, settings, "audit_ingestion_mode", "legacy")
+    )
+    app.state.spend_ingestion_mode = spend_ingestion_mode
+    app.state.audit_ingestion_mode = audit_ingestion_mode
+    durable_telemetry_enabled = spend_ingestion_mode == "outbox" or audit_ingestion_mode == "outbox"
+    telemetry_database_connected = False
+    app.state.telemetry_prisma_manager = telemetry_prisma_manager
+    if durable_telemetry_enabled:
+        telemetry_database_settings = resolve_telemetry_database_settings(cfg, settings)
+        if telemetry_database_settings is None:
+            raise RuntimeError("durable telemetry ingestion requires an explicit database URL")
+        await telemetry_prisma_manager.connect(telemetry_database_settings)
+        if telemetry_prisma_manager.client is None:
+            raise RuntimeError("durable telemetry ingestion requires the Prisma client")
+        telemetry_database_connected = True
+
     http_client = build_upstream_http_client(cfg.general_settings)
     control_http_client = build_control_http_client()
     app.state.upstream_http_settings = cfg.general_settings
@@ -94,11 +134,15 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
     app.state.named_credential_repository = NamedCredentialRepository(prisma_manager.client)
-    app.state.callable_target_binding_repository = CallableTargetBindingRepository(prisma_manager.client)
+    app.state.callable_target_binding_repository = CallableTargetBindingRepository(
+        prisma_manager.client
+    )
     app.state.callable_target_access_group_repository = CallableTargetAccessGroupBindingRepository(
         prisma_manager.client
     )
-    app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(prisma_manager.client)
+    app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(
+        prisma_manager.client
+    )
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
     app.state.tier_repository = TierRepository(prisma_manager.client)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
@@ -117,6 +161,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         dynamic_config_manager=dynamic_config_manager,
         http_client=http_client,
         control_http_client=control_http_client,
+        telemetry_database_connected=telemetry_database_connected,
         statuses=(
             BootstrapStatus("config", "ready"),
             BootstrapStatus("redis", "ready"),
@@ -135,4 +180,6 @@ async def shutdown_infrastructure_runtime(runtime: InfrastructureRuntime) -> Non
     await runtime.control_http_client.aclose()
     if runtime.redis_client is not None:
         await runtime.redis_client.close()
+    if runtime.telemetry_database_connected:
+        await telemetry_prisma_manager.disconnect()
     await prisma_manager.disconnect()

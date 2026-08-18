@@ -39,6 +39,10 @@ class FakePrisma:
                 "created_at": datetime.now(tz=UTC).isoformat(),
                 "updated_at": datetime.now(tz=UTC).isoformat(),
                 "sent_at": args[20],
+                "delivery_audit_status": args[21],
+                "delivery_audit_event_id": args[22],
+                "delivery_audit_max_attempts": args[23],
+                "delivery_audit_next_attempt_at": args[24],
             }
             self.rows[email_id] = row
             return [dict(row)]
@@ -48,13 +52,16 @@ class FakePrisma:
             due_rows = [
                 row
                 for row in self.rows.values()
-                if row["status"] in {"queued", "retrying"} and row["next_attempt_at"] <= datetime.now(tz=UTC)
+                if row["status"] in {"queued", "retrying"}
+                and row["next_attempt_at"] <= datetime.now(tz=UTC)
             ][:limit]
             claimed: list[dict[str, object]] = []
             for row in due_rows:
                 updated = dict(row)
-                updated["status"] = "sending"
-                updated["attempt_count"] = int(updated["attempt_count"]) + 1
+                updated["status"] = "claimed"
+                updated["delivery_locked_by"] = args[1]
+                updated["delivery_claim_token"] = f"{args[2]}:{updated['email_id']}"
+                updated["delivery_lease_expires_at"] = datetime.now(tz=UTC)
                 updated["updated_at"] = datetime.now(tz=UTC).isoformat()
                 self.rows[str(updated["email_id"])] = updated
                 claimed.append(updated)
@@ -97,7 +104,10 @@ class FakePrisma:
     async def execute_raw(self, query: str, *args):
         email_id = str(args[0])
         row = dict(self.rows[email_id])
-        if "SET to_addresses = $2::text[]" in query:
+        if "SET status = 'sending', attempt_count" in query:
+            row["status"] = "sending"
+            row["attempt_count"] = int(row["attempt_count"]) + 1
+        elif "SET to_addresses = $2::text[]" in query:
             row["to_addresses"] = list(args[1])
             row["cc_addresses"] = list(args[2])
             row["bcc_addresses"] = list(args[3])
@@ -119,6 +129,7 @@ class FakePrisma:
             row["last_error"] = args[1]
         row["updated_at"] = datetime.now(tz=UTC).isoformat()
         self.rows[email_id] = row
+        return 1
 
 
 @pytest.mark.asyncio
@@ -152,19 +163,9 @@ async def test_email_outbox_repository_roundtrip() -> None:
 
     claimed = await repo.claim_due(limit=1)
     assert len(claimed) == 1
-    assert claimed[0].status == "sending"
-    assert claimed[0].attempt_count == 1
-
-    await repo.mark_retry("email-1", error="temporary", next_attempt_at=now)
-    retrying = await repo.get_by_email_id("email-1")
-    assert retrying is not None
-    assert retrying.status == "retrying"
-    assert retrying.last_error == "temporary"
-
-    await repo.mark_failed("email-1", error="terminal")
-    failed = await repo.get_by_email_id("email-1")
-    assert failed is not None
-    assert failed.status == "failed"
+    assert claimed[0].status == "claimed"
+    assert claimed[0].attempt_count == 0
+    assert claimed[0].delivery_claim_token
 
     await repo.update_recipients_and_payload(
         "email-1",
@@ -172,13 +173,59 @@ async def test_email_outbox_repository_roundtrip() -> None:
         cc_addresses=[],
         bcc_addresses=[],
         payload_json={"suppressed_recipients": ["cc@example.com"]},
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
     )
     updated = await repo.get_by_email_id("email-1")
     assert updated is not None
     assert updated.to_addresses == ["updated@example.com"]
     assert updated.payload_json == {"suppressed_recipients": ["cc@example.com"]}
 
-    await repo.cancel("email-1", reason="all recipients are suppressed")
+    assert await repo.begin_delivery_attempt(
+        email_id="email-1",
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
+    )
+
+    await repo.mark_retry(
+        "email-1",
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
+        error="temporary",
+        next_attempt_at=now,
+    )
+    retrying = await repo.get_by_email_id("email-1")
+    assert retrying is not None
+    assert retrying.status == "retrying"
+    assert retrying.last_error == "temporary"
+
+    claimed = await repo.claim_due(limit=1)
+    assert claimed[0].delivery_claim_token
+    await repo.begin_delivery_attempt(
+        email_id="email-1",
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
+    )
+    await repo.mark_failed(
+        "email-1",
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
+        error="terminal",
+    )
+    failed = await repo.get_by_email_id("email-1")
+    assert failed is not None
+    assert failed.status == "failed"
+
+    repo.prisma.rows["email-1"]["status"] = "retrying"
+    repo.prisma.rows["email-1"]["next_attempt_at"] = now
+    claimed = await repo.claim_due(limit=1)
+    assert claimed[0].delivery_claim_token
+    await repo.cancel(
+        "email-1",
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
+        reason="all recipients are suppressed",
+    )
     cancelled = await repo.get_by_email_id("email-1")
     assert cancelled is not None
     assert cancelled.status == "cancelled"
@@ -200,7 +247,19 @@ async def test_email_outbox_repository_marks_sent() -> None:
         )
     )
 
-    await repo.mark_sent("email-2", provider_message_id="provider-123")
+    claimed = await repo.claim_due(limit=1)
+    assert claimed[0].delivery_claim_token
+    await repo.begin_delivery_attempt(
+        email_id="email-2",
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
+    )
+    await repo.mark_sent(
+        "email-2",
+        worker_id="email-worker",
+        claim_token=claimed[0].delivery_claim_token,
+        provider_message_id="provider-123",
+    )
 
     stored = await repo.get_by_email_id("email-2")
     assert stored is not None

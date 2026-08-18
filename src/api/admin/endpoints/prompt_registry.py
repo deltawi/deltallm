@@ -30,7 +30,10 @@ _ALLOWED_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user",
 def _repository_or_503(request: Request) -> PromptRegistryRepository:
     repository = getattr(request.app.state, "prompt_registry_repository", None)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Prompt registry repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prompt registry repository unavailable",
+        )
     return repository
 
 
@@ -44,7 +47,9 @@ def _service(request: Request) -> PromptRegistryService | None:
 def _validate_template_key(value: Any) -> str:
     template_key = str(value or "").strip()
     if not template_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="template_key is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="template_key is required"
+        )
     if not _TEMPLATE_KEY_RE.match(template_key):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -64,7 +69,9 @@ def _validate_scope_type(value: Any) -> str:
     scope_type = str(value or "").strip().lower()
     if scope_type not in _ALLOWED_SCOPE_TYPES:
         allowed = ", ".join(sorted(_ALLOWED_SCOPE_TYPES))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}"
+        )
     return normalize_scope_type(scope_type)
 
 
@@ -93,15 +100,21 @@ def _validate_version(value: Any, *, field_name: str = "version") -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer"
+        ) from exc
     if parsed < 1:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 1")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 1"
+        )
     return parsed
 
 
 def _validate_template_body(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="template_body must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="template_body must be an object"
+        )
     findings = detect_secret_like_content(value)
     if findings:
         raise HTTPException(
@@ -116,6 +129,7 @@ async def _invalidate_template_cache(request: Request, template_key: str) -> Non
     if service is None:
         return
     await service.invalidate_template(template_key)
+    await _notify_prompt_invalidation(request)
 
 
 async def _invalidate_scope_cache(request: Request, *, scope_type: str, scope_id: str) -> None:
@@ -123,6 +137,7 @@ async def _invalidate_scope_cache(request: Request, *, scope_type: str, scope_id
     if service is None:
         return
     await service.invalidate_scope(scope_type=scope_type, scope_id=scope_id)
+    await _notify_prompt_invalidation(request)
 
 
 async def _invalidate_all_cache(request: Request) -> None:
@@ -130,13 +145,27 @@ async def _invalidate_all_cache(request: Request) -> None:
     if service is None:
         return
     await service.invalidate_all()
+    await _notify_prompt_invalidation(request)
+
+
+async def _notify_prompt_invalidation(request: Request) -> None:
+    invalidation = getattr(request.app.state, "governance_invalidation_service", None)
+    if invalidation is None or getattr(invalidation, "redis", None) is None:
+        return
+    if not await invalidation.notify("prompt"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Mutation committed, but prompt cache invalidation publication failed",
+        )
 
 
 def _validated_metadata(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object"
+        )
     return dict(value)
 
 
@@ -147,7 +176,12 @@ def _template_response_payload(template: Any) -> dict[str, Any]:
     return payload
 
 
-def _resolve_owner_scope_inputs(payload: dict[str, Any], *, existing_scope_type: str | None = None, existing_scope_id: str | None = None) -> tuple[str, str | None]:
+def _resolve_owner_scope_inputs(
+    payload: dict[str, Any],
+    *,
+    existing_scope_type: str | None = None,
+    existing_scope_id: str | None = None,
+) -> tuple[str, str | None]:
     raw_scope_type = payload.get("owner_scope_type", payload.get("owner_scope", ...))
     raw_scope_id = payload.get("owner_scope_id", ...)
 
@@ -180,7 +214,11 @@ def _resolve_template_metadata(
     raw_metadata_value = _validated_metadata(raw_metadata)
     if raw_metadata_value is not None:
         metadata.update(raw_metadata_value)
-    if allow_legacy_owner_without_scope_id and owner_scope_type == "organization" and not owner_scope_id:
+    if (
+        allow_legacy_owner_without_scope_id
+        and owner_scope_type == "organization"
+        and not owner_scope_id
+    ):
         return metadata or None
     try:
         return apply_owner_scope_to_metadata(
@@ -192,7 +230,10 @@ def _resolve_template_metadata(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.get("/ui/api/prompt-registry/templates", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/prompt-registry/templates",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def list_prompt_templates(
     request: Request,
     search: str | None = Query(default=None),
@@ -202,15 +243,28 @@ async def list_prompt_templates(
     repository = _repository_or_503(request)
     items, total = await repository.list_templates(search=search, limit=limit, offset=offset)
     data = [_template_response_payload(item) for item in items]
-    return {"data": data, "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total}}
+    return {
+        "data": data,
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
+    }
 
 
-@router.get("/ui/api/prompt-registry/templates/{template_key}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/prompt-registry/templates/{template_key}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def get_prompt_template(request: Request, template_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     template = await repository.get_template(template_key)
     if template is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
+        )
     versions = await repository.list_versions(template_key)
     labels = await repository.list_labels(template_key)
     bindings, _ = await repository.list_bindings(template_key=template_key, limit=200, offset=0)
@@ -222,7 +276,10 @@ async def get_prompt_template(request: Request, template_key: str) -> dict[str, 
     }
 
 
-@router.post("/ui/api/prompt-registry/templates", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.post(
+    "/ui/api/prompt-registry/templates",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def create_prompt_template(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
@@ -230,7 +287,9 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
     name = str(payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
-    description = str(payload.get("description")).strip() if payload.get("description") is not None else None
+    description = (
+        str(payload.get("description")).strip() if payload.get("description") is not None else None
+    )
     owner_scope_type, owner_scope_id = _resolve_owner_scope_inputs(payload)
     metadata = _resolve_template_metadata(
         existing_metadata=None,
@@ -249,7 +308,9 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
         )
     except Exception as exc:
         if "duplicate key" in str(exc).lower():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Prompt template already exists") from exc
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Prompt template already exists"
+            ) from exc
         raise
 
     response = _template_response_payload(created)
@@ -265,13 +326,20 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
     return response
 
 
-@router.put("/ui/api/prompt-registry/templates/{template_key}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def update_prompt_template(request: Request, template_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.put(
+    "/ui/api/prompt-registry/templates/{template_key}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def update_prompt_template(
+    request: Request, template_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     existing = await repository.get_template(template_key)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
+        )
 
     name = str(payload.get("name") or existing.name).strip()
     if not name:
@@ -308,7 +376,9 @@ async def update_prompt_template(request: Request, template_key: str, payload: d
         metadata=metadata,
     )
     if updated is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
+        )
 
     response = _template_response_payload(updated)
     await emit_admin_mutation_audit(
@@ -325,13 +395,18 @@ async def update_prompt_template(request: Request, template_key: str, payload: d
     return response
 
 
-@router.delete("/ui/api/prompt-registry/templates/{template_key}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.delete(
+    "/ui/api/prompt-registry/templates/{template_key}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def delete_prompt_template(request: Request, template_key: str) -> dict[str, bool]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     deleted = await repository.delete_template(template_key)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
+        )
     await _invalidate_all_cache(request)
     response = {"deleted": True}
     await emit_admin_mutation_audit(
@@ -345,20 +420,31 @@ async def delete_prompt_template(request: Request, template_key: str) -> dict[st
     return response
 
 
-@router.post("/ui/api/prompt-registry/templates/{template_key}/versions", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def create_prompt_version(request: Request, template_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/prompt-registry/templates/{template_key}/versions",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def create_prompt_version(
+    request: Request, template_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     if await repository.get_template(template_key) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
+        )
 
     template_body = _validate_template_body(payload.get("template_body"))
     variables_schema = payload.get("variables_schema")
     if variables_schema is not None and not isinstance(variables_schema, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="variables_schema must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="variables_schema must be an object"
+        )
     model_hints = payload.get("model_hints")
     if model_hints is not None and not isinstance(model_hints, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_hints must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="model_hints must be an object"
+        )
     raw_route_preferences = payload.get("route_preferences")
     try:
         route_preferences = normalize_route_preferences(raw_route_preferences)
@@ -374,10 +460,14 @@ async def create_prompt_version(request: Request, template_key: str, payload: di
         status="draft",
     )
     if created is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
+        )
 
     if bool(payload.get("publish")):
-        published = await repository.publish_version(template_key, version=created.version, published_by="admin_api")
+        published = await repository.publish_version(
+            template_key, version=created.version, published_by="admin_api"
+        )
         if published is not None:
             created = published
 
@@ -395,14 +485,23 @@ async def create_prompt_version(request: Request, template_key: str, payload: di
     return response
 
 
-@router.post("/ui/api/prompt-registry/templates/{template_key}/versions/{version}/publish", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def publish_prompt_version(request: Request, template_key: str, version: int) -> dict[str, Any]:
+@router.post(
+    "/ui/api/prompt-registry/templates/{template_key}/versions/{version}/publish",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def publish_prompt_version(
+    request: Request, template_key: str, version: int
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     parsed_version = _validate_version(version)
-    published = await repository.publish_version(template_key, version=parsed_version, published_by="admin_api")
+    published = await repository.publish_version(
+        template_key, version=parsed_version, published_by="admin_api"
+    )
     if published is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt version not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt version not found"
+        )
     await _invalidate_template_cache(request, template_key)
     response = to_json_value(asdict(published))
     await emit_admin_mutation_audit(
@@ -416,15 +515,23 @@ async def publish_prompt_version(request: Request, template_key: str, version: i
     return response
 
 
-@router.get("/ui/api/prompt-registry/templates/{template_key}/labels", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/prompt-registry/templates/{template_key}/labels",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def list_prompt_labels(request: Request, template_key: str) -> list[dict[str, Any]]:
     repository = _repository_or_503(request)
     labels = await repository.list_labels(template_key)
     return [to_json_value(asdict(item)) for item in labels]
 
 
-@router.post("/ui/api/prompt-registry/templates/{template_key}/labels", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def assign_prompt_label(request: Request, template_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/prompt-registry/templates/{template_key}/labels",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def assign_prompt_label(
+    request: Request, template_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     label = _validate_label(payload.get("label"))
@@ -432,11 +539,16 @@ async def assign_prompt_label(request: Request, template_key: str, payload: dict
     require_approval = bool(payload.get("require_approval", False))
     approved_by = str(payload.get("approved_by") or "").strip()
     if require_approval and label.lower() in {"production", "prod"} and not approved_by:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="approved_by is required when approval is enabled")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="approved_by is required when approval is enabled",
+        )
 
     assigned = await repository.assign_label(template_key, label=label, version=version)
     if assigned is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template or version not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template or version not found"
+        )
 
     await _invalidate_template_cache(request, template_key)
     response = to_json_value(asdict(assigned))
@@ -446,13 +558,20 @@ async def assign_prompt_label(request: Request, template_key: str, payload: dict
         action=AuditAction.ADMIN_PROMPT_REGISTRY_UPDATE,
         resource_type="prompt_label",
         resource_id=f"{template_key}:{label}",
-        request_payload={**payload, "approved_by": approved_by or None, "approval_used": require_approval},
+        request_payload={
+            **payload,
+            "approved_by": approved_by or None,
+            "approval_used": require_approval,
+        },
         response_payload=response,
     )
     return response
 
 
-@router.delete("/ui/api/prompt-registry/templates/{template_key}/labels/{label}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.delete(
+    "/ui/api/prompt-registry/templates/{template_key}/labels/{label}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def delete_prompt_label(request: Request, template_key: str, label: str) -> dict[str, bool]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
@@ -472,7 +591,10 @@ async def delete_prompt_label(request: Request, template_key: str, label: str) -
     return response
 
 
-@router.get("/ui/api/prompt-registry/bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/prompt-registry/bindings",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def list_prompt_bindings(
     request: Request,
     scope_type: str | None = Query(default=None),
@@ -492,11 +614,19 @@ async def list_prompt_bindings(
     )
     return {
         "data": [to_json_value(_normalize_binding_payload(asdict(item))) for item in items],
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
-@router.post("/ui/api/prompt-registry/bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.post(
+    "/ui/api/prompt-registry/bindings",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def upsert_prompt_binding(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
@@ -509,11 +639,15 @@ async def upsert_prompt_binding(request: Request, payload: dict[str, Any]) -> di
     try:
         priority = int(payload.get("priority", 100))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="priority must be an integer") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="priority must be an integer"
+        ) from exc
     enabled = bool(payload.get("enabled", True))
     metadata = payload.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object"
+        )
 
     binding = await repository.upsert_binding(
         scope_type=scope_type,
@@ -525,7 +659,9 @@ async def upsert_prompt_binding(request: Request, payload: dict[str, Any]) -> di
         metadata=metadata,
     )
     if binding is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
+        )
 
     await _invalidate_scope_cache(request, scope_type=scope_type, scope_id=scope_id)
     response = to_json_value(_normalize_binding_payload(asdict(binding)))
@@ -541,13 +677,18 @@ async def upsert_prompt_binding(request: Request, payload: dict[str, Any]) -> di
     return response
 
 
-@router.delete("/ui/api/prompt-registry/bindings/{binding_id}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.delete(
+    "/ui/api/prompt-registry/bindings/{binding_id}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def delete_prompt_binding(request: Request, binding_id: str) -> dict[str, bool]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     removed = await repository.delete_binding(binding_id)
     if not removed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt binding not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt binding not found"
+        )
     await _invalidate_all_cache(request)
     response = {"deleted": True}
     await emit_admin_mutation_audit(
@@ -561,35 +702,61 @@ async def delete_prompt_binding(request: Request, binding_id: str) -> dict[str, 
     return response
 
 
-@router.post("/ui/api/prompt-registry/render", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.post(
+    "/ui/api/prompt-registry/render",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def dry_run_prompt_render(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     service = _service(request)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Prompt registry service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prompt registry service unavailable",
+        )
 
     template_key = _validate_template_key(payload.get("template_key"))
     label = str(payload.get("label")).strip() if payload.get("label") is not None else None
-    version = _validate_version(payload.get("version")) if payload.get("version") is not None else None
+    version = (
+        _validate_version(payload.get("version")) if payload.get("version") is not None else None
+    )
     variables = payload.get("variables")
     if variables is not None and not isinstance(variables, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="variables must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="variables must be an object"
+        )
     variables = variables or {}
     try:
-        return await service.dry_run_render(template_key=template_key, label=label, version=version, variables=variables)
+        return await service.dry_run_render(
+            template_key=template_key, label=label, version=version, variables=variables
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.post("/ui/api/prompt-registry/preview-resolution", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.post(
+    "/ui/api/prompt-registry/preview-resolution",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def preview_prompt_resolution(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     service = _service(request)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Prompt registry service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prompt registry service unavailable",
+        )
     api_key = str(payload.get("api_key")).strip() if payload.get("api_key") is not None else None
     user_id = str(payload.get("user_id")).strip() if payload.get("user_id") is not None else None
     team_id = str(payload.get("team_id")).strip() if payload.get("team_id") is not None else None
-    organization_id = str(payload.get("organization_id")).strip() if payload.get("organization_id") is not None else None
-    route_group_key = str(payload.get("route_group_key")).strip() if payload.get("route_group_key") is not None else None
+    organization_id = (
+        str(payload.get("organization_id")).strip()
+        if payload.get("organization_id") is not None
+        else None
+    )
+    route_group_key = (
+        str(payload.get("route_group_key")).strip()
+        if payload.get("route_group_key") is not None
+        else None
+    )
     result = await service.resolve_binding_preview(
         api_key=api_key,
         user_id=user_id,

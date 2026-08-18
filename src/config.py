@@ -90,9 +90,13 @@ class ChatBatchingConfig(BaseModel):
         if self.mode != "sync_microbatch":
             return self
         if (self.upstream_max_batch_size or 0) < 2:
-            raise ValueError("chat_batching.upstream_max_batch_size must be at least 2 when mode is sync_microbatch")
+            raise ValueError(
+                "chat_batching.upstream_max_batch_size must be at least 2 when mode is sync_microbatch"
+            )
         if self.require_homogeneous_params is not True:
-            raise ValueError("chat_batching.require_homogeneous_params=false is not supported for sync_microbatch")
+            raise ValueError(
+                "chat_batching.require_homogeneous_params=false is not supported for sync_microbatch"
+            )
         return self
 
 
@@ -141,7 +145,9 @@ class DeltaLLMParams(BaseModel):
             provider = model_value.split("/", 1)[0].strip().lower() if "/" in model_value else ""
 
         if not supports_custom_openai_compatible_auth(provider):
-            raise ValueError(f"Custom auth headers are not supported for provider '{provider or 'unknown'}'")
+            raise ValueError(
+                f"Custom auth headers are not supported for provider '{provider or 'unknown'}'"
+            )
         return self
 
 
@@ -192,7 +198,9 @@ class ModelDeployment(BaseModel):
 
     model_name: str
     named_credential_id: str | None = None
-    deltallm_params: DeltaLLMParams = Field(validation_alias=AliasChoices("deltallm_params", "litellm_params"))
+    deltallm_params: DeltaLLMParams = Field(
+        validation_alias=AliasChoices("deltallm_params", "litellm_params")
+    )
     model_info: ModelInfo | None = None
     deployment_id: str | None = None
 
@@ -233,7 +241,9 @@ class GuardrailConfig(BaseModel):
     model_config = {"populate_by_name": True}
 
     guardrail_name: str
-    deltallm_params: dict[str, Any] = Field(validation_alias=AliasChoices("deltallm_params", "litellm_params"))
+    deltallm_params: dict[str, Any] = Field(
+        validation_alias=AliasChoices("deltallm_params", "litellm_params")
+    )
 
     @field_validator("deltallm_params")
     @classmethod
@@ -360,7 +370,13 @@ class SelfRegistrationSettings(BaseModel):
             domain = str(raw_domain or "").strip().lower()
             if not domain:
                 continue
-            if "@" in domain or "/" in domain or "\\" in domain or domain.startswith(".") or domain.endswith("."):
+            if (
+                "@" in domain
+                or "/" in domain
+                or "\\" in domain
+                or domain.startswith(".")
+                or domain.endswith(".")
+            ):
                 raise ValueError("allowed_domains entries must be bare email domains")
             if domain not in seen:
                 normalized_domains.append(domain)
@@ -372,9 +388,13 @@ class SelfRegistrationSettings(BaseModel):
         if not self.enabled:
             return self
         if not self.default_org.id:
-            raise ValueError("self_registration.default_org.id is required when self-registration is enabled")
+            raise ValueError(
+                "self_registration.default_org.id is required when self-registration is enabled"
+            )
         if not self.default_team.id:
-            raise ValueError("self_registration.default_team.id is required when self-registration is enabled")
+            raise ValueError(
+                "self_registration.default_team.id is required when self-registration is enabled"
+            )
         if self.mode == "sso_allowed_domain" and not self.allowed_domains:
             raise ValueError(
                 "self_registration.allowed_domains is required when mode is sso_allowed_domain"
@@ -408,6 +428,35 @@ class GeneralSettings(BaseModel):
     database_url: str | None = None
     db_pool_size: int = Field(default=20, gt=0)
     db_pool_timeout: int = Field(default=30, ge=0)
+    telemetry_db_pool_size: int = Field(default=5, gt=0, le=100)
+    telemetry_db_pool_timeout_seconds: int = Field(default=2, ge=0, le=60)
+    budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
+    budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
+    budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_preflight_capacity_enabled: bool = False
+    gateway_preflight_global_max_parallel: int = Field(default=300, gt=0, le=100_000)
+    gateway_preflight_org_max_parallel: int = Field(default=100, ge=0, le=100_000)
+    gateway_preflight_lease_ttl_seconds: int = Field(default=30, ge=5, le=300)
+    spend_ingestion_mode: Literal["legacy", "outbox"] = "legacy"
+    spend_ingestion_batch_size: int = Field(default=100, ge=1, le=500)
+    spend_ingestion_flush_interval_ms: int = Field(default=100, ge=10, le=10_000)
+    spend_ingestion_lease_seconds: int = Field(default=30, ge=5, le=300)
+    spend_ingestion_max_attempts: int = Field(default=10, ge=1, le=100)
+    spend_ingestion_worker_enabled: bool = True
+    spend_ingestion_max_pending_events: int = Field(default=100_000, ge=1, le=10_000_000)
+    spend_ingestion_overload_policy: Literal["sync_fallback", "fail_closed"] = "sync_fallback"
+    spend_ingestion_fallback_max_concurrency: int = Field(default=1, ge=1, le=32)
+    spend_ingestion_fallback_max_waiters: int = Field(default=8, ge=0, le=10_000)
+    spend_ingestion_fallback_queue_timeout_ms: int = Field(default=100, ge=1, le=60_000)
+    spend_ingestion_fallback_execution_timeout_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
+    spend_ingestion_completed_retention_hours: int = Field(default=1, ge=0, le=24 * 30)
+    spend_ingestion_failed_retention_days: int = Field(default=30, ge=1, le=3650)
+    spend_ingestion_cleanup_interval_seconds: float = Field(default=60.0, ge=1.0, le=86_400.0)
+    spend_ingestion_cleanup_batch_size: int = Field(default=1000, ge=1, le=100_000)
+    spend_ingestion_cleanup_max_batches_per_run: int = Field(default=10, ge=1, le=1000)
+    spend_ingestion_cleanup_time_budget_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
+    telemetry_worker_startup_timeout_seconds: float = Field(default=5.0, ge=0.1, le=60)
+    telemetry_shutdown_drain_timeout_seconds: float = Field(default=20.0, ge=0.1, le=300)
     spend_reporting_max_concurrency: int = Field(default=2, gt=0, le=32)
     spend_reporting_global_max_concurrency: int = Field(default=2, gt=0, le=64)
     spend_reporting_queue_timeout_seconds: float = Field(default=10.0, gt=0)
@@ -430,6 +479,14 @@ class GeneralSettings(BaseModel):
     cache_backend: Literal["memory", "redis", "s3"] = "memory"
     cache_ttl: int = 3600
     cache_max_size: int = 10000
+    prompt_negative_cache_enabled: bool = False
+    prompt_cache_l1_ttl_seconds: int = Field(default=30, ge=1)
+    prompt_cache_l2_ttl_seconds: int = Field(default=300, ge=1)
+    prompt_negative_l1_ttl_seconds: int = Field(default=5, ge=1)
+    prompt_negative_l2_ttl_seconds: int = Field(default=30, ge=1)
+    prompt_cache_l1_max_entries: int = Field(default=10_000, ge=100, le=1_000_000)
+    prompt_singleflight_max_keys: int = Field(default=256, ge=1, le=10_000)
+    prompt_singleflight_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     stream_cache_max_bytes: int = Field(default=262_144, gt=0)
     stream_cache_max_fragments: int = Field(default=2_048, gt=0)
     failover_event_history_size: int = Field(default=1_000, gt=0)
@@ -492,6 +549,11 @@ class GeneralSettings(BaseModel):
     email_worker_enabled: bool = True
     email_worker_poll_interval_seconds: float = Field(default=5.0, gt=0)
     email_worker_max_concurrency: int = Field(default=3, ge=1, le=20)
+    email_worker_batch_size: int = Field(default=10, ge=1, le=500)
+    email_worker_delivery_lease_seconds: int = Field(default=60, ge=10, le=600)
+    email_worker_audit_lease_seconds: int = Field(default=30, ge=5, le=300)
+    email_worker_startup_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    email_worker_shutdown_drain_timeout_seconds: float = Field(default=20.0, gt=0, le=300)
     smtp_host: str | None = None
     smtp_port: int = Field(default=587, ge=1, le=65535)
     smtp_username: str | None = None
@@ -614,7 +676,9 @@ class GeneralSettings(BaseModel):
     embeddings_batch_scheduler_backfill_scan_limit: int = Field(default=500, ge=1, le=5_000)
     embeddings_batch_stale_lease_sweeper_enabled: bool = True
     embeddings_batch_stale_lease_sweeper_interval_seconds: float = Field(default=60.0, gt=0.0)
-    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: float = Field(default=30.0, gt=0.0)
+    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: float = Field(
+        default=30.0, gt=0.0
+    )
     embeddings_batch_stale_lease_sweeper_page_size: int = Field(default=100, ge=1, le=1_000)
     embeddings_batch_stale_lease_sweeper_max_rows_per_run: int = Field(default=500, ge=1, le=5_000)
     embeddings_batch_scheduler_claim_mode: Literal["job_fifo", "work_slice"] = "job_fifo"
@@ -647,7 +711,9 @@ class GeneralSettings(BaseModel):
         le=1_000,
     )
     embeddings_batch_tenant_scope_preference: str = "organization,team,api_key,user"
-    embeddings_batch_tenant_fair_share_disabled_model_groups: list[str] = Field(default_factory=list)
+    embeddings_batch_tenant_fair_share_disabled_model_groups: list[str] = Field(
+        default_factory=list
+    )
     embeddings_batch_size_aware_scheduling_enabled: bool = False
     embeddings_batch_aging_seconds_per_work_unit: int = Field(default=30, ge=1)
     embeddings_batch_max_age_credit_work_units: int = Field(default=1_000, ge=0)
@@ -671,6 +737,20 @@ class GeneralSettings(BaseModel):
     tier_capacity_fair_share_enabled: bool = False
     tier_capacity_fair_share_active_ttl_seconds: int = Field(default=10, ge=1, le=300)
     audit_enabled: bool = True
+    audit_ingestion_mode: Literal["legacy", "outbox"] = "legacy"
+    audit_ingestion_worker_enabled: bool = True
+    audit_ingestion_batch_size: int = Field(default=100, ge=1, le=500)
+    audit_ingestion_flush_interval_ms: int = Field(default=100, ge=10, le=10_000)
+    audit_ingestion_lease_seconds: int = Field(default=30, ge=5, le=300)
+    audit_ingestion_max_attempts: int = Field(default=10, ge=1, le=100)
+    audit_ingestion_max_pending_events: int = Field(default=100_000, ge=1, le=10_000_000)
+    audit_ingestion_required_reserve: int = Field(default=10_000, ge=0, le=10_000_000)
+    audit_ingestion_completed_retention_hours: int = Field(default=1, ge=0, le=24 * 30)
+    audit_ingestion_failed_retention_days: int = Field(default=30, ge=1, le=3650)
+    audit_ingestion_cleanup_interval_seconds: float = Field(default=60.0, ge=1.0, le=86_400.0)
+    audit_ingestion_cleanup_batch_size: int = Field(default=1000, ge=1, le=100_000)
+    audit_ingestion_cleanup_max_batches_per_run: int = Field(default=10, ge=1, le=1000)
+    audit_ingestion_cleanup_time_budget_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
     audit_retention_worker_enabled: bool = True
     audit_retention_interval_seconds: float = 86400.0
     audit_retention_scan_limit: int = 500
@@ -804,7 +884,9 @@ class GeneralSettings(BaseModel):
         if self.slack_alerting_enabled:
             from src.notifications.types import NOTIFICATION_ALERT_TYPES
 
-            unknown = [kind for kind in self.slack_alert_kinds if kind not in NOTIFICATION_ALERT_TYPES]
+            unknown = [
+                kind for kind in self.slack_alert_kinds if kind not in NOTIFICATION_ALERT_TYPES
+            ]
             if unknown:
                 allowed = ", ".join(sorted(NOTIFICATION_ALERT_TYPES))
                 raise ValueError(
@@ -818,7 +900,10 @@ class AppConfig(BaseModel):
 
     model_list: list[ModelDeployment] = Field(default_factory=list)
     router_settings: RouterSettings = Field(default_factory=RouterSettings)
-    deltallm_settings: DeltaLLMSettings = Field(default_factory=DeltaLLMSettings, validation_alias=AliasChoices("deltallm_settings", "litellm_settings"))
+    deltallm_settings: DeltaLLMSettings = Field(
+        default_factory=DeltaLLMSettings,
+        validation_alias=AliasChoices("deltallm_settings", "litellm_settings"),
+    )
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
 
 
@@ -835,6 +920,57 @@ class Settings(BaseSettings):
     database_url: str | None = None
     db_pool_size: int | None = Field(default=None, gt=0)
     db_pool_timeout: int | None = Field(default=None, ge=0)
+    telemetry_db_pool_size: int | None = Field(default=None, gt=0, le=100)
+    telemetry_db_pool_timeout_seconds: int | None = Field(default=None, ge=0, le=60)
+    budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
+    budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
+    budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_preflight_capacity_enabled: bool = False
+    gateway_preflight_global_max_parallel: int = Field(default=300, gt=0, le=100_000)
+    gateway_preflight_org_max_parallel: int = Field(default=100, ge=0, le=100_000)
+    gateway_preflight_lease_ttl_seconds: int = Field(default=30, ge=5, le=300)
+    spend_ingestion_mode: Literal["legacy", "outbox"] = "legacy"
+    spend_ingestion_batch_size: int = Field(default=100, ge=1, le=500)
+    spend_ingestion_flush_interval_ms: int = Field(default=100, ge=10, le=10_000)
+    spend_ingestion_lease_seconds: int = Field(default=30, ge=5, le=300)
+    spend_ingestion_max_attempts: int = Field(default=10, ge=1, le=100)
+    spend_ingestion_worker_enabled: bool = True
+    spend_ingestion_max_pending_events: int = Field(default=100_000, ge=1, le=10_000_000)
+    spend_ingestion_overload_policy: Literal["sync_fallback", "fail_closed"] = "sync_fallback"
+    spend_ingestion_fallback_max_concurrency: int = Field(default=1, ge=1, le=32)
+    spend_ingestion_fallback_max_waiters: int = Field(default=8, ge=0, le=10_000)
+    spend_ingestion_fallback_queue_timeout_ms: int = Field(default=100, ge=1, le=60_000)
+    spend_ingestion_fallback_execution_timeout_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
+    spend_ingestion_completed_retention_hours: int = Field(default=1, ge=0, le=24 * 30)
+    spend_ingestion_failed_retention_days: int = Field(default=30, ge=1, le=3650)
+    spend_ingestion_cleanup_interval_seconds: float = Field(default=60.0, ge=1.0, le=86_400.0)
+    spend_ingestion_cleanup_batch_size: int = Field(default=1000, ge=1, le=100_000)
+    spend_ingestion_cleanup_max_batches_per_run: int = Field(default=10, ge=1, le=1000)
+    spend_ingestion_cleanup_time_budget_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
+    telemetry_worker_startup_timeout_seconds: float = Field(default=5.0, ge=0.1, le=60)
+    telemetry_shutdown_drain_timeout_seconds: float = Field(default=20.0, ge=0.1, le=300)
+    audit_ingestion_mode: Literal["legacy", "outbox"] = "legacy"
+    audit_ingestion_worker_enabled: bool = True
+    audit_ingestion_batch_size: int = Field(default=100, ge=1, le=500)
+    audit_ingestion_flush_interval_ms: int = Field(default=100, ge=10, le=10_000)
+    audit_ingestion_lease_seconds: int = Field(default=30, ge=5, le=300)
+    audit_ingestion_max_attempts: int = Field(default=10, ge=1, le=100)
+    audit_ingestion_max_pending_events: int = Field(default=100_000, ge=1, le=10_000_000)
+    audit_ingestion_required_reserve: int = Field(default=10_000, ge=0, le=10_000_000)
+    audit_ingestion_completed_retention_hours: int = Field(default=1, ge=0, le=24 * 30)
+    audit_ingestion_failed_retention_days: int = Field(default=30, ge=1, le=3650)
+    audit_ingestion_cleanup_interval_seconds: float = Field(default=60.0, ge=1.0, le=86_400.0)
+    audit_ingestion_cleanup_batch_size: int = Field(default=1000, ge=1, le=100_000)
+    audit_ingestion_cleanup_max_batches_per_run: int = Field(default=10, ge=1, le=1000)
+    audit_ingestion_cleanup_time_budget_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
+    prompt_negative_cache_enabled: bool = False
+    prompt_cache_l1_ttl_seconds: int = Field(default=30, ge=1)
+    prompt_cache_l2_ttl_seconds: int = Field(default=300, ge=1)
+    prompt_negative_l1_ttl_seconds: int = Field(default=5, ge=1)
+    prompt_negative_l2_ttl_seconds: int = Field(default=30, ge=1)
+    prompt_cache_l1_max_entries: int = Field(default=10_000, ge=100, le=1_000_000)
+    prompt_singleflight_max_keys: int = Field(default=256, ge=1, le=10_000)
+    prompt_singleflight_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     redis_url: str | None = None
     redis_host: str = "localhost"
     redis_port: int = 6379
@@ -867,10 +1003,14 @@ class DatabaseConnectionSettings:
 def resolve_salt_key(config: AppConfig, settings: Settings) -> str:
     candidate = config.general_settings.salt_key or settings.salt_key
     if candidate is None or not candidate.strip():
-        raise ValueError("Salt key is required. Set `general_settings.salt_key` or `DELTALLM_SALT_KEY`.")
+        raise ValueError(
+            "Salt key is required. Set `general_settings.salt_key` or `DELTALLM_SALT_KEY`."
+        )
     normalized = candidate.strip()
     if normalized == "change-me":
-        raise ValueError("Insecure salt key is not allowed. Configure a unique non-default salt key.")
+        raise ValueError(
+            "Insecure salt key is not allowed. Configure a unique non-default salt key."
+        )
     return normalized
 
 
@@ -886,10 +1026,14 @@ def _apply_database_pool_settings(database_url: str, *, pool_size: int, pool_tim
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query["connection_limit"] = str(pool_size)
     query["pool_timeout"] = str(pool_timeout)
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
 
 
-def resolve_database_settings(config: AppConfig, settings: Settings) -> DatabaseConnectionSettings | None:
+def resolve_database_settings(
+    config: AppConfig, settings: Settings
+) -> DatabaseConnectionSettings | None:
     candidate_url = (
         _normalize_optional_str(settings.database_url)
         or _normalize_optional_str(config.general_settings.database_url)
@@ -903,6 +1047,35 @@ def resolve_database_settings(config: AppConfig, settings: Settings) -> Database
     if pool_timeout is None:
         pool_timeout = config.general_settings.db_pool_timeout
 
+    return DatabaseConnectionSettings(
+        url=_apply_database_pool_settings(
+            candidate_url,
+            pool_size=pool_size,
+            pool_timeout=pool_timeout,
+        ),
+        pool_size=pool_size,
+        pool_timeout=pool_timeout,
+    )
+
+
+def resolve_telemetry_database_settings(
+    config: AppConfig,
+    settings: Settings,
+) -> DatabaseConnectionSettings | None:
+    """Resolve an isolated Prisma pool for background and durable telemetry work."""
+
+    candidate_url = (
+        _normalize_optional_str(settings.database_url)
+        or _normalize_optional_str(config.general_settings.database_url)
+        or _normalize_optional_str(os.getenv("DATABASE_URL"))
+    )
+    if candidate_url is None:
+        return None
+
+    pool_size = settings.telemetry_db_pool_size or config.general_settings.telemetry_db_pool_size
+    pool_timeout = settings.telemetry_db_pool_timeout_seconds
+    if pool_timeout is None:
+        pool_timeout = config.general_settings.telemetry_db_pool_timeout_seconds
     return DatabaseConnectionSettings(
         url=_apply_database_pool_settings(
             candidate_url,
@@ -962,7 +1135,9 @@ def _safe_config_validation_message(exc: ValidationError) -> str:
     return f"Resolved configuration is invalid. {suffix}"
 
 
-def resolve_app_config_with_secrets(raw_config: dict[str, Any], secret_resolver: Any | None = None) -> AppConfig:
+def resolve_app_config_with_secrets(
+    raw_config: dict[str, Any], secret_resolver: Any | None = None
+) -> AppConfig:
     from src.config_runtime.secrets import SecretResolver
 
     resolver = secret_resolver or SecretResolver()

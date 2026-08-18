@@ -9,7 +9,10 @@ from fastapi.responses import JSONResponse
 
 from src.guardrails.exceptions import GuardrailViolationError
 from src.models.errors import ApprovalRequiredError, ProxyError, RateLimitError
-from src.telemetry.request_failures import maybe_log_proxy_error, maybe_log_request_validation_failure
+from src.telemetry.request_failures import (
+    maybe_log_proxy_error,
+    maybe_log_request_validation_failure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +44,13 @@ def proxy_error_response(exc: ProxyError) -> JSONResponse:
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProxyError)
     async def proxy_error_handler(request: Request, exc: ProxyError) -> JSONResponse:
-        maybe_log_proxy_error(request, exc)
+        await maybe_log_proxy_error(request, exc)
         return proxy_error_response(exc)
 
     @app.exception_handler(RequestValidationError)
-    async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def request_validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         await maybe_log_request_validation_failure(request, exc)
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
@@ -53,4 +58,6 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
         logger.error("unhandled exception", extra={"error_type": type(exc).__name__})
         proxy_error = ProxyError()
-        return JSONResponse(status_code=proxy_error.status_code, content=_serialize_error(proxy_error))
+        return JSONResponse(
+            status_code=proxy_error.status_code, content=_serialize_error(proxy_error)
+        )

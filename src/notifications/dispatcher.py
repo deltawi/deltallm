@@ -3,10 +3,19 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal, Sequence
 
+from src.audit.delivery import AuditDeliveryClass
 from src.metrics import increment_notification_enqueue
-from src.notifications.preferences import GlobalConfigPreferenceResolver, NotificationPreferenceResolver
-from src.notifications.types import ChannelOutcome, ChannelResult, NotificationChannel, NotificationMessage
-from src.services.audit_service import AuditEventInput, AuditService
+from src.notifications.preferences import (
+    GlobalConfigPreferenceResolver,
+    NotificationPreferenceResolver,
+)
+from src.notifications.types import (
+    ChannelOutcome,
+    ChannelResult,
+    NotificationChannel,
+    NotificationMessage,
+)
+from src.services.audit_service import AuditEventInput, AuditService, enqueue_audit_event
 from src.services.notification_recipients import NotificationRecipients
 
 logger = logging.getLogger(__name__)
@@ -85,7 +94,7 @@ class NotificationDispatcher:
             if result.outcome == "queued":
                 any_delivered = True
             try:
-                self._emit(
+                await self._emit(
                     channel=channel.name,
                     message=message,
                     result=result,
@@ -110,8 +119,10 @@ class NotificationDispatcher:
         metric_status: str = "suppressed",
     ) -> None:
         """Record a producer-level decision not to dispatch (no channel involved)."""
-        increment_notification_enqueue(kind=message.metric_kind, channel="none", status=metric_status)
-        self._record_audit(
+        increment_notification_enqueue(
+            kind=message.metric_kind, channel="none", status=metric_status
+        )
+        await self._record_audit(
             audit_action=audit_action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -137,7 +148,7 @@ class NotificationDispatcher:
         unaffected.
         """
         increment_notification_enqueue(kind=metric_kind, channel="none", status="error")
-        self._record_audit(
+        await self._record_audit(
             audit_action=audit_action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -159,11 +170,15 @@ class NotificationDispatcher:
         except Exception as exc:  # pragma: no cover - defensive, channel-isolated
             logger.warning(
                 "notification channel raised",
-                extra={"channel": channel.name, "notification_kind": message.metric_kind, "error": str(exc)},
+                extra={
+                    "channel": channel.name,
+                    "notification_kind": message.metric_kind,
+                    "error": str(exc),
+                },
             )
             return ChannelResult(outcome="error", error=str(exc))
 
-    def _emit(
+    async def _emit(
         self,
         *,
         channel: str,
@@ -187,7 +202,7 @@ class NotificationDispatcher:
         reason = _SKIP_REASON.get(result.outcome)
         if reason is not None:
             metadata.setdefault("reason", reason)
-        self._record_audit(
+        await self._record_audit(
             audit_action=audit_action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -197,7 +212,7 @@ class NotificationDispatcher:
             error=result.error,
         )
 
-    def _record_audit(
+    async def _record_audit(
         self,
         *,
         audit_action: str,
@@ -210,7 +225,8 @@ class NotificationDispatcher:
     ) -> None:
         if self.audit_service is None:
             return
-        self.audit_service.record_event(
+        await enqueue_audit_event(
+            self.audit_service,
             AuditEventInput(
                 action=audit_action,
                 actor_type="system",
@@ -221,7 +237,7 @@ class NotificationDispatcher:
                 error_type="NotificationEnqueueError" if error else None,
                 metadata={**metadata, "error": error},
             ),
-            critical=False,
+            delivery_class=AuditDeliveryClass.BEST_EFFORT,
         )
 
     async def try_claim(self, key: str) -> ClaimOutcome:

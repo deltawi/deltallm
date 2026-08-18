@@ -64,6 +64,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -79,6 +81,11 @@ jobs:
       - name: Generate Prisma client
         run: uv run prisma generate --schema=./prisma/schema.prisma
 
+      - name: Verify fresh and last-release migration paths
+        env:
+          MIGRATION_TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: uv run python scripts/verify_migration_paths.py --base-ref v0.1.34
+
       - name: Apply Prisma migrations
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
@@ -93,7 +100,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
           REDIS_URL: redis://localhost:6379/0
-          DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only
+          DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only-0000
           DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
         run: uv run pytest -v --ignore=tests/test_provider_presets_smoke.py
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -11,7 +12,12 @@ from src.db.named_credentials import NamedCredentialRepository
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
 from src.providers.resolution import validate_provider_mode_compatibility
-from src.router import RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
+from src.router import (
+    RouterConfig,
+    RoutingStrategy,
+    build_deployment_registry,
+    build_route_group_policies,
+)
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import ensure_model_name_available, load_model_registry
@@ -61,13 +67,17 @@ class ModelHotReloadManager:
             current = self.dynamic_config.get_config()
             model_list = list(current.get("model_list", []))
             model_list.append(deployment)
-            await self.dynamic_config.update_config({"model_list": model_list}, updated_by=updated_by)
+            await self.dynamic_config.update_config(
+                {"model_list": model_list}, updated_by=updated_by
+            )
         else:
             await self.model_repository.create(
                 ModelDeploymentRecord(
                     deployment_id=deployment_id,
                     model_name=str(deployment["model_name"]),
-                    named_credential_id=str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
+                    named_credential_id=str(deployment.get("named_credential_id")).strip() or None
+                    if deployment.get("named_credential_id") is not None
+                    else None,
                     deltallm_params=dict(deployment["deltallm_params"]),
                     model_info=dict(deployment.get("model_info", {})),
                 )
@@ -76,7 +86,9 @@ class ModelHotReloadManager:
             await self._reload_runtime()
         return deployment_id
 
-    async def update_model(self, deployment_id: str, model_config: dict[str, Any], updated_by: str = "admin_api") -> bool:
+    async def update_model(
+        self, deployment_id: str, model_config: dict[str, Any], updated_by: str = "admin_api"
+    ) -> bool:
         deployment = model_config.copy()
         deployment["deployment_id"] = deployment_id
         self._validate_model_config(deployment)
@@ -97,7 +109,9 @@ class ModelHotReloadManager:
                     break
             if not updated:
                 return False
-            await self.dynamic_config.update_config({"model_list": model_list}, updated_by=updated_by)
+            await self.dynamic_config.update_config(
+                {"model_list": model_list}, updated_by=updated_by
+            )
             return True
 
         updated_record = await self.model_repository.update(
@@ -138,35 +152,25 @@ class ModelHotReloadManager:
         app = self.app
         settings = app.state.settings
 
-        app.state.app_config = app_config
         salt_key = resolve_salt_key(app_config, settings)
         model_registry, _ = await self._load_model_registry_compat(
             app_config=app_config,
             settings=settings,
         )
-        app.state.model_registry = model_registry
-
         route_groups, _ = await load_route_groups(
             self.route_group_repository,
             app_config,
             route_group_cache=self.route_group_cache,
         )
+        callable_target_catalog = build_callable_target_catalog(model_registry, route_groups)
+        new_deployments = build_deployment_registry(model_registry, route_groups=route_groups)
+        app.state.model_registry = model_registry
         app.state.route_groups = route_groups
-        app.state.callable_target_catalog = build_callable_target_catalog(
-            app.state.model_registry,
-            route_groups,
-        )
-        new_deployments = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
-        registries = [
-            getattr(app.state.router, "deployment_registry", None),
-            getattr(app.state.failover_manager, "registry", None),
-            getattr(app.state.router_health_handler, "registry", None),
-            getattr(app.state.background_health_checker, "registry", None),
-        ]
-        for registry in registries:
-            if isinstance(registry, dict):
-                registry.clear()
-                registry.update(new_deployments)
+        app.state.callable_target_catalog = callable_target_catalog
+        app.state.router.deployment_registry = dict(new_deployments)
+        app.state.failover_manager.registry = dict(new_deployments)
+        app.state.router_health_handler.registry = dict(new_deployments)
+        app.state.background_health_checker.registry = dict(new_deployments)
 
         router_settings = app_config.router_settings
         app.state.router.strategy = RoutingStrategy(router_settings.routing_strategy)
@@ -179,7 +183,9 @@ class ModelHotReloadManager:
         app.state.failover_manager.config.num_retries = router_settings.num_retries
         app.state.failover_manager.config.retry_after = router_settings.retry_after
         app.state.failover_manager.config.timeout = router_settings.timeout
-        app.state.failover_manager.config.fallbacks = _normalize_fallbacks(app_config.deltallm_settings.fallbacks)
+        app.state.failover_manager.config.fallbacks = _normalize_fallbacks(
+            app_config.deltallm_settings.fallbacks
+        )
 
         if app_config.deltallm_settings.guardrails:
             app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
@@ -191,6 +197,94 @@ class ModelHotReloadManager:
             callback_settings=app_config.deltallm_settings.callback_settings,
         )
         app.state.turn_off_message_logging = app_config.deltallm_settings.turn_off_message_logging
+        general = app_config.general_settings
+        prompt_service = getattr(app.state, "prompt_registry_service", None)
+        if prompt_service is not None:
+            prompt_service.configure_cache(
+                l1_ttl_seconds=general.prompt_cache_l1_ttl_seconds,
+                l2_ttl_seconds=general.prompt_cache_l2_ttl_seconds,
+                negative_cache_enabled=general.prompt_negative_cache_enabled,
+                negative_l1_ttl_seconds=general.prompt_negative_l1_ttl_seconds,
+                negative_l2_ttl_seconds=general.prompt_negative_l2_ttl_seconds,
+                l1_max_entries=general.prompt_cache_l1_max_entries,
+            )
+        budget_service = getattr(app.state, "budget_service", None)
+        if budget_service is not None:
+            budget_service.query_mode = general.budget_enforcement_query_mode
+            budget_service.shadow_sample_rate = general.budget_enforcement_shadow_sample_rate
+            budget_service.query_timeout_seconds = general.budget_enforcement_query_timeout_seconds
+        spend_service = getattr(app.state, "spend_tracking_service", None)
+        if spend_service is not None and callable(getattr(spend_service, "reconfigure", None)):
+            await spend_service.reconfigure(
+                replace(
+                    spend_service.config,
+                    # Ingestion mode owns a dedicated startup-time database pool.
+                    # A rolling restart is required to switch modes safely.
+                    enabled=spend_service.config.enabled,
+                    batch_size=general.spend_ingestion_batch_size,
+                    flush_interval_seconds=general.spend_ingestion_flush_interval_ms / 1000.0,
+                    lease_seconds=general.spend_ingestion_lease_seconds,
+                    max_attempts=general.spend_ingestion_max_attempts,
+                    worker_enabled=general.spend_ingestion_worker_enabled,
+                    max_pending_events=general.spend_ingestion_max_pending_events,
+                    overload_policy=general.spend_ingestion_overload_policy,
+                    fallback_max_concurrency=general.spend_ingestion_fallback_max_concurrency,
+                    fallback_max_waiters=general.spend_ingestion_fallback_max_waiters,
+                    fallback_queue_timeout_seconds=(
+                        general.spend_ingestion_fallback_queue_timeout_ms / 1000.0
+                    ),
+                    fallback_execution_timeout_seconds=(
+                        general.spend_ingestion_fallback_execution_timeout_seconds
+                    ),
+                    completed_retention_hours=general.spend_ingestion_completed_retention_hours,
+                    failed_retention_days=general.spend_ingestion_failed_retention_days,
+                    cleanup_interval_seconds=general.spend_ingestion_cleanup_interval_seconds,
+                    cleanup_batch_size=general.spend_ingestion_cleanup_batch_size,
+                    cleanup_max_batches_per_run=(
+                        general.spend_ingestion_cleanup_max_batches_per_run
+                    ),
+                    cleanup_time_budget_seconds=(
+                        general.spend_ingestion_cleanup_time_budget_seconds
+                    ),
+                    worker_startup_timeout_seconds=(
+                        general.telemetry_worker_startup_timeout_seconds
+                    ),
+                    shutdown_drain_timeout_seconds=general.telemetry_shutdown_drain_timeout_seconds,
+                )
+            )
+        audit_service = getattr(app.state, "audit_service", None)
+        if audit_service is not None and callable(getattr(audit_service, "reconfigure", None)):
+            await audit_service.reconfigure(
+                replace(
+                    audit_service.ingestion_config,
+                    # Ingestion mode owns a dedicated startup-time database pool.
+                    # A rolling restart is required to switch modes safely.
+                    enabled=audit_service.ingestion_config.enabled,
+                    worker_enabled=general.audit_ingestion_worker_enabled,
+                    batch_size=general.audit_ingestion_batch_size,
+                    flush_interval_seconds=general.audit_ingestion_flush_interval_ms / 1000.0,
+                    lease_seconds=general.audit_ingestion_lease_seconds,
+                    max_attempts=general.audit_ingestion_max_attempts,
+                    max_pending_events=general.audit_ingestion_max_pending_events,
+                    required_reserve=general.audit_ingestion_required_reserve,
+                    completed_retention_hours=(general.audit_ingestion_completed_retention_hours),
+                    failed_retention_days=general.audit_ingestion_failed_retention_days,
+                    cleanup_interval_seconds=(general.audit_ingestion_cleanup_interval_seconds),
+                    cleanup_batch_size=general.audit_ingestion_cleanup_batch_size,
+                    cleanup_max_batches_per_run=(
+                        general.audit_ingestion_cleanup_max_batches_per_run
+                    ),
+                    cleanup_time_budget_seconds=(
+                        general.audit_ingestion_cleanup_time_budget_seconds
+                    ),
+                    worker_startup_timeout_seconds=(
+                        general.telemetry_worker_startup_timeout_seconds
+                    ),
+                    shutdown_drain_timeout_seconds=(
+                        general.telemetry_shutdown_drain_timeout_seconds
+                    ),
+                )
+            )
         configure_cache_runtime(
             app,
             app_config=app_config,
@@ -198,13 +292,16 @@ class ModelHotReloadManager:
             salt_key=salt_key,
         )
         await reload_callable_target_grants_for_app(app, notify=False)
+        app.state.app_config = app_config
 
     async def _reload_runtime(self) -> None:
         app_config = self.dynamic_config.get_app_config()
         await self._apply_runtime_config(app_config)
         changed = await sync_auto_follow_organization_bindings(
             db=getattr(getattr(self.app.state, "prisma_manager", None), "client", None),
-            callable_target_binding_repository=getattr(self.app.state, "callable_target_binding_repository", None),
+            callable_target_binding_repository=getattr(
+                self.app.state, "callable_target_binding_repository", None
+            ),
             route_group_repository=getattr(self.app.state, "route_group_repository", None),
             callable_target_catalog=getattr(self.app.state, "callable_target_catalog", None),
         )
@@ -233,9 +330,7 @@ class ModelHotReloadManager:
         }
         signature = inspect.signature(load_model_registry)
         supported_kwargs = {
-            key: value
-            for key, value in kwargs.items()
-            if key in signature.parameters
+            key: value for key, value in kwargs.items() if key in signature.parameters
         }
         return await load_model_registry(
             self.model_repository,
@@ -248,19 +343,19 @@ class ModelHotReloadManager:
     def _repository_update_kwargs(repository: Any, deployment: dict[str, Any]) -> dict[str, Any]:
         kwargs = {
             "model_name": str(deployment["model_name"]),
-            "named_credential_id": str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
+            "named_credential_id": str(deployment.get("named_credential_id")).strip() or None
+            if deployment.get("named_credential_id") is not None
+            else None,
             "deltallm_params": dict(deployment["deltallm_params"]),
             "model_info": dict(deployment.get("model_info", {})),
         }
         signature = inspect.signature(repository.update)
-        return {
-            key: value
-            for key, value in kwargs.items()
-            if key in signature.parameters
-        }
+        return {key: value for key, value in kwargs.items() if key in signature.parameters}
 
     @staticmethod
-    def _build_router_config(router_settings: RouterSettings, route_groups: list[dict[str, Any]] | None = None) -> RouterConfig:
+    def _build_router_config(
+        router_settings: RouterSettings, route_groups: list[dict[str, Any]] | None = None
+    ) -> RouterConfig:
         data = router_settings.model_dump()
         allowed = {
             "num_retries",
@@ -271,7 +366,9 @@ class ModelHotReloadManager:
             "enable_pre_call_checks",
             "model_group_alias",
         }
-        effective_route_groups = route_groups if route_groups is not None else data.get("route_groups", [])
+        effective_route_groups = (
+            route_groups if route_groups is not None else data.get("route_groups", [])
+        )
         return RouterConfig(
             **{key: value for key, value in data.items() if key in allowed},
             route_group_policies=build_route_group_policies(effective_route_groups),
@@ -279,8 +376,18 @@ class ModelHotReloadManager:
 
     @staticmethod
     def _has_runtime_changes(changes: dict[str, list[str]]) -> bool:
-        interesting = {"model_list", "router_settings", "deltallm_settings", "litellm_settings", "general_settings"}
-        touched = set(changes.get("added", [])) | set(changes.get("removed", [])) | set(changes.get("modified", []))
+        interesting = {
+            "model_list",
+            "router_settings",
+            "deltallm_settings",
+            "litellm_settings",
+            "general_settings",
+        }
+        touched = (
+            set(changes.get("added", []))
+            | set(changes.get("removed", []))
+            | set(changes.get("modified", []))
+        )
         return bool(touched & interesting)
 
     @staticmethod

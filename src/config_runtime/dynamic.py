@@ -36,6 +36,34 @@ class DynamicConfigLoadError(RuntimeError):
     """Raised when a dynamic config reload cannot read the durable source."""
 
 
+class DynamicConfigRestartRequiredError(RuntimeError):
+    """Raised when an update changes fields that are bound during process startup."""
+
+
+_STARTUP_ONLY_GENERAL_SETTINGS = frozenset(
+    {
+        "database_url",
+        "db_pool_size",
+        "db_pool_timeout",
+        "telemetry_db_pool_size",
+        "telemetry_db_pool_timeout_seconds",
+        "spend_ingestion_mode",
+        "audit_ingestion_mode",
+        "prompt_singleflight_max_keys",
+        "prompt_singleflight_timeout_seconds",
+        "email_enabled",
+        "email_worker_enabled",
+        "email_worker_poll_interval_seconds",
+        "email_worker_max_concurrency",
+        "email_worker_batch_size",
+        "email_worker_delivery_lease_seconds",
+        "email_worker_audit_lease_seconds",
+        "email_worker_startup_timeout_seconds",
+        "email_worker_shutdown_drain_timeout_seconds",
+    }
+)
+
+
 class DynamicConfigManager:
     """Merges file + DB config and propagates changes via Redis pub/sub."""
 
@@ -110,8 +138,20 @@ class DynamicConfigManager:
         async with self._update_lock:
             next_db_config = deep_merge(self._db_config, config_update)
             next_app_config = self._build_app_config(next_db_config)
+            self._reject_startup_only_changes(next_app_config)
+            previous_db_config = deepcopy(self._db_config)
             await self._store_db_config(next_db_config, updated_by=updated_by)
-            await self._apply_db_config(next_db_config, app_config=next_app_config)
+            try:
+                await self._apply_db_config(next_db_config, app_config=next_app_config)
+            except Exception:
+                try:
+                    await self._store_db_config(
+                        previous_db_config,
+                        updated_by=f"rollback:{updated_by}",
+                    )
+                except Exception:
+                    logger.exception("failed rolling back rejected dynamic config")
+                raise
             await self._publish_reload_event(event_type="config_updated")
 
     async def publish_model_updated(self) -> None:
@@ -197,6 +237,8 @@ class DynamicConfigManager:
     ) -> bool:
         previous_app_config = self._config
         new_app_config = app_config or self._build_app_config(db_config)
+        if self._config_generation > 0:
+            self._reject_startup_only_changes(new_app_config)
 
         changes = self._detect_app_config_changes(previous_app_config, new_app_config)
         if forced_modified_keys:
@@ -204,19 +246,47 @@ class DynamicConfigManager:
             # persisted config blob. Merge in the synthetic keys so subscribers
             # still refresh the relevant in-memory state on peer pods.
             changes["modified"] = sorted(set(changes["modified"]) | set(forced_modified_keys))
-        self._db_config = deepcopy(db_config)
-        self._config = new_app_config
-
         if not any(changes.values()):
+            self._db_config = deepcopy(db_config)
             return False
 
+        try:
+            await self._notify_subscribers(new_app_config, changes)
+        except Exception:
+            rollback_changes = self._detect_app_config_changes(
+                new_app_config,
+                previous_app_config,
+            )
+            for callback in list(self._subscribers):
+                try:
+                    result = callback(previous_app_config, rollback_changes)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    logger.exception("config subscriber rollback failed")
+            raise
+        self._db_config = deepcopy(db_config)
+        self._config = new_app_config
         self._config_generation += 1
         self._record_scheduler_rollbacks(
             previous_config=previous_app_config,
             current_config=new_app_config,
         )
-        await self._notify_subscribers(changes)
         return True
+
+    def _reject_startup_only_changes(self, next_app_config: AppConfig) -> None:
+        current = self._config.general_settings
+        candidate = next_app_config.general_settings
+        changed = sorted(
+            field_name
+            for field_name in _STARTUP_ONLY_GENERAL_SETTINGS
+            if getattr(current, field_name) != getattr(candidate, field_name)
+        )
+        if changed:
+            fields = ", ".join(f"general_settings.{field_name}" for field_name in changed)
+            raise DynamicConfigRestartRequiredError(
+                f"startup-only settings require a restart: {fields}"
+            )
 
     def _build_app_config(self, db_config: dict[str, Any]) -> AppConfig:
         try:
@@ -225,7 +295,9 @@ class DynamicConfigManager:
             raise DynamicConfigValidationError("failed to validate dynamic config") from exc
 
     @staticmethod
-    def _record_scheduler_rollbacks(*, previous_config: AppConfig, current_config: AppConfig) -> None:
+    def _record_scheduler_rollbacks(
+        *, previous_config: AppConfig, current_config: AppConfig
+    ) -> None:
         previous_modes = resolve_scheduler_modes_from_settings(previous_config.general_settings)
         current_modes = resolve_scheduler_modes_from_settings(current_config.general_settings)
         for event in scheduler_rollback_events(previous=previous_modes, current=current_modes):
@@ -235,14 +307,15 @@ class DynamicConfigManager:
                 reason=event.reason,
             )
 
-    async def _notify_subscribers(self, changes: dict[str, list[str]]) -> None:
+    async def _notify_subscribers(
+        self,
+        app_config: AppConfig,
+        changes: dict[str, list[str]],
+    ) -> None:
         for callback in list(self._subscribers):
-            try:
-                result = callback(self._config, changes)
-                if asyncio.iscoroutine(result):
-                    await result
-            except Exception as exc:
-                logger.error("config subscriber callback failed: %s", exc)
+            result = callback(app_config, changes)
+            if asyncio.iscoroutine(result):
+                await result
 
     async def _load_from_db(self, *, allow_stale_on_error: bool = False) -> dict[str, Any]:
         if self.db is None:

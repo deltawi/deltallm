@@ -27,8 +27,11 @@ class CallbackManager:
         self.pre_call_hooks: list[CustomLogger] = []
         self.post_call_hooks: list[CustomLogger] = []
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._config_managed_handlers: set[int] = set()
 
-    def register_callback(self, callback: str | CustomLogger | type[CustomLogger], callback_type: str = "success") -> None:
+    def register_callback(
+        self, callback: str | CustomLogger | type[CustomLogger], callback_type: str = "success"
+    ) -> None:
         handler = self._resolve_callback(callback)
         if callback_type in {"success", "both"}:
             self.success_callbacks.append(handler)
@@ -38,8 +41,10 @@ class CallbackManager:
         if handler.__class__.async_pre_call_hook is not CustomLogger.async_pre_call_hook:
             self.pre_call_hooks.append(handler)
         if (
-            handler.__class__.async_post_call_success_hook is not CustomLogger.async_post_call_success_hook
-            or handler.__class__.async_post_call_failure_hook is not CustomLogger.async_post_call_failure_hook
+            handler.__class__.async_post_call_success_hook
+            is not CustomLogger.async_post_call_success_hook
+            or handler.__class__.async_post_call_failure_hook
+            is not CustomLogger.async_post_call_failure_hook
         ):
             self.post_call_hooks.append(handler)
 
@@ -51,13 +56,39 @@ class CallbackManager:
         callbacks: Iterable[str] | None,
         callback_settings: dict[str, dict[str, Any]] | None,
     ) -> None:
+        self._remove_config_managed_callbacks()
         settings = callback_settings or {}
-        for name in success_callbacks or []:
+        success_names = _unique_callback_names(success_callbacks)
+        failure_names = _unique_callback_names(failure_callbacks)
+        both_names = _unique_callback_names(callbacks)
+
+        # A callback present in ``callbacks`` already receives both outcomes.
+        # Do not instantiate it again from the outcome-specific lists.
+        both_keys = {_callback_identity(name) for name in both_names}
+        for name in success_names:
+            if _callback_identity(name) in both_keys:
+                continue
             self._register_by_name(name, callback_type="success", callback_settings=settings)
-        for name in failure_callbacks or []:
+        for name in failure_names:
+            if _callback_identity(name) in both_keys:
+                continue
             self._register_by_name(name, callback_type="failure", callback_settings=settings)
-        for name in callbacks or []:
+        for name in both_names:
             self._register_by_name(name, callback_type="both", callback_settings=settings)
+
+    def _remove_config_managed_callbacks(self) -> None:
+        if not self._config_managed_handlers:
+            return
+        managed = self._config_managed_handlers
+        self.success_callbacks = [
+            item for item in self.success_callbacks if id(item) not in managed
+        ]
+        self.failure_callbacks = [
+            item for item in self.failure_callbacks if id(item) not in managed
+        ]
+        self.pre_call_hooks = [item for item in self.pre_call_hooks if id(item) not in managed]
+        self.post_call_hooks = [item for item in self.post_call_hooks if id(item) not in managed]
+        managed.clear()
 
     async def execute_pre_call_hooks(
         self,
@@ -70,11 +101,15 @@ class CallbackManager:
         payload = data
         for handler in self.pre_call_hooks:
             try:
-                maybe_payload = await handler.async_pre_call_hook(user_api_key_dict, cache, payload, call_type)
+                maybe_payload = await handler.async_pre_call_hook(
+                    user_api_key_dict, cache, payload, call_type
+                )
                 if maybe_payload is not None:
                     payload = maybe_payload
             except Exception:
-                logger.exception("callback pre-call hook failed", extra={"handler": handler.__class__.__name__})
+                logger.exception(
+                    "callback pre-call hook failed", extra={"handler": handler.__class__.__name__}
+                )
         return payload
 
     async def execute_post_call_success_hooks(
@@ -88,7 +123,10 @@ class CallbackManager:
             try:
                 await handler.async_post_call_success_hook(data, user_api_key_dict, response)
             except Exception:
-                logger.exception("callback post-call success hook failed", extra={"handler": handler.__class__.__name__})
+                logger.exception(
+                    "callback post-call success hook failed",
+                    extra={"handler": handler.__class__.__name__},
+                )
 
     async def execute_post_call_failure_hooks(
         self,
@@ -99,14 +137,21 @@ class CallbackManager:
     ) -> None:
         for handler in self.post_call_hooks:
             try:
-                await handler.async_post_call_failure_hook(request_data, original_exception, user_api_key_dict)
+                await handler.async_post_call_failure_hook(
+                    request_data, original_exception, user_api_key_dict
+                )
             except Exception:
-                logger.exception("callback post-call failure hook failed", extra={"handler": handler.__class__.__name__})
+                logger.exception(
+                    "callback post-call failure hook failed",
+                    extra={"handler": handler.__class__.__name__},
+                )
 
     def dispatch_success_callbacks(self, payload: StandardLoggingPayload) -> None:
         self._schedule(self.execute_success_callbacks(payload))
 
-    def dispatch_failure_callbacks(self, payload: StandardLoggingPayload, exception: Exception) -> None:
+    def dispatch_failure_callbacks(
+        self, payload: StandardLoggingPayload, exception: Exception
+    ) -> None:
         self._schedule(self.execute_failure_callbacks(payload, exception))
 
     async def execute_success_callbacks(self, payload: StandardLoggingPayload) -> None:
@@ -119,9 +164,14 @@ class CallbackManager:
                     end_time=payload.end_time,
                 )
             except Exception:
-                logger.exception("callback success execution failed", extra={"handler": handler.__class__.__name__})
+                logger.exception(
+                    "callback success execution failed",
+                    extra={"handler": handler.__class__.__name__},
+                )
 
-    async def execute_failure_callbacks(self, payload: StandardLoggingPayload, exception: Exception) -> None:
+    async def execute_failure_callbacks(
+        self, payload: StandardLoggingPayload, exception: Exception
+    ) -> None:
         for handler in self.failure_callbacks:
             try:
                 await handler.async_log_failure_event(
@@ -131,7 +181,10 @@ class CallbackManager:
                     end_time=payload.end_time,
                 )
             except Exception:
-                logger.exception("callback failure execution failed", extra={"handler": handler.__class__.__name__})
+                logger.exception(
+                    "callback failure execution failed",
+                    extra={"handler": handler.__class__.__name__},
+                )
 
     async def shutdown(self) -> None:
         if not self._tasks:
@@ -150,8 +203,11 @@ class CallbackManager:
         try:
             handler = self._resolve_string_callback(name, callback_settings)
             self.register_callback(handler, callback_type=callback_type)
+            self._config_managed_handlers.add(id(handler))
         except Exception as exc:
-            logger.warning("failed to register callback", extra={"callback": name, "error": str(exc)})
+            logger.warning(
+                "failed to register callback", extra={"callback": name, "error": str(exc)}
+            )
 
     def _resolve_callback(self, callback: str | CustomLogger | type[CustomLogger]) -> CustomLogger:
         if isinstance(callback, CustomLogger):
@@ -162,7 +218,9 @@ class CallbackManager:
             return self._resolve_string_callback(callback, callback_settings={})
         raise ValueError(f"Invalid callback type: {type(callback)}")
 
-    def _resolve_string_callback(self, callback: str, callback_settings: dict[str, dict[str, Any]]) -> CustomLogger:
+    def _resolve_string_callback(
+        self, callback: str, callback_settings: dict[str, dict[str, Any]]
+    ) -> CustomLogger:
         name = callback.strip()
         kwargs: dict[str, Any] = {}
         if name in BUILTIN_CALLBACKS:
@@ -186,3 +244,21 @@ class CallbackManager:
             return
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+
+def _callback_identity(name: str) -> str:
+    normalized = str(name or "").strip()
+    return BUILTIN_CALLBACKS.get(normalized, normalized)
+
+
+def _unique_callback_names(names: Iterable[str] | None) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for raw_name in names or []:
+        name = str(raw_name or "").strip()
+        identity = _callback_identity(name)
+        if not name or identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(name)
+    return unique

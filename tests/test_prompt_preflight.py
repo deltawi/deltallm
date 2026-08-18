@@ -6,6 +6,7 @@ import pytest
 
 from src.db.prompt_registry import PromptBindingRecord, PromptResolvedRecord
 from src.models.responses import UserAPIKeyAuth
+from src.services.callable_targets import CallableTarget
 from src.services.prompt_registry import PromptProvenance, PromptRegistryService, PromptRenderOutput
 from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
 
@@ -15,8 +16,14 @@ class _InjectingPromptService:
         del kwargs
         return PromptRenderOutput(
             messages=[{"role": "system", "content": "You must answer as DeltaLLM assistant."}],
-            provenance=PromptProvenance(source="binding", template_key="support.prompt", version=3, label="production"),
-            rendered_prompt={"messages": [{"role": "system", "content": "You must answer as DeltaLLM assistant."}]},
+            provenance=PromptProvenance(
+                source="binding", template_key="support.prompt", version=3, label="production"
+            ),
+            rendered_prompt={
+                "messages": [
+                    {"role": "system", "content": "You must answer as DeltaLLM assistant."}
+                ]
+            },
         )
 
 
@@ -38,7 +45,9 @@ class _SpendRecorder:
 
 
 class _PromptRepoForDefaults:
-    async def resolve_prompt(self, *, template_key: str, label: str | None = None, version: int | None = None):  # noqa: ANN201
+    async def resolve_prompt(
+        self, *, template_key: str, label: str | None = None, version: int | None = None
+    ):  # noqa: ANN201
         del version
         if template_key == "support.prompt":
             return PromptResolvedRecord(
@@ -147,7 +156,13 @@ async def test_chat_preflight_injects_prompt_messages(client, test_app):
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
@@ -155,7 +170,11 @@ async def test_chat_preflight_injects_prompt_messages(client, test_app):
     test_app.state.http_client.post = post
     test_app.state.prompt_registry_service = _InjectingPromptService()
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
     request_payload = captured.get("json")
@@ -170,14 +189,21 @@ async def test_chat_preflight_keeps_spend_metadata_with_unified_resolution_block
     test_app.state.spend_tracking_service = recorder
     test_app.state.prompt_registry_service = _InjectingPromptService()
 
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-prompt-resolution"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-prompt-resolution",
+    }
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
     assert response.status_code == 200
     await asyncio.sleep(0.05)
     assert recorder.events
-    metadata = (recorder.events[-1].get("metadata") or {})
+    metadata = recorder.events[-1].get("metadata") or {}
     assert metadata.get("routing_decision")
     assert metadata.get("prompt_provenance", {}).get("template_key") == "support.prompt"
     resolution = metadata.get("request_resolution") or {}
@@ -189,7 +215,11 @@ async def test_chat_preflight_keeps_spend_metadata_with_unified_resolution_block
 async def test_chat_preflight_returns_400_for_prompt_resolution_errors(client, test_app):
     test_app.state.prompt_registry_service = _FailingPromptService()
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 400
     payload = response.json()["error"]
@@ -198,7 +228,9 @@ async def test_chat_preflight_returns_400_for_prompt_resolution_errors(client, t
 
 
 @pytest.mark.asyncio
-async def test_chat_preflight_uses_route_group_default_prompt_when_no_higher_scope_binding(client, test_app):
+async def test_chat_preflight_uses_route_group_default_prompt_when_no_higher_scope_binding(
+    client, test_app
+):
     captured: dict[str, object] = {}
 
     async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
@@ -209,7 +241,13 @@ async def test_chat_preflight_uses_route_group_default_prompt_when_no_higher_sco
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
@@ -219,9 +257,16 @@ async def test_chat_preflight_uses_route_group_default_prompt_when_no_higher_sco
         repository=_PromptRepoWithoutBindings(),
         route_group_repository=_RouteGroupPromptRepo(),
     )
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="route_group")
+    }
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
     assert response.status_code == 200
@@ -231,7 +276,9 @@ async def test_chat_preflight_uses_route_group_default_prompt_when_no_higher_sco
 
 
 @pytest.mark.asyncio
-async def test_chat_preflight_keeps_explicit_prompt_precedence_over_route_group_default(client, test_app):
+async def test_chat_preflight_keeps_explicit_prompt_precedence_over_route_group_default(
+    client, test_app
+):
     captured: dict[str, object] = {}
 
     async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
@@ -242,7 +289,13 @@ async def test_chat_preflight_keeps_explicit_prompt_precedence_over_route_group_
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
@@ -250,7 +303,9 @@ async def test_chat_preflight_keeps_explicit_prompt_precedence_over_route_group_
     test_app.state.http_client.post = post
 
     class _PromptRepoWithExplicit(_PromptRepoWithoutBindings):
-        async def resolve_prompt(self, *, template_key: str, label: str | None = None, version: int | None = None):  # noqa: ANN201
+        async def resolve_prompt(
+            self, *, template_key: str, label: str | None = None, version: int | None = None
+        ):  # noqa: ANN201
             if template_key == "key.prompt":
                 return PromptResolvedRecord(
                     prompt_template_id="tmpl-key",
@@ -263,7 +318,9 @@ async def test_chat_preflight_keeps_explicit_prompt_precedence_over_route_group_
                     variables_schema=None,
                     model_hints=None,
                 )
-            return await super().resolve_prompt(template_key=template_key, label=label, version=version)
+            return await super().resolve_prompt(
+                template_key=template_key, label=label, version=version
+            )
 
     test_app.state.prompt_registry_service = PromptRegistryService(
         repository=_PromptRepoWithExplicit(),
@@ -287,7 +344,9 @@ async def test_chat_preflight_keeps_explicit_prompt_precedence_over_route_group_
 
 @pytest.mark.asyncio
 async def test_prompt_registry_resolves_legacy_key_binding_from_api_key_scope() -> None:
-    service = PromptRegistryService(repository=_PromptRepoForDefaults(), route_group_repository=_RouteGroupPromptRepo())
+    service = PromptRegistryService(
+        repository=_PromptRepoForDefaults(), route_group_repository=_RouteGroupPromptRepo()
+    )
 
     resolved = await service.resolve_and_render(
         explicit_reference=None,
@@ -351,15 +410,26 @@ async def test_chat_preflight_applies_prompt_route_preference_tags(client, test_
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
 
     test_app.state.http_client.post = post
+
     class _PromptRepoWithRoutePreferences(_PromptRepoWithoutBindings):
-        async def resolve_prompt(self, *, template_key: str, label: str | None = None, version: int | None = None):  # noqa: ANN201
-            resolved = await super().resolve_prompt(template_key=template_key, label=label, version=version)
+        async def resolve_prompt(
+            self, *, template_key: str, label: str | None = None, version: int | None = None
+        ):  # noqa: ANN201
+            resolved = await super().resolve_prompt(
+                template_key=template_key, label=label, version=version
+            )
             if resolved is None or template_key != "support.prompt":
                 return resolved
             return PromptResolvedRecord(
@@ -379,6 +449,9 @@ async def test_chat_preflight_applies_prompt_route_preference_tags(client, test_
         repository=_PromptRepoWithRoutePreferences(),
         route_group_repository=_RouteGroupPromptRepo(),
     )
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="route_group")
+    }
     recorder = _SpendRecorder()
     test_app.state.spend_tracking_service = recorder
     for deployment in test_app.state.router.deployment_registry.get("gpt-4o-mini", []):
@@ -396,9 +469,13 @@ async def test_chat_preflight_applies_prompt_route_preference_tags(client, test_
     assert response.status_code == 200
     await asyncio.sleep(0.05)
     assert recorder.events
-    metadata = (recorder.events[-1].get("metadata") or {})
-    assert metadata.get("prompt_provenance", {}).get("route_preferences") == {"tags": ["support", "vip"]}
-    assert metadata.get("request_resolution", {}).get("prompt", {}).get("route_preferences") == {"tags": ["support", "vip"]}
+    metadata = recorder.events[-1].get("metadata") or {}
+    assert metadata.get("prompt_provenance", {}).get("route_preferences") == {
+        "tags": ["support", "vip"]
+    }
+    assert metadata.get("request_resolution", {}).get("prompt", {}).get("route_preferences") == {
+        "tags": ["support", "vip"]
+    }
 
 
 @pytest.mark.asyncio

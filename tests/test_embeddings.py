@@ -124,18 +124,22 @@ async def test_embeddings_upstream_rate_limit_returns_429(client, test_app):
     assert response.json()["error"]["type"] == "rate_limit_error"
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
-    assert int(health.get("consecutive_failures", 0) or 0) == 2
+    assert int(health.get("consecutive_failures", 0) or 0) == 1
     assert health.get("last_error") == "provider quota exhausted"
     assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
 
 
 @pytest.mark.asyncio
-async def test_embeddings_upstream_service_unavailable_updates_passive_health(client, test_app):
+async def test_embeddings_upstream_service_unavailable_updates_health_once(client, test_app):
     deployment = test_app.state.router.deployment_registry["text-embedding-3-small"][0]
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del headers, json, timeout
-        return httpx.Response(503, json={"error": {"message": "provider unavailable"}}, request=httpx.Request("POST", url))
+        return httpx.Response(
+            503,
+            json={"error": {"message": "provider unavailable"}},
+            request=httpx.Request("POST", url),
+        )
 
     test_app.state.http_client.post = post
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
@@ -146,13 +150,15 @@ async def test_embeddings_upstream_service_unavailable_updates_passive_health(cl
     assert response.status_code == 503
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
-    assert int(health.get("consecutive_failures", 0) or 0) == 2
+    assert int(health.get("consecutive_failures", 0) or 0) == 1
     assert health.get("last_error") == "Upstream embedding call failed with status 503"
     assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
 
 
 @pytest.mark.asyncio
-async def test_embeddings_upstream_service_unavailable_retries_when_route_policy_allows(client, test_app):
+async def test_embeddings_upstream_service_unavailable_retries_when_route_policy_allows(
+    client, test_app
+):
     deployment = test_app.state.router.deployment_registry["text-embedding-3-small"][0]
     attempts = {"count": 0}
 
@@ -198,7 +204,9 @@ async def test_embeddings_upstream_service_unavailable_retries_when_route_policy
 
 
 @pytest.mark.asyncio
-async def test_embeddings_upstream_timeout_retries_when_route_policy_targets_timeout(client, test_app):
+async def test_embeddings_upstream_timeout_retries_when_route_policy_targets_timeout(
+    client, test_app
+):
     deployment = test_app.state.router.deployment_registry["text-embedding-3-small"][0]
     attempts = {"count": 0}
 
@@ -251,7 +259,10 @@ async def test_embeddings_upstream_bad_request_does_not_mark_deployment_unhealth
         type(deployment)(
             deployment_id="text-embedding-3-small-fallback",
             model_name="text-embedding-3-small",
-            deltallm_params={"model": "openai/text-embedding-3-small", "api_key": "provider-key-fallback"},
+            deltallm_params={
+                "model": "openai/text-embedding-3-small",
+                "api_key": "provider-key-fallback",
+            },
             model_info={},
         )
     )
@@ -270,7 +281,9 @@ async def test_embeddings_upstream_bad_request_does_not_mark_deployment_unhealth
         attempted_auths.append(headers.get("Authorization"))
         calls["count"] += 1
         if calls["count"] == 1:
-            return httpx.Response(400, json={"error": {"message": "bad embedding input"}}, request=request)
+            return httpx.Response(
+                400, json={"error": {"message": "bad embedding input"}}, request=request
+            )
         return httpx.Response(
             200,
             json={

@@ -112,10 +112,17 @@ from src.metrics.audit import (
 )
 from src.metrics.email import (
     increment_email_delivery_attempt,
+    increment_email_delivery_unknown,
+    increment_email_worker_failure,
     observe_email_delivery_latency,
+    set_email_delivery_audit_backlog,
     set_email_queue_depth,
 )
 from src.metrics.notifications import increment_notification_enqueue
+from src.metrics.prompt import (
+    increment_prompt_singleflight_outcome,
+    set_prompt_singleflight_inflight,
+)
 from src.metrics.counters import (
     increment_cache_hit,
     increment_cache_miss,
@@ -146,6 +153,7 @@ from src.metrics.histograms import (
     observe_tier_capacity_fair_share_latency,
 )
 from src.metrics.prometheus import get_prometheus_registry, infer_provider
+from src.metrics.request_phases import observe_request_phase
 
 __all__ = [
     "get_prometheus_registry",
@@ -260,8 +268,13 @@ __all__ = [
     "increment_audit_events_dropped",
     "observe_audit_ingestion_latency",
     "increment_email_delivery_attempt",
+    "increment_email_delivery_unknown",
+    "increment_email_worker_failure",
     "observe_email_delivery_latency",
+    "set_email_delivery_audit_backlog",
     "increment_notification_enqueue",
+    "increment_prompt_singleflight_outcome",
+    "set_prompt_singleflight_inflight",
     "increment_request",
     "increment_request_failure",
     "increment_usage",
@@ -280,6 +293,7 @@ __all__ = [
     "observe_api_latency",
     "observe_prompt_resolution_latency",
     "observe_tier_capacity_fair_share_latency",
+    "observe_request_phase",
     "set_deployment_state",
     "set_deployment_latency_per_output_token",
     "set_deployment_active_requests",

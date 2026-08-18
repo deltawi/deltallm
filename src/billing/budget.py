@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import calendar
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.billing.alerts import AlertService
+from src.db.budgets import BudgetRepository
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +32,23 @@ class BudgetExceeded(Exception):
 class BudgetEnforcementService:
     """Checks hard and soft budgets for key/user/team/org entities."""
 
-    def __init__(self, db_client: Any | None, alert_service: AlertService | None = None) -> None:
+    def __init__(
+        self,
+        db_client: Any | None,
+        alert_service: AlertService | None = None,
+        *,
+        query_mode: str = "legacy",
+        shadow_sample_rate: float = 0.01,
+        query_timeout_seconds: float = 2.0,
+    ) -> None:
         self.db = db_client
         self.alerts = alert_service
+        self.repository = BudgetRepository(db_client)
+        self.query_mode = str(query_mode or "legacy").strip().lower()
+        if self.query_mode not in {"legacy", "shadow", "combined"}:
+            raise ValueError("budget query mode must be legacy, shadow, or combined")
+        self.shadow_sample_rate = min(1.0, max(0.0, float(shadow_sample_rate)))
+        self.query_timeout_seconds = max(0.01, float(query_timeout_seconds))
 
     async def check_budgets(
         self,
@@ -45,13 +62,139 @@ class BudgetEnforcementService:
         if self.db is None:
             return
 
-        await self._check_entity_budget("key", api_key)
-        await self._check_entity_budget("user", user_id)
-        await self._check_entity_budget("team", team_id)
-        await self._check_entity_budget("org", organization_id)
+        if self.query_mode == "combined":
+            await self._check_combined_budgets(
+                api_key=api_key,
+                user_id=user_id,
+                team_id=team_id,
+                organization_id=organization_id,
+                model=model,
+            )
+            return
 
-        if team_id and model:
-            await self._check_team_model_budget(team_id=team_id, model=model)
+        should_shadow = self.query_mode == "shadow" and self._should_shadow(
+            api_key,
+            user_id,
+            team_id,
+            organization_id,
+            model,
+        )
+
+        legacy_error: BudgetExceeded | None = None
+        try:
+            await self._check_entity_budget("key", api_key)
+            await self._check_entity_budget("user", user_id)
+            await self._check_entity_budget("team", team_id)
+            await self._check_entity_budget("org", organization_id)
+
+            if team_id and model:
+                await self._check_team_model_budget(team_id=team_id, model=model)
+        except BudgetExceeded as exc:
+            legacy_error = exc
+
+        shadow_snapshot: list[dict[str, Any]] | None = None
+        if should_shadow:
+            try:
+                # Legacy enforcement owns reset transitions. Compare only after
+                # those guarded updates so shadow mode observes the same state.
+                async with asyncio.timeout(self.query_timeout_seconds):
+                    shadow_snapshot = await self.repository.get_snapshot(
+                        api_key=api_key,
+                        user_id=user_id,
+                        team_id=team_id,
+                        organization_id=organization_id,
+                        model=model,
+                    )
+            except Exception:
+                logger.exception("budget combined-query shadow read failed")
+
+        if shadow_snapshot is not None:
+            combined_error = self._first_hard_budget_error(shadow_snapshot)
+            if _budget_error_signature(legacy_error) != _budget_error_signature(combined_error):
+                logger.warning(
+                    "budget query shadow mismatch",
+                    extra={
+                        "legacy": _budget_error_signature(legacy_error),
+                        "combined": _budget_error_signature(combined_error),
+                    },
+                )
+        if legacy_error is not None:
+            raise legacy_error
+
+    async def _check_combined_budgets(
+        self,
+        *,
+        api_key: str | None,
+        user_id: str | None,
+        team_id: str | None,
+        organization_id: str | None,
+        model: str | None,
+    ) -> None:
+        async with asyncio.timeout(self.query_timeout_seconds):
+            snapshot = await self.repository.get_snapshot(
+                api_key=api_key,
+                user_id=user_id,
+                team_id=team_id,
+                organization_id=organization_id,
+                model=model,
+            )
+        for raw_entity in snapshot:
+            entity = dict(raw_entity)
+            entity_type = str(entity.get("entity_type") or "")
+            entity_id = str(entity.get("entity_id") or "")
+            if entity_type != "team_model":
+                entity = await self._check_budget_reset(entity_type, entity)
+            await self._evaluate_entity_budget(entity_type, entity_id, entity)
+
+    async def _evaluate_entity_budget(
+        self,
+        entity_type: str,
+        entity_id: str,
+        entity: dict[str, Any],
+    ) -> None:
+        max_budget = _to_float_or_none(entity.get("max_budget"))
+        soft_budget = _to_float_or_none(entity.get("soft_budget"))
+        spend = _to_float(entity.get("spend"))
+        if max_budget is not None and spend >= max_budget:
+            raise BudgetExceeded(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                spend=spend,
+                max_budget=max_budget,
+            )
+        if soft_budget is not None and spend >= soft_budget and self.alerts is not None:
+            await self.alerts.send_budget_alert(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                current_spend=spend,
+                soft_budget=soft_budget,
+                hard_budget=max_budget,
+            )
+
+    def _first_hard_budget_error(
+        self,
+        snapshot: list[dict[str, Any]],
+    ) -> BudgetExceeded | None:
+        for entity in snapshot:
+            max_budget = _to_float_or_none(entity.get("max_budget"))
+            spend = _to_float(entity.get("spend"))
+            if max_budget is not None and spend >= max_budget:
+                return BudgetExceeded(
+                    entity_type=str(entity.get("entity_type") or ""),
+                    entity_id=str(entity.get("entity_id") or ""),
+                    spend=spend,
+                    max_budget=max_budget,
+                )
+        return None
+
+    def _should_shadow(self, *values: str | None) -> bool:
+        if self.shadow_sample_rate <= 0:
+            return False
+        if self.shadow_sample_rate >= 1:
+            return True
+        token = "\0".join(str(value or "") for value in values)
+        bucket = int.from_bytes(hashlib.sha256(token.encode("utf-8")).digest()[:8], "big")
+        return bucket / float(2**64) < self.shadow_sample_rate
 
     async def _check_entity_budget(self, entity_type: str, entity_id: str | None) -> None:
         if not entity_id:
@@ -63,21 +206,7 @@ class BudgetEnforcementService:
 
         entity = await self._check_budget_reset(entity_type, entity)
 
-        max_budget = _to_float_or_none(entity.get("max_budget"))
-        soft_budget = _to_float_or_none(entity.get("soft_budget"))
-        spend = _to_float(entity.get("spend"))
-
-        if max_budget is not None and spend >= max_budget:
-            raise BudgetExceeded(entity_type=entity_type, entity_id=entity_id, spend=spend, max_budget=max_budget)
-
-        if soft_budget is not None and spend >= soft_budget and self.alerts is not None:
-            await self.alerts.send_budget_alert(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                current_spend=spend,
-                soft_budget=soft_budget,
-                hard_budget=max_budget,
-            )
+        await self._evaluate_entity_budget(entity_type, entity_id, entity)
 
     async def _check_team_model_budget(self, team_id: str, model: str) -> None:
         rows = await self.db.query_raw(
@@ -102,7 +231,7 @@ class BudgetEnforcementService:
 
         counter_rows = await self.db.query_raw(
             """
-            SELECT spend
+            SELECT COALESCE(spend_exact, spend::numeric)::double precision AS spend
             FROM deltallm_teammodelspend
             WHERE team_id = $1 AND model = $2
             LIMIT 1
@@ -115,7 +244,10 @@ class BudgetEnforcementService:
         else:
             spend_rows = await self.db.query_raw(
                 """
-                SELECT COALESCE(SUM(spend), 0) AS total
+                SELECT COALESCE(
+                    SUM(COALESCE(spend_exact, spend::numeric)),
+                    0
+                )::double precision AS total
                 FROM deltallm_spendlog_events
                 WHERE team_id = $1 AND model = $2
                 """,
@@ -145,7 +277,9 @@ class BudgetEnforcementService:
         table, column, soft_budget_expr, metadata_expr = table_info
         rows = await self.db.query_raw(
             f"""
-            SELECT {column} AS entity_id, max_budget, {soft_budget_expr}, spend, budget_duration, budget_reset_at, {metadata_expr} AS metadata
+            SELECT {column} AS entity_id, max_budget, {soft_budget_expr},
+                   COALESCE(spend_exact, spend::numeric)::double precision AS spend,
+                   budget_duration, budget_reset_at, {metadata_expr} AS metadata
             FROM {table}
             WHERE {column} = $1
             LIMIT 1
@@ -217,6 +351,7 @@ class BudgetEnforcementService:
                 f"""
                 UPDATE {table}
                 SET spend = 0,
+                    spend_exact = 0,
                     budget_reset_at = $1::timestamp,
                     metadata = CASE
                         WHEN $4::int IS NULL THEN metadata
@@ -248,9 +383,14 @@ class BudgetEnforcementService:
             entity["spend"] = 0
             entity["budget_reset_at"] = next_reset
             if inferred_monthly_anchor_day is not None:
-                entity["metadata"] = _with_monthly_anchor_day(entity.get("metadata"), inferred_monthly_anchor_day)
+                entity["metadata"] = _with_monthly_anchor_day(
+                    entity.get("metadata"), inferred_monthly_anchor_day
+                )
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("failed to reset budget", extra={"entity_type": entity_type, "entity_id": entity_id, "error": str(exc)})
+            logger.warning(
+                "failed to reset budget",
+                extra={"entity_type": entity_type, "entity_id": entity_id, "error": str(exc)},
+            )
 
         return entity
 
@@ -329,7 +469,9 @@ def _duration_unit(duration: Any) -> str | None:
     return parsed[1] if parsed is not None else None
 
 
-def _next_fixed_reset_after(value: datetime, *, amount: int, unit: str, now: datetime) -> datetime | None:
+def _next_fixed_reset_after(
+    value: datetime, *, amount: int, unit: str, now: datetime
+) -> datetime | None:
     if unit == "h":
         step = timedelta(hours=amount)
     elif unit == "d":
@@ -377,6 +519,12 @@ def _affected_row_count(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _budget_error_signature(error: BudgetExceeded | None) -> tuple[str, str] | None:
+    if error is None:
+        return None
+    return error.entity_type, error.entity_id
 
 
 def _monthly_anchor_day(metadata: Any) -> int | None:

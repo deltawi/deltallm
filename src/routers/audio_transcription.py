@@ -16,7 +16,11 @@ from src.billing.cost import compute_billing_result
 from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
+from src.middleware.rate_limit import (
+    _release_rate_limits,
+    acquire_parallel_limits_for_payload,
+    check_and_acquire_rate_limits_for_payload,
+)
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -37,6 +41,7 @@ from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
     attach_route_decision,
@@ -47,13 +52,14 @@ from src.routers.routing_decision import (
     resolve_failure_target,
     update_served_route_decision,
 )
-from src.routers.utils import enforce_budget_if_configured, fire_and_forget
+from src.routers.utils import enforce_budget_if_configured
 from src.services.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,
     get_tier_policy_mode_from_app,
 )
+from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
 
 DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS = 600.0
 
@@ -61,7 +67,10 @@ router = APIRouter(prefix="/v1", tags=["audio"])
 
 
 def _transcription_timeout_seconds(params: dict[str, Any]) -> float:
-    return configured_timeout_seconds(params.get("timeout")) or DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS
+    return (
+        configured_timeout_seconds(params.get("timeout"))
+        or DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS
+    )
 
 
 async def _execute_stt(
@@ -114,6 +123,7 @@ async def _execute_stt(
     form_model = resolve_upstream_model(params, fallback_model=model) or model
 
     from src.routers.utils import apply_default_params
+
     _stt_defaults: dict[str, Any] = {"model": form_model}
     if language:
         _stt_defaults["language"] = language
@@ -145,6 +155,7 @@ async def _execute_stt(
         except Exception:
             upstream_msg = response.text
         import logging
+
         logging.getLogger(__name__).warning(
             "upstream STT %s returned %d: %s", api_base, response.status_code, upstream_msg
         )
@@ -153,7 +164,9 @@ async def _execute_stt(
             request=httpx.Request("POST", f"{api_base}/audio/transcriptions"),
             response=response,
         )
-    parsed_response = response.json() if "json" in upstream_response_format else {"text": response.text}
+    parsed_response = (
+        response.json() if "json" in upstream_response_format else {"text": response.text}
+    )
     data = _reshape_transcription_response(
         requested_response_format=response_format,
         upstream_response_format=upstream_response_format,
@@ -188,20 +201,29 @@ async def audio_transcriptions(
         audit_action=AuditAction.AUDIO_TRANSCRIPTION_REQUEST,
     )
     auth = request.state.user_api_key
+    await acquire_preflight_capacity(request, auth=auth)
     ensure_model_allowed(
         auth,
         model,
-        callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        callable_target_grant_service=getattr(
+            request.app.state, "callable_target_grant_service", None
+        ),
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),
         tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
-    await enforce_budget_if_configured(request, model=model, auth=auth)
-
-    callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
-    request_data = {"model": model, "language": language, "prompt": prompt, "response_format": response_format, "temperature": temperature}
+    callback_manager: CallbackManager = getattr(
+        request.app.state, "callback_manager", CallbackManager()
+    )
+    request_data = {
+        "model": model,
+        "language": language,
+        "prompt": prompt,
+        "response_format": response_format,
+        "temperature": temperature,
+    }
 
     file_content = await file.read()
     filename = file.filename or "audio.wav"
@@ -213,12 +235,28 @@ async def audio_transcriptions(
         "file_size": len(file_content),
         "file_sha256": hashlib.sha256(file_content).hexdigest(),
     }
-    await check_and_acquire_rate_limits_for_payload(
+    token_estimate = estimate_tokens(request_data) + estimate_tokens(file_content)
+    await acquire_parallel_limits_for_payload(
         request,
         model=model,
         payload=admission_payload,
-        token_estimate=estimate_tokens(request_data) + estimate_tokens(file_content),
+        token_estimate=token_estimate,
     )
+    try:
+        await enforce_budget_if_configured(request, model=model, auth=auth)
+    except Exception:
+        await _release_rate_limits(request)
+        await release_preflight_capacity(request)
+        raise
+    try:
+        await check_and_acquire_rate_limits_for_payload(
+            request,
+            model=model,
+            payload=admission_payload,
+            token_estimate=token_estimate,
+        )
+    finally:
+        await release_preflight_capacity(request)
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(model)
@@ -229,6 +267,7 @@ async def audio_transcriptions(
     )
     failover_kwargs = route_failover_kwargs(request_context)
     if "timeout_seconds" not in failover_kwargs:
+
         def timeout_for_deployment(deployment: Deployment) -> float:
             return _transcription_timeout_seconds(deployment.deltallm_params)
 
@@ -236,7 +275,9 @@ async def audio_transcriptions(
     capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
-    primary_api_base = str(primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
+    primary_api_base = str(
+        primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)
+    ).rstrip("/")
 
     def track_attempt(deployment):  # noqa: ANN001
         capture_attempted_deployment(request, deployment)
@@ -246,8 +287,16 @@ async def audio_transcriptions(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_stt(
-                request, file_content, filename, content_type_str,
-                model, language, prompt, response_format, temperature, dep,
+                request,
+                file_content,
+                filename,
+                content_type_str,
+                model,
+                language,
+                prompt,
+                response_format,
+                temperature,
+                dep,
             ),
             return_deployment=True,
             on_attempt=track_attempt,
@@ -258,7 +307,6 @@ async def audio_transcriptions(
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
-        await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
         api_provider = resolve_provider(served_deployment.deltallm_params)
 
         api_latency_ms = data.pop("_api_latency_ms", 0)
@@ -310,15 +358,25 @@ async def audio_transcriptions(
             request,
         )
         increment_request(
-            model=model, api_provider=api_provider,
-            api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=200,
+            model=model,
+            api_provider=api_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            status_code=200,
         )
         increment_spend(
-            model=model, api_provider=api_provider,
-            api_key=auth.api_key, user=auth.user_id, team=auth.team_id, spend=request_cost,
+            model=model,
+            api_provider=api_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            spend=request_cost,
         )
-        fire_and_forget(
+        await enqueue_request_log_write(
+            request,
             request.app.state.spend_tracking_service.log_spend(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -334,20 +392,37 @@ async def audio_transcriptions(
                 cache_hit=False,
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
-            )
+            ),
         )
-        observe_request_latency(model=model, api_provider=api_provider, status_code=200, latency_seconds=perf_counter() - request_start)
-        observe_api_latency(model=model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000)
-        callback_payload = build_standard_logging_payload(
-            call_type="audio_transcription", request_id=request_id, model=model,
-            deployment_model=deployment_model, request_payload=request_data, response_obj=data,
-            user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
-            api_base=api_base, response_cost=request_cost, api_latency_ms=api_latency_ms,
+        observe_request_latency(
+            model=model,
             api_provider=api_provider,
-            turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+            status_code=200,
+            latency_seconds=perf_counter() - request_start,
+        )
+        observe_api_latency(
+            model=model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000
+        )
+        callback_payload = build_standard_logging_payload(
+            call_type="audio_transcription",
+            request_id=request_id,
+            model=model,
+            deployment_model=deployment_model,
+            request_payload=request_data,
+            response_obj=data,
+            user_api_key_dict=auth.model_dump(mode="json"),
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
+            api_base=api_base,
+            response_cost=request_cost,
+            api_latency_ms=api_latency_ms,
+            api_provider=api_provider,
+            turn_off_message_logging=bool(
+                getattr(request.app.state, "turn_off_message_logging", False)
+            ),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.AUDIO_TRANSCRIPTION_REQUEST,
@@ -374,23 +449,33 @@ async def audio_transcriptions(
         return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
     except httpx.HTTPError as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
-        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
-        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(
-            failure_deployment_id,
-            success=False,
-            error=str(exc),
-            exc=exc,
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get(
+            "model"
         )
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
-        increment_request(model=model, api_provider=failure_provider, api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=status_code)
-        increment_request_failure(model=model, api_provider=failure_provider, error_type=exc.__class__.__name__)
-        observe_request_latency(model=model, api_provider=failure_provider, status_code=status_code, latency_seconds=perf_counter() - request_start)
-        enqueue_request_log_write(
+        increment_request(
+            model=model,
+            api_provider=failure_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            status_code=status_code,
+        )
+        increment_request_failure(
+            model=model, api_provider=failure_provider, error_type=exc.__class__.__name__
+        )
+        observe_request_latency(
+            model=model,
+            api_provider=failure_provider,
+            status_code=status_code,
+            latency_seconds=perf_counter() - request_start,
+        )
+        await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -415,9 +500,9 @@ async def audio_transcriptions(
                 end_time=datetime.now(tz=UTC),
                 http_status_code=status_code,
                 exc=exc,
-            )
+            ),
         )
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.AUDIO_TRANSCRIPTION_REQUEST,
@@ -444,20 +529,16 @@ async def audio_transcriptions(
         raise InvalidRequestError(message=f"Audio transcription request failed: {exc}") from exc
     except Exception as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
-        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
-        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(
-            failure_deployment_id,
-            success=False,
-            error=str(exc),
-            exc=exc,
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get(
+            "model"
         )
         status_code = int(getattr(exc, "status_code", 500) or 500)
-        enqueue_request_log_write(
+        await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -482,9 +563,9 @@ async def audio_transcriptions(
                 end_time=datetime.now(tz=UTC),
                 http_status_code=status_code,
                 exc=exc,
-            )
+            ),
         )
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.AUDIO_TRANSCRIPTION_REQUEST,

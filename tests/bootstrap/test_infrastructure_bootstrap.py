@@ -4,7 +4,29 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.bootstrap.infrastructure import init_infrastructure_runtime, shutdown_infrastructure_runtime
+from src.bootstrap.infrastructure import (
+    _startup_setting,
+    init_infrastructure_runtime,
+    shutdown_infrastructure_runtime,
+)
+from src.config import GeneralSettings, Settings
+
+
+def test_telemetry_startup_mode_uses_env_only_when_config_is_implicit() -> None:
+    settings = Settings.model_validate({"audit_ingestion_mode": "outbox"})
+
+    assert (
+        _startup_setting(GeneralSettings(), settings, "audit_ingestion_mode", "legacy") == "outbox"
+    )
+    assert (
+        _startup_setting(
+            GeneralSettings.model_validate({"audit_ingestion_mode": "legacy"}),
+            settings,
+            "audit_ingestion_mode",
+            "legacy",
+        )
+        == "legacy"
+    )
 
 
 @pytest.mark.asyncio
@@ -89,7 +111,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             redis_password=None,
         ),
     )
-    monkeypatch.setattr("src.bootstrap.infrastructure.load_yaml_dict", lambda path: {"loaded_from": path})
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.load_yaml_dict", lambda path: {"loaded_from": path}
+    )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.build_app_config",
         lambda file_config, secret_resolver: SimpleNamespace(  # noqa: ARG005
@@ -105,21 +129,49 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             deltallm_settings=SimpleNamespace(),
         ),
     )
-    monkeypatch.setattr("src.bootstrap.infrastructure.DynamicConfigManager", FakeDynamicConfigManager)
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.DynamicConfigManager", FakeDynamicConfigManager
+    )
     monkeypatch.setattr("src.bootstrap.infrastructure.Redis", FakeRedis)
     monkeypatch.setattr("src.bootstrap.infrastructure.prisma_manager", FakePrismaManager())
-    monkeypatch.setattr("src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt")  # noqa: ARG005
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt"
+    )  # noqa: ARG005
     monkeypatch.setattr("src.upstream_http.httpx.AsyncClient", FakeHTTPClient)
-    monkeypatch.setattr("src.bootstrap.infrastructure.OpenAIAdapter", lambda client: ("openai", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.AzureOpenAIAdapter", lambda client: ("azure", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.AnthropicAdapter", lambda client: ("anthropic", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.GeminiAdapter", lambda client: ("gemini", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.BedrockAdapter", lambda client: ("bedrock", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.RouteGroupRuntimeCache", lambda redis_client: ("route-cache", redis_client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.ModelDeploymentRepository", lambda client: ("model-repo", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.RouteGroupRepository", lambda client: ("route-group-repo", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.PromptRegistryRepository", lambda client: ("prompt-repo", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.MCPRepository", lambda client: ("mcp-repo", client))
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.OpenAIAdapter", lambda client: ("openai", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.AzureOpenAIAdapter", lambda client: ("azure", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.AnthropicAdapter", lambda client: ("anthropic", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.GeminiAdapter", lambda client: ("gemini", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.BedrockAdapter", lambda client: ("bedrock", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.RouteGroupRuntimeCache",
+        lambda redis_client: ("route-cache", redis_client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.ModelDeploymentRepository",
+        lambda client: ("model-repo", client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.RouteGroupRepository",
+        lambda client: ("route-group-repo", client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.PromptRegistryRepository",
+        lambda client: ("prompt-repo", client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.MCPRepository", lambda client: ("mcp-repo", client)
+    )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.BatchRepository",
         lambda client, **kwargs: ("batch-repo", client, kwargs),
@@ -137,8 +189,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert app.state.prisma_manager.database_settings.pool_size == 25
     assert app.state.prisma_manager.database_settings.pool_timeout == 45
     assert app.state.prisma_manager.database_settings.url == (
-        "postgresql://env-user:env-pass@env-host:5432/env-db"
-        "?connection_limit=25&pool_timeout=45"
+        "postgresql://env-user:env-pass@env-host:5432/env-db?connection_limit=25&pool_timeout=45"
     )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
     assert app.state.salt_key == "salt"

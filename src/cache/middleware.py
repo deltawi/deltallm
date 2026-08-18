@@ -36,8 +36,8 @@ from src.routers.text_adapters import (
     completions_to_chat_request,
     responses_to_chat_request,
 )
-from src.routers.utils import fire_and_forget
-from src.telemetry.request_failures import maybe_log_proxy_error
+from src.telemetry.request_failures import enqueue_request_log_write, maybe_log_proxy_error
+from src.telemetry.event_identity import get_or_create_billing_event_id
 
 from .backends.base import CacheBackend, CacheEntry
 from .key_builder import CacheKeyBuilder
@@ -125,7 +125,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         backend: CacheBackend | None = getattr(request.app.state, "cache_backend", None)
         key_builder: CacheKeyBuilder | None = getattr(request.app.state, "cache_key_builder", None)
-        metrics: CacheMetricsProtocol = getattr(request.app.state, "cache_metrics", NoopCacheMetrics())
+        metrics: CacheMetricsProtocol = getattr(
+            request.app.state, "cache_metrics", NoopCacheMetrics()
+        )
         streaming_handler = getattr(request.app.state, "streaming_cache_handler", None)
 
         if backend is None or key_builder is None or not self._should_cache(request):
@@ -138,14 +140,16 @@ class CacheMiddleware(BaseHTTPMiddleware):
             await authenticate_request(request)
         except HTTPException as exc:
             headers = getattr(exc, "headers", None) or {}
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=headers)
+            return JSONResponse(
+                status_code=exc.status_code, content={"detail": exc.detail}, headers=headers
+            )
         try:
             prepared_data = await self._prepare_request(request, request_data)
         except ValidationError:
             # Let FastAPI preserve its endpoint-specific 422 response contract.
             return await call_next(request)
         except ProxyError as exc:
-            maybe_log_proxy_error(request, exc)
+            await maybe_log_proxy_error(request, exc)
             return proxy_error_response(exc)
 
         if prepared_data is None:
@@ -153,7 +157,6 @@ class CacheMiddleware(BaseHTTPMiddleware):
 
         request_data = prepared_data
         try:
-
             cache_options = parse_cache_options(request_data, self._normalized_headers(request))
             model = str(request_data.get("model") or "unknown")
             endpoint = request.url.path
@@ -167,7 +170,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
             cache_key = key_builder.build_key_from_payload(request_data, cache_options.custom_key)
             cache_key = f"endpoint:{endpoint}:{cache_key}"
             cache_key = self._scoped_cache_key(cache_key, request)
-            request.state.cache_context = CacheContext(cache_key=cache_key, options=cache_options, model=model)
+            request.state.cache_context = CacheContext(
+                cache_key=cache_key, options=cache_options, model=model
+            )
             request.state.cache_context.hit = False
 
             if bool(request_data.get("stream")) and streaming_handler is not None:
@@ -181,7 +186,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                         metrics.hit(endpoint=endpoint, model=model)
                         request.state.cache_context.hit = True
                         request.state.cache_hit = True
-                        await self._record_cache_hit_accounting(request, endpoint, model, cache_key, cached)
+                        await self._record_cache_hit_accounting(
+                            request, endpoint, model, cache_key, cached
+                        )
                         return StreamingResponse(
                             streaming_handler.reconstruct_sse_stream(
                                 cached.response,
@@ -196,7 +203,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                         )
                     metrics.miss(endpoint=endpoint, model=model)
 
-                request.state.cache_context = CacheContext(cache_key=cache_key, options=cache_options, model=model)
+                request.state.cache_context = CacheContext(
+                    cache_key=cache_key, options=cache_options, model=model
+                )
                 request.state.cache_context.hit = False
                 request.state.cache_hit = False
                 response = await call_next(request)
@@ -209,7 +218,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                     metrics.hit(endpoint=endpoint, model=model)
                     request.state.cache_context.hit = True
                     request.state.cache_hit = True
-                    await self._record_cache_hit_accounting(request, endpoint, model, cache_key, cached_entry)
+                    await self._record_cache_hit_accounting(
+                        request, endpoint, model, cache_key, cached_entry
+                    )
                     return self._cached_json_response(cached_entry.response, cache_key)
                 metrics.miss(endpoint=endpoint, model=model)
                 request.state.cache_hit = False
@@ -253,14 +264,10 @@ class CacheMiddleware(BaseHTTPMiddleware):
             payload = ChatCompletionRequest.model_validate(request_data)
             canonical_data: dict[str, Any] | None = request_data
         elif endpoint == "/v1/completions":
-            payload = completions_to_chat_request(
-                CompletionsRequest.model_validate(request_data)
-            )
+            payload = completions_to_chat_request(CompletionsRequest.model_validate(request_data))
             canonical_data = None
         elif endpoint == "/v1/responses":
-            payload = responses_to_chat_request(
-                ResponsesRequest.model_validate(request_data)
-            )
+            payload = responses_to_chat_request(ResponsesRequest.model_validate(request_data))
             canonical_data = None
         else:
             return None
@@ -298,7 +305,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
         return {k.lower(): v for k, v in request.headers.items()}
 
     def _effective_default_ttl(self, request: Request) -> int:
-        general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+        general_settings = getattr(
+            getattr(request.app.state, "app_config", None), "general_settings", None
+        )
         configured = getattr(general_settings, "cache_ttl", None)
         try:
             return int(configured) if configured is not None else self.default_ttl
@@ -333,10 +342,18 @@ class CacheMiddleware(BaseHTTPMiddleware):
         if api_provider is None or deployment_model is None:
             deployment = _find_runtime_deployment(request, entry.deployment_id)
         if deployment is not None:
-            deployment_model = deployment_model or _normalized_text(deployment.deltallm_params.get("model"))
-            api_provider = api_provider or _normalized_provider(resolve_provider(deployment.deltallm_params))
+            deployment_model = deployment_model or _normalized_text(
+                deployment.deltallm_params.get("model")
+            )
+            api_provider = api_provider or _normalized_provider(
+                resolve_provider(deployment.deltallm_params)
+            )
         if api_provider is None:
-            api_provider = _provider_from_model_value(deployment_model) or _provider_from_model_value(model) or "unknown"
+            api_provider = (
+                _provider_from_model_value(deployment_model)
+                or _provider_from_model_value(model)
+                or "unknown"
+            )
         pricing_model_info = dict(entry.pricing or {}) if isinstance(entry.pricing, dict) else None
         pricing = resolve_tier_pricing(
             auth=auth,
@@ -413,16 +430,10 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 "provider_cost_avoided_billing": {
                     "cost": avoided_billing.billing.cost,
                     "billing_unit": avoided_billing.billing.billing_unit,
-                    "pricing_fields_used": list(
-                        avoided_billing.billing.pricing_fields_used
-                    ),
-                    "usage_snapshot": dict(
-                        avoided_billing.billing.usage_snapshot
-                    ),
+                    "pricing_fields_used": list(avoided_billing.billing.pricing_fields_used),
+                    "usage_snapshot": dict(avoided_billing.billing.usage_snapshot),
                     "unpriced_reason": avoided_billing.billing.unpriced_reason,
-                    "missing_pricing_fields": list(
-                        avoided_billing.missing_pricing_fields
-                    ),
+                    "missing_pricing_fields": list(avoided_billing.missing_pricing_fields),
                 },
             },
             pricing,
@@ -431,8 +442,10 @@ class CacheMiddleware(BaseHTTPMiddleware):
             effective_pricing_sources=customer_billing.pricing_sources_used,
             missing_pricing_fields=customer_billing.missing_pricing_fields,
         )
-        fire_and_forget(
+        await enqueue_request_log_write(
+            request,
             request.app.state.spend_tracking_service.log_spend(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request.headers.get("x-request-id") or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -446,7 +459,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 cost=request_cost,
                 metadata=spend_metadata,
                 cache_hit=True,
-            )
+            ),
         )
 
     def _scoped_cache_key(self, cache_key: str, request: Request) -> str:
@@ -496,7 +509,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
             logger.warning("cache write failed: %s", exc)
             metrics.error(operation="set")
 
-    async def _materialize_response(self, response: Response) -> tuple[Response, dict[str, Any] | None]:
+    async def _materialize_response(
+        self, response: Response
+    ) -> tuple[Response, dict[str, Any] | None]:
         if isinstance(response, StreamingResponse):
             return response, None
 
@@ -509,7 +524,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
             return response, None
 
         chunks = [chunk async for chunk in body_iterator]
-        body_bytes = b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8") for chunk in chunks)
+        body_bytes = b"".join(
+            chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8") for chunk in chunks
+        )
         rebuilt = Response(
             content=body_bytes,
             status_code=response.status_code,

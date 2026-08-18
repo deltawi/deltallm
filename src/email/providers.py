@@ -9,7 +9,12 @@ from typing import Any
 
 import httpx
 
-from src.email.models import EmailDeliveryError, EmailDeliveryResult, PreparedEmail
+from src.email.models import (
+    EmailDeliveryDisposition,
+    EmailDeliveryError,
+    EmailDeliveryResult,
+    PreparedEmail,
+)
 from src.upstream_http import build_control_request_timeout
 
 
@@ -52,6 +57,11 @@ def _classify_http_error(*, provider: str, response: httpx.Response) -> EmailDel
         retriable=retriable,
         provider=provider,  # type: ignore[arg-type]
         status_code=status_code,
+        disposition=(
+            EmailDeliveryDisposition.REJECTED_RETRYABLE
+            if retriable
+            else EmailDeliveryDisposition.REJECTED_TERMINAL
+        ),
     )
 
 
@@ -68,14 +78,32 @@ def _classify_smtp_error(exc: Exception) -> EmailDeliveryError:
         status_code = int(getattr(exc, "smtp_code", 0) or 0) or None
         retriable = bool(status_code and 400 <= status_code < 500)
         error_message = getattr(exc, "smtp_error", b"")
-        detail = error_message.decode("utf-8", errors="ignore").strip() if isinstance(error_message, bytes) else str(error_message).strip()
+        detail = (
+            error_message.decode("utf-8", errors="ignore").strip()
+            if isinstance(error_message, bytes)
+            else str(error_message).strip()
+        )
         message = "SMTP response error"
         if detail:
             message = f"{message}: {detail[:200]}"
-        return EmailDeliveryError(message, retriable=retriable, provider="smtp", status_code=status_code)
-    if isinstance(exc, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, TimeoutError, OSError)):
-        return EmailDeliveryError(str(exc) or "SMTP transport error", retriable=True, provider="smtp")
-    return EmailDeliveryError(str(exc) or "SMTP delivery error", retriable=True, provider="smtp")
+        return EmailDeliveryError(
+            message, retriable=retriable, provider="smtp", status_code=status_code
+        )
+    if isinstance(
+        exc, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, TimeoutError, OSError)
+    ):
+        return EmailDeliveryError(
+            str(exc) or "SMTP transport error",
+            retriable=False,
+            provider="smtp",
+            disposition=EmailDeliveryDisposition.OUTCOME_UNKNOWN,
+        )
+    return EmailDeliveryError(
+        str(exc) or "SMTP delivery error",
+        retriable=False,
+        provider="smtp",
+        disposition=EmailDeliveryDisposition.OUTCOME_UNKNOWN,
+    )
 
 
 class SMTPEmailProvider:
@@ -92,7 +120,9 @@ class SMTPEmailProvider:
         mime = _build_mime_message(message)
         recipients = _all_recipients(message)
         await asyncio.to_thread(self._send_sync, mime, recipients)
-        return EmailDeliveryResult(provider="smtp", provider_message_id=str(mime.get("Message-ID") or ""))
+        return EmailDeliveryResult(
+            provider="smtp", provider_message_id=str(mime.get("Message-ID") or "")
+        )
 
     def _send_sync(self, mime: EmailMessage, recipients: list[str]) -> None:
         smtp: smtplib.SMTP | None = None
@@ -140,11 +170,18 @@ class ResendEmailProvider:
                 timeout=build_control_request_timeout(20),
             )
         except httpx.TransportError as exc:
-            raise EmailDeliveryError(str(exc) or "Resend transport error", retriable=True, provider="resend") from exc
+            raise EmailDeliveryError(
+                str(exc) or "Resend transport error",
+                retriable=False,
+                provider="resend",
+                disposition=EmailDeliveryDisposition.OUTCOME_UNKNOWN,
+            ) from exc
         if response.status_code >= 400:
             raise _classify_http_error(provider="resend", response=response)
         payload = response.json() if response.content else {}
-        return EmailDeliveryResult(provider="resend", provider_message_id=str(payload.get("id") or ""))
+        return EmailDeliveryResult(
+            provider="resend", provider_message_id=str(payload.get("id") or "")
+        )
 
 
 class SendGridEmailProvider:
@@ -175,13 +212,22 @@ class SendGridEmailProvider:
                     "subject": message.subject,
                     "content": [
                         {"type": "text/plain", "value": message.text_body},
-                        *([{"type": "text/html", "value": message.html_body}] if message.html_body else []),
+                        *(
+                            [{"type": "text/html", "value": message.html_body}]
+                            if message.html_body
+                            else []
+                        ),
                     ],
                 },
                 timeout=build_control_request_timeout(20),
             )
         except httpx.TransportError as exc:
-            raise EmailDeliveryError(str(exc) or "SendGrid transport error", retriable=True, provider="sendgrid") from exc
+            raise EmailDeliveryError(
+                str(exc) or "SendGrid transport error",
+                retriable=False,
+                provider="sendgrid",
+                disposition=EmailDeliveryDisposition.OUTCOME_UNKNOWN,
+            ) from exc
         if response.status_code >= 400:
             raise _classify_http_error(provider="sendgrid", response=response)
         provider_message_id = response.headers.get("X-Message-Id")

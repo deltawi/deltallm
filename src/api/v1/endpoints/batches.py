@@ -52,9 +52,7 @@ def _batch_audit_response_payload(batch: object) -> dict[str, Any] | None:
         "error_file_id": batch.get("error_file_id"),
         "request_counts": batch.get("request_counts"),
         "metadata_present": bool(batch.get("metadata")),
-        "webhook_configured": bool(
-            isinstance(webhook, dict) and webhook.get("configured") is True
-        ),
+        "webhook_configured": bool(isinstance(webhook, dict) and webhook.get("configured") is True),
     }
 
 
@@ -84,7 +82,9 @@ async def create_batch(request: Request, payload: dict[str, Any]):
             "idempotency_key_present": bool(idempotency_key),
             "webhook_configured": webhook_configured,
         }
-        create_batch_result = getattr(service, "create_batch_result", None) or service.create_embeddings_batch_result
+        create_batch_result = (
+            getattr(service, "create_batch_result", None) or service.create_embeddings_batch_result
+        )
         result = await create_batch_result(
             auth=auth,
             input_file_id=input_file_id,
@@ -96,7 +96,7 @@ async def create_batch(request: Request, payload: dict[str, Any]):
         )
         created = result.response
         audit_metadata.update(result.audit_metadata)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_CREATE_REQUEST,
@@ -113,7 +113,7 @@ async def create_batch(request: Request, payload: dict[str, Any]):
         )
         return created
     except Exception as exc:
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_CREATE_REQUEST,
@@ -141,7 +141,7 @@ async def get_batch(request: Request, batch_id: str):
     try:
         service = _batch_service_or_404(request)
         batch = await service.get_batch(batch_id=batch_id, auth=auth)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_READ_REQUEST,
@@ -158,7 +158,7 @@ async def get_batch(request: Request, batch_id: str):
         )
         return batch
     except Exception as exc:
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_READ_REQUEST,
@@ -183,7 +183,7 @@ async def list_batches(request: Request, limit: int = 20):
     try:
         service = _batch_service_or_404(request)
         batches = await service.list_batches(auth=auth, limit=limit)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_LIST_REQUEST,
@@ -199,7 +199,7 @@ async def list_batches(request: Request, limit: int = 20):
         )
         return batches
     except Exception as exc:
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_LIST_REQUEST,
@@ -223,7 +223,7 @@ async def cancel_batch(request: Request, batch_id: str):
     try:
         service = _batch_service_or_404(request)
         result = await service.cancel_batch(batch_id=batch_id, auth=auth)
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_CANCEL_REQUEST,
@@ -240,7 +240,7 @@ async def cancel_batch(request: Request, batch_id: str):
         )
         return result
     except Exception as exc:
-        emit_audit_event(
+        await emit_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.BATCH_CANCEL_REQUEST,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -55,6 +57,7 @@ async def fallback_events(request: Request, limit: int = 50) -> JSONResponse:
 
 async def _readiness_payload(request: Request) -> dict[str, object]:
     checks: dict[str, bool] = {}
+    details: dict[str, dict[str, str]] = {}
 
     redis_client = getattr(request.app.state, "redis", None)
     if redis_client is None:
@@ -76,11 +79,62 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
         except Exception:
             checks["database"] = False
 
+    telemetry_modes = {
+        str(getattr(request.app.state, "spend_ingestion_mode", "legacy")),
+        str(getattr(request.app.state, "audit_ingestion_mode", "legacy")),
+    }
+    if "outbox" in telemetry_modes:
+        telemetry_manager = getattr(request.app.state, "telemetry_prisma_manager", None)
+        telemetry_client = getattr(telemetry_manager, "client", None)
+        if telemetry_client is None:
+            checks["telemetry_database"] = False
+            details["telemetry_database"] = {"state": "unavailable"}
+        else:
+            try:
+                await asyncio.wait_for(telemetry_client.query_raw("SELECT 1"), timeout=1.0)
+                checks["telemetry_database"] = True
+                details["telemetry_database"] = {"state": "ready"}
+            except TimeoutError:
+                checks["telemetry_database"] = False
+                details["telemetry_database"] = {"state": "timeout"}
+            except Exception:
+                checks["telemetry_database"] = False
+                details["telemetry_database"] = {"state": "unavailable"}
+
     if bool(getattr(request.app.state, "batch_webhook_worker_expected", False)):
         worker_task = getattr(request.app.state, "batch_webhook_outbox_task", None)
-        checks["batch_webhook_worker"] = bool(
-            worker_task is not None and not worker_task.done()
-        )
+        checks["batch_webhook_worker"] = bool(worker_task is not None and not worker_task.done())
+
+    spend_service = getattr(request.app.state, "spend_tracking_service", None)
+    spend_health = getattr(spend_service, "worker_health", None)
+    if spend_health is not None:
+        checks["spend_ingestion_worker"] = bool(spend_health.ready)
+        details["spend_ingestion_worker"] = _worker_health_payload(spend_health)
+
+    audit_service = getattr(request.app.state, "audit_service", None)
+    audit_health = getattr(audit_service, "worker_health", None)
+    if audit_health is not None:
+        checks["audit_ingestion_worker"] = bool(audit_health.ready)
+        details["audit_ingestion_worker"] = _worker_health_payload(audit_health)
+    policy_listener_health = getattr(audit_service, "policy_listener_health", None)
+    if policy_listener_health is not None:
+        # Pub/sub reduces policy-cache staleness but PostgreSQL remains the
+        # authoritative privacy decision on every content-bearing write.
+        details["audit_policy_listener"] = _worker_health_payload(policy_listener_health)
+
+    email_worker = getattr(request.app.state, "email_outbox_worker", None)
+    email_worker_health = getattr(email_worker, "worker_health", None)
+    if email_worker_health is not None:
+        checks["email_outbox_worker"] = bool(email_worker_health.ready)
+        details["email_outbox_worker"] = _worker_health_payload(email_worker_health)
 
     status = "ok" if all(checks.values()) else "degraded"
-    return {"status": status, "checks": checks}
+    return {"status": status, "checks": checks, "details": details}
+
+
+def _worker_health_payload(health: object) -> dict[str, str]:
+    payload = {"state": str(getattr(health, "state", "failed"))}
+    detail = getattr(health, "detail", None)
+    if detail:
+        payload["detail"] = str(detail)
+    return payload

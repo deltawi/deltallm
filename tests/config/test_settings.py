@@ -16,6 +16,7 @@ from src.config import (
     resolve_app_config_with_secrets,
     resolve_database_settings,
     resolve_salt_key,
+    resolve_telemetry_database_settings,
 )
 from src.upstream_http import (
     build_control_request_timeout,
@@ -282,7 +283,10 @@ def test_resolve_app_config_with_secrets_wraps_secret_resolution_errors():
             raise RuntimeError("secret backend exploded")
 
     with pytest.raises(ValueError, match="Failed to resolve configuration secrets") as exc_info:
-        resolve_app_config_with_secrets({"general_settings": {"master_key": "StrongMasterKey2026SecureTokenABCD1234"}}, secret_resolver=BrokenResolver())
+        resolve_app_config_with_secrets(
+            {"general_settings": {"master_key": "StrongMasterKey2026SecureTokenABCD1234"}},
+            secret_resolver=BrokenResolver(),
+        )
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None
 
@@ -412,6 +416,51 @@ def test_resolve_database_settings_returns_none_without_database_url(monkeypatch
     settings = Settings.model_validate({})
 
     assert resolve_database_settings(cfg, settings) is None
+
+
+def test_resolve_telemetry_database_settings_uses_isolated_pool_overrides(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "database_url": "postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db?schema=public",
+                "telemetry_db_pool_size": 4,
+                "telemetry_db_pool_timeout_seconds": 3,
+            }
+        }
+    )
+    settings = Settings.model_validate(
+        {
+            "telemetry_db_pool_size": 7,
+            "telemetry_db_pool_timeout_seconds": 1,
+        }
+    )
+
+    resolved = resolve_telemetry_database_settings(cfg, settings)
+
+    assert resolved is not None
+    assert resolved.pool_size == 7
+    assert resolved.pool_timeout == 1
+    assert resolved.url == (
+        "postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db"
+        "?schema=public&connection_limit=7&pool_timeout=1"
+    )
+
+
+def test_settings_load_audit_ingestion_mode_from_environment(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
+    monkeypatch.setenv("DELTALLM_AUDIT_INGESTION_MODE", "outbox")
+    monkeypatch.setenv("DELTALLM_AUDIT_INGESTION_MAX_PENDING_EVENTS", "1234")
+    monkeypatch.setenv("DELTALLM_TELEMETRY_WORKER_STARTUP_TIMEOUT_SECONDS", "3.5")
+    monkeypatch.setenv("DELTALLM_TELEMETRY_SHUTDOWN_DRAIN_TIMEOUT_SECONDS", "12")
+
+    settings = Settings()
+
+    assert settings.audit_ingestion_mode == "outbox"
+    assert settings.audit_ingestion_max_pending_events == 1234
+    assert settings.telemetry_worker_startup_timeout_seconds == 3.5
+    assert settings.telemetry_shutdown_drain_timeout_seconds == 12
 
 
 def test_settings_load_database_pool_overrides_from_environment(monkeypatch):
@@ -689,7 +738,9 @@ def test_chat_batching_config_rejects_unknown_modes(mode: str):
 
 
 @pytest.mark.parametrize("upstream_max_batch_size", [None, 1])
-def test_chat_batching_config_rejects_sync_microbatch_without_batch_size(upstream_max_batch_size: int | None):
+def test_chat_batching_config_rejects_sync_microbatch_without_batch_size(
+    upstream_max_batch_size: int | None,
+):
     with pytest.raises(ValueError, match="upstream_max_batch_size"):
         ChatBatchingConfig.model_validate(
             {

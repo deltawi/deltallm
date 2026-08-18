@@ -6,8 +6,14 @@ from typing import Any
 from fastapi import Request
 
 from src.audit.actions import AuditAction, normalize_audit_action
+from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
-from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
+from src.services.audit_service import (
+    AuditEventInput,
+    AuditPayloadInput,
+    AuditService,
+    enqueue_audit_event,
+)
 
 
 def request_client_ip(request: Request) -> str | None:
@@ -21,7 +27,7 @@ def request_client_ip(request: Request) -> str | None:
     return None
 
 
-def emit_audit_event(
+async def emit_audit_event(
     *,
     request: Request,
     request_start: float,
@@ -40,6 +46,7 @@ def emit_audit_event(
     output_tokens: int | None = None,
     metadata: dict[str, Any] | None = None,
     critical: bool = True,
+    event_id: str | None = None,
 ) -> None:
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
     if audit_service is None:
@@ -52,7 +59,8 @@ def emit_audit_event(
     if response_payload is not None:
         payloads.append(AuditPayloadInput(kind="response", content_json=response_payload))
 
-    audit_service.record_event(
+    await enqueue_audit_event(
+        audit_service,
         AuditEventInput(
             action=normalize_audit_action(action),
             organization_id=organization_id,
@@ -72,7 +80,10 @@ def emit_audit_event(
             error_type=error.__class__.__name__ if error is not None else None,
             error_code=derive_audit_error_code(error),
             metadata=metadata or {},
+            event_id=event_id,
         ),
         payloads=payloads,
-        critical=critical,
+        delivery_class=(
+            AuditDeliveryClass.REQUIRED if critical else AuditDeliveryClass.BEST_EFFORT
+        ),
     )

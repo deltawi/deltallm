@@ -27,6 +27,27 @@ deltallm_email_delivery_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_email_delivery_audit_backlog_metric = Gauge(
+    "deltallm_email_delivery_audit_backlog",
+    "Email delivery audit records by bounded state",
+    ["status"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_email_delivery_unknown_metric = Counter(
+    "deltallm_email_delivery_unknown_total",
+    "Email deliveries whose provider outcome cannot be proven",
+    ["provider", "kind", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_email_worker_failure_metric = Counter(
+    "deltallm_email_worker_failures_total",
+    "Email worker failures by bounded phase",
+    ["phase"],
+    registry=get_prometheus_registry(),
+)
+
 
 def set_email_queue_depth(value: int) -> None:
     deltallm_email_queue_depth_metric.set(max(0, int(value)))
@@ -45,3 +66,22 @@ def observe_email_delivery_latency(*, provider: str, kind: str, latency_seconds:
         provider=sanitize_label(provider),
         kind=sanitize_label(kind),
     ).observe(max(0.0, float(latency_seconds)))
+
+
+def set_email_delivery_audit_backlog(counts: dict[str, int]) -> None:
+    for status in ("pending", "retrying", "processing", "blocked"):
+        deltallm_email_delivery_audit_backlog_metric.labels(status=status).set(
+            max(0, int(counts.get(status, 0)))
+        )
+
+
+def increment_email_delivery_unknown(*, provider: str, kind: str, reason: str) -> None:
+    deltallm_email_delivery_unknown_metric.labels(
+        provider=sanitize_label(provider),
+        kind=sanitize_label(kind),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def increment_email_worker_failure(*, phase: str) -> None:
+    deltallm_email_worker_failure_metric.labels(phase=sanitize_label(phase)).inc()
