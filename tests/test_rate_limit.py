@@ -154,6 +154,8 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
     record.rpm_limit = 50
     record.team_model_rpm_limit = {"gpt-4o-mini": 1}
     test_app.state.limit_counter = RecordingLimitCounter()
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = "audio_transcription"
 
     async def stt_post(url: str, headers: dict[str, str], files, data, timeout: int):  # noqa: ANN001, ANN201
         del headers, files, data, timeout
@@ -180,35 +182,36 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "path",
+    ("path", "routing_mode"),
     [
-        "/v1/images/generations",
-        "/v1/rerank",
-        "/v1/audio/speech",
-        "/v1/audio/transcriptions",
+        ("/v1/images/generations", "image_generation"),
+        ("/v1/rerank", "rerank"),
+        ("/v1/audio/speech", "audio_speech"),
+        ("/v1/audio/transcriptions", "audio_transcription"),
     ],
 )
 async def test_multimodal_access_denial_does_not_consume_rate_quota(
     client,
     test_app,
     path: str,
+    routing_mode: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     record = next(iter(test_app.state._test_repo.records.values()))
     record.rpm_limit = 1
     test_app.state.http_client.post = _multimodal_success_response
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = routing_mode
+    if routing_mode == "rerank":
+        deployment.deltallm_params["provider"] = "vllm"
 
     grant_service = test_app.state.callable_target_grant_service
     grant_repository = grant_service.repository
     removed_bindings = [
-        binding
-        for binding in grant_repository.bindings
-        if binding.callable_key == "gpt-4o-mini"
+        binding for binding in grant_repository.bindings if binding.callable_key == "gpt-4o-mini"
     ]
     grant_repository.bindings = [
-        binding
-        for binding in grant_repository.bindings
-        if binding.callable_key != "gpt-4o-mini"
+        binding for binding in grant_repository.bindings if binding.callable_key != "gpt-4o-mini"
     ]
     await grant_service.reload()
 

@@ -31,6 +31,7 @@ from src.providers.resolution import (
     resolve_provider,
     resolve_upstream_model,
 )
+from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
@@ -164,7 +165,11 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
-    request_context = {"metadata": {}, "user_id": auth.user_id or auth.api_key}
+    request_context = {
+        "metadata": {},
+        "user_id": auth.user_id or auth.api_key,
+        ROUTING_MODE_CONTEXT_KEY: "image_generation",
+    }
     primary = app_router.require_deployment(
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
@@ -187,6 +192,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             execute=lambda dep: _execute_image_generation(request, payload, dep),
             return_deployment=True,
             on_attempt=track_attempt,
+            routing_context=request_context,
             **failover_kwargs,
         )
         update_served_route_decision(

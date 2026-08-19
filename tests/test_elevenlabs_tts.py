@@ -29,6 +29,7 @@ def _configure_elevenlabs_deployment(test_app, *, default_params: dict | None = 
     deployment.model_info = {
         "input_cost_per_character": 0.01,
         "default_params": dict(default_params or {}),
+        "mode": "audio_speech",
     }
 
 
@@ -62,6 +63,7 @@ async def test_audio_speech_openai_compatible_tts_providers_stay_on_audio_speech
     deployment.deltallm_params["model"] = upstream_model
     deployment.deltallm_params["api_base"] = api_base
     deployment.deltallm_params["api_key"] = "provider-key"
+    deployment.model_info["mode"] = "audio_speech"
     captured: dict[str, object] = {}
 
     async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201

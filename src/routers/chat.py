@@ -27,6 +27,7 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
+from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import seed_request_failure_context
 from src.routers.routing_decision import (
@@ -74,7 +75,11 @@ async def handle_chat_like_request(
 
     router = request.app.state.router
     model_group = router.resolve_model_group(payload.model)
-    request_context = {"metadata": payload.metadata or {}, "user_id": auth.user_id or auth.api_key}
+    request_context = {
+        "metadata": payload.metadata or {},
+        "user_id": auth.user_id or auth.api_key,
+        ROUTING_MODE_CONTEXT_KEY: "chat",
+    }
     primary = router.require_deployment(
         model_group=model_group,
         deployment=await router.select_deployment(model_group, request_context),
@@ -123,6 +128,7 @@ async def handle_chat_like_request(
                         execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
                         return_deployment=True,
                         on_attempt=track_attempt,
+                        routing_context=request_context,
                         **failover_kwargs,
                     )
                     update_served_route_decision(
@@ -321,6 +327,7 @@ async def handle_chat_like_request(
             execute=_execute_for_deployment,
             return_deployment=True,
             on_attempt=track_attempt,
+            routing_context=request_context,
             **failover_kwargs,
         )
         update_served_route_decision(

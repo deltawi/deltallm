@@ -34,6 +34,7 @@ from src.metrics import (
 from src.models.errors import InvalidRequestError
 from src.models.requests import AudioSpeechRequest
 from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.router.router import Deployment
@@ -238,7 +239,11 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
-    request_context = {"metadata": {}, "user_id": auth.user_id or auth.api_key}
+    request_context = {
+        "metadata": {},
+        "user_id": auth.user_id or auth.api_key,
+        ROUTING_MODE_CONTEXT_KEY: "audio_speech",
+    }
     primary = app_router.require_deployment(
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
@@ -261,6 +266,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             execute=lambda dep: _execute_tts(request, payload, dep),
             return_deployment=True,
             on_attempt=track_attempt,
+            routing_context=request_context,
             **failover_kwargs,
         )
         update_served_route_decision(

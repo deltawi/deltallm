@@ -29,7 +29,9 @@ class _SpendRecorder:
         error_type = kwargs.get("error_type")
         if error_type is None:
             exc = kwargs.get("exc")
-            error_type = getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None)
+            error_type = getattr(exc, "error_type", None) or (
+                exc.__class__.__name__ if exc is not None else None
+            )
         self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
 
 
@@ -68,7 +70,10 @@ class _RecordingAuditService:
         ("/v1/embeddings", {"json": {"model": "text-embedding-3-small", "input": "hello"}}),
         ("/v1/images/generations", {"json": {"model": "gpt-4o-mini", "prompt": "cat"}}),
         ("/v1/rerank", {"json": {"model": "gpt-4o-mini", "query": "q", "documents": ["a", "b"]}}),
-        ("/v1/audio/speech", {"json": {"model": "gpt-4o-mini", "input": "hello", "voice": "alloy"}}),
+        (
+            "/v1/audio/speech",
+            {"json": {"model": "gpt-4o-mini", "input": "hello", "voice": "alloy"}},
+        ),
     ],
 )
 async def test_budget_enforced_for_non_text_endpoints(client, test_app, path, kwargs):
@@ -87,7 +92,9 @@ async def test_budget_enforced_for_audio_transcriptions(client, test_app):
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     files = {"file": ("audio.wav", b"abc", "audio/wav")}
     data = {"model": "gpt-4o-mini", "response_format": "json"}
-    response = await client.post("/v1/audio/transcriptions", headers=headers, files=files, data=data)
+    response = await client.post(
+        "/v1/audio/transcriptions", headers=headers, files=files, data=data
+    )
     assert response.status_code == 429
     payload = response.json()["error"]
     assert payload["type"] == "budget_exceeded"
@@ -104,8 +111,12 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
     fallback = type(registry[0])(
         deployment_id="gpt-4o-mini-fallback",
         model_name="gpt-4o-mini",
-        deltallm_params={"model": "openai/gpt-4o-mini", "api_key": "fallback-key", "api_base": "https://fallback.example/v1"},
-        model_info={},
+        deltallm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "fallback-key",
+            "api_base": "https://fallback.example/v1",
+        },
+        model_info={"mode": "chat"},
     )
     registry.append(fallback)
 
@@ -117,15 +128,26 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
 
     async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
         del timeout
-        if url.endswith("/chat/completions") and headers.get("Authorization") == "Bearer primary-key":
-            return httpx.Response(503, json={"error": "primary down"}, request=httpx.Request("POST", url))
+        if (
+            url.endswith("/chat/completions")
+            and headers.get("Authorization") == "Bearer primary-key"
+        ):
+            return httpx.Response(
+                503, json={"error": "primary down"}, request=httpx.Request("POST", url)
+            )
         if url.endswith("/chat/completions"):
             payload = {
                 "id": "chatcmpl-fallback",
                 "object": "chat.completion",
                 "created": 1700000000,
                 "model": json["model"],
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             }
             return httpx.Response(200, json=payload)
@@ -134,7 +156,11 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
     test_app.state.http_client.post = post
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 
@@ -150,7 +176,11 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
     [
         (
             "/v1/chat/completions",
-            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+            {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
             "gpt-4o-mini",
         ),
         (
@@ -160,7 +190,9 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
         ),
     ],
 )
-async def test_explicit_provider_keeps_spend_logging_intact(client, test_app, path, body, registry_key):
+async def test_explicit_provider_keeps_spend_logging_intact(
+    client, test_app, path, body, registry_key
+):
     test_app.state.spend_tracking_service = _SpendRecorder()
 
     deployment = test_app.state.router.deployment_registry[registry_key][0]
@@ -185,14 +217,23 @@ async def test_chat_failure_writes_error_request_log(client, test_app):
 
     async def failing_post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del headers, json, timeout
-        return httpx.Response(503, json={"error": "upstream unavailable"}, request=httpx.Request("POST", url))
+        return httpx.Response(
+            503, json={"error": "upstream unavailable"}, request=httpx.Request("POST", url)
+        )
 
     test_app.state.http_client.post = failing_post
 
     response = await client.post(
         "/v1/chat/completions",
-        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-chat-error"},
-        json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": "req-chat-error",
+        },
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        },
     )
     assert response.status_code == 503
 
@@ -212,13 +253,18 @@ async def test_embedding_failure_writes_error_request_log(client, test_app):
 
     async def failing_post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del headers, json, timeout
-        return httpx.Response(503, json={"error": "upstream unavailable"}, request=httpx.Request("POST", url))
+        return httpx.Response(
+            503, json={"error": "upstream unavailable"}, request=httpx.Request("POST", url)
+        )
 
     test_app.state.http_client.post = failing_post
 
     response = await client.post(
         "/v1/embeddings",
-        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-embedding-error"},
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": "req-embedding-error",
+        },
         json={"model": "text-embedding-3-small", "input": "hello"},
     )
     assert response.status_code == 503
@@ -250,7 +296,7 @@ async def test_embedding_failover_failure_uses_last_attempted_deployment_metadat
             "api_key": "fallback-key",
             "api_base": "https://fallback.example/v1",
         },
-        model_info={},
+        model_info={"mode": "embedding"},
     )
     registry.append(fallback)
 
@@ -271,7 +317,10 @@ async def test_embedding_failover_failure_uses_last_attempted_deployment_metadat
 
     response = await client.post(
         "/v1/embeddings",
-        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-embedding-failover-failure"},
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": "req-embedding-failover-failure",
+        },
         json={"model": "text-embedding-3-small", "input": "hello"},
     )
     assert response.status_code == 503
@@ -307,8 +356,15 @@ async def test_denied_model_preflight_writes_request_log_and_audit_event(client,
 
     response = await client.post(
         "/v1/chat/completions",
-        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-chat-denied"},
-        json={"model": "gpts-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": "req-chat-denied",
+        },
+        json={
+            "model": "gpts-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        },
     )
     assert response.status_code == 403
     payload = response.json()["error"]
@@ -371,7 +427,10 @@ async def test_invalid_json_writes_request_log_without_audit_event(client, test_
 async def test_audio_transcription_spend_log_includes_billing_metadata(client, test_app):
     test_app.state.spend_tracking_service = _SpendRecorder()
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
-    deployment.model_info = {"input_cost_per_second": 0.25}
+    deployment.model_info = {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.25,
+    }
 
     async def post(url, headers=None, json=None, timeout=None, files=None, data=None):  # noqa: ANN001, ANN201
         del headers, json, timeout, files, data
@@ -401,6 +460,7 @@ async def test_audio_transcription_spend_log_includes_billing_metadata(client, t
 @pytest.mark.asyncio
 async def test_audio_transcription_preserves_600_second_default_timeout(client, test_app):
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = "audio_transcription"
     deployment.deltallm_params.pop("timeout", None)
     test_app.state.app_config.general_settings.upstream_http_read_timeout_seconds = 123
     captured: dict[str, object] = {}
@@ -431,8 +491,11 @@ async def test_audio_transcription_preserves_600_second_default_timeout(client, 
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_short_primary_timeout_uses_per_deployment_failover_timeout(client, test_app):
+async def test_audio_transcription_short_primary_timeout_uses_per_deployment_failover_timeout(
+    client, test_app
+):
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = "audio_transcription"
     deployment.deltallm_params["timeout"] = 60
     fallback = Deployment(
         deployment_id="gpt-4o-mini-fallback",
@@ -442,6 +505,7 @@ async def test_audio_transcription_short_primary_timeout_uses_per_deployment_fai
             "api_key": "fallback-key",
             "api_base": "https://fallback.example/v1",
         },
+        model_info={"mode": "audio_transcription"},
     )
     test_app.state.router.deployment_registry["gpt-4o-mini"].append(fallback)
     captured: dict[str, object] = {}
@@ -478,10 +542,15 @@ async def test_audio_transcription_short_primary_timeout_uses_per_deployment_fai
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_route_policy_timeout_overrides_default_failover_timeout(client, test_app):
+async def test_audio_transcription_route_policy_timeout_overrides_default_failover_timeout(
+    client, test_app
+):
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = "audio_transcription"
     deployment.deltallm_params.pop("timeout", None)
-    test_app.state.router.config.route_group_policies["gpt-4o-mini"] = RouteGroupPolicy(timeout_seconds=45)
+    test_app.state.router.config.route_group_policies["gpt-4o-mini"] = RouteGroupPolicy(
+        timeout_seconds=45
+    )
     captured: dict[str, object] = {}
 
     async def post(url, headers=None, json=None, timeout=None, files=None, data=None):  # noqa: ANN001, ANN201
@@ -508,10 +577,15 @@ async def test_audio_transcription_route_policy_timeout_overrides_default_failov
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_forces_verbose_json_for_second_pricing_and_preserves_json_shape(client, test_app):
+async def test_audio_transcription_forces_verbose_json_for_second_pricing_and_preserves_json_shape(
+    client, test_app
+):
     test_app.state.spend_tracking_service = _SpendRecorder()
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
-    deployment.model_info = {"input_cost_per_second": 0.111}
+    deployment.model_info = {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.111,
+    }
     deployment.deltallm_params["provider"] = "groq"
     deployment.deltallm_params["api_base"] = "https://api.groq.com/openai/v1"
     captured_formats: list[str] = []
@@ -553,10 +627,15 @@ async def test_audio_transcription_forces_verbose_json_for_second_pricing_and_pr
 
 
 @pytest.mark.asyncio
-async def test_audio_speech_spend_log_marks_unpriced_without_matching_pricing_unit(client, test_app):
+async def test_audio_speech_spend_log_marks_unpriced_without_matching_pricing_unit(
+    client, test_app
+):
     test_app.state.spend_tracking_service = _SpendRecorder()
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
-    deployment.model_info = {"output_cost_per_second": 0.25}
+    deployment.model_info = {
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.25,
+    }
 
     async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
         del headers, json, timeout
@@ -581,11 +660,14 @@ async def test_audio_speech_spend_log_marks_unpriced_without_matching_pricing_un
 
 
 @pytest.mark.asyncio
-async def test_audio_speech_forces_sse_for_token_pricing_and_preserves_audio_response(client, test_app):
+async def test_audio_speech_forces_sse_for_token_pricing_and_preserves_audio_response(
+    client, test_app
+):
     test_app.state.spend_tracking_service = _SpendRecorder()
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
     deployment.deltallm_params["provider"] = "openai"
     deployment.model_info = {
+        "mode": "audio_speech",
         "input_cost_per_token": 1.0,
         "output_cost_per_audio_token": 0.5,
     }
@@ -598,9 +680,9 @@ async def test_audio_speech_forces_sse_for_token_pricing_and_preserves_audio_res
             captured_stream_formats.append(json.get("stream_format"))
             body = (
                 "event: speech.audio.delta\n"
-                f"data: {{\"type\":\"speech.audio.delta\",\"audio\":\"{audio_chunk}\"}}\n\n"
+                f'data: {{"type":"speech.audio.delta","audio":"{audio_chunk}"}}\n\n'
                 "event: speech.audio.done\n"
-                "data: {\"type\":\"speech.audio.done\",\"usage\":{\"input_tokens\":10,\"output_tokens\":4}}\n\n"
+                'data: {"type":"speech.audio.done","usage":{"input_tokens":10,"output_tokens":4}}\n\n'
                 "data: [DONE]\n\n"
             )
             return httpx.Response(
@@ -616,7 +698,12 @@ async def test_audio_speech_forces_sse_for_token_pricing_and_preserves_audio_res
     response = await client.post(
         "/v1/audio/speech",
         headers={"Authorization": f"Bearer {test_app.state._test_key}"},
-        json={"model": "gpt-4o-mini", "input": "hello world", "voice": "alloy", "response_format": "mp3"},
+        json={
+            "model": "gpt-4o-mini",
+            "input": "hello world",
+            "voice": "alloy",
+            "response_format": "mp3",
+        },
     )
     assert response.status_code == 200
     assert response.content == b"hello-audio"
@@ -632,7 +719,9 @@ async def test_audio_speech_forces_sse_for_token_pricing_and_preserves_audio_res
 
 
 @pytest.mark.asyncio
-async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_metadata(client, test_app):
+async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_metadata(
+    client, test_app
+):
     test_app.state.spend_tracking_service = _SpendRecorder()
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
     deployment.deltallm_params["provider"] = "gemini"
@@ -640,6 +729,7 @@ async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_met
     deployment.deltallm_params["api_base"] = "https://generativelanguage.googleapis.com/v1beta"
     deployment.deltallm_params["api_key"] = "gemini-key"
     deployment.model_info = {
+        "mode": "audio_speech",
         "input_cost_per_token": 1.0,
         "output_cost_per_audio_token": 0.5,
     }
@@ -649,7 +739,12 @@ async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_met
         del headers, timeout
         if url.endswith("/models/gemini-2.5-flash-preview-tts:generateContent?key=gemini-key"):
             assert json["generationConfig"]["responseModalities"] == ["AUDIO"]
-            assert json["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+            assert (
+                json["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"][
+                    "voiceName"
+                ]
+                == "Kore"
+            )
             payload = {
                 "candidates": [
                     {
@@ -679,7 +774,12 @@ async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_met
     response = await client.post(
         "/v1/audio/speech",
         headers={"Authorization": f"Bearer {test_app.state._test_key}"},
-        json={"model": "gpt-4o-mini", "input": "hello world", "voice": "Kore", "response_format": "wav"},
+        json={
+            "model": "gpt-4o-mini",
+            "input": "hello world",
+            "voice": "Kore",
+            "response_format": "wav",
+        },
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("audio/wav")
@@ -701,13 +801,25 @@ async def test_audio_speech_applies_default_params_for_gemini_native_requests(cl
     deployment.deltallm_params["model"] = "gemini/gemini-2.5-flash-preview-tts"
     deployment.deltallm_params["api_base"] = "https://generativelanguage.googleapis.com/v1beta"
     deployment.deltallm_params["api_key"] = "gemini-key"
-    deployment.model_info = {"default_params": {"safetySettings": [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]}}
+    deployment.model_info = {
+        "mode": "audio_speech",
+        "default_params": {
+            "safetySettings": [
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_NONE",
+                }
+            ]
+        },
+    }
     pcm_chunk = base64.b64encode(b"\x00\x00\x01\x00").decode("ascii")
 
     async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
         del headers, timeout
         if url.endswith("/models/gemini-2.5-flash-preview-tts:generateContent?key=gemini-key"):
-            assert json["safetySettings"] == [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
+            assert json["safetySettings"] == [
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
+            ]
             payload = {
                 "candidates": [
                     {
@@ -732,7 +844,12 @@ async def test_audio_speech_applies_default_params_for_gemini_native_requests(cl
     response = await client.post(
         "/v1/audio/speech",
         headers={"Authorization": f"Bearer {test_app.state._test_key}"},
-        json={"model": "gpt-4o-mini", "input": "hello world", "voice": "Kore", "response_format": "wav"},
+        json={
+            "model": "gpt-4o-mini",
+            "input": "hello world",
+            "voice": "Kore",
+            "response_format": "wav",
+        },
     )
     assert response.status_code == 200
     assert response.content.startswith(b"RIFF")
@@ -745,11 +862,17 @@ async def test_audio_speech_rejects_unsupported_gemini_output_formats(client, te
     deployment.deltallm_params["model"] = "gemini/gemini-2.5-flash-preview-tts"
     deployment.deltallm_params["api_base"] = "https://generativelanguage.googleapis.com/v1beta"
     deployment.deltallm_params["api_key"] = "gemini-key"
+    deployment.model_info["mode"] = "audio_speech"
 
     response = await client.post(
         "/v1/audio/speech",
         headers={"Authorization": f"Bearer {test_app.state._test_key}"},
-        json={"model": "gpt-4o-mini", "input": "hello world", "voice": "Kore", "response_format": "mp3"},
+        json={
+            "model": "gpt-4o-mini",
+            "input": "hello world",
+            "voice": "Kore",
+            "response_format": "mp3",
+        },
     )
     assert response.status_code == 400
     assert "supports only 'wav' and 'pcm'" in response.text

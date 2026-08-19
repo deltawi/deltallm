@@ -183,7 +183,6 @@ class ModelHotReloadManager:
         app.state.route_groups = route_groups
         app.state.callable_target_catalog = callable_target_catalog
         app.state.router.deployment_registry = dict(new_deployments)
-        app.state.failover_manager.registry = dict(new_deployments)
         app.state.router_health_handler.registry = dict(new_deployments)
         app.state.background_health_checker.registry = dict(new_deployments)
 

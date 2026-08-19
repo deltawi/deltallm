@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime, timedelta
+import time
 from typing import Any
 
 import httpx
@@ -98,6 +99,21 @@ class FakeRedis:
             self.ttl_store[key] = max(1, int(ttl) // 1000)
         return True
 
+    async def pexpireat(self, key: str, expires_at_ms: int):
+        if key in self.store or key in self.hash_store or key in self.zset_store:
+            remaining_ms = max(1, int(expires_at_ms) - int(time.time() * 1000))
+            self.ttl_store[key] = max(1, remaining_ms // 1000)
+        return True
+
+    async def ttl(self, key: str):
+        if key not in self.store and key not in self.hash_store and key not in self.zset_store:
+            return -2
+        return self.ttl_store.get(key, -1)
+
+    async def pttl(self, key: str):
+        ttl = await self.ttl(key)
+        return ttl * 1000 if ttl >= 0 else ttl
+
     async def mget(self, keys):
         return [self.store.get(key) for key in keys]
 
@@ -161,14 +177,18 @@ class FakeRedis:
     async def zrem(self, key: str, *members: str):
         values = self.zset_store.get(key, [])
         before = len(values)
-        self.zset_store[key] = [(score, member) for score, member in values if member not in set(members)]
+        self.zset_store[key] = [
+            (score, member) for score, member in values if member not in set(members)
+        ]
         if not self.zset_store[key]:
             self.zset_store.pop(key, None)
         return before - len(self.zset_store.get(key, []))
 
     async def zremrangebyscore(self, key: str, min_score: int, max_score: int):
         values = self.zset_store.get(key, [])
-        self.zset_store[key] = [(s, m) for s, m in values if not (int(min_score) <= s <= int(max_score))]
+        self.zset_store[key] = [
+            (s, m) for s, m in values if not (int(min_score) <= s <= int(max_score))
+        ]
 
     async def zrangebyscore(
         self,
@@ -200,10 +220,15 @@ class FakeRedis:
             if score >= int(min_score) and (max_value is None or score <= max_value)
         )
 
+    async def zcard(self, key: str):
+        return len(self.zset_store.get(key, []))
+
     async def zrevrange(self, key: str, start: int, end: int):
-        values = sorted(self.zset_store.get(key, []), key=lambda item: (item[0], item[1]), reverse=True)
+        values = sorted(
+            self.zset_store.get(key, []), key=lambda item: (item[0], item[1]), reverse=True
+        )
         if end < 0:
-            sliced = values[int(start):]
+            sliced = values[int(start) :]
         else:
             sliced = values[int(start) : int(end) + 1]
         return [member for _score, member in sliced]
@@ -256,6 +281,99 @@ class FakeRedis:
         keys = [str(item) for item in args[:numkeys]]
         argv = [str(item) for item in args[numkeys:]]
         n = len(keys)
+
+        if "router_attempt_release_v2" in script:
+            active_key, owners_key = keys
+            owner_token = argv[0]
+            owners = self.zset_store.get(owners_key, [])
+            removed = any(member == owner_token for _score, member in owners)
+            if removed:
+                self.zset_store[owners_key] = [
+                    (score, member) for score, member in owners if member != owner_token
+                ]
+                if not self.zset_store[owners_key]:
+                    self.zset_store.pop(owners_key, None)
+                    self.ttl_store.pop(owners_key, None)
+            current = int(self.store.get(active_key, 0) or 0)
+            if removed:
+                current = max(0, current - 1)
+            current = max(current, len(self.zset_store.get(owners_key, [])))
+            if current <= 0:
+                self.store.pop(active_key, None)
+                self.ttl_store.pop(active_key, None)
+                return 0
+            self.store[active_key] = current
+            return current
+
+        if "router_attempt_admission_v2" in script:
+            active_key, owners_key, cooldown_key, health_key = keys[:4]
+            now_ms = int(time.time() * 1000)
+            owners = self.zset_store.get(owners_key, [])
+            expired_count = sum(1 for score, _member in owners if score <= now_ms)
+            if expired_count:
+                self.zset_store[owners_key] = [
+                    (score, member) for score, member in owners if score > now_ms
+                ]
+                if not self.zset_store[owners_key]:
+                    self.zset_store.pop(owners_key, None)
+                    self.ttl_store.pop(owners_key, None)
+            current_active = max(
+                0,
+                int(self.store.get(active_key, 0) or 0) - expired_count,
+            )
+            current_active = max(current_active, len(self.zset_store.get(owners_key, [])))
+            if current_active:
+                self.store[active_key] = current_active
+            else:
+                self.store.pop(active_key, None)
+                self.ttl_store.pop(active_key, None)
+            if cooldown_key in self.store:
+                return [0, "cooldown", 0]
+            if self.hash_store.get(health_key, {}).get("healthy") == "false":
+                return [0, "unhealthy", 0]
+
+            capacity_count = int(argv[0])
+            for index in range(capacity_count):
+                current = int(self.store.get(keys[4 + index], 0) or 0)
+                limit = int(argv[4 + index])
+                if current >= limit:
+                    return [0, "capacity", 0]
+
+            lease_ttl_ms = int(argv[1])
+            owner_token = argv[3]
+            expires_at_ms = now_ms + lease_ttl_ms
+            await self.zadd(owners_key, {owner_token: expires_at_ms})
+            active = current_active + 1
+            self.store[active_key] = active
+            ttl_seconds = max(1, (lease_ttl_ms + int(argv[4 + capacity_count])) // 1000)
+            self.ttl_store[active_key] = ttl_seconds
+            self.ttl_store[owners_key] = ttl_seconds
+            return [1, "acquired", active, expires_at_ms]
+
+        if "router_attempt_active_batch_v1" in script:
+            now_ms = int(time.time() * 1000)
+            results: list[int] = []
+            for index in range(0, len(keys), 2):
+                active_key, owners_key = keys[index : index + 2]
+                owners = self.zset_store.get(owners_key, [])
+                expired_count = sum(1 for score, _member in owners if score <= now_ms)
+                if expired_count:
+                    self.zset_store[owners_key] = [
+                        (score, member) for score, member in owners if score > now_ms
+                    ]
+                    if not self.zset_store[owners_key]:
+                        self.zset_store.pop(owners_key, None)
+                        self.ttl_store.pop(owners_key, None)
+                current = max(0, int(self.store.get(active_key, 0) or 0) - expired_count)
+                current = max(current, len(self.zset_store.get(owners_key, [])))
+                if current:
+                    self.store[active_key] = current
+                else:
+                    self.store.pop(active_key, None)
+                    self.ttl_store.pop(active_key, None)
+                results.append(current)
+            return results
+
         staged_fair_counters: dict[str, int] = {}
         staged_active_states: dict[str, dict[str, Any]] = {}
         staged_active_order: list[dict[str, Any]] = []
@@ -294,7 +412,9 @@ class FakeRedis:
             total_weight = int(float(self.store.get(total_weight_key, 0) or 0))
             expired = [
                 member
-                for score, member in sorted(self.zset_store.get(active_key, []), key=lambda item: item[0])
+                for score, member in sorted(
+                    self.zset_store.get(active_key, []), key=lambda item: item[0]
+                )
                 if score <= now_ms
             ][:cleanup_limit]
             cleanup_lagged = cleanup_limit > 0 and len(expired) >= cleanup_limit
@@ -340,7 +460,9 @@ class FakeRedis:
             weights = state["weights"]
             if organization_id in weights:
                 return int(weights[organization_id])
-            return int(float(self.hash_store.get(state["weight_key"], {}).get(organization_id, 0) or 0))
+            return int(
+                float(self.hash_store.get(state["weight_key"], {}).get(organization_id, 0) or 0)
+            )
 
         def stage_active_organization(
             *,
@@ -369,7 +491,9 @@ class FakeRedis:
             previous_score = staged_active_score(state, organization_id)
             previous_weight = staged_active_weight(state, organization_id)
             if previous_score > now_ms:
-                state["total_weight"] = int(state["total_weight"]) - previous_weight + effective_weight
+                state["total_weight"] = (
+                    int(state["total_weight"]) - previous_weight + effective_weight
+                )
             else:
                 state["active_count"] = int(state["active_count"]) + 1
                 state["total_weight"] = int(state["total_weight"]) + effective_weight
@@ -435,7 +559,9 @@ class FakeRedis:
                 await self.expire(limit_hit_rank_key, window_seconds)
                 await self.expire(limit_hit_total_key, window_seconds)
 
-            def check_dimension(pool_key: str, org_key: str, capacity: int, amount: int, scope: str, dimension: str):
+            def check_dimension(
+                pool_key: str, org_key: str, capacity: int, amount: int, scope: str, dimension: str
+            ):
                 if capacity <= 0 or amount <= 0:
                     return [1, scope, "not_configured", 0, 0, capacity, 0, 0.0, dimension]
                 pool_current = fair_counter_value(pool_key)
@@ -443,21 +569,84 @@ class FakeRedis:
                 next_pool = pool_current + amount
                 saturation = next_pool / capacity
                 share_multiplier = burst_multiplier if strategy == "reserved_burst" else 1.0
-                share_limit = max(1, int((capacity * effective_weight * share_multiplier) // max(1.0, total_weight)))
+                share_limit = max(
+                    1,
+                    int((capacity * effective_weight * share_multiplier) // max(1.0, total_weight)),
+                )
                 share_limit = min(capacity, share_limit)
                 if next_pool > capacity:
-                    return [0, scope, "pool_capacity_exceeded", pool_current, org_current, capacity, share_limit, saturation, dimension]
+                    return [
+                        0,
+                        scope,
+                        "pool_capacity_exceeded",
+                        pool_current,
+                        org_current,
+                        capacity,
+                        share_limit,
+                        saturation,
+                        dimension,
+                    ]
                 if cleanup_lagged:
-                    return [1, scope, "cleanup_lagged", pool_current, org_current, capacity, share_limit, saturation, dimension]
+                    return [
+                        1,
+                        scope,
+                        "cleanup_lagged",
+                        pool_current,
+                        org_current,
+                        capacity,
+                        share_limit,
+                        saturation,
+                        dimension,
+                    ]
                 if saturation > saturation_threshold and org_current + amount > share_limit:
-                    return [0, scope, "weighted_share_exceeded", pool_current, org_current, capacity, share_limit, saturation, dimension]
-                return [1, scope, "allowed", pool_current, org_current, capacity, share_limit, saturation, dimension]
+                    return [
+                        0,
+                        scope,
+                        "weighted_share_exceeded",
+                        pool_current,
+                        org_current,
+                        capacity,
+                        share_limit,
+                        saturation,
+                        dimension,
+                    ]
+                return [
+                    1,
+                    scope,
+                    "allowed",
+                    pool_current,
+                    org_current,
+                    capacity,
+                    share_limit,
+                    saturation,
+                    dimension,
+                ]
 
-            rpm = check_dimension(rpm_pool_key, rpm_org_key, rpm_capacity, rpm_amount, "tier_pool_fair_share_rpm", "rpm")
+            rpm = check_dimension(
+                rpm_pool_key,
+                rpm_org_key,
+                rpm_capacity,
+                rpm_amount,
+                "tier_pool_fair_share_rpm",
+                "rpm",
+            )
             if rpm[0] == 0:
                 await record_limit_hit(str(rpm[1]))
                 return [
-                    [0, rpm[1], rpm[2], active_count, total_weight, effective_weight, rpm[3], rpm[4], rpm[5], rpm[6], int(rpm[7] * 1_000_000), rpm[8]],
+                    [
+                        0,
+                        rpm[1],
+                        rpm[2],
+                        active_count,
+                        total_weight,
+                        effective_weight,
+                        rpm[3],
+                        rpm[4],
+                        rpm[5],
+                        rpm[6],
+                        int(rpm[7] * 1_000_000),
+                        rpm[8],
+                    ],
                     None,
                 ]
             rpm_org_total = int(rpm[4])
@@ -465,11 +654,31 @@ class FakeRedis:
                 stage_fair_counter_increment(rpm_pool_key, rpm_amount)
                 rpm_org_total = stage_fair_counter_increment(rpm_org_key, rpm_amount)
 
-            tpm = check_dimension(tpm_pool_key, tpm_org_key, tpm_capacity, tpm_amount, "tier_pool_fair_share_tpm", "tpm")
+            tpm = check_dimension(
+                tpm_pool_key,
+                tpm_org_key,
+                tpm_capacity,
+                tpm_amount,
+                "tier_pool_fair_share_tpm",
+                "tpm",
+            )
             if tpm[0] == 0:
                 await record_limit_hit(str(tpm[1]))
                 return [
-                    [0, tpm[1], tpm[2], active_count, total_weight, effective_weight, tpm[3], tpm[4], tpm[5], tpm[6], int(tpm[7] * 1_000_000), tpm[8]],
+                    [
+                        0,
+                        tpm[1],
+                        tpm[2],
+                        active_count,
+                        total_weight,
+                        effective_weight,
+                        tpm[3],
+                        tpm[4],
+                        tpm[5],
+                        tpm[6],
+                        int(tpm[7] * 1_000_000),
+                        tpm[8],
+                    ],
                     None,
                 ]
             tpm_org_total = int(tpm[4])
@@ -492,7 +701,11 @@ class FakeRedis:
                 "rpm_org_current": rpm_org_total,
                 "tpm_org_current": tpm_org_total,
             }
-            reason = "cleanup_lagged" if rpm[2] == "cleanup_lagged" or tpm[2] == "cleanup_lagged" else "allowed"
+            reason = (
+                "cleanup_lagged"
+                if rpm[2] == "cleanup_lagged" or tpm[2] == "cleanup_lagged"
+                else "allowed"
+            )
             selected = tpm if float(tpm[7]) > float(rpm[7]) else rpm
             return [
                 [
@@ -518,8 +731,13 @@ class FakeRedis:
                     await self.zrem(state["active_key"], organization_id)
                     await self.hdel(state["weight_key"], organization_id)
                 for organization_id in state["touched_orgs"]:
-                    await self.zadd(state["active_key"], {organization_id: state["scores"][organization_id]})
-                    await self.hset(state["weight_key"], {organization_id: str(state["weights"][organization_id])})
+                    await self.zadd(
+                        state["active_key"], {organization_id: state["scores"][organization_id]}
+                    )
+                    await self.hset(
+                        state["weight_key"],
+                        {organization_id: str(state["weights"][organization_id])},
+                    )
                 self.store[state["active_count_key"]] = str(state["active_count"])
                 self.store[state["total_weight_key"]] = str(state["total_weight"])
                 ttl_seconds = int(state["active_ttl_seconds"])
@@ -574,11 +792,7 @@ class FakeRedis:
             parallel_tokens = argv[cursor : cursor + parallel_token_count]
             cursor += parallel_token_count
             capacity_arg_start = cursor + (fair_count * 15)
-            capacity_count = (
-                int(argv[capacity_arg_start])
-                if capacity_arg_start < len(argv)
-                else 0
-            )
+            capacity_count = int(argv[capacity_arg_start]) if capacity_arg_start < len(argv) else 0
             capacity_by_rate_index: dict[int, tuple[str, int]] = {}
             for idx in range(capacity_count):
                 arg_start = capacity_arg_start + 1 + (idx * 3)
@@ -587,10 +801,7 @@ class FakeRedis:
                     int(argv[arg_start + 2]),
                 )
             capacity_key_start = (
-                rate_count
-                + legacy_parallel_count
-                + parallel_count
-                + (fair_count * 14)
+                rate_count + legacy_parallel_count + parallel_count + (fair_count * 14)
             )
 
             async def record_capacity_limit_hit(rate_index: int) -> None:
@@ -598,9 +809,7 @@ class FakeRedis:
                 if metadata is None:
                     return
                 field, ttl = metadata
-                heatmap_key, rank_key, total_key = keys[
-                    capacity_key_start : capacity_key_start + 3
-                ]
+                heatmap_key, rank_key, total_key = keys[capacity_key_start : capacity_key_start + 3]
                 await self.hincrby(heatmap_key, field, 1)
                 await self.zincrby(rank_key, 1, field)
                 await self.incr(total_key)
@@ -628,7 +837,10 @@ class FakeRedis:
                     for score, member in self.zset_store.get(key, [])
                     if score > now_ms
                 ]
-                if len(self.zset_store.get(key, [])) + parallel_requested[idx] > parallel_limits[idx]:
+                if (
+                    len(self.zset_store.get(key, [])) + parallel_requested[idx]
+                    > parallel_limits[idx]
+                ):
                     return [0, "parallel", "lease", idx + 1]
             decisions = []
             commits = []
@@ -717,7 +929,9 @@ class FakeRedis:
                         if member != token
                     ]
                     self.zset_store.setdefault(key, []).append((expires_at_values[idx], token))
-                    self.ttl_store[key] = max(1, (expires_at_values[idx] - int(argv[(2 * n)])) // 1000)
+                    self.ttl_store[key] = max(
+                        1, (expires_at_values[idx] - int(argv[(2 * n)])) // 1000
+                    )
                 return [1, 0]
 
             if len(argv) == n:
@@ -881,7 +1095,9 @@ class InMemoryCallableTargetBindingRepository:
     def __init__(self, bindings: list[CallableTargetBindingRecord]) -> None:
         self.bindings = list(bindings)
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -908,7 +1124,7 @@ class MockHTTPStreamResponse:
 
     async def aiter_lines(self):
         yield 'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}'
-        yield 'data: [DONE]'
+        yield "data: [DONE]"
 
 
 class MockHTTPClient:
@@ -946,7 +1162,9 @@ class MockHTTPClient:
 
         return httpx.Response(404, json={"error": "not found"})
 
-    def stream(self, method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):
+    def stream(
+        self, method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int
+    ):
         self.stream_calls += 1
         return MockHTTPStreamResponse()
 
@@ -999,9 +1217,17 @@ async def test_app() -> FastAPI:
     )
     await app.state.callable_target_grant_service.reload()
     app.state.model_registry = {
-        "gpt-4o-mini": [{"deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"}}],
+        "gpt-4o-mini": [
+            {"deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"}}
+        ],
         "text-embedding-3-small": [
-            {"deltallm_params": {"model": "openai/text-embedding-3-small", "api_key": "provider-key"}}
+            {
+                "deltallm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "provider-key",
+                },
+                "model_info": {"mode": "embedding"},
+            }
         ],
     }
     app.state.http_client = mock_http
@@ -1036,7 +1262,7 @@ async def test_app() -> FastAPI:
     cooldown_manager = CooldownManager(state_backend=state_backend)
     failover_manager = FailoverManager(
         config=FallbackConfig(),
-        deployment_registry=deployment_registry,
+        candidate_planner=router,
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
@@ -1051,7 +1277,9 @@ async def test_app() -> FastAPI:
         state_backend=state_backend,
     )
     app.state.guardrail_registry = GuardrailRegistry()
-    app.state.guardrail_middleware = GuardrailMiddleware(registry=app.state.guardrail_registry, cache_backend=redis)
+    app.state.guardrail_middleware = GuardrailMiddleware(
+        registry=app.state.guardrail_registry, cache_backend=redis
+    )
     app.state.budget_service = NoopBudgetService()
     app.state.spend_tracking_service = NoopSpendTrackingService()
 

@@ -42,7 +42,13 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "openai": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
     "anthropic": {"chat"},
     "azure": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
-    "azure_openai": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
+    "azure_openai": {
+        "chat",
+        "embedding",
+        "image_generation",
+        "audio_speech",
+        "audio_transcription",
+    },
     "openrouter": {"chat", "embedding", "image_generation"},
     "groq": {"chat", "embedding", "audio_speech", "audio_transcription"},
     "together": {"chat", "embedding", "image_generation"},
@@ -52,24 +58,71 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "gemini": {"chat", "audio_speech"},
     "bedrock": {"chat"},
     "elevenlabs": {"audio_speech", "audio_transcription"},
-    "vllm": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
+    "vllm": {
+        "chat",
+        "embedding",
+        "image_generation",
+        "audio_speech",
+        "audio_transcription",
+        "rerank",
+    },
     "lmstudio": {"chat", "embedding"},
     "ollama": {"chat", "embedding"},
 }
 
 PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
     "openai": {"provider": "openai", "api_base": "https://api.openai.com/v1", "compat": "openai"},
-    "anthropic": {"provider": "anthropic", "api_base": "https://api.anthropic.com/v1", "compat": "anthropic"},
-    "azure_openai": {"provider": "azure_openai", "api_base": "https://{resource}.openai.azure.com/openai/v1", "compat": "openai"},
-    "openrouter": {"provider": "openrouter", "api_base": "https://openrouter.ai/api/v1", "compat": "openai"},
+    "anthropic": {
+        "provider": "anthropic",
+        "api_base": "https://api.anthropic.com/v1",
+        "compat": "anthropic",
+    },
+    "azure_openai": {
+        "provider": "azure_openai",
+        "api_base": "https://{resource}.openai.azure.com/openai/v1",
+        "compat": "openai",
+    },
+    "openrouter": {
+        "provider": "openrouter",
+        "api_base": "https://openrouter.ai/api/v1",
+        "compat": "openai",
+    },
     "groq": {"provider": "groq", "api_base": "https://api.groq.com/openai/v1", "compat": "openai"},
-    "together": {"provider": "together", "api_base": "https://api.together.xyz/v1", "compat": "openai"},
-    "fireworks": {"provider": "fireworks", "api_base": "https://api.fireworks.ai/inference/v1", "compat": "openai"},
-    "deepinfra": {"provider": "deepinfra", "api_base": "https://api.deepinfra.com/v1/openai", "compat": "openai"},
-    "perplexity": {"provider": "perplexity", "api_base": "https://api.perplexity.ai", "compat": "openai"},
-    "gemini": {"provider": "gemini", "api_base": "https://generativelanguage.googleapis.com/v1beta", "compat": "native"},
-    "bedrock": {"provider": "bedrock", "api_base": "https://bedrock-runtime.{region}.amazonaws.com", "compat": "native"},
-    "elevenlabs": {"provider": "elevenlabs", "api_base": "https://api.elevenlabs.io/v1", "compat": "native"},
+    "together": {
+        "provider": "together",
+        "api_base": "https://api.together.xyz/v1",
+        "compat": "openai",
+    },
+    "fireworks": {
+        "provider": "fireworks",
+        "api_base": "https://api.fireworks.ai/inference/v1",
+        "compat": "openai",
+    },
+    "deepinfra": {
+        "provider": "deepinfra",
+        "api_base": "https://api.deepinfra.com/v1/openai",
+        "compat": "openai",
+    },
+    "perplexity": {
+        "provider": "perplexity",
+        "api_base": "https://api.perplexity.ai",
+        "compat": "openai",
+    },
+    "gemini": {
+        "provider": "gemini",
+        "api_base": "https://generativelanguage.googleapis.com/v1beta",
+        "compat": "native",
+    },
+    "bedrock": {
+        "provider": "bedrock",
+        "api_base": "https://bedrock-runtime.{region}.amazonaws.com",
+        "compat": "native",
+    },
+    "elevenlabs": {
+        "provider": "elevenlabs",
+        "api_base": "https://api.elevenlabs.io/v1",
+        "compat": "native",
+    },
     "vllm": {"provider": "vllm", "api_base": None, "compat": "openai"},
     "lmstudio": {"provider": "lmstudio", "api_base": None, "compat": "openai"},
     "ollama": {"provider": "ollama", "api_base": None, "compat": "openai"},
@@ -94,7 +147,9 @@ def resolve_provider(params: Mapping[str, object] | None) -> str:
     return provider_from_model(str(params.get("model") or ""))
 
 
-def resolve_upstream_model(params: Mapping[str, object] | None, fallback_model: str | None = None) -> str:
+def resolve_upstream_model(
+    params: Mapping[str, object] | None, fallback_model: str | None = None
+) -> str:
     if not params:
         return (fallback_model or "").strip()
 
@@ -106,7 +161,7 @@ def resolve_upstream_model(params: Mapping[str, object] | None, fallback_model: 
     lowered = upstream_model.lower()
     for prefix in PROVIDER_MODEL_PREFIXES_TO_STRIP.get(provider, ()):
         if lowered.startswith(prefix):
-            return upstream_model[len(prefix):]
+            return upstream_model[len(prefix) :]
     return upstream_model
 
 
