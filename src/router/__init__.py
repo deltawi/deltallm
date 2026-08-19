@@ -9,6 +9,7 @@ from src.router.candidates import (
     RouteCandidatePlanner,
 )
 from src.router.failover import ErrorClassification, FallbackConfig, FailoverManager, RetryPolicy
+from src.router.execution import ManagedFailoverResult, RequestDeadline
 from src.router.health import (
     BackgroundHealthChecker,
     HealthCheckConfig,
@@ -40,8 +41,10 @@ __all__ = [
     "FailoverManager",
     "HealthCheckConfig",
     "HealthEndpointHandler",
+    "ManagedFailoverResult",
     "PassiveHealthTracker",
     "RedisStateBackend",
+    "RequestDeadline",
     "ROUTING_MODE_CONTEXT_KEY",
     "RouteCandidatePlan",
     "RouteCandidatePlanner",

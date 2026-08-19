@@ -32,7 +32,7 @@ class OpenedStream:
     upstream_started: float
     _closed: bool = False
 
-    async def close(self, exc: Exception | None = None) -> None:
+    async def close(self, exc: BaseException | None = None) -> None:
         if self._closed:
             return
         self._closed = True
@@ -273,7 +273,7 @@ async def open_stream_with_first_chunk(
             internal_stream_usage_requested=internal_stream_usage_requested,
             upstream_started=upstream_started,
         )
-    except Exception as exc:
+    except BaseException as exc:
         observe_request_phase(
             route="chat_completions",
             phase="upstream_http",

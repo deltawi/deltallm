@@ -81,6 +81,10 @@ The supported policy fields today are:
 - `retry.max_attempts`
 - `retry.retryable_error_classes`
 
+`retry.max_attempts` is the maximum number of additional same-deployment retries for the
+whole routed request. The budget is shared across all primary and fallback candidates; it
+is not reset for each candidate. Candidate failover attempts remain separate from retries.
+
 ## Policy Modes
 
 The UI can present policy modes as shortcuts:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Callable
@@ -108,34 +109,31 @@ async def handle_chat_like_request(
             # so unsupported stream providers fail as a normal HTTP error.
             resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
 
+            managed_stream = await request.app.state.failover_manager.execute_managed_with_failover(
+                primary_deployment=primary,
+                model_group=model_group,
+                execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
+                on_attempt=track_attempt,
+                routing_context=request_context,
+                **failover_kwargs,
+            )
+            opened_stream = managed_stream.value
+            served_deployment = managed_stream.deployment
+            update_served_route_decision(
+                request,
+                primary_deployment_id=primary.deployment_id,
+                served_deployment_id=served_deployment.deployment_id,
+            )
+
             async def stream_sse():
                 cache_context = getattr(request.state, "cache_context", None)
                 stream_handler = getattr(request.app.state, "streaming_cache_handler", None)
                 stream_id = None
                 stream_write_context: StreamWriteContext | None = None
                 stream_usage = StreamUsageTracker()
-                opened_stream = None
-                served_deployment = None
-                failure_exc: Exception | None = None
+                failure_exc: BaseException | None = None
                 stream_cache_complete = False
                 try:
-                    (
-                        opened_stream,
-                        served_deployment,
-                    ) = await request.app.state.failover_manager.execute_with_failover(
-                        primary_deployment=primary,
-                        model_group=model_group,
-                        execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
-                        return_deployment=True,
-                        on_attempt=track_attempt,
-                        routing_context=request_context,
-                        **failover_kwargs,
-                    )
-                    update_served_route_decision(
-                        request,
-                        primary_deployment_id=primary.deployment_id,
-                        served_deployment_id=served_deployment.deployment_id,
-                    )
                     params = opened_stream.params
                     api_base_local = opened_stream.api_base
                     if (
@@ -172,46 +170,47 @@ async def handle_chat_like_request(
                         )
                         stream_handler.start_stream(stream_id)
 
-                    initial = opened_stream.first_line
-                    if initial:
-                        line_info = stream_usage.add_line(initial)
-                        if stream_id is not None and stream_handler is not None:
-                            stream_handler.add_chunk_from_line(stream_id, initial)
-                        if not (
-                            line_info.is_usage_only_chunk
-                            and not opened_stream.client_stream_usage_requested
-                        ):
+                    async with asyncio.timeout(managed_stream.deadline.require_remaining()):
+                        initial = opened_stream.first_line
+                        if initial:
+                            line_info = stream_usage.add_line(initial)
+                            if stream_id is not None and stream_handler is not None:
+                                stream_handler.add_chunk_from_line(stream_id, initial)
+                            if not (
+                                line_info.is_usage_only_chunk
+                                and not opened_stream.client_stream_usage_requested
+                            ):
+                                out_line = (
+                                    stream_line_transform(initial)
+                                    if stream_line_transform is not None
+                                    else initial
+                                )
+                                if out_line is not None:
+                                    yield f"{out_line}\n\n"
+                        async for line in opened_stream.translated_stream:
+                            if not line:
+                                continue
+
+                            line_info = stream_usage.add_line(line)
+                            if stream_id is not None and stream_handler is not None:
+                                stream_handler.add_chunk_from_line(stream_id, line)
+                                if line.strip() == "data: [DONE]":
+                                    stream_cache_complete = True
+
+                            if (
+                                line_info.is_usage_only_chunk
+                                and not opened_stream.client_stream_usage_requested
+                            ):
+                                continue
+
                             out_line = (
-                                stream_line_transform(initial)
+                                stream_line_transform(line)
                                 if stream_line_transform is not None
-                                else initial
+                                else line
                             )
-                            if out_line is not None:
-                                yield f"{out_line}\n\n"
-                    async for line in opened_stream.translated_stream:
-                        if not line:
-                            continue
-
-                        line_info = stream_usage.add_line(line)
-                        if stream_id is not None and stream_handler is not None:
-                            stream_handler.add_chunk_from_line(stream_id, line)
-                            if line.strip() == "data: [DONE]":
-                                stream_cache_complete = True
-
-                        if (
-                            line_info.is_usage_only_chunk
-                            and not opened_stream.client_stream_usage_requested
-                        ):
-                            continue
-
-                        out_line = (
-                            stream_line_transform(line)
-                            if stream_line_transform is not None
-                            else line
-                        )
-                        if out_line is None:
-                            continue
-                        yield f"{out_line}\n\n"
+                            if out_line is None:
+                                continue
+                            yield f"{out_line}\n\n"
                     resolved_usage = stream_usage.resolve(payload)
                     if (
                         stream_id is not None
@@ -252,6 +251,9 @@ async def handle_chat_like_request(
                         usage=resolved_usage.usage,
                         usage_metadata=resolved_usage.metadata(),
                     )
+                except asyncio.CancelledError as exc:
+                    failure_exc = exc
+                    raise
                 except Exception as exc:
                     failure_exc = exc
                     if stream_id is not None and stream_handler is not None:
@@ -284,8 +286,10 @@ async def handle_chat_like_request(
                     )
                     raise
                 finally:
-                    if opened_stream is not None:
+                    try:
                         await opened_stream.close(failure_exc)
+                    finally:
+                        await managed_stream.release()
 
             return StreamingResponse(
                 stream_sse(),
