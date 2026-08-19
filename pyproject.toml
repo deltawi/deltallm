@@ -41,6 +41,9 @@ guardrails-presidio = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "integration: exercises a real local infrastructure dependency when available",
+]
 
 [tool.ruff]
 line-length = 100

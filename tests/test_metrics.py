@@ -9,7 +9,9 @@ from src.services.prompt_registry import PromptRegistryService
 
 
 class _PromptMetricsRepository:
-    async def resolve_prompt(self, *, template_key: str, label: str | None = None, version: int | None = None):  # noqa: ANN201
+    async def resolve_prompt(
+        self, *, template_key: str, label: str | None = None, version: int | None = None
+    ):  # noqa: ANN201
         del label, version
         return PromptResolvedRecord(
             prompt_template_id="tmpl-1",
@@ -37,7 +39,9 @@ class _PromptMetricsRepository:
 
 
 class _ShadowMetricsBindingRepository:
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         del callable_key, scope_type, scope_id, limit, offset
         return [
             CallableTargetBindingRecord(
@@ -93,6 +97,9 @@ async def test_metrics_endpoint_exposes_request_and_usage_metrics(client, test_a
     assert "deltallm_spend_total" in text
     assert "deltallm_request_total_latency_seconds" in text
     assert "deltallm_llm_api_latency_seconds" in text
+    assert "deltallm_request_phase_latency_seconds" in text
+    assert 'phase="response_total"' in text
+    assert 'response_kind="nonstream"' in text
 
 
 async def test_metrics_endpoint_exposes_cache_hit_and_miss(client, test_app):
@@ -127,13 +134,21 @@ async def test_metrics_endpoint_exposes_deployment_gauges(client):
 
 
 async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app):
-    test_app.state.prompt_registry_service = PromptRegistryService(repository=_PromptMetricsRepository())
+    test_app.state.prompt_registry_service = PromptRegistryService(
+        repository=_PromptMetricsRepository()
+    )
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "hello"}],
-        "metadata": {"prompt_ref": {"key": "support.prompt", "label": "production", "variables": {"name": "Mehdi"}}},
+        "metadata": {
+            "prompt_ref": {
+                "key": "support.prompt",
+                "label": "production",
+                "variables": {"name": "Mehdi"},
+            }
+        },
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -145,6 +160,8 @@ async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app
     assert "deltallm_prompt_cache_lookups_total" in text
     assert "deltallm_prompt_resolutions_total" in text
     assert "deltallm_prompt_resolution_latency_seconds" in text
+    assert "deltallm_prompt_singleflight_inflight" in text
+    assert "deltallm_prompt_singleflight_outcomes_total" in text
 
 
 async def test_metrics_endpoint_exposes_callable_target_policy_shadow_metrics(client, test_app):
@@ -153,7 +170,9 @@ async def test_metrics_endpoint_exposes_callable_target_policy_shadow_metrics(cl
     record.team_id = "team-1"
     record.models = ["gpt-4o-mini", "text-embedding-3-small"]
     setattr(test_app.state.settings, "callable_target_scope_policy_mode", "shadow")
-    setattr(test_app.state.app_config.general_settings, "callable_target_scope_policy_mode", "shadow")
+    setattr(
+        test_app.state.app_config.general_settings, "callable_target_scope_policy_mode", "shadow"
+    )
     test_app.state.callable_target_grant_service = CallableTargetGrantService(
         repository=_ShadowMetricsBindingRepository(),
         policy_repository=_ShadowMetricsPolicyRepository(),

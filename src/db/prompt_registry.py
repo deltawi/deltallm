@@ -112,6 +112,9 @@ class PromptRegistryRepository:
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
 
+    def with_db(self, prisma_client: Any | None) -> PromptRegistryRepository:
+        return PromptRegistryRepository(prisma_client)
+
     async def list_templates(
         self,
         *,
@@ -686,7 +689,9 @@ class PromptRegistryRepository:
         )
         return bool(rows)
 
-    async def resolve_binding(self, *, scope_type: str, scope_id: str) -> PromptBindingRecord | None:
+    async def resolve_binding(
+        self, *, scope_type: str, scope_id: str
+    ) -> PromptBindingRecord | None:
         if self.prisma is None:
             return None
         rows = await self.prisma.query_raw(
@@ -717,6 +722,99 @@ class PromptRegistryRepository:
         if not rows:
             return None
         return self._to_binding_record(rows[0])
+
+    async def resolve_binding_chain(
+        self,
+        *,
+        scopes: list[tuple[str, str]],
+    ) -> list[PromptBindingRecord]:
+        """Resolve the best enabled binding for every requested canonical scope in one query."""
+
+        if self.prisma is None or not scopes:
+            return []
+
+        values: list[str] = []
+        parameters: list[Any] = []
+        for scope_rank, (raw_scope_type, raw_scope_id) in enumerate(scopes):
+            canonical_scope_type = normalize_scope_type(raw_scope_type)
+            scope_id = str(raw_scope_id or "").strip()
+            if not canonical_scope_type or not scope_id:
+                continue
+            for alias_rank, candidate_scope_type in enumerate(
+                scope_lookup_candidates(canonical_scope_type)
+            ):
+                start = len(parameters) + 1
+                values.append(
+                    f"(${start}::text, ${start + 1}::text, ${start + 2}::text, "
+                    f"${start + 3}::int, ${start + 4}::int)"
+                )
+                parameters.extend(
+                    [
+                        canonical_scope_type,
+                        candidate_scope_type,
+                        scope_id,
+                        scope_rank,
+                        alias_rank,
+                    ]
+                )
+
+        if not values:
+            return []
+
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH requested(canonical_scope_type, stored_scope_type, scope_id, scope_rank, alias_rank) AS (
+                VALUES {", ".join(values)}
+            ), ranked AS (
+                SELECT
+                    b.prompt_binding_id,
+                    b.scope_type,
+                    b.scope_id,
+                    b.prompt_template_id,
+                    t.template_key,
+                    b.label,
+                    b.priority,
+                    b.enabled,
+                    b.metadata,
+                    b.created_at,
+                    b.updated_at,
+                    r.canonical_scope_type,
+                    r.scope_rank,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY r.canonical_scope_type, r.scope_id
+                        ORDER BY
+                            r.alias_rank ASC,
+                            b.priority ASC,
+                            b.created_at ASC,
+                            b.prompt_binding_id ASC
+                    ) AS binding_rank
+                FROM requested r
+                JOIN deltallm_promptbinding b
+                  ON b.scope_type = r.stored_scope_type
+                 AND b.scope_id = r.scope_id
+                 AND b.enabled = TRUE
+                JOIN deltallm_prompttemplate t
+                  ON t.prompt_template_id = b.prompt_template_id
+            )
+            SELECT
+                prompt_binding_id,
+                scope_type,
+                scope_id,
+                prompt_template_id,
+                template_key,
+                label,
+                priority,
+                enabled,
+                metadata,
+                created_at,
+                updated_at
+            FROM ranked
+            WHERE binding_rank = 1
+            ORDER BY scope_rank ASC
+            """,
+            *parameters,
+        )
+        return [self._to_binding_record(row) for row in rows]
 
     async def resolve_prompt(
         self,
@@ -786,9 +884,15 @@ class PromptRegistryRepository:
             status=str(row.get("status") or ""),
             label=str(row.get("label")) if row.get("label") is not None else None,
             template_body=_parse_json_object(row.get("template_body")),
-            variables_schema=_parse_json_object(row.get("variables_schema")) if row.get("variables_schema") is not None else None,
-            model_hints=_parse_json_object(row.get("model_hints")) if row.get("model_hints") is not None else None,
-            route_preferences=_parse_json_object(row.get("route_preferences")) if row.get("route_preferences") is not None else None,
+            variables_schema=_parse_json_object(row.get("variables_schema"))
+            if row.get("variables_schema") is not None
+            else None,
+            model_hints=_parse_json_object(row.get("model_hints"))
+            if row.get("model_hints") is not None
+            else None,
+            route_preferences=_parse_json_object(row.get("route_preferences"))
+            if row.get("route_preferences") is not None
+            else None,
         )
 
     async def list_binding_scopes_for_template(self, template_key: str) -> list[tuple[str, str]]:
@@ -815,6 +919,7 @@ class PromptRegistryRepository:
     async def create_render_log(
         self,
         *,
+        prompt_render_log_id: str | None = None,
         request_id: str | None,
         api_key: str | None,
         user_id: str | None,
@@ -832,6 +937,7 @@ class PromptRegistryRepository:
         error_message: str | None,
         variables: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
+        variables_redacted: bool = False,
     ) -> None:
         if self.prisma is None:
             return
@@ -856,12 +962,15 @@ class PromptRegistryRepository:
                 error_message,
                 variables,
                 metadata,
+                variables_redacted,
                 created_at
             ) VALUES (
-                gen_random_uuid()::text,
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17::jsonb,NOW()
+                COALESCE($1, gen_random_uuid()::text),
+                $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18::jsonb,$19,NOW()
             )
+            ON CONFLICT (prompt_render_log_id) DO NOTHING
             """,
+            prompt_render_log_id,
             request_id,
             api_key,
             user_id,
@@ -879,7 +988,39 @@ class PromptRegistryRepository:
             error_message,
             json.dumps(variables) if variables is not None else None,
             json.dumps(metadata) if metadata is not None else None,
+            bool(variables_redacted),
         )
+
+    async def create_render_logs_batch(self, payloads: list[dict[str, Any]]) -> int:
+        if self.prisma is None or not payloads:
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            INSERT INTO deltallm_promptrenderlog (
+                prompt_render_log_id, request_id, api_key, user_id, team_id,
+                organization_id, route_group_key, model, prompt_template_id,
+                prompt_version_id, prompt_key, label, status, latency_ms,
+                error_code, error_message, variables, metadata, variables_redacted,
+                created_at
+            )
+            SELECT
+                COALESCE(item->>'prompt_render_log_id', gen_random_uuid()::text),
+                item->>'request_id', item->>'api_key', item->>'user_id', item->>'team_id',
+                item->>'organization_id', item->>'route_group_key', item->>'model',
+                item->>'prompt_template_id', item->>'prompt_version_id',
+                item->>'prompt_key', item->>'label', item->>'status',
+                (item->>'latency_ms')::int, item->>'error_code', item->>'error_message',
+                NULLIF(item->'variables', 'null'::jsonb),
+                NULLIF(item->'metadata', 'null'::jsonb),
+                COALESCE((item->>'variables_redacted')::boolean, FALSE),
+                NOW()
+            FROM jsonb_array_elements($1::jsonb) AS source(item)
+            ON CONFLICT (prompt_render_log_id) DO NOTHING
+            RETURNING prompt_render_log_id
+            """,
+            json.dumps(payloads, default=str),
+        )
+        return len(rows)
 
     async def _resolve_template_id(self, template_key: str) -> str | None:
         if self.prisma is None:
@@ -899,10 +1040,18 @@ class PromptRegistryRepository:
         return value or None
 
     def _to_template_record(self, row: dict[str, Any]) -> PromptTemplateRecord:
-        metadata = _parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None
+        metadata = (
+            _parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None
+        )
         owner_scope = owner_scope_from_metadata(metadata)
-        owner_scope_value = str(row.get("owner_scope")).strip() if row.get("owner_scope") is not None else None
-        if owner_scope_value and owner_scope.scope_type == "global" and owner_scope.scope_id is None:
+        owner_scope_value = (
+            str(row.get("owner_scope")).strip() if row.get("owner_scope") is not None else None
+        )
+        if (
+            owner_scope_value
+            and owner_scope.scope_type == "global"
+            and owner_scope.scope_id is None
+        ):
             owner_scope_type = normalize_owner_scope_type(owner_scope_value)
         else:
             owner_scope_type = owner_scope.scope_type
@@ -930,11 +1079,19 @@ class PromptRegistryRepository:
             version=int(row.get("version") or 0),
             status=str(row.get("status") or ""),
             template_body=_parse_json_object(row.get("template_body")),
-            variables_schema=_parse_json_object(row.get("variables_schema")) if row.get("variables_schema") is not None else None,
-            model_hints=_parse_json_object(row.get("model_hints")) if row.get("model_hints") is not None else None,
-            route_preferences=_parse_json_object(row.get("route_preferences")) if row.get("route_preferences") is not None else None,
+            variables_schema=_parse_json_object(row.get("variables_schema"))
+            if row.get("variables_schema") is not None
+            else None,
+            model_hints=_parse_json_object(row.get("model_hints"))
+            if row.get("model_hints") is not None
+            else None,
+            route_preferences=_parse_json_object(row.get("route_preferences"))
+            if row.get("route_preferences") is not None
+            else None,
             published_at=_parse_datetime(row.get("published_at")),
-            published_by=str(row.get("published_by")) if row.get("published_by") is not None else None,
+            published_by=str(row.get("published_by"))
+            if row.get("published_by") is not None
+            else None,
             archived_at=_parse_datetime(row.get("archived_at")),
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
@@ -962,7 +1119,9 @@ class PromptRegistryRepository:
             label=str(row.get("label") or ""),
             priority=int(row.get("priority") or 0),
             enabled=bool(row.get("enabled", True)),
-            metadata=_parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None,
+            metadata=_parse_json_object(row.get("metadata"))
+            if row.get("metadata") is not None
+            else None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
         )

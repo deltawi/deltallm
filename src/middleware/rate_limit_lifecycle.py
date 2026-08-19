@@ -7,6 +7,7 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.middleware.rate_limit import _release_rate_limits
+from src.services.preflight_capacity import release_preflight_capacity
 
 
 class RateLimitLeaseLifecycleMiddleware:
@@ -38,12 +39,14 @@ class RateLimitLeaseLifecycleMiddleware:
             if message["type"] != "http.response.body" or message.get("more_body", False):
                 return
             response_finished = True
+            await release_preflight_capacity(request)
             await _release_rate_limits(request)
 
         try:
             await self.app(scope, receive, send_with_release)
         finally:
             if not response_finished:
+                await release_preflight_capacity(request)
                 await _release_rate_limits(request)
 
 

@@ -224,7 +224,9 @@ class ModelDeploymentRepository:
             ModelDeploymentRecord(
                 deployment_id=str(row.get("deployment_id") or ""),
                 model_name=str(row.get("model_name") or ""),
-                named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
+                named_credential_id=str(row.get("named_credential_id"))
+                if row.get("named_credential_id") is not None
+                else None,
                 deltallm_params=_parse_json_object(row.get("deltallm_params")),
                 model_info=_parse_metadata(row.get("model_info")),
             )
@@ -250,12 +252,16 @@ class ModelDeploymentRepository:
         return ModelDeploymentRecord(
             deployment_id=str(row.get("deployment_id") or ""),
             model_name=str(row.get("model_name") or ""),
-            named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
+            named_credential_id=str(row.get("named_credential_id"))
+            if row.get("named_credential_id") is not None
+            else None,
             deltallm_params=_parse_json_object(row.get("deltallm_params")),
             model_info=_parse_metadata(row.get("model_info")),
         )
 
-    async def list_by_deployment_ids(self, deployment_ids: list[str]) -> list[ModelDeploymentRecord]:
+    async def list_by_deployment_ids(
+        self, deployment_ids: list[str]
+    ) -> list[ModelDeploymentRecord]:
         if self.prisma is None or not deployment_ids:
             return []
 
@@ -277,7 +283,9 @@ class ModelDeploymentRepository:
             ModelDeploymentRecord(
                 deployment_id=str(row.get("deployment_id") or ""),
                 model_name=str(row.get("model_name") or ""),
-                named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
+                named_credential_id=str(row.get("named_credential_id"))
+                if row.get("named_credential_id") is not None
+                else None,
                 deltallm_params=_parse_json_object(row.get("deltallm_params")),
                 model_info=_parse_metadata(row.get("model_info")),
             )
@@ -344,7 +352,9 @@ class ModelDeploymentRepository:
         return ModelDeploymentRecord(
             deployment_id=str(row.get("deployment_id") or ""),
             model_name=str(row.get("model_name") or ""),
-            named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
+            named_credential_id=str(row.get("named_credential_id"))
+            if row.get("named_credential_id") is not None
+            else None,
             deltallm_params=_parse_json_object(row.get("deltallm_params")),
             model_info=_parse_metadata(row.get("model_info")),
         )
@@ -367,7 +377,9 @@ class ModelDeploymentRepository:
         if self.prisma is None or not records:
             return False
 
-        count_rows = await self.prisma.query_raw("SELECT COUNT(*)::int AS count FROM deltallm_modeldeployment")
+        count_rows = await self.prisma.query_raw(
+            "SELECT COUNT(*)::int AS count FROM deltallm_modeldeployment"
+        )
         if count_rows and int(count_rows[0].get("count") or 0) > 0:
             return False
 
@@ -440,6 +452,9 @@ class AuditRepository:
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
 
+    def with_db(self, prisma_client: Any | None) -> AuditRepository:
+        return AuditRepository(prisma_client)
+
     async def create_event(self, record: AuditEventRecord) -> AuditEventRecord:
         if self.prisma is None:
             return record
@@ -462,6 +477,7 @@ class AuditRepository:
                 $11, $12, $13, $14, $15, $16,
                 $17, $18, $19::jsonb, $20, $21, $22
             )
+            ON CONFLICT (event_id) DO NOTHING
             RETURNING
                 event_id, occurred_at, organization_id, actor_type, actor_id, api_key, action,
                 resource_type, resource_id, request_id, correlation_id, ip, user_agent, status,
@@ -510,6 +526,7 @@ class AuditRepository:
                 content_sha256, size_bytes, redacted
             )
             VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7, $8, $9)
+            ON CONFLICT (payload_id) DO NOTHING
             RETURNING payload_id, event_id, kind, storage_mode, content_json, storage_uri,
                       content_sha256, size_bytes, redacted, created_at
             """,
@@ -526,6 +543,75 @@ class AuditRepository:
         if not rows:
             return record
         return self._to_payload_record(rows[0])
+
+    async def create_events_batch(self, records: list[AuditEventRecord]) -> int:
+        if self.prisma is None or not records:
+            return 0
+        payload = [
+            {
+                **record.__dict__,
+                "event_id": record.event_id or str(uuid4()),
+            }
+            for record in records
+        ]
+        rows = await self.prisma.query_raw(
+            """
+            INSERT INTO deltallm_auditevent (
+                event_id, occurred_at, organization_id, actor_type, actor_id, api_key,
+                action, resource_type, resource_id, request_id, correlation_id, ip,
+                user_agent, status, latency_ms, input_tokens, output_tokens, error_type,
+                error_code, metadata, content_stored, prev_hash, event_hash
+            )
+            SELECT
+                (item->>'event_id')::uuid,
+                COALESCE((item->>'occurred_at')::timestamptz, NOW()),
+                item->>'organization_id', item->>'actor_type', item->>'actor_id',
+                item->>'api_key', item->>'action', item->>'resource_type',
+                item->>'resource_id', item->>'request_id', item->>'correlation_id',
+                item->>'ip', item->>'user_agent', item->>'status',
+                (item->>'latency_ms')::int, (item->>'input_tokens')::int,
+                (item->>'output_tokens')::int, item->>'error_type', item->>'error_code',
+                NULLIF(item->'metadata', 'null'::jsonb),
+                COALESCE((item->>'content_stored')::boolean, FALSE),
+                item->>'prev_hash', item->>'event_hash'
+            FROM jsonb_array_elements($1::jsonb) AS source(item)
+            ON CONFLICT (event_id) DO NOTHING
+            RETURNING event_id
+            """,
+            json.dumps(payload, default=str),
+        )
+        return len(rows)
+
+    async def create_payloads_batch(self, records: list[AuditPayloadRecord]) -> int:
+        if self.prisma is None or not records:
+            return 0
+        payload = [
+            {
+                **record.__dict__,
+                "payload_id": record.payload_id or str(uuid4()),
+            }
+            for record in records
+        ]
+        rows = await self.prisma.query_raw(
+            """
+            INSERT INTO deltallm_auditpayload (
+                payload_id, event_id, kind, storage_mode, content_json, storage_uri,
+                content_sha256, size_bytes, redacted, created_at
+            )
+            SELECT
+                (item->>'payload_id')::uuid, (item->>'event_id')::uuid,
+                item->>'kind', COALESCE(item->>'storage_mode', 'inline'),
+                NULLIF(item->'content_json', 'null'::jsonb), item->>'storage_uri',
+                item->>'content_sha256', (item->>'size_bytes')::int,
+                COALESCE((item->>'redacted')::boolean, FALSE),
+                COALESCE((item->>'created_at')::timestamptz, NOW())
+            FROM jsonb_array_elements($1::jsonb) AS source(item)
+            ON CONFLICT (payload_id) DO NOTHING
+            RETURNING payload_id
+            """,
+            json.dumps(payload, default=str),
+        )
+        return len(rows)
 
     async def is_content_storage_enabled_for_org(self, organization_id: str | None) -> bool:
         if self.prisma is None or not organization_id:
@@ -563,7 +649,9 @@ class AuditRepository:
         )
         return [str(row.get("event_id")) for row in rows if row.get("event_id")]
 
-    async def list_expired_payload_ids(self, *, default_retention_days: int, limit: int) -> list[str]:
+    async def list_expired_payload_ids(
+        self, *, default_retention_days: int, limit: int
+    ) -> list[str]:
         if self.prisma is None:
             return []
         rows = await self.prisma.query_raw(

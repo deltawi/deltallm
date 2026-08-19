@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from src.audit.delivery import AuditDeliveryClass
 from src.billing.tier_pricing import (
     attach_pricing_metadata,
     resolve_deployment_tier_pricing,
@@ -32,6 +33,7 @@ from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.routers.routing_decision import (
     capture_attempted_deployment,
@@ -42,8 +44,12 @@ from src.routers.routing_decision import (
     resolve_failure_target,
     update_served_route_decision,
 )
-from src.routers.utils import fire_and_forget
-from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
+from src.services.audit_service import (
+    AuditEventInput,
+    AuditPayloadInput,
+    AuditService,
+    enqueue_audit_event,
+)
 from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
 
@@ -61,7 +67,7 @@ def _request_client_ip(request: Request) -> str | None:
     return None
 
 
-def _emit_embedding_audit_event(
+async def _emit_embedding_audit_event(
     *,
     request: Request,
     auth: Any,
@@ -87,7 +93,8 @@ def _emit_embedding_audit_event(
     if response_data is None:
         payloads = [AuditPayloadInput(kind="request", content_json=request_data)]
 
-    audit_service.record_event(
+    await enqueue_audit_event(
+        audit_service,
         AuditEventInput(
             action=AuditAction.EMBEDDING_REQUEST.value,
             organization_id=getattr(auth, "organization_id", None),
@@ -109,7 +116,7 @@ def _emit_embedding_audit_event(
             metadata=metadata or {},
         ),
         payloads=payloads,
-        critical=True,
+        delivery_class=AuditDeliveryClass.REQUIRED,
     )
 
 
@@ -138,6 +145,7 @@ async def _execute_embedding(
         upstream_payload["model"] = upstream_model
 
     from src.routers.utils import apply_default_params
+
     apply_default_params(upstream_payload, deployment.model_info)
 
     upstream_start = perf_counter()
@@ -145,7 +153,9 @@ async def _execute_embedding(
         f"{api_base}/embeddings",
         headers=headers,
         json=upstream_payload,
-        timeout=build_upstream_request_timeout_for_request(request, configured_timeout_seconds(params.get("timeout"))),
+        timeout=build_upstream_request_timeout_for_request(
+            request, configured_timeout_seconds(params.get("timeout"))
+        ),
     )
     if response.status_code >= 400:
         raise httpx.HTTPStatusError(
@@ -189,7 +199,9 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
     capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
-    primary_api_base = str(primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
+    primary_api_base = str(
+        primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)
+    ).rstrip("/")
 
     def track_attempt(deployment):  # noqa: ANN001
         capture_attempted_deployment(request, deployment)
@@ -208,12 +220,15 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
-        request.state.cache_store_pricing = cache_pricing_snapshot_from_deployment(served_deployment)
+        request.state.cache_store_pricing = cache_pricing_snapshot_from_deployment(
+            served_deployment
+        )
         request.state.cache_store_deployment_id = served_deployment.deployment_id
         request.state.cache_store_provider = resolve_provider(served_deployment.deltallm_params)
-        request.state.cache_store_deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
+        request.state.cache_store_deployment_model = (
+            str(served_deployment.deltallm_params.get("model") or "") or None
+        )
         route_meta = route_decision_metadata(request)
-        await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
         api_provider = resolve_provider(served_deployment.deltallm_params)
 
         api_latency_ms = data.pop("_api_latency_ms", 0)
@@ -295,8 +310,10 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             effective_pricing_sources=customer_billing.pricing_sources_used,
             missing_pricing_fields=customer_billing.missing_pricing_fields,
         )
-        fire_and_forget(
+        await enqueue_request_log_write(
+            request,
             request.app.state.spend_tracking_service.log_spend(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -312,7 +329,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 cache_hit=cache_hit,
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
-            )
+            ),
         )
         observe_request_latency(
             model=payload.model,
@@ -339,7 +356,9 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             response_cost=request_cost,
             api_latency_ms=api_latency_ms,
             api_provider=api_provider,
-            turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+            turn_off_message_logging=bool(
+                getattr(request.app.state, "turn_off_message_logging", False)
+            ),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)
         await callback_manager.execute_post_call_success_hooks(
@@ -361,7 +380,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         }
         if route_meta is not None:
             audit_metadata["routing_decision"] = route_meta
-        _emit_embedding_audit_event(
+        await _emit_embedding_audit_event(
             request=request,
             auth=auth,
             model=payload.model,
@@ -376,36 +395,52 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
     except httpx.HTTPError as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
-        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
-        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(
-            failure_deployment_id,
-            success=False,
-            error=str(exc),
-            exc=exc,
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get(
+            "model"
         )
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
         increment_request(
-            model=payload.model, api_provider=failure_provider,
-            api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=status_code,
+            model=payload.model,
+            api_provider=failure_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            status_code=status_code,
         )
-        increment_request_failure(model=payload.model, api_provider=failure_provider, error_type=exc.__class__.__name__)
-        observe_request_latency(model=payload.model, api_provider=failure_provider, status_code=status_code, latency_seconds=perf_counter() - request_start)
+        increment_request_failure(
+            model=payload.model, api_provider=failure_provider, error_type=exc.__class__.__name__
+        )
+        observe_request_latency(
+            model=payload.model,
+            api_provider=failure_provider,
+            status_code=status_code,
+            latency_seconds=perf_counter() - request_start,
+        )
         callback_payload = build_standard_logging_payload(
-            call_type="embedding", request_id=request_id, model=payload.model,
-            deployment_model=failure_deployment_model, request_payload=request_data, response_obj=None,
-            user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
+            call_type="embedding",
+            request_id=request_id,
+            model=payload.model,
+            deployment_model=failure_deployment_model,
+            request_payload=request_data,
+            response_obj=None,
+            user_api_key_dict=auth.model_dump(mode="json"),
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
             api_base=failure_api_base,
             api_provider=failure_provider,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
-            turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+            turn_off_message_logging=bool(
+                getattr(request.app.state, "turn_off_message_logging", False)
+            ),
         )
         callback_manager.dispatch_failure_callbacks(callback_payload, exc)
         await request.app.state.guardrail_middleware.run_post_call_failure(
-            request_data=request_data, user_api_key_dict=auth.model_dump(mode="python"),
-            original_exception=exc, call_type="embedding",
+            request_data=request_data,
+            user_api_key_dict=auth.model_dump(mode="python"),
+            original_exception=exc,
+            call_type="embedding",
         )
         error_route_meta = route_decision_metadata(request)
         error_metadata: dict[str, Any] = {
@@ -416,9 +451,10 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         }
         if error_route_meta is not None:
             error_metadata["routing_decision"] = error_route_meta
-        enqueue_request_log_write(
+        await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -434,9 +470,9 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 end_time=datetime.now(tz=UTC),
                 http_status_code=status_code,
                 exc=exc,
-            )
+            ),
         )
-        _emit_embedding_audit_event(
+        await _emit_embedding_audit_event(
             request=request,
             auth=auth,
             model=payload.model,
@@ -450,30 +486,35 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         raise InvalidRequestError(message=f"Embedding request failed: {exc}") from exc
     except Exception as exc:
         failure_target = resolve_failure_target(request, fallback_deployment=primary)
-        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
-        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(
-            failure_deployment_id,
-            success=False,
-            error=str(exc),
-            exc=exc,
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get(
+            "model"
         )
         status_code = int(getattr(exc, "status_code", 500) or 500)
         callback_payload = build_standard_logging_payload(
-            call_type="embedding", request_id=request_id, model=payload.model,
-            deployment_model=failure_deployment_model, request_payload=request_data, response_obj=None,
-            user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
+            call_type="embedding",
+            request_id=request_id,
+            model=payload.model,
+            deployment_model=failure_deployment_model,
+            request_payload=request_data,
+            response_obj=None,
+            user_api_key_dict=auth.model_dump(mode="json"),
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
             api_base=failure_api_base,
             api_provider=failure_provider,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
-            turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+            turn_off_message_logging=bool(
+                getattr(request.app.state, "turn_off_message_logging", False)
+            ),
         )
         callback_manager.dispatch_failure_callbacks(callback_payload, exc)
         await request.app.state.guardrail_middleware.run_post_call_failure(
-            request_data=request_data, user_api_key_dict=auth.model_dump(mode="python"),
-            original_exception=exc, call_type="embedding",
+            request_data=request_data,
+            user_api_key_dict=auth.model_dump(mode="python"),
+            original_exception=exc,
+            call_type="embedding",
         )
         error_route_meta = route_decision_metadata(request)
         error_metadata: dict[str, Any] = {
@@ -484,9 +525,10 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         }
         if error_route_meta is not None:
             error_metadata["routing_decision"] = error_route_meta
-        enqueue_request_log_write(
+        await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
+                event_id=get_or_create_billing_event_id(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -502,9 +544,9 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 end_time=datetime.now(tz=UTC),
                 http_status_code=status_code,
                 exc=exc,
-            )
+            ),
         )
-        _emit_embedding_audit_event(
+        await _emit_embedding_audit_event(
             request=request,
             auth=auth,
             model=payload.model,

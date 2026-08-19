@@ -21,27 +21,18 @@ deltallm_settings:
   turn_off_message_logging: {{ $cfg.deltallm_settings.turn_off_message_logging }}
   success_callback:
     {{- $successCallbacks := default (list) $cfg.deltallm_settings.success_callback }}
-    {{- if not (has "prometheus" $successCallbacks) }}
-    {{- $successCallbacks = append $successCallbacks "prometheus" }}
-    {{- end }}
     {{- if and $root.Values.s3.enabled (not (has "s3" $successCallbacks)) }}
     {{- $successCallbacks = append $successCallbacks "s3" }}
     {{- end }}
 {{ toYaml $successCallbacks | indent 4 }}
   failure_callback:
     {{- $failureCallbacks := default (list) $cfg.deltallm_settings.failure_callback }}
-    {{- if not (has "prometheus" $failureCallbacks) }}
-    {{- $failureCallbacks = append $failureCallbacks "prometheus" }}
-    {{- end }}
     {{- if and $root.Values.s3.enabled (not (has "s3" $failureCallbacks)) }}
     {{- $failureCallbacks = append $failureCallbacks "s3" }}
     {{- end }}
 {{ toYaml $failureCallbacks | indent 4 }}
   callbacks:
     {{- $callbacks := default (list) $cfg.deltallm_settings.callbacks }}
-    {{- if not (has "prometheus" $callbacks) }}
-    {{- $callbacks = append $callbacks "prometheus" }}
-    {{- end }}
 {{ toYaml $callbacks | indent 4 }}
   {{- $callbackSettings := deepCopy (default (dict) $cfg.deltallm_settings.callback_settings) }}
   {{- if $root.Values.s3.enabled }}
@@ -172,10 +163,28 @@ general_settings:
 {{- define "deltallm.validateRenderedConfig" -}}
 {{- $apiConfig := include "deltallm.apiConfigYaml" . | fromYaml -}}
 {{- $apiGeneral := default (dict) (get $apiConfig "general_settings") -}}
+{{- $telemetryDrainSeconds := float64 (default 20 (get $apiGeneral "telemetry_shutdown_drain_timeout_seconds")) -}}
+{{- $terminationGraceSeconds := float64 .Values.terminationGracePeriodSeconds -}}
+{{- if le $terminationGraceSeconds $telemetryDrainSeconds -}}
+{{- fail "terminationGracePeriodSeconds must be greater than telemetry_shutdown_drain_timeout_seconds" -}}
+{{- end -}}
+{{- $emailEnabled := eq (lower (toString (default false (get $apiGeneral "email_enabled")))) "true" -}}
+{{- $emailWorkerEnabled := true -}}
+{{- if hasKey $apiGeneral "email_worker_enabled" -}}
+{{- $emailWorkerEnabled = eq (lower (toString (get $apiGeneral "email_worker_enabled"))) "true" -}}
+{{- end -}}
+{{- $emailDrainSeconds := float64 (default 20 (get $apiGeneral "email_worker_shutdown_drain_timeout_seconds")) -}}
+{{- if and $emailEnabled $emailWorkerEnabled (le $terminationGraceSeconds $emailDrainSeconds) -}}
+{{- fail "terminationGracePeriodSeconds must be greater than email_worker_shutdown_drain_timeout_seconds when the email worker is enabled" -}}
+{{- end -}}
 {{- include "deltallm.validateSchedulerConfig" (dict "role" "api" "general" $apiGeneral) -}}
 {{- if .Values.batchWorker.enabled -}}
 {{- $workerConfig := include "deltallm.batchWorkerConfigYaml" . | fromYaml -}}
 {{- $workerGeneral := default (dict) (get $workerConfig "general_settings") -}}
+{{- $workerTelemetryDrainSeconds := float64 (default 20 (get $workerGeneral "telemetry_shutdown_drain_timeout_seconds")) -}}
+{{- if le $terminationGraceSeconds $workerTelemetryDrainSeconds -}}
+{{- fail "terminationGracePeriodSeconds must be greater than the batch worker telemetry_shutdown_drain_timeout_seconds" -}}
+{{- end -}}
 {{- include "deltallm.validateSchedulerConfig" (dict "role" "batchWorker" "general" $workerGeneral) -}}
 {{- end -}}
 {{- end -}}

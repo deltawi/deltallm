@@ -16,7 +16,7 @@ spend_router = APIRouter(prefix="/spend", tags=["Spend"])
 global_router = APIRouter(prefix="/global", tags=["Global Spend"])
 
 
-def _emit_spend_audit(
+async def _emit_spend_audit(
     *,
     request: Request,
     request_start: float,
@@ -26,7 +26,7 @@ def _emit_spend_audit(
     response_payload: dict[str, Any] | None = None,
     error: Exception | None = None,
 ) -> None:
-    emit_audit_event(
+    await emit_audit_event(
         request=request,
         request_start=request_start,
         action=action,
@@ -44,7 +44,9 @@ def _emit_spend_audit(
 def _db_or_503(request: Request) -> Any:
     db = getattr(getattr(request.app.state, "prisma_manager", None), "client", None)
     if db is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable"
+        )
     return db
 
 
@@ -150,7 +152,7 @@ async def get_spend_logs(
 
     try:
         logs = await db.query_raw(
-        f"""
+            f"""
         SELECT
             id,
             request_id,
@@ -179,17 +181,17 @@ async def get_spend_logs(
         LIMIT ${limit_idx}
         OFFSET ${offset_idx}
         """,
-        *log_params,
-    )
+            *log_params,
+        )
 
         total_rows = await db.query_raw(
-        f"""
+            f"""
         SELECT COUNT(*) AS total
         FROM {source.table}
         {where_sql}
         """,
-        *params,
-    )
+            *params,
+        )
         total = int((total_rows[0] if total_rows else {}).get("total") or 0)
 
         result = {
@@ -201,7 +203,7 @@ async def get_spend_logs(
                 "has_more": offset + limit < total,
             },
         }
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.SPEND_LOGS_READ,
@@ -221,7 +223,7 @@ async def get_spend_logs(
         )
         return result
     except Exception as exc:
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.SPEND_LOGS_READ,
@@ -264,7 +266,7 @@ async def get_global_spend(
     )
     try:
         rows = await db.query_raw(
-        f"""
+            f"""
         SELECT
             COALESCE(SUM(spend), 0) AS total_spend,
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
@@ -274,25 +276,31 @@ async def get_global_spend(
         FROM {source.table}
         {where_sql}
         """,
-        *params,
-    )
+            *params,
+        )
         result = _to_json_value(dict(rows[0] if rows else {}))
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_READ,
             status="success",
-            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             response_payload=result if isinstance(result, dict) else None,
         )
         return result
     except Exception as exc:
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_READ,
             status="error",
-            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             error=exc,
         )
         raise
@@ -329,7 +337,7 @@ async def get_spend_report(
     )
     try:
         rows = await db.query_raw(
-        f"""
+            f"""
         SELECT
             {group_column} AS group_key,
             COALESCE(SUM(spend), 0) AS total_spend,
@@ -341,47 +349,57 @@ async def get_spend_report(
         GROUP BY {group_column}
         ORDER BY total_spend DESC
         """,
-        *params,
-    )
+            *params,
+        )
         result = {
             "group_by": group_by,
             "breakdown": [_to_json_value(dict(row)) for row in rows],
         }
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_REPORT_READ,
             status="success",
-            request_payload={"group_by": group_by, "start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "group_by": group_by,
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             response_payload={"groups": len(result["breakdown"])},
         )
         return result
     except Exception as exc:
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_REPORT_READ,
             status="error",
-            request_payload={"group_by": group_by, "start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "group_by": group_by,
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             error=exc,
         )
         raise
 
 
 @global_router.get("/spend/keys")
-async def get_spend_per_key(request: Request, _: str = Depends(require_master_key)) -> list[dict[str, Any]]:
+async def get_spend_per_key(
+    request: Request, _: str = Depends(require_master_key)
+) -> list[dict[str, Any]]:
     request_start = perf_counter()
     db = _db_or_503(request)
     try:
         rows = await db.query_raw(
-        """
+            """
         SELECT token, key_name, spend, max_budget, user_id, team_id
         FROM deltallm_verificationtoken
         ORDER BY spend DESC
         """
-    )
+        )
         result = [_to_json_value(dict(row)) for row in rows]
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_KEYS_READ,
@@ -390,7 +408,7 @@ async def get_spend_per_key(request: Request, _: str = Depends(require_master_ke
         )
         return result
     except Exception as exc:
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_KEYS_READ,
@@ -401,19 +419,21 @@ async def get_spend_per_key(request: Request, _: str = Depends(require_master_ke
 
 
 @global_router.get("/spend/teams")
-async def get_spend_per_team(request: Request, _: str = Depends(require_master_key)) -> list[dict[str, Any]]:
+async def get_spend_per_team(
+    request: Request, _: str = Depends(require_master_key)
+) -> list[dict[str, Any]]:
     request_start = perf_counter()
     db = _db_or_503(request)
     try:
         rows = await db.query_raw(
-        """
+            """
         SELECT team_id, team_alias, spend, max_budget
         FROM deltallm_teamtable
         ORDER BY spend DESC
         """
-    )
+        )
         result = [_to_json_value(dict(row)) for row in rows]
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_TEAMS_READ,
@@ -422,7 +442,7 @@ async def get_spend_per_team(request: Request, _: str = Depends(require_master_k
         )
         return result
     except Exception as exc:
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_TEAMS_READ,
@@ -455,7 +475,7 @@ async def get_spend_per_end_user(
 
     try:
         rows = await db.query_raw(
-        f"""
+            f"""
         SELECT
             COALESCE({source.end_user_column}, {source.user_column}, 'anonymous') AS end_user_id,
             COALESCE(SUM(spend), 0) AS total_spend,
@@ -465,25 +485,31 @@ async def get_spend_per_end_user(
         GROUP BY end_user_id
         ORDER BY total_spend DESC
         """,
-        *params,
-    )
+            *params,
+        )
         result = [_to_json_value(dict(row)) for row in rows]
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_END_USERS_READ,
             status="success",
-            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             response_payload={"count": len(result)},
         )
         return result
     except Exception as exc:
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_END_USERS_READ,
             status="error",
-            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             error=exc,
         )
         raise
@@ -512,7 +538,7 @@ async def get_spend_per_model(
 
     try:
         rows = await db.query_raw(
-        f"""
+            f"""
         SELECT
             model,
             COALESCE(SUM(spend), 0) AS total_spend,
@@ -523,25 +549,31 @@ async def get_spend_per_model(
         GROUP BY model
         ORDER BY total_spend DESC
         """,
-        *params,
-    )
+            *params,
+        )
         result = [_to_json_value(dict(row)) for row in rows]
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_MODELS_READ,
             status="success",
-            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             response_payload={"count": len(result)},
         )
         return result
     except Exception as exc:
-        _emit_spend_audit(
+        await _emit_spend_audit(
             request=request,
             request_start=request_start,
             action=AuditAction.GLOBAL_SPEND_MODELS_READ,
             status="error",
-            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            request_payload={
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+            },
             error=exc,
         )
         raise

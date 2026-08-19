@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from asyncio import CancelledError, Task, create_task
+from asyncio import Task
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,7 +10,11 @@ from src.db.email import EmailOutboxRepository
 from src.email.models import EmailConfigurationError
 from src.services.email_feedback_service import EmailFeedbackService
 from src.services.email_delivery_service import EmailDeliveryService
-from src.services.email_outbox_service import EmailOutboxService, EmailOutboxWorker, EmailWorkerConfig
+from src.services.email_outbox_service import (
+    EmailOutboxService,
+    EmailOutboxWorker,
+    EmailWorkerConfig,
+)
 
 
 @dataclass
@@ -23,11 +27,15 @@ class EmailRuntime:
 async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
     repository = getattr(app.state, "email_outbox_repository", None)
     if repository is None:
-        repository = EmailOutboxRepository(getattr(getattr(app.state, "prisma_manager", None), "client", None))
+        repository = EmailOutboxRepository(
+            getattr(getattr(app.state, "prisma_manager", None), "client", None)
+        )
         app.state.email_outbox_repository = repository
     feedback_repository = getattr(app.state, "email_feedback_repository", None)
     if feedback_repository is None:
-        feedback_repository = EmailFeedbackRepository(getattr(getattr(app.state, "prisma_manager", None), "client", None))
+        feedback_repository = EmailFeedbackRepository(
+            getattr(getattr(app.state, "prisma_manager", None), "client", None)
+        )
         app.state.email_feedback_repository = feedback_repository
 
     delivery_service = EmailDeliveryService(
@@ -48,7 +56,12 @@ async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
     )
 
     if not bool(getattr(cfg.general_settings, "email_enabled", False)):
-        return EmailRuntime(statuses=(BootstrapStatus("email", "disabled"), BootstrapStatus("email_worker", "disabled")))
+        return EmailRuntime(
+            statuses=(
+                BootstrapStatus("email", "disabled"),
+                BootstrapStatus("email_worker", "disabled"),
+            )
+        )
 
     try:
         delivery_service.validate_current_config()
@@ -70,12 +83,36 @@ async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
             audit_service=getattr(app.state, "audit_service", None),
             feedback_repository=feedback_repository,
             config=EmailWorkerConfig(
-                poll_interval_seconds=float(getattr(cfg.general_settings, "email_worker_poll_interval_seconds", 5.0) or 5.0),
-                max_batch_size=10,
-                max_concurrency=int(getattr(cfg.general_settings, "email_worker_max_concurrency", 3) or 3),
+                poll_interval_seconds=float(
+                    getattr(cfg.general_settings, "email_worker_poll_interval_seconds", 5.0) or 5.0
+                ),
+                max_batch_size=int(
+                    getattr(cfg.general_settings, "email_worker_batch_size", 10) or 10
+                ),
+                max_concurrency=int(
+                    getattr(cfg.general_settings, "email_worker_max_concurrency", 3) or 3
+                ),
+                delivery_lease_seconds=int(
+                    getattr(cfg.general_settings, "email_worker_delivery_lease_seconds", 60) or 60
+                ),
+                audit_lease_seconds=int(
+                    getattr(cfg.general_settings, "email_worker_audit_lease_seconds", 30) or 30
+                ),
+                startup_timeout_seconds=float(
+                    getattr(cfg.general_settings, "email_worker_startup_timeout_seconds", 5.0)
+                    or 5.0
+                ),
+                shutdown_drain_timeout_seconds=float(
+                    getattr(
+                        cfg.general_settings, "email_worker_shutdown_drain_timeout_seconds", 20.0
+                    )
+                    or 20.0
+                ),
             ),
         )
-        runtime.worker_task = create_task(runtime.worker.run())
+        await runtime.worker.start()
+        runtime.worker_task = runtime.worker.task
+        app.state.email_outbox_worker = runtime.worker
         statuses.append(BootstrapStatus("email_worker", "ready"))
     else:
         statuses.append(BootstrapStatus("email_worker", "disabled"))
@@ -85,10 +122,5 @@ async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
 
 async def shutdown_email_runtime(runtime: EmailRuntime) -> None:
     if runtime.worker is not None:
-        runtime.worker.stop()
-    if runtime.worker_task is not None:
-        runtime.worker_task.cancel()
-        try:
-            await runtime.worker_task
-        except CancelledError:
-            pass
+        await runtime.worker.shutdown()
+    runtime.worker_task = None

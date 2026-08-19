@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from time import perf_counter
 from typing import Any
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
@@ -25,12 +26,19 @@ from src.mcp import (
     MCPTransportError,
 )
 from src.routers.audit_helpers import emit_audit_event
+from src.services.audit_service import require_audit_service
 
 router = APIRouter(tags=["mcp"])
 
 
+def _tool_audit_event_id(operation_id: str, phase: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"deltallm:mcp-tool:{operation_id}:{phase}"))
+
+
 def _jsonrpc_success(request_id: str | int | None, result: dict[str, Any]) -> JSONResponse:
-    return JSONResponse(status_code=200, content={"jsonrpc": "2.0", "id": request_id, "result": result})
+    return JSONResponse(
+        status_code=200, content={"jsonrpc": "2.0", "id": request_id, "result": result}
+    )
 
 
 def _jsonrpc_error(
@@ -66,14 +74,18 @@ def _map_mcp_error(request_id: str | int | None, exc: Exception) -> JSONResponse
             request_id,
             code=-32009,
             message=str(exc),
-            data={"approval_request_id": exc.approval_request_id} if exc.approval_request_id else None,
+            data={"approval_request_id": exc.approval_request_id}
+            if exc.approval_request_id
+            else None,
         )
     if isinstance(exc, MCPApprovalRequiredError):
         return _jsonrpc_error(
             request_id,
             code=-32008,
             message=str(exc),
-            data={"approval_request_id": exc.approval_request_id} if exc.approval_request_id else None,
+            data={"approval_request_id": exc.approval_request_id}
+            if exc.approval_request_id
+            else None,
         )
     if isinstance(exc, MCPRateLimitError):
         return _jsonrpc_error(request_id, code=-32029, message=str(exc))
@@ -101,6 +113,7 @@ async def mcp_gateway(request: Request):
     request_start = perf_counter()
     auth = await authenticate_request(request)
     request_id: str | int | None = None
+    tool_operation_id: str | None = None
 
     try:
         payload = await request.json()
@@ -112,6 +125,7 @@ async def mcp_gateway(request: Request):
 
     method = str(payload.get("method") or "").strip()
     params = payload.get("params")
+    tool_params = params if isinstance(params, dict) else {}
     request_id = payload.get("id")
 
     if not method:
@@ -145,7 +159,7 @@ async def mcp_gateway(request: Request):
                     for tool in tools
                 ]
             }
-            emit_audit_event(
+            await emit_audit_event(
                 request=request,
                 request_start=request_start,
                 action=AuditAction.MCP_TOOLS_LIST,
@@ -169,6 +183,33 @@ async def mcp_gateway(request: Request):
             arguments = params.get("arguments")
             if arguments is not None and not isinstance(arguments, dict):
                 raise ValueError("tools/call params.arguments must be an object")
+            tool_operation_id = str(uuid4())
+            try:
+                server_key = parse_namespaced_tool_name(tool_name)[0]
+            except MCPToolNotFoundError:
+                server_key = ""
+            require_audit_service(getattr(request.app.state, "audit_service", None))
+            await emit_audit_event(
+                request=request,
+                request_start=request_start,
+                action=AuditAction.MCP_TOOL_CALL,
+                status="attempted",
+                actor_type="api_key",
+                actor_id=auth.user_id or auth.api_key,
+                organization_id=auth.organization_id,
+                api_key=auth.api_key,
+                resource_type="mcp_tool",
+                resource_id=tool_name,
+                request_payload={"name": tool_name},
+                metadata={
+                    "operation_id": tool_operation_id,
+                    "phase": "attempt",
+                    "server_key": server_key,
+                    "tool_name": tool_name,
+                },
+                critical=True,
+                event_id=_tool_audit_event_id(tool_operation_id, "attempt"),
+            )
             result = await gateway.call_tool(
                 auth,
                 namespaced_tool_name=tool_name,
@@ -177,7 +218,7 @@ async def mcp_gateway(request: Request):
                 request_id=request.headers.get("x-request-id"),
                 correlation_id=request.headers.get("x-request-id"),
             )
-            emit_audit_event(
+            await emit_audit_event(
                 request=request,
                 request_start=request_start,
                 action=AuditAction.MCP_TOOL_CALL,
@@ -191,12 +232,15 @@ async def mcp_gateway(request: Request):
                 request_payload={"name": tool_name},
                 response_payload={"is_error": result.is_error},
                 metadata={
-                    "server_key": str(result.metadata.get("server_key") or parse_namespaced_tool_name(tool_name)[0]),
+                    "operation_id": tool_operation_id,
+                    "phase": "outcome",
+                    "server_key": str(result.metadata.get("server_key") or server_key),
                     "tool_name": str(result.metadata.get("tool_name") or tool_name),
                     "scope_type": result.metadata.get("scope_type"),
                     "scope_id": result.metadata.get("scope_id"),
                 },
-                critical=True,
+                critical=False,
+                event_id=_tool_audit_event_id(tool_operation_id, "outcome"),
             )
             return _jsonrpc_success(
                 request_id,
@@ -206,16 +250,17 @@ async def mcp_gateway(request: Request):
                     "isError": result.is_error,
                 },
             )
-        return _jsonrpc_error(request_id, code=-32601, message=f"Method '{method}' is not supported")
+        return _jsonrpc_error(
+            request_id, code=-32601, message=f"Method '{method}' is not supported"
+        )
     except MCPError as exc:
         if method == "tools/call":
-            tool_name = str((params or {}).get("name") or "")
-            scope = await gateway.resolve_tool_scope(auth, namespaced_tool_name=tool_name)
+            tool_name = str(tool_params.get("name") or "")
             try:
                 server_key = parse_namespaced_tool_name(tool_name)[0]
             except MCPToolNotFoundError:
                 server_key = ""
-            emit_audit_event(
+            await emit_audit_event(
                 request=request,
                 request_start=request_start,
                 action=AuditAction.MCP_TOOL_CALL,
@@ -228,15 +273,22 @@ async def mcp_gateway(request: Request):
                 resource_id=tool_name,
                 error=exc,
                 metadata={
+                    "operation_id": tool_operation_id,
+                    "phase": "outcome",
                     "server_key": server_key,
                     "tool_name": tool_name,
-                    "scope_type": scope.scope_type if scope is not None else None,
-                    "scope_id": scope.scope_id if scope is not None else None,
+                    "scope_type": None,
+                    "scope_id": None,
                 },
-                critical=True,
+                critical=False,
+                event_id=(
+                    _tool_audit_event_id(tool_operation_id, "outcome")
+                    if tool_operation_id is not None
+                    else None
+                ),
             )
         elif method == "tools/list":
-            emit_audit_event(
+            await emit_audit_event(
                 request=request,
                 request_start=request_start,
                 action=AuditAction.MCP_TOOLS_LIST,
@@ -253,7 +305,7 @@ async def mcp_gateway(request: Request):
         return _map_mcp_error(request_id, exc)
     except Exception as exc:
         if method == "tools/call":
-            emit_audit_event(
+            await emit_audit_event(
                 request=request,
                 request_start=request_start,
                 action=AuditAction.MCP_TOOL_CALL,
@@ -263,12 +315,21 @@ async def mcp_gateway(request: Request):
                 organization_id=auth.organization_id,
                 api_key=auth.api_key,
                 resource_type="mcp_tool",
-                resource_id=str((params or {}).get("name") or ""),
+                resource_id=str(tool_params.get("name") or ""),
                 error=exc,
-                critical=True,
+                metadata={
+                    "operation_id": tool_operation_id,
+                    "phase": "outcome",
+                },
+                critical=False,
+                event_id=(
+                    _tool_audit_event_id(tool_operation_id, "outcome")
+                    if tool_operation_id is not None
+                    else None
+                ),
             )
         elif method == "tools/list":
-            emit_audit_event(
+            await emit_audit_event(
                 request=request,
                 request_start=request_start,
                 action=AuditAction.MCP_TOOLS_LIST,

@@ -291,8 +291,9 @@ async def test_init_and_shutdown_audit_runtime_enabled(monkeypatch: pytest.Monke
     created: dict[str, object] = {}
 
     class FakeAuditService:
-        def __init__(self, repository) -> None:  # noqa: ANN001
+        def __init__(self, repository, **kwargs) -> None:  # noqa: ANN001, ANN003
             self.repository = repository
+            self.kwargs = kwargs
             self.started = False
             self.stopped = False
             created["service"] = self
@@ -344,7 +345,11 @@ async def test_init_and_shutdown_audit_runtime_enabled(monkeypatch: pytest.Monke
 async def test_init_batch_runtime_disabled_sets_batch_state_to_none() -> None:
     app = SimpleNamespace(state=SimpleNamespace())
 
-    runtime = await init_batch_runtime(app, _batch_config(enabled=False, worker_enabled=False, gc_enabled=False), repository=object())
+    runtime = await init_batch_runtime(
+        app,
+        _batch_config(enabled=False, worker_enabled=False, gc_enabled=False),
+        repository=object(),
+    )
 
     assert app.state.batch_storage is None
     assert app.state.batch_storage_registry is None
@@ -465,7 +470,15 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             self.stopped = True
 
     class FakeStagingBackend:
-        def __init__(self, *, storage, storage_registry=None, stage_purpose="batch-create-stage", chunk_size=65_536, max_line_bytes=1_048_576) -> None:  # noqa: ANN001,E501
+        def __init__(
+            self,
+            *,
+            storage,
+            storage_registry=None,
+            stage_purpose="batch-create-stage",
+            chunk_size=65_536,
+            max_line_bytes=1_048_576,
+        ) -> None:  # noqa: ANN001,E501
             self.storage = storage
             self.storage_registry = storage_registry
             self.stage_purpose = stage_purpose
@@ -474,7 +487,19 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             created["staging_backend"] = self
 
     class FakePromoter:
-        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds, **kwargs) -> None:  # noqa: ANN001,E501
+        def __init__(
+            self,
+            *,
+            repository,
+            staging,
+            metadata_retention_days,
+            max_pending_batches_per_scope,
+            insert_chunk_size,
+            soft_precheck_enabled,
+            tx_max_wait_seconds,
+            tx_timeout_seconds,
+            **kwargs,
+        ) -> None:  # noqa: ANN001,E501
             del kwargs
             self.repository = repository
             self.staging = staging
@@ -508,16 +533,37 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
         def stop(self) -> None:
             self.stopped = True
 
-    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path}
+    )
     monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
     monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchExecutorWorker", FakeBatchWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchRetentionCleanupWorker", FakeGCWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchSchedulerBackfillWorker", FakeSchedulerBackfillWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchStaleLeaseSweeperWorker", FakeStaleLeaseSweeperWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker",
+        FakeCompletionOutboxWorker,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchRetentionCleanupWorker", FakeGCWorker
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchSchedulerBackfillWorker",
+        FakeSchedulerBackfillWorker,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchStaleLeaseSweeperWorker",
+        FakeStaleLeaseSweeperWorker,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
+        FakeStagingBackend,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
+        FakeCreateSessionAdminService,
+    )
 
     app = SimpleNamespace(state=SimpleNamespace(redis="redis-client"))
     create_sessions = _FakeCreateSessionRepository()
@@ -528,12 +574,12 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
         _batch_config(
             enabled=True,
             worker_enabled=True,
-                gc_enabled=True,
-                scheduler_backfill_enabled=True,
-                stale_lease_sweeper_enabled=True,
-            ),
-            repository=repository,
-        )
+            gc_enabled=True,
+            scheduler_backfill_enabled=True,
+            stale_lease_sweeper_enabled=True,
+        ),
+        repository=repository,
+    )
 
     assert app.state.batch_storage == {"path": "/tmp/batch-artifacts"}
     assert app.state.batch_storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
@@ -641,12 +687,24 @@ async def test_init_batch_runtime_can_disable_completion_outbox_worker(
         del args, kwargs
         raise AssertionError("completion outbox worker should not start")
 
-    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path}
+    )
     monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", _unexpected_outbox_worker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", _unexpected_outbox_worker
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
+        FakeStagingBackend,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
+        FakeCreateSessionAdminService,
+    )
 
     app = SimpleNamespace(state=SimpleNamespace())
     repository = SimpleNamespace(create_sessions=_FakeCreateSessionRepository())
@@ -736,13 +794,23 @@ async def test_init_and_shutdown_batch_webhook_worker(monkeypatch: pytest.Monkey
         "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path}
     )
     monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
     monkeypatch.setattr(
-        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
+        FakeStagingBackend,
     )
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchWebhookOutboxWorker", FakeWebhookWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.httpx.AsyncHTTPTransport", FakeTransport)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
+        FakeCreateSessionAdminService,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchWebhookOutboxWorker", FakeWebhookWorker
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.httpx.AsyncHTTPTransport", FakeTransport
+    )
 
     app = SimpleNamespace(state=SimpleNamespace())
     repository = SimpleNamespace(create_sessions=_FakeCreateSessionRepository())
@@ -804,7 +872,15 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
             self.stopped = True
 
     class FakeStagingBackend:
-        def __init__(self, *, storage, storage_registry=None, stage_purpose="batch-create-stage", chunk_size=65_536, max_line_bytes=1_048_576) -> None:  # noqa: ANN001,E501
+        def __init__(
+            self,
+            *,
+            storage,
+            storage_registry=None,
+            stage_purpose="batch-create-stage",
+            chunk_size=65_536,
+            max_line_bytes=1_048_576,
+        ) -> None:  # noqa: ANN001,E501
             self.storage = storage
             self.storage_registry = storage_registry
             self.stage_purpose = stage_purpose
@@ -813,7 +889,19 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
             created["staging_backend"] = self
 
     class FakePromoter:
-        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds, **kwargs) -> None:  # noqa: ANN001,E501
+        def __init__(
+            self,
+            *,
+            repository,
+            staging,
+            metadata_retention_days,
+            max_pending_batches_per_scope,
+            insert_chunk_size,
+            soft_precheck_enabled,
+            tx_max_wait_seconds,
+            tx_timeout_seconds,
+            **kwargs,
+        ) -> None:  # noqa: ANN001,E501
             del kwargs
             self.repository = repository
             self.staging = staging
@@ -847,13 +935,29 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
         def stop(self) -> None:
             self.stopped = True
 
-    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path}
+    )
     monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionCleanupWorker", FakeCreateSessionCleanupWorker)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker",
+        FakeCompletionOutboxWorker,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
+        FakeStagingBackend,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
+        FakeCreateSessionAdminService,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionCleanupWorker",
+        FakeCreateSessionCleanupWorker,
+    )
 
     app = SimpleNamespace(state=SimpleNamespace())
     create_sessions = _FakeCreateSessionRepository()
@@ -883,7 +987,9 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
     assert runtime.create_session_cleanup_worker is created["cleanup_worker"]
     assert runtime.create_session_cleanup_task is not None
     assert created["staging_backend"].storage == {"path": "/tmp/batch-artifacts"}
-    assert created["staging_backend"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["staging_backend"].storage_registry == {
+        "local": {"path": "/tmp/batch-artifacts"}
+    }
     assert created["staging_backend"].chunk_size == 65_536
     assert created["staging_backend"].max_line_bytes == 1_048_576
     assert created["cleanup_worker"].repository is create_sessions
@@ -950,7 +1056,15 @@ async def test_init_batch_runtime_builds_create_session_public_service(
             self.stopped = True
 
     class FakeStagingBackend:
-        def __init__(self, *, storage, storage_registry=None, stage_purpose="batch-create-stage", chunk_size=65_536, max_line_bytes=1_048_576) -> None:  # noqa: ANN001,E501
+        def __init__(
+            self,
+            *,
+            storage,
+            storage_registry=None,
+            stage_purpose="batch-create-stage",
+            chunk_size=65_536,
+            max_line_bytes=1_048_576,
+        ) -> None:  # noqa: ANN001,E501
             self.storage = storage
             self.storage_registry = storage_registry
             self.stage_purpose = stage_purpose
@@ -959,7 +1073,19 @@ async def test_init_batch_runtime_builds_create_session_public_service(
             created["staging_backend"] = self
 
     class FakePromoter:
-        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds, **kwargs) -> None:  # noqa: ANN001,E501
+        def __init__(
+            self,
+            *,
+            repository,
+            staging,
+            metadata_retention_days,
+            max_pending_batches_per_scope,
+            insert_chunk_size,
+            soft_precheck_enabled,
+            tx_max_wait_seconds,
+            tx_timeout_seconds,
+            **kwargs,
+        ) -> None:  # noqa: ANN001,E501
             del kwargs
             self.repository = repository
             self.staging = staging
@@ -978,12 +1104,25 @@ async def test_init_batch_runtime_builds_create_session_public_service(
             self.staging = staging
             created["admin_service"] = self
 
-    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path}
+    )
     monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker",
+        FakeCompletionOutboxWorker,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
+        FakeStagingBackend,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
+        FakeCreateSessionAdminService,
+    )
 
     app = SimpleNamespace(state=SimpleNamespace())
     create_sessions = _FakeCreateSessionRepository()
@@ -1013,7 +1152,9 @@ async def test_init_batch_runtime_builds_create_session_public_service(
     assert runtime.create_session_cleanup_worker is None
     assert runtime.create_session_cleanup_task is None
     assert created["staging_backend"].storage == {"path": "/tmp/batch-artifacts"}
-    assert created["staging_backend"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["staging_backend"].storage_registry == {
+        "local": {"path": "/tmp/batch-artifacts"}
+    }
     assert created["staging_backend"].chunk_size == 65_536
     assert created["staging_backend"].max_line_bytes == 1_048_576
     assert created["promoter"].repository is repository
@@ -1166,7 +1307,10 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
         "src.bootstrap.batch_runtime.storage.S3BatchArtifactStorage",
         lambda **kwargs: {"backend": "s3", **kwargs},
     )
-    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"backend": "local", "path": path})
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage",
+        lambda path: {"backend": "local", "path": path},
+    )
     monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
     monkeypatch.setattr(
         "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
@@ -1187,7 +1331,13 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
 
     runtime = await init_batch_runtime(
         app,
-        _batch_config(enabled=True, worker_enabled=False, gc_enabled=False, storage_backend="s3", s3_bucket="batch-bucket"),
+        _batch_config(
+            enabled=True,
+            worker_enabled=False,
+            gc_enabled=False,
+            storage_backend="s3",
+            s3_bucket="batch-bucket",
+        ),
         repository=repository,
     )
 
@@ -1205,7 +1355,9 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeBatchService:
         def __init__(self, repository, storage, storage_registry=None, **kwargs) -> None:  # noqa: ANN001
             del repository, kwargs
@@ -1219,7 +1371,9 @@ async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(mo
     def _fail_local(path: str):  # noqa: ANN001
         raise RuntimeError("local storage unavailable")
 
-    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", _fail_local)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", _fail_local
+    )
     monkeypatch.setattr(
         "src.bootstrap.batch_runtime.storage.S3BatchArtifactStorage",
         lambda **kwargs: {"backend": "s3", **kwargs},
@@ -1242,11 +1396,26 @@ async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(mo
 
     runtime = await init_batch_runtime(
         app,
-        _batch_config(enabled=True, worker_enabled=False, gc_enabled=False, storage_backend="s3", s3_bucket="batch-bucket"),
+        _batch_config(
+            enabled=True,
+            worker_enabled=False,
+            gc_enabled=False,
+            storage_backend="s3",
+            s3_bucket="batch-bucket",
+        ),
         repository=SimpleNamespace(create_sessions=_FakeCreateSessionRepository()),
     )
 
-    assert app.state.batch_storage == {"backend": "s3", "bucket": "batch-bucket", "region": "us-east-1", "prefix": "deltallm/batch-artifacts", "endpoint_url": None, "access_key_id": None, "secret_access_key": None, "spool_max_bytes": 8_388_608}
+    assert app.state.batch_storage == {
+        "backend": "s3",
+        "bucket": "batch-bucket",
+        "region": "us-east-1",
+        "prefix": "deltallm/batch-artifacts",
+        "endpoint_url": None,
+        "access_key_id": None,
+        "secret_access_key": None,
+        "spool_max_bytes": 8_388_608,
+    }
     assert "local" not in app.state.batch_storage_registry
     assert app.state.batch_storage_registry["s3"]["backend"] == "s3"
     assert runtime.worker is None
@@ -1262,7 +1431,13 @@ async def test_init_batch_runtime_rejects_s3_without_bucket() -> None:
     with pytest.raises(RuntimeError, match="embeddings_batch_s3_bucket"):
         await init_batch_runtime(
             app,
-            _batch_config(enabled=True, worker_enabled=False, gc_enabled=False, storage_backend="s3", s3_bucket=None),
+            _batch_config(
+                enabled=True,
+                worker_enabled=False,
+                gc_enabled=False,
+                storage_backend="s3",
+                s3_bucket=None,
+            ),
             repository=object(),
         )
 
@@ -1278,7 +1453,9 @@ async def test_init_batch_runtime_raises_when_create_session_schema_is_unavailab
         def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
             del create_session_service
 
-    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path}
+    )
     monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
     monkeypatch.setattr(
         "src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker",
@@ -1289,7 +1466,10 @@ async def test_init_batch_runtime_raises_when_create_session_schema_is_unavailab
     create_sessions = _FakeCreateSessionRepository(fail_on_ready=True)
     repository = SimpleNamespace(create_sessions=create_sessions)
 
-    with pytest.raises(RuntimeError, match="Batch create-session schema is unavailable while embeddings batching is enabled"):
+    with pytest.raises(
+        RuntimeError,
+        match="Batch create-session schema is unavailable while embeddings batching is enabled",
+    ):
         await init_batch_runtime(
             app,
             _batch_config(enabled=True, worker_enabled=False, gc_enabled=False),
@@ -1352,9 +1532,7 @@ async def test_drain_worker_task_bounds_cancellation_suppressing_worker(
 
     task = asyncio.create_task(_worker())
     await started.wait()
-    drain_task = asyncio.create_task(
-        _drain_worker_task(task, label="test worker", timeout=0.01)
-    )
+    drain_task = asyncio.create_task(_drain_worker_task(task, label="test worker", timeout=0.01))
     try:
         await asyncio.wait_for(cancellation_seen.wait(), timeout=0.1)
         await asyncio.sleep(0.03)

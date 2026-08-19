@@ -1,6 +1,7 @@
 from src.email.models import (
     EmailConfigurationError,
     EmailDeliveryError,
+    EmailDeliveryDisposition,
     EmailDeliveryResult,
     PreparedEmail,
     RenderedEmailTemplate,
@@ -9,6 +10,7 @@ from src.email.models import (
 __all__ = [
     "EmailConfigurationError",
     "EmailDeliveryError",
+    "EmailDeliveryDisposition",
     "EmailDeliveryResult",
     "PreparedEmail",
     "RenderedEmailTemplate",

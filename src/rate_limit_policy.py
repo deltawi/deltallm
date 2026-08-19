@@ -22,7 +22,11 @@ from src.services.limit_counter import (
     RateLimitCheck,
     RateLimitResult,
 )
-from src.tier_rate_limit_policy import RateLimitMode, build_tier_limit_controls, build_tier_rate_limit_checks
+from src.tier_rate_limit_policy import (
+    RateLimitMode,
+    build_tier_limit_controls,
+    build_tier_rate_limit_checks,
+)
 
 
 def estimate_tokens(payload: Any) -> int:
@@ -131,7 +135,9 @@ class _StaticTierCapacityObservation:
     active_org_count: None = None
 
 
-def compute_rate_limit_state(result: RateLimitResult, checks: list[RateLimitCheck]) -> RateLimitState:
+def compute_rate_limit_state(
+    result: RateLimitResult, checks: list[RateLimitCheck]
+) -> RateLimitState:
     if not result.checks or not result.current_values:
         return RateLimitState()
 
@@ -158,7 +164,11 @@ def compute_rate_limit_state(result: RateLimitResult, checks: list[RateLimitChec
             or check.scope.endswith("_rph")
             or check.scope.endswith("_rpd")
         )
-        is_tpm = check.scope.endswith("_tpm") or check.scope.endswith("_tpm_limit") or check.scope.endswith("_tpd")
+        is_tpm = (
+            check.scope.endswith("_tpm")
+            or check.scope.endswith("_tpm_limit")
+            or check.scope.endswith("_tpd")
+        )
 
         if not is_rpm and not is_tpm:
             if check.amount == 1:
@@ -203,7 +213,9 @@ def _build_standard_rate_limit_checks(
     def _add(scope: str, entity_id: str | None, limit: int | None, amount: int) -> None:
         if not entity_id or limit is None or limit <= 0 or amount <= 0:
             return
-        checks.append(RateLimitCheck(scope=scope, entity_id=entity_id, limit=int(limit), amount=int(amount)))
+        checks.append(
+            RateLimitCheck(scope=scope, entity_id=entity_id, limit=int(limit), amount=int(amount))
+        )
 
     _add("org_rpm", auth.organization_id, auth.org_rpm_limit, 1)
     _add("team_rpm", auth.team_id, auth.team_rpm_limit, 1)
@@ -219,14 +231,26 @@ def _build_standard_rate_limit_checks(
         if not entity_id or limit is None or limit <= 0 or amount <= 0:
             return
         checks.append(
-            RateLimitCheck(scope=scope, entity_id=entity_id, limit=int(limit), amount=int(amount), window_seconds=3600)
+            RateLimitCheck(
+                scope=scope,
+                entity_id=entity_id,
+                limit=int(limit),
+                amount=int(amount),
+                window_seconds=3600,
+            )
         )
 
     def _add_d(scope: str, entity_id: str | None, limit: int | None, amount: int) -> None:
         if not entity_id or limit is None or limit <= 0 or amount <= 0:
             return
         checks.append(
-            RateLimitCheck(scope=scope, entity_id=entity_id, limit=int(limit), amount=int(amount), window_seconds=86400)
+            RateLimitCheck(
+                scope=scope,
+                entity_id=entity_id,
+                limit=int(limit),
+                amount=int(amount),
+                window_seconds=86400,
+            )
         )
 
     _add_h("org_rph", auth.organization_id, auth.org_rph_limit, 1)
@@ -250,10 +274,27 @@ def _build_standard_rate_limit_checks(
         org_model_rpm = _model_limit(auth.org_model_rpm_limit, model)
         org_model_tpm = _model_limit(auth.org_model_tpm_limit, model)
 
-        _add("team_model_rpm", f"{auth.team_id}:{model}" if auth.team_id else None, team_model_rpm, 1)
-        _add("team_model_tpm", f"{auth.team_id}:{model}" if auth.team_id else None, team_model_tpm, tokens)
-        _add("org_model_rpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_rpm, 1)
-        _add("org_model_tpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_tpm, tokens)
+        _add(
+            "team_model_rpm", f"{auth.team_id}:{model}" if auth.team_id else None, team_model_rpm, 1
+        )
+        _add(
+            "team_model_tpm",
+            f"{auth.team_id}:{model}" if auth.team_id else None,
+            team_model_tpm,
+            tokens,
+        )
+        _add(
+            "org_model_rpm",
+            f"{auth.organization_id}:{model}" if auth.organization_id else None,
+            org_model_rpm,
+            1,
+        )
+        _add(
+            "org_model_tpm",
+            f"{auth.organization_id}:{model}" if auth.organization_id else None,
+            org_model_tpm,
+            tokens,
+        )
 
     return checks
 
@@ -292,7 +333,9 @@ def build_parallel_limit_checks(
     tier_parallel_checks: tuple[ParallelLimitCheck, ...] = (),
 ) -> list[ParallelLimitCheck]:
     checks: list[ParallelLimitCheck] = []
-    key_check = _parallel_limit_check("key", getattr(auth, "api_key", None), getattr(auth, "max_parallel_requests", None))
+    key_check = _parallel_limit_check(
+        "key", getattr(auth, "api_key", None), getattr(auth, "max_parallel_requests", None)
+    )
     if key_check is not None:
         checks.append(key_check)
     checks.extend(tier_parallel_checks)
@@ -311,6 +354,7 @@ async def acquire_rate_limit_controls(
     tier_capacity_fair_share_enabled: bool = False,
     tier_capacity_fair_share_active_ttl_seconds: int = 10,
     mode: RateLimitMode | str = "sync",
+    preacquired_parallel_lease: RateLimitLease | None = None,
 ) -> tuple[RateLimitLease, RateLimitState]:
     checks = _build_standard_rate_limit_checks(auth=auth, tokens=tokens, model=model)
     tier_controls = build_tier_limit_controls(
@@ -329,11 +373,12 @@ async def acquire_rate_limit_controls(
         getattr(auth, "api_key", None),
         getattr(auth, "max_parallel_requests", None),
     )
+    parallel_preacquired = preacquired_parallel_lease is not None
     use_unified_admission = bool(
         tier_controls.fair_share_checks
         or tier_controls.capacity_rate_checks
-        or legacy_parallel_check is not None
-        or tier_controls.parallel_checks
+        or (not parallel_preacquired and legacy_parallel_check is not None)
+        or (not parallel_preacquired and tier_controls.parallel_checks)
     )
     if use_unified_admission:
         fair_share_started = perf_counter()
@@ -348,8 +393,10 @@ async def acquire_rate_limit_controls(
                 list(tier_controls.fair_share_checks),
                 capacity_rate_checks=list(tier_controls.capacity_rate_checks),
                 active_ttl_seconds=tier_capacity_fair_share_active_ttl_seconds,
-                legacy_parallel_check=legacy_parallel_check,
-                parallel_checks=list(tier_controls.parallel_checks),
+                legacy_parallel_check=(None if parallel_preacquired else legacy_parallel_check),
+                parallel_checks=(
+                    [] if parallel_preacquired else list(tier_controls.parallel_checks)
+                ),
             )
         except RateLimitError as exc:
             decision = getattr(exc, "tier_fair_share_decision", None)
@@ -366,7 +413,9 @@ async def acquire_rate_limit_controls(
                 _annotate_rate_limit_error(
                     exc,
                     checks=checks,
-                    state=_fair_share_429_state(decision, retry_after=getattr(exc, "retry_after", None)),
+                    state=_fair_share_429_state(
+                        decision, retry_after=getattr(exc, "retry_after", None)
+                    ),
                 )
             elif (
                 static_capacity_check := _capacity_rate_check_for_error(
@@ -392,7 +441,9 @@ async def acquire_rate_limit_controls(
                 _annotate_rate_limit_error(
                     exc,
                     checks=checks,
-                    state=_parallel_429_state(failed_check, retry_after=getattr(exc, "retry_after", None)),
+                    state=_parallel_429_state(
+                        failed_check, retry_after=getattr(exc, "retry_after", None)
+                    ),
                 )
             else:
                 _annotate_rate_limit_error(exc, checks=checks)
@@ -412,10 +463,11 @@ async def acquire_rate_limit_controls(
             tier_controls.capacity_rate_checks,
             admission.rate_result,
         )
-        return RateLimitLease(
+        lease = preacquired_parallel_lease or RateLimitLease(
             legacy_parallel_lease=admission.legacy_parallel_lease,
             parallel_leases=admission.parallel_leases,
-        ), compute_rate_limit_state(admission.rate_result, checks)
+        )
+        return lease, compute_rate_limit_state(admission.rate_result, checks)
 
     try:
         result = await limiter.check_rate_limits_atomic(checks)
@@ -423,6 +475,9 @@ async def acquire_rate_limit_controls(
         _annotate_rate_limit_error(exc, checks=checks)
         raise
     rate_limit_state = compute_rate_limit_state(result, checks)
+
+    if parallel_preacquired:
+        return preacquired_parallel_lease, rate_limit_state
 
     acquired_legacy_parallel_lease = None
     tier_parallel_leases: list[ParallelLimitLease] = []
@@ -450,6 +505,71 @@ async def acquire_rate_limit_controls(
         legacy_parallel_lease=acquired_legacy_parallel_lease,
         parallel_leases=tuple(tier_parallel_leases),
     ), rate_limit_state
+
+
+async def acquire_parallel_limit_controls(
+    *,
+    limiter: LimitCounter,
+    auth: Any,
+    tokens: int,
+    model: str | None,
+    tier_policy_service: Any | None = None,
+    tier_policy_mode: str = "disabled",
+    tier_policy_missing_service_mode: str = "fail_open",
+    tier_capacity_fair_share_enabled: bool = False,
+    mode: RateLimitMode | str = "sync",
+) -> RateLimitLease:
+    """Acquire only final-model parallel controls before budget/rate accounting."""
+    rate_checks = build_rate_limit_checks(
+        auth=auth,
+        tokens=tokens,
+        model=model,
+        tier_policy_service=tier_policy_service,
+        tier_policy_mode=tier_policy_mode,
+        tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+        tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
+        mode=mode,
+    )
+    tier_controls = build_tier_limit_controls(
+        auth=auth,
+        tokens=tokens,
+        model=model,
+        tier_policy_service=tier_policy_service,
+        tier_policy_mode=tier_policy_mode,
+        tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+        tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
+        mode=mode,
+    )
+    legacy_check = _parallel_limit_check(
+        "key",
+        getattr(auth, "api_key", None),
+        getattr(auth, "max_parallel_requests", None),
+    )
+    legacy_lease = None
+    tier_leases: list[ParallelLimitLease] = []
+    try:
+        if legacy_check is not None:
+            legacy_lease = await _acquire_legacy_parallel_limit_check(
+                limiter=limiter,
+                check=legacy_check,
+                rate_checks=rate_checks,
+            )
+        tier_leases = await _acquire_parallel_limit_checks(
+            limiter=limiter,
+            checks=list(tier_controls.parallel_checks),
+            rate_checks=rate_checks,
+        )
+    except Exception:
+        await _release_acquired_parallel_controls(
+            limiter=limiter,
+            legacy_lease=legacy_lease,
+            leases=tier_leases,
+        )
+        raise
+    return RateLimitLease(
+        legacy_parallel_lease=legacy_lease,
+        parallel_leases=tuple(tier_leases),
+    )
 
 
 async def _check_tier_fair_share_controls(
@@ -481,7 +601,9 @@ async def _check_tier_fair_share_controls(
             _annotate_rate_limit_error(
                 exc,
                 checks=rate_checks,
-                state=_fair_share_429_state(decision, retry_after=getattr(exc, "retry_after", None)),
+                state=_fair_share_429_state(
+                    decision, retry_after=getattr(exc, "retry_after", None)
+                ),
             )
         else:
             _annotate_rate_limit_error(exc, checks=rate_checks)
@@ -524,7 +646,9 @@ async def _record_tier_fair_share_decision(
         )
 
 
-def _capacity_rate_check_for_error(capacity_checks: tuple[Any, ...], exc: RateLimitError) -> Any | None:
+def _capacity_rate_check_for_error(
+    capacity_checks: tuple[Any, ...], exc: RateLimitError
+) -> Any | None:
     failed_scope = str(getattr(exc, "param", "") or "")
     for capacity_check in capacity_checks:
         if str(getattr(capacity_check, "scope", "")) == failed_scope:
@@ -543,7 +667,9 @@ def _record_allowed_static_tier_capacity(
         for index, admitted_check in enumerate(result.checks):
             if admitted_check is not rate_check and admitted_check != rate_check:
                 continue
-            current_value = result.current_values[index] if index < len(result.current_values) else 0
+            current_value = (
+                result.current_values[index] if index < len(result.current_values) else 0
+            )
             _record_static_tier_capacity_observation(
                 capacity_check,
                 outcome="allowed",
@@ -559,11 +685,7 @@ def _record_static_tier_capacity_observation(
     current_value: int,
 ) -> None:
     rate_check = capacity_check.rate_check
-    saturation = (
-        max(0, int(current_value)) / rate_check.limit
-        if int(rate_check.limit) > 0
-        else 0.0
-    )
+    saturation = max(0, int(current_value)) / rate_check.limit if int(rate_check.limit) > 0 else 0.0
     observation = _StaticTierCapacityObservation(
         pool_key=str(capacity_check.pool_key),
         callable_key=str(capacity_check.callable_key),
@@ -611,7 +733,9 @@ async def release_rate_limit_controls(*, limiter: LimitCounter, lease: RateLimit
         raise release_error
 
 
-def _parallel_limit_check(scope: str, entity_id: object, limit: object) -> ParallelLimitCheck | None:
+def _parallel_limit_check(
+    scope: str, entity_id: object, limit: object
+) -> ParallelLimitCheck | None:
     normalized_entity_id = _normalize_id(entity_id)
     normalized_limit = _positive_int_or_none(limit)
     if normalized_entity_id is None or normalized_limit is None:
@@ -645,7 +769,9 @@ async def _acquire_legacy_parallel_limit_check(
     rate_checks: list[RateLimitCheck],
 ) -> LegacyParallelLease | None:
     try:
-        return await limiter.acquire_legacy_parallel_lease(check.scope, check.entity_id, check.limit)
+        return await limiter.acquire_legacy_parallel_lease(
+            check.scope, check.entity_id, check.limit
+        )
     except RateLimitError as exc:
         _ensure_parallel_error_fields(exc, check)
         _annotate_rate_limit_error(
@@ -670,7 +796,9 @@ async def _release_acquired_parallel_controls(
             await limiter.release_legacy_parallel_lease(legacy_lease)
 
 
-def _parallel_check_for_error(exc: RateLimitError, checks: list[ParallelLimitCheck]) -> ParallelLimitCheck:
+def _parallel_check_for_error(
+    exc: RateLimitError, checks: list[ParallelLimitCheck]
+) -> ParallelLimitCheck:
     failed_scope = getattr(exc, "param", None)
     if failed_scope is not None:
         for check in checks:
@@ -684,7 +812,11 @@ def _looks_like_parallel_limit_error(exc: RateLimitError, checks: list[ParallelL
         return False
     failed_scope = getattr(exc, "param", None)
     if failed_scope is None:
-        return str(getattr(exc, "message", "") or exc).lower().startswith("parallel request limit exceeded")
+        return (
+            str(getattr(exc, "message", "") or exc)
+            .lower()
+            .startswith("parallel request limit exceeded")
+        )
     return any(check.scope == failed_scope for check in checks)
 
 
@@ -721,9 +853,11 @@ def _parallel_429_state(check: ParallelLimitCheck, *, retry_after: object) -> Ra
 
 def _fair_share_429_state(decision: Any, *, retry_after: object) -> RateLimitState:
     retry_after_seconds = _positive_int_or_none(retry_after) or 1
-    limit = _positive_int_or_none(getattr(decision, "share_limit", None)) or _positive_int_or_none(
-        getattr(decision, "pool_limit", None)
-    ) or 1
+    limit = (
+        _positive_int_or_none(getattr(decision, "share_limit", None))
+        or _positive_int_or_none(getattr(decision, "pool_limit", None))
+        or 1
+    )
     scope = str(getattr(decision, "scope", "tier_pool_fair_share"))
     reset_at = int(time.time()) + retry_after_seconds
     if str(getattr(decision, "dimension", "")).strip().lower() == "tpm":

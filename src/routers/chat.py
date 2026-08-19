@@ -83,7 +83,9 @@ async def handle_chat_like_request(
     capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
-    api_base = primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
+    api_base = primary.deltallm_params.get(
+        "api_base", request.app.state.settings.openai_base_url
+    ).rstrip("/")
 
     def track_attempt(deployment):  # noqa: ANN001
         capture_attempted_deployment(request, deployment)
@@ -94,7 +96,9 @@ async def handle_chat_like_request(
     try:
         if payload.stream:
             if has_mcp_tools:
-                raise InvalidRequestError(message="MCP tools are not supported on streaming chat requests yet")
+                raise InvalidRequestError(
+                    message="MCP tools are not supported on streaming chat requests yet"
+                )
             # Validate provider+mode before starting the streaming response,
             # so unsupported stream providers fail as a normal HTTP error.
             resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
@@ -110,7 +114,10 @@ async def handle_chat_like_request(
                 failure_exc: Exception | None = None
                 stream_cache_complete = False
                 try:
-                    opened_stream, served_deployment = await request.app.state.failover_manager.execute_with_failover(
+                    (
+                        opened_stream,
+                        served_deployment,
+                    ) = await request.app.state.failover_manager.execute_with_failover(
                         primary_deployment=primary,
                         model_group=model_group,
                         execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
@@ -128,15 +135,18 @@ async def handle_chat_like_request(
                     if (
                         enable_stream_cache
                         and request.url.path == "/v1/chat/completions"
-                        and
-                        cache_context is not None
+                        and cache_context is not None
                         and stream_handler is not None
                         and cache_context.options.control.value != "no-store"
                     ):
                         cache_ttl = int(
                             cache_context.options.ttl
                             or getattr(
-                                getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
+                                getattr(
+                                    getattr(request.app.state, "app_config", None),
+                                    "general_settings",
+                                    None,
+                                ),
                                 "cache_ttl",
                                 3600,
                             )
@@ -149,7 +159,10 @@ async def handle_chat_like_request(
                             pricing=cache_pricing_snapshot_from_deployment(served_deployment),
                             deployment_id=served_deployment.deployment_id,
                             provider=resolve_provider(served_deployment.deltallm_params),
-                            deployment_model=str(served_deployment.deltallm_params.get("model") or "") or None,
+                            deployment_model=str(
+                                served_deployment.deltallm_params.get("model") or ""
+                            )
+                            or None,
                         )
                         stream_handler.start_stream(stream_id)
 
@@ -162,7 +175,11 @@ async def handle_chat_like_request(
                             line_info.is_usage_only_chunk
                             and not opened_stream.client_stream_usage_requested
                         ):
-                            out_line = stream_line_transform(initial) if stream_line_transform is not None else initial
+                            out_line = (
+                                stream_line_transform(initial)
+                                if stream_line_transform is not None
+                                else initial
+                            )
                             if out_line is not None:
                                 yield f"{out_line}\n\n"
                     async for line in opened_stream.translated_stream:
@@ -175,15 +192,26 @@ async def handle_chat_like_request(
                             if line.strip() == "data: [DONE]":
                                 stream_cache_complete = True
 
-                        if line_info.is_usage_only_chunk and not opened_stream.client_stream_usage_requested:
+                        if (
+                            line_info.is_usage_only_chunk
+                            and not opened_stream.client_stream_usage_requested
+                        ):
                             continue
 
-                        out_line = stream_line_transform(line) if stream_line_transform is not None else line
+                        out_line = (
+                            stream_line_transform(line)
+                            if stream_line_transform is not None
+                            else line
+                        )
                         if out_line is None:
                             continue
                         yield f"{out_line}\n\n"
                     resolved_usage = stream_usage.resolve(payload)
-                    if stream_id is not None and stream_handler is not None and stream_write_context is not None:
+                    if (
+                        stream_id is not None
+                        and stream_handler is not None
+                        and stream_write_context is not None
+                    ):
                         if stream_cache_complete:
                             await stream_handler.finalize_and_store(
                                 stream_id,
@@ -222,8 +250,14 @@ async def handle_chat_like_request(
                     failure_exc = exc
                     if stream_id is not None and stream_handler is not None:
                         stream_handler.discard_stream(stream_id)
-                    failure_params = opened_stream.params if opened_stream is not None else primary.deltallm_params
-                    failure_api_base = opened_stream.api_base if opened_stream is not None else api_base
+                    failure_params = (
+                        opened_stream.params
+                        if opened_stream is not None
+                        else primary.deltallm_params
+                    )
+                    failure_api_base = (
+                        opened_stream.api_base if opened_stream is not None else api_base
+                    )
                     await emit_stream_failure(
                         request=request,
                         auth=auth,
@@ -264,16 +298,24 @@ async def handle_chat_like_request(
             gateway = getattr(request.app.state, "mcp_gateway_service", None)
             if gateway is None:
                 raise ServiceUnavailableError(message="MCP gateway service is not available")
-            orchestrator = MCPChatOrchestrator(gateway)
+            orchestrator = MCPChatOrchestrator(
+                gateway,
+                audit_service=getattr(request.app.state, "audit_service", None),
+            )
             return await orchestrator.execute(
                 request=request,
                 auth=auth,
                 payload=payload,
-                execute_chat_call=lambda request_payload: execute_chat(request, request_payload, deployment),
+                execute_chat_call=lambda request_payload: execute_chat(
+                    request, request_payload, deployment
+                ),
                 guardrail_middleware=guardrail_middleware,
             )
 
-        (payload_data, api_latency_ms), served_deployment = await request.app.state.failover_manager.execute_with_failover(
+        (
+            (payload_data, api_latency_ms),
+            served_deployment,
+        ) = await request.app.state.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=_execute_for_deployment,
@@ -286,11 +328,17 @@ async def handle_chat_like_request(
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
-        request.state.cache_store_pricing = cache_pricing_snapshot_from_deployment(served_deployment)
+        request.state.cache_store_pricing = cache_pricing_snapshot_from_deployment(
+            served_deployment
+        )
         request.state.cache_store_deployment_id = served_deployment.deployment_id
         request.state.cache_store_provider = resolve_provider(served_deployment.deltallm_params)
-        request.state.cache_store_deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
-        response_payload = response_transform(payload_data) if response_transform is not None else payload_data
+        request.state.cache_store_deployment_model = (
+            str(served_deployment.deltallm_params.get("model") or "") or None
+        )
+        response_payload = (
+            response_transform(payload_data) if response_transform is not None else payload_data
+        )
         api_provider = resolve_provider(served_deployment.deltallm_params)
         await emit_nonstream_success(
             request=request,
@@ -310,7 +358,9 @@ async def handle_chat_like_request(
             cache_key=cache_key,
             audit_action=audit_action,
         )
-        return JSONResponse(status_code=200, content=response_payload, headers=route_decision_headers(request))
+        return JSONResponse(
+            status_code=200, content=response_payload, headers=route_decision_headers(request)
+        )
     except httpx.HTTPError as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
         await emit_nonstream_failure(

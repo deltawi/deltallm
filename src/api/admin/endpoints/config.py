@@ -26,6 +26,7 @@ from src.api.admin.endpoints.common import (
     get_auth_scope,
 )
 from src.config import UIBrandingPayload, UIBrandingSettings, UIBrandingUpdatePayload
+from src.config_runtime.dynamic import DynamicConfigRestartRequiredError
 from src.middleware.admin import require_admin_permission
 from src.providers.resolution import resolve_provider
 from src.services.ui_branding_assets import (
@@ -400,7 +401,13 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
         config_update["general_settings"] = general_updates
 
     if config_update:
-        await dynamic_config.update_config(config_update, updated_by="admin_api")
+        try:
+            await dynamic_config.update_config(config_update, updated_by="admin_api")
+        except DynamicConfigRestartRequiredError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "restart_required", "message": str(exc)},
+            ) from exc
 
     response = await get_routing(request)
     await emit_admin_mutation_audit(
@@ -489,7 +496,13 @@ async def update_settings(
         config_update["deltallm_settings"] = deltallm_updates
 
     if config_update:
-        await dynamic_config.update_config(config_update, updated_by="admin_api")
+        try:
+            await dynamic_config.update_config(config_update, updated_by="admin_api")
+        except DynamicConfigRestartRequiredError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "restart_required", "message": str(exc)},
+            ) from exc
 
     settings = getattr(request.app.state, "settings", None)
     if settings is not None and "master_key" in general_updates:

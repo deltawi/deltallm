@@ -11,6 +11,7 @@ from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import (
     DynamicConfigManager,
     DynamicConfigPersistenceError,
+    DynamicConfigRestartRequiredError,
     DynamicConfigValidationError,
 )
 from src.config_runtime.loader import deep_merge
@@ -516,6 +517,77 @@ async def test_dynamic_config_update_validates_before_db_write():
     assert db.updated_by is None
     assert redis.messages == []
 
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_rejects_startup_only_ingestion_mode_change() -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+
+    with pytest.raises(DynamicConfigRestartRequiredError, match="audit_ingestion_mode"):
+        await manager.update_config(
+            {"general_settings": {"audit_ingestion_mode": "outbox"}},
+            updated_by="test",
+        )
+
+    assert manager.get_app_config().general_settings.audit_ingestion_mode == "legacy"
+    assert db.config_value == {}
+    await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("prompt_singleflight_max_keys", 512),
+        ("email_worker_delivery_lease_seconds", 90),
+        ("email_worker_enabled", False),
+    ),
+)
+async def test_dynamic_config_rejects_startup_owned_worker_changes(
+    field_name: str,
+    value: object,
+) -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+
+    with pytest.raises(DynamicConfigRestartRequiredError, match=field_name):
+        await manager.update_config(
+            {"general_settings": {field_name: value}},
+            updated_by="test",
+        )
+
+    assert db.config_value == {}
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_subscriber_failure_restores_last_known_good_config() -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    observed: list[str] = []
+
+    async def subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        strategy = config.router_settings.routing_strategy
+        observed.append(strategy)
+        if strategy == "weighted":
+            raise RuntimeError("runtime rejected candidate")
+
+    manager.subscribe(subscriber)
+
+    with pytest.raises(RuntimeError, match="runtime rejected candidate"):
+        await manager.update_config(
+            {"router_settings": {"routing_strategy": "weighted"}},
+            updated_by="test",
+        )
+
+    assert manager.get_app_config().router_settings.routing_strategy == "simple-shuffle"
+    assert db.config_value == {}
+    assert observed == ["weighted", "simple-shuffle"]
     await manager.close()
 
 

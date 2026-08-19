@@ -85,7 +85,6 @@ class BackgroundHealthChecker:
     async def _apply_result(self, deployment: Deployment, result: HealthProbeResult) -> None:
         if result.healthy:
             await self.state.record_success(deployment.deployment_id)
-            await self.state.set_health(deployment.deployment_id, True)
             if await self.state.is_cooled_down(deployment.deployment_id):
                 await self.state.clear_cooldown(deployment.deployment_id)
             return
@@ -116,7 +115,6 @@ class PassiveHealthTracker:
     ) -> None:
         if success:
             await self.state.record_success(deployment_id)
-            await self.state.set_health(deployment_id, True)
             return
 
         if affects_health is None and exc is not None:
@@ -190,7 +188,11 @@ class HealthEndpointHandler:
                 healthy_count += 1
 
             state_value = 0 if is_healthy else 2
-            set_deployment_state(deployment_id=deployment.deployment_id, model=deployment.model_name, state=state_value)
+            set_deployment_state(
+                deployment_id=deployment.deployment_id,
+                model=deployment.model_name,
+                state=state_value,
+            )
             set_deployment_active_requests(
                 deployment_id=deployment.deployment_id,
                 model=deployment.model_name,
@@ -217,8 +219,12 @@ class HealthEndpointHandler:
                     "active_requests": active.get(deployment.deployment_id, 0),
                     "consecutive_failures": int(dep_health.get("consecutive_failures", 0) or 0),
                     "last_error": dep_health.get("last_error") or None,
-                    "last_error_at": int(dep_health["last_error_at"]) if dep_health.get("last_error_at") else None,
-                    "last_success_at": int(dep_health["last_success_at"]) if dep_health.get("last_success_at") else None,
+                    "last_error_at": int(dep_health["last_error_at"])
+                    if dep_health.get("last_error_at")
+                    else None,
+                    "last_success_at": int(dep_health["last_success_at"])
+                    if dep_health.get("last_success_at")
+                    else None,
                     "avg_latency_ms": avg_latency,
                 }
             )
@@ -231,7 +237,11 @@ class HealthEndpointHandler:
         else:
             status = "degraded"
 
-        if backend_status is not None and backend_status.get("mode") != "redis" and status == "healthy":
+        if (
+            backend_status is not None
+            and backend_status.get("mode") != "redis"
+            and status == "healthy"
+        ):
             status = "degraded"
 
         payload = {

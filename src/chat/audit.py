@@ -5,9 +5,14 @@ from typing import Any
 
 from fastapi import Request
 
-from src.audit.actions import AuditAction
+from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
-from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
+from src.services.audit_service import (
+    AuditEventInput,
+    AuditPayloadInput,
+    AuditService,
+    enqueue_audit_event,
+)
 
 
 def audit_action_for_path(path: str) -> str:
@@ -33,7 +38,7 @@ def request_client_ip(request: Request) -> str | None:
     return None
 
 
-def emit_text_audit_event(
+async def emit_text_audit_event(
     *,
     request: Request,
     auth: Any,
@@ -59,7 +64,8 @@ def emit_text_audit_event(
     ]
     if response_data is None:
         payloads = [AuditPayloadInput(kind="request", content_json=request_data)]
-    audit_service.record_event(
+    await enqueue_audit_event(
+        audit_service,
         AuditEventInput(
             action=action,
             organization_id=getattr(auth, "organization_id", None),
@@ -81,43 +87,5 @@ def emit_text_audit_event(
             metadata=metadata or {},
         ),
         payloads=payloads,
-        critical=True,
-    )
-
-
-def emit_prompt_resolution_audit_event(
-    *,
-    request: Request,
-    auth: Any,
-    status: str,
-    request_start: float,
-    prompt_key: str | None,
-    metadata: dict[str, Any] | None = None,
-    error: Exception | None = None,
-) -> None:
-    audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
-    if audit_service is None:
-        return
-
-    request_id = request.headers.get("x-request-id")
-    audit_service.record_event(
-        AuditEventInput(
-            action=AuditAction.PROMPT_RESOLUTION_REQUEST.value,
-            organization_id=getattr(auth, "organization_id", None),
-            actor_type="api_key",
-            actor_id=getattr(auth, "user_id", None) or getattr(auth, "api_key", None),
-            api_key=getattr(auth, "api_key", None),
-            resource_type="prompt",
-            resource_id=prompt_key,
-            request_id=request_id,
-            correlation_id=request_id,
-            ip=request_client_ip(request),
-            user_agent=request.headers.get("user-agent"),
-            status=status,
-            latency_ms=int((perf_counter() - request_start) * 1000),
-            error_type=error.__class__.__name__ if error is not None else None,
-            error_code=derive_audit_error_code(error),
-            metadata=metadata or {},
-        ),
-        critical=False,
+        delivery_class=AuditDeliveryClass.REQUIRED,
     )

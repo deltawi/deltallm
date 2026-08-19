@@ -4,14 +4,32 @@ import json
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import Request
 
 from src.audit.actions import AuditAction
+from src.audit.delivery import AuditDeliveryClass
 from src.chat.audit import request_client_ip
-from src.models.errors import InvalidRequestError, PermissionDeniedError, RateLimitError, ServiceUnavailableError
-from src.models.requests import ChatCompletionRequest, ChatMessage, FunctionToolDefinition, MCPToolDefinition
-from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
+from src.models.errors import (
+    InvalidRequestError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
+from src.models.requests import (
+    ChatCompletionRequest,
+    ChatMessage,
+    FunctionToolDefinition,
+    MCPToolDefinition,
+)
+from src.services.audit_service import (
+    AuditEventInput,
+    AuditPayloadInput,
+    AuditService,
+    enqueue_audit_event,
+    require_audit_service,
+)
 
 from .exceptions import (
     MCPAccessDeniedError,
@@ -47,10 +65,12 @@ class MCPChatOrchestrator:
         self,
         gateway: MCPGatewayService,
         *,
+        audit_service: AuditService | None = None,
         max_mcp_tool_hops: int = 4,
         max_mcp_tools_per_turn: int = 8,
     ) -> None:
         self.gateway = gateway
+        self.audit_service = audit_service
         self.max_mcp_tool_hops = max(1, int(max_mcp_tool_hops))
         self.max_mcp_tools_per_turn = max(1, int(max_mcp_tools_per_turn))
 
@@ -59,13 +79,17 @@ class MCPChatOrchestrator:
         auth: Any,
         payload: ChatCompletionRequest,
     ) -> tuple[ChatCompletionRequest, dict[str, ResolvedMCPTool]]:
-        requested_mcp_tools = [tool for tool in payload.tools or [] if isinstance(tool, MCPToolDefinition)]
+        requested_mcp_tools = [
+            tool for tool in payload.tools or [] if isinstance(tool, MCPToolDefinition)
+        ]
         if not requested_mcp_tools:
             return payload, {}
 
         visible = await self.gateway.list_visible_tools(auth)
         translated: list[FunctionToolDefinition] = [
-            tool if isinstance(tool, FunctionToolDefinition) else FunctionToolDefinition.model_validate(tool.model_dump(mode="python"))
+            tool
+            if isinstance(tool, FunctionToolDefinition)
+            else FunctionToolDefinition.model_validate(tool.model_dump(mode="python"))
             for tool in (payload.tools or [])
             if isinstance(tool, FunctionToolDefinition)
         ]
@@ -76,10 +100,15 @@ class MCPChatOrchestrator:
                 tool
                 for tool in visible
                 if tool.server_key == definition.server
-                and (definition.allowed_tools is None or tool.original_name in set(definition.allowed_tools))
+                and (
+                    definition.allowed_tools is None
+                    or tool.original_name in set(definition.allowed_tools)
+                )
             ]
             if not matched:
-                raise InvalidRequestError(message=f"No visible MCP tools are available for server '{definition.server}'")
+                raise InvalidRequestError(
+                    message=f"No visible MCP tools are available for server '{definition.server}'"
+                )
             for tool in matched:
                 if tool.namespaced_name in resolved_tools:
                     continue
@@ -146,7 +175,10 @@ class MCPChatOrchestrator:
                     message=f"MCP tool execution limit exceeded: received {len(tool_calls)} tool calls, limit is {self.max_mcp_tools_per_turn}"
                 )
 
-            if any(self._tool_name_from_call(tool_call) not in resolved_tools for tool_call in tool_calls):
+            if any(
+                self._tool_name_from_call(tool_call) not in resolved_tools
+                for tool_call in tool_calls
+            ):
                 return response_payload, total_api_latency_ms
 
             next_messages = list(current_payload.messages)
@@ -163,6 +195,17 @@ class MCPChatOrchestrator:
                     arguments=arguments,
                 )
                 tool_started = perf_counter()
+                tool_operation_id = str(uuid4())
+                await self._emit_tool_audit_attempt_event(
+                    request=request,
+                    auth=auth,
+                    namespaced_tool_name=tool_name,
+                    server_key=resolved.server_key,
+                    scope_type=resolved.scope_type,
+                    scope_id=resolved.scope_id,
+                    arguments=guarded_arguments,
+                    operation_id=tool_operation_id,
+                )
                 try:
                     result = await self.gateway.call_tool(
                         auth,
@@ -173,7 +216,7 @@ class MCPChatOrchestrator:
                         correlation_id=request.headers.get("x-request-id"),
                     )
                 except MCPToolNotFoundError as exc:
-                    self._emit_tool_audit_failure_event(
+                    await self._emit_tool_audit_failure_event(
                         request=request,
                         auth=auth,
                         namespaced_tool_name=tool_name,
@@ -183,10 +226,11 @@ class MCPChatOrchestrator:
                         arguments=guarded_arguments,
                         request_start=tool_started,
                         error=exc,
+                        operation_id=tool_operation_id,
                     )
                     raise InvalidRequestError(message=str(exc)) from exc
                 except MCPApprovalRequiredError as exc:
-                    self._emit_tool_audit_failure_event(
+                    await self._emit_tool_audit_failure_event(
                         request=request,
                         auth=auth,
                         namespaced_tool_name=tool_name,
@@ -196,6 +240,7 @@ class MCPChatOrchestrator:
                         arguments=guarded_arguments,
                         request_start=tool_started,
                         error=exc,
+                        operation_id=tool_operation_id,
                     )
                     raise InvalidRequestError(
                         message=(
@@ -204,7 +249,7 @@ class MCPChatOrchestrator:
                         ),
                     ) from exc
                 except (MCPAccessDeniedError, MCPPolicyDeniedError) as exc:
-                    self._emit_tool_audit_failure_event(
+                    await self._emit_tool_audit_failure_event(
                         request=request,
                         auth=auth,
                         namespaced_tool_name=tool_name,
@@ -214,10 +259,11 @@ class MCPChatOrchestrator:
                         arguments=guarded_arguments,
                         request_start=tool_started,
                         error=exc,
+                        operation_id=tool_operation_id,
                     )
                     raise PermissionDeniedError(message=str(exc)) from exc
                 except MCPRateLimitError as exc:
-                    self._emit_tool_audit_failure_event(
+                    await self._emit_tool_audit_failure_event(
                         request=request,
                         auth=auth,
                         namespaced_tool_name=tool_name,
@@ -227,10 +273,16 @@ class MCPChatOrchestrator:
                         arguments=guarded_arguments,
                         request_start=tool_started,
                         error=exc,
+                        operation_id=tool_operation_id,
                     )
                     raise RateLimitError(message=str(exc), retry_after=exc.retry_after) from exc
-                except (MCPTransportError, MCPInvalidResponseError, MCPToolTimeoutError, MCPError) as exc:
-                    self._emit_tool_audit_failure_event(
+                except (
+                    MCPTransportError,
+                    MCPInvalidResponseError,
+                    MCPToolTimeoutError,
+                    MCPError,
+                ) as exc:
+                    await self._emit_tool_audit_failure_event(
                         request=request,
                         auth=auth,
                         namespaced_tool_name=tool_name,
@@ -240,6 +292,7 @@ class MCPChatOrchestrator:
                         arguments=guarded_arguments,
                         request_start=tool_started,
                         error=exc,
+                        operation_id=tool_operation_id,
                     )
                     raise ServiceUnavailableError(message=str(exc)) from exc
 
@@ -250,7 +303,7 @@ class MCPChatOrchestrator:
                     tool_name=resolved.original_name,
                     result=result,
                 )
-                self._emit_tool_audit_event(
+                await self._emit_tool_audit_event(
                     request=request,
                     auth=auth,
                     namespaced_tool_name=tool_name,
@@ -260,6 +313,7 @@ class MCPChatOrchestrator:
                     arguments=guarded_arguments,
                     result_payload=guarded_result,
                     request_start=tool_started,
+                    operation_id=tool_operation_id,
                 )
                 next_messages.append(
                     ChatMessage(
@@ -289,15 +343,23 @@ class MCPChatOrchestrator:
 
     @staticmethod
     def _assistant_message_from_response(response_payload: dict[str, Any]) -> ChatMessage:
-        choice = ((response_payload.get("choices") or [{}])[0]) if isinstance(response_payload.get("choices"), list) else {}
+        choice = (
+            ((response_payload.get("choices") or [{}])[0])
+            if isinstance(response_payload.get("choices"), list)
+            else {}
+        )
         message = choice.get("message") if isinstance(choice, dict) else {}
         if not isinstance(message, dict):
             message = {}
         return ChatMessage(
             role="assistant",
-            content=message.get("content") if isinstance(message.get("content"), list) else str(message.get("content") or ""),
+            content=message.get("content")
+            if isinstance(message.get("content"), list)
+            else str(message.get("content") or ""),
             name=message.get("name"),
-            tool_calls=message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else None,
+            tool_calls=message.get("tool_calls")
+            if isinstance(message.get("tool_calls"), list)
+            else None,
         )
 
     @staticmethod
@@ -307,7 +369,9 @@ class MCPChatOrchestrator:
             raise InvalidRequestError(message="Provider returned an invalid tool call payload")
         name = str(function.get("name") or "").strip()
         if not name:
-            raise InvalidRequestError(message="Provider returned a tool call without a function name")
+            raise InvalidRequestError(
+                message="Provider returned a tool call without a function name"
+            )
         return name
 
     @staticmethod
@@ -324,7 +388,9 @@ class MCPChatOrchestrator:
             try:
                 parsed = json.loads(raw_arguments)
             except json.JSONDecodeError as exc:
-                raise InvalidRequestError(message="Provider returned invalid JSON tool arguments") from exc
+                raise InvalidRequestError(
+                    message="Provider returned invalid JSON tool arguments"
+                ) from exc
             if not isinstance(parsed, dict):
                 raise InvalidRequestError(message="Provider returned non-object tool arguments")
             return parsed
@@ -352,7 +418,9 @@ class MCPChatOrchestrator:
         if guarded_arguments is None:
             return {}
         if not isinstance(guarded_arguments, dict):
-            raise InvalidRequestError(message="Guardrail mutated MCP tool arguments into an invalid shape")
+            raise InvalidRequestError(
+                message="Guardrail mutated MCP tool arguments into an invalid shape"
+            )
         return guarded_arguments
 
     async def _run_tool_output_guardrails(
@@ -377,7 +445,9 @@ class MCPChatOrchestrator:
             call_type="mcp_tool_output",
         )
         if not isinstance(payload, dict):
-            raise InvalidRequestError(message="Guardrail mutated MCP tool output into an invalid shape")
+            raise InvalidRequestError(
+                message="Guardrail mutated MCP tool output into an invalid shape"
+            )
         return payload
 
     @staticmethod
@@ -394,7 +464,7 @@ class MCPChatOrchestrator:
             return json.dumps(content, separators=(",", ":"), sort_keys=True)
         return json.dumps(result_payload, separators=(",", ":"), sort_keys=True)
 
-    def _emit_tool_audit_event(
+    async def _emit_tool_audit_event(
         self,
         *,
         request: Request,
@@ -406,12 +476,14 @@ class MCPChatOrchestrator:
         arguments: dict[str, Any],
         result_payload: dict[str, Any],
         request_start: float,
+        operation_id: str,
     ) -> None:
-        audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
+        audit_service = self.audit_service
         if audit_service is None:
             return
         request_id = request.headers.get("x-request-id")
-        audit_service.record_event(
+        await enqueue_audit_event(
+            audit_service,
             AuditEventInput(
                 action=AuditAction.MCP_TOOL_CALL.value,
                 organization_id=getattr(auth, "organization_id", None),
@@ -427,20 +499,23 @@ class MCPChatOrchestrator:
                 status="error" if bool(result_payload.get("is_error")) else "success",
                 latency_ms=int((perf_counter() - request_start) * 1000),
                 metadata={
+                    "operation_id": operation_id,
+                    "phase": "outcome",
                     "server_key": server_key,
                     "tool_name": namespaced_tool_name,
                     "scope_type": scope_type,
                     "scope_id": scope_id,
                 },
+                event_id=self._tool_audit_event_id(operation_id, "outcome"),
             ),
             payloads=[
                 AuditPayloadInput(kind="request", content_json={"arguments": arguments}),
                 AuditPayloadInput(kind="response", content_json=result_payload),
             ],
-            critical=False,
+            delivery_class=AuditDeliveryClass.BEST_EFFORT,
         )
 
-    def _emit_tool_audit_failure_event(
+    async def _emit_tool_audit_failure_event(
         self,
         *,
         request: Request,
@@ -452,12 +527,14 @@ class MCPChatOrchestrator:
         arguments: dict[str, Any],
         request_start: float,
         error: Exception,
+        operation_id: str,
     ) -> None:
-        audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
+        audit_service = self.audit_service
         if audit_service is None:
             return
         request_id = request.headers.get("x-request-id")
-        audit_service.record_event(
+        await enqueue_audit_event(
+            audit_service,
             AuditEventInput(
                 action=AuditAction.MCP_TOOL_CALL.value,
                 organization_id=getattr(auth, "organization_id", None),
@@ -474,12 +551,62 @@ class MCPChatOrchestrator:
                 latency_ms=int((perf_counter() - request_start) * 1000),
                 error_type=error.__class__.__name__,
                 metadata={
+                    "operation_id": operation_id,
+                    "phase": "outcome",
                     "server_key": server_key,
                     "tool_name": namespaced_tool_name,
                     "scope_type": scope_type,
                     "scope_id": scope_id,
                 },
+                event_id=self._tool_audit_event_id(operation_id, "outcome"),
             ),
             payloads=[AuditPayloadInput(kind="request", content_json={"arguments": arguments})],
-            critical=False,
+            delivery_class=AuditDeliveryClass.BEST_EFFORT,
         )
+
+    async def _emit_tool_audit_attempt_event(
+        self,
+        *,
+        request: Request,
+        auth: Any,
+        namespaced_tool_name: str,
+        server_key: str,
+        scope_type: str | None,
+        scope_id: str | None,
+        arguments: dict[str, Any],
+        operation_id: str,
+    ) -> None:
+        audit_service = require_audit_service(self.audit_service)
+        request_id = request.headers.get("x-request-id")
+        await enqueue_audit_event(
+            audit_service,
+            AuditEventInput(
+                action=AuditAction.MCP_TOOL_CALL.value,
+                organization_id=getattr(auth, "organization_id", None),
+                actor_type="api_key",
+                actor_id=getattr(auth, "user_id", None) or getattr(auth, "api_key", None),
+                api_key=getattr(auth, "api_key", None),
+                resource_type="mcp_tool",
+                resource_id=namespaced_tool_name,
+                request_id=request_id,
+                correlation_id=request_id,
+                ip=request_client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+                status="attempted",
+                metadata={
+                    "operation_id": operation_id,
+                    "phase": "attempt",
+                    "server_key": server_key,
+                    "tool_name": namespaced_tool_name,
+                    "scope_type": scope_type,
+                    "scope_id": scope_id,
+                },
+                event_id=self._tool_audit_event_id(operation_id, "attempt"),
+            ),
+            payloads=[AuditPayloadInput(kind="request", content_json={"arguments": arguments})],
+            delivery_class=AuditDeliveryClass.REQUIRED,
+        )
+
+    @staticmethod
+    def _tool_audit_event_id(operation_id: str, phase: str) -> str:
+        return str(uuid5(NAMESPACE_URL, f"deltallm:mcp-tool:{operation_id}:{phase}"))

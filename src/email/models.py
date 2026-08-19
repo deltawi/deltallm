@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal
 
 EmailKind = Literal["transactional", "notification", "test"]
@@ -41,6 +42,12 @@ class EmailConfigurationError(ValueError):
     pass
 
 
+class EmailDeliveryDisposition(StrEnum):
+    REJECTED_RETRYABLE = "rejected_retryable"
+    REJECTED_TERMINAL = "rejected_terminal"
+    OUTCOME_UNKNOWN = "outcome_unknown"
+
+
 class EmailDeliveryError(RuntimeError):
     def __init__(
         self,
@@ -49,8 +56,14 @@ class EmailDeliveryError(RuntimeError):
         retriable: bool,
         provider: EmailProviderName | None = None,
         status_code: int | None = None,
+        disposition: EmailDeliveryDisposition | None = None,
     ) -> None:
         super().__init__(message)
         self.retriable = retriable
         self.provider = provider
         self.status_code = status_code
+        self.disposition = disposition or (
+            EmailDeliveryDisposition.REJECTED_RETRYABLE
+            if retriable
+            else EmailDeliveryDisposition.REJECTED_TERMINAL
+        )

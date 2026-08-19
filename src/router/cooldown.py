@@ -40,7 +40,6 @@ class CooldownManager:
 
     async def record_success(self, deployment_id: str) -> None:
         await self.state.record_success(deployment_id)
-        await self.state.set_health(deployment_id, True)
 
     async def _enter_cooldown(self, deployment_id: str, reason: str, failure_count: int) -> None:
         await self.state.set_cooldown(deployment_id, self.cooldown_time, reason)
@@ -68,7 +67,9 @@ class CooldownManager:
             "last_error_at": health.get("last_error_at"),
         }
 
-    async def manual_cooldown(self, deployment_id: str, duration_sec: int, reason: str = "manual") -> None:
+    async def manual_cooldown(
+        self, deployment_id: str, duration_sec: int, reason: str = "manual"
+    ) -> None:
         original = self.cooldown_time
         try:
             self.cooldown_time = max(1, int(duration_sec))
@@ -102,5 +103,4 @@ class CooldownRecoveryMonitor:
         deployment_ids = await self.deployment_ids_provider()
         for deployment_id in deployment_ids:
             if not await self.state.is_cooled_down(deployment_id):
-                await self.state.set_health(deployment_id, True)
                 await self.state.record_success(deployment_id)

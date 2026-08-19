@@ -6,6 +6,7 @@ from src.models.errors import AuthenticationError
 from src.models.responses import UserAPIKeyAuth
 from src.services.key_service import KeyService
 from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
+from src.telemetry.event_identity import get_or_create_billing_event_id
 
 
 async def authenticate_request(
@@ -40,7 +41,9 @@ async def authenticate_request(
 
     key_service: KeyService | None = getattr(request.app.state, "key_service", None)
     if key_service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Key service not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Key service not configured"
+        )
 
     try:
         auth = await key_service.validate_key(raw_key)
@@ -66,6 +69,7 @@ def auth_dependency() -> Depends:
 
 def _is_master_key(request: Request, token: str) -> bool:
     import hmac as _hmac
+
     dcm = getattr(request.app.state, "dynamic_config_manager", None)
     if dcm is not None:
         cfg = dcm.get_app_config()
@@ -108,6 +112,7 @@ async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth
 
 
 def _attach_request_auth_context(request: Request, auth: UserAPIKeyAuth) -> None:
+    get_or_create_billing_event_id(request)
     request.state.user_api_key = auth
     request.state.auth_context = auth
     request.state.runtime_scope_context = resolve_runtime_scope_context(auth)

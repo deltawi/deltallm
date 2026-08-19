@@ -14,12 +14,23 @@ from src.services.asset_binding_mirror import (
     mirror_route_group_binding_to_callable_target,
     reload_callable_target_grants,
 )
-from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, model_entries, to_json_value
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    model_entries,
+    to_json_value,
+)
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_groups import RouteGroupRepository
 from src.middleware.admin import require_admin_permission
 from src.router.policy_validation import validate_route_policy
-from src.router import Router, RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
+from src.router import (
+    Router,
+    RouterConfig,
+    RoutingStrategy,
+    build_deployment_registry,
+    build_route_group_policies,
+)
 from src.services.asset_ownership import (
     apply_owner_scope_to_metadata,
     normalize_owner_scope_type,
@@ -27,20 +38,32 @@ from src.services.asset_ownership import (
     public_metadata_without_owner_scope,
 )
 from src.services.asset_scopes import normalize_scope_type
-from src.services.organization_callable_target_sync import maybe_disable_organization_auto_follow_for_scope_mutation
+from src.services.organization_callable_target_sync import (
+    maybe_disable_organization_auto_follow_for_scope_mutation,
+)
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 from src.services.route_groups import RouteGroupRuntimeCache
 
 router = APIRouter(tags=["Admin Route Groups"])
 
-ALLOWED_MODES = {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription", "rerank"}
+ALLOWED_MODES = {
+    "chat",
+    "embedding",
+    "image_generation",
+    "audio_speech",
+    "audio_transcription",
+    "rerank",
+}
 _ALLOWED_BINDING_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user"}
 
 
 def _repository_or_503(request: Request) -> RouteGroupRepository:
     repository = getattr(request.app.state, "route_group_repository", None)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Route group repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Route group repository unavailable",
+        )
     return repository
 
 
@@ -62,7 +85,9 @@ def _validate_mode(value: Any) -> str:
     mode = str(value or "chat").strip()
     if mode not in ALLOWED_MODES:
         allowed = ", ".join(sorted(ALLOWED_MODES))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"mode must be one of: {allowed}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"mode must be one of: {allowed}"
+        )
     return mode
 
 
@@ -74,7 +99,10 @@ def _validate_strategy(value: Any | None, *, field_name: str = "strategy") -> st
         return None
     if strategy not in RoutingStrategy._value2member_map_:
         allowed = ", ".join(item.value for item in RoutingStrategy)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be one of: {allowed}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be one of: {allowed}",
+        )
     return strategy
 
 
@@ -82,18 +110,24 @@ def _validate_int_or_none(value: Any, *, field_name: str) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer"
+        )
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer"
+        ) from exc
 
 
 def _validate_iterations(value: Any) -> int:
     parsed = _validate_int_or_none(value, field_name="iterations")
     iterations = parsed if parsed is not None else 100
     if iterations < 1 or iterations > 5000:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="iterations must be between 1 and 5000")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="iterations must be between 1 and 5000"
+        )
     return iterations
 
 
@@ -159,7 +193,9 @@ def _apply_policy_simulation_override(
         if "retry" in policy:
             patched["retry"] = policy.get("retry")
         if "members" in policy:
-            patched["members"] = _merge_simulation_members(list(group.get("members") or []), policy.get("members"))
+            patched["members"] = _merge_simulation_members(
+                list(group.get("members") or []), policy.get("members")
+            )
         updated.append(patched)
 
     if not found:
@@ -237,11 +273,24 @@ async def _invalidate_prompt_group_cache(request: Request, group_key: str) -> No
     await service.invalidate_scope(scope_type="group", scope_id=group_key)
 
 
+async def _notify_route_group_invalidation(request: Request) -> None:
+    invalidation = getattr(request.app.state, "governance_invalidation_service", None)
+    if invalidation is None or getattr(invalidation, "redis", None) is None:
+        return
+    if not await invalidation.notify("prompt", "route_groups"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Mutation committed, but route-group invalidation publication failed",
+        )
+
+
 def _validated_metadata(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object"
+        )
     return dict(value)
 
 
@@ -249,17 +298,24 @@ def _validate_binding_scope_type(value: Any) -> str:
     scope_type = str(value or "").strip().lower()
     if scope_type not in _ALLOWED_BINDING_SCOPE_TYPES:
         allowed = ", ".join(sorted(_ALLOWED_BINDING_SCOPE_TYPES))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}"
+        )
     normalized = normalize_scope_type(scope_type)
     if normalized == "group":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type must be one of: api_key, team, organization, user")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scope_type must be one of: api_key, team, organization, user",
+        )
     return normalized
 
 
 def _validate_scope_id(value: Any, *, field_name: str = "scope_id") -> str:
     scope_id = str(value or "").strip()
     if not scope_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} is required"
+        )
     return scope_id
 
 
@@ -274,22 +330,33 @@ def _binding_response_payload(binding: Any) -> dict[str, Any]:
     return to_json_value(asdict(binding))
 
 
-async def _validate_default_prompt(request: Request, value: Any) -> tuple[bool, dict[str, str] | None]:
+async def _validate_default_prompt(
+    request: Request, value: Any
+) -> tuple[bool, dict[str, str] | None]:
     if value is ...:
         return False, None
     if value is None:
         return True, None
     if not isinstance(value, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="default_prompt must be an object or null")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="default_prompt must be an object or null",
+        )
     template_key = str(value.get("template_key") or value.get("key") or "").strip()
     if not template_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="default_prompt.template_key is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="default_prompt.template_key is required",
+        )
     label = str(value.get("label") or "").strip()
     prompt_repository = _prompt_repository(request)
     if prompt_repository is not None:
         template = await prompt_repository.get_template(template_key)
         if template is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="default_prompt.template_key does not exist")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="default_prompt.template_key does not exist",
+            )
     payload: dict[str, str] = {"template_key": template_key}
     if label:
         payload["label"] = label
@@ -319,24 +386,37 @@ async def _resolve_group_metadata(
         current_scope = owner_scope_from_metadata(existing_metadata)
         current_scope_type = current_scope.scope_type
         current_scope_id = current_scope.scope_id
-        scope_type = current_scope_type if raw_owner_scope_type is ... else normalize_owner_scope_type(raw_owner_scope_type)
-        scope_id = current_scope_id if raw_owner_scope_id is ... else (
-            str(raw_owner_scope_id).strip() if raw_owner_scope_id is not None else None
+        scope_type = (
+            current_scope_type
+            if raw_owner_scope_type is ...
+            else normalize_owner_scope_type(raw_owner_scope_type)
+        )
+        scope_id = (
+            current_scope_id
+            if raw_owner_scope_id is ...
+            else (str(raw_owner_scope_id).strip() if raw_owner_scope_id is not None else None)
         )
         try:
-            metadata = apply_owner_scope_to_metadata(
-                metadata or None,
-                scope_type=scope_type,
-                scope_id=scope_id,
-            ) or {}
+            metadata = (
+                apply_owner_scope_to_metadata(
+                    metadata or None,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                )
+                or {}
+            )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return metadata or None
 
 
-def _validate_policy_payload(payload: dict[str, Any], *, available_member_ids: set[str]) -> tuple[dict[str, Any], list[str]]:
+def _validate_policy_payload(
+    payload: dict[str, Any], *, available_member_ids: set[str]
+) -> tuple[dict[str, Any], list[str]]:
     try:
-        normalized, warnings = validate_route_policy(payload, available_member_ids=available_member_ids)
+        normalized, warnings = validate_route_policy(
+            payload, available_member_ids=available_member_ids
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -345,7 +425,9 @@ def _validate_policy_payload(payload: dict[str, Any], *, available_member_ids: s
     return normalized, warnings
 
 
-@router.get("/ui/api/route-groups", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/route-groups", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))]
+)
 async def list_route_groups(
     request: Request,
     search: str | None = Query(default=None),
@@ -357,11 +439,19 @@ async def list_route_groups(
     data = [_group_response_payload(group) for group in groups]
     return {
         "data": data,
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
-@router.get("/ui/api/route-groups/{group_key}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/route-groups/{group_key}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
@@ -379,7 +469,10 @@ async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
     }
 
 
-@router.post("/ui/api/route-groups", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.post(
+    "/ui/api/route-groups",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
@@ -412,12 +505,15 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
         )
     except Exception as exc:
         if "duplicate key" in str(exc).lower():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Route group already exists") from exc
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Route group already exists"
+            ) from exc
         raise
 
     await _invalidate_runtime_cache(request)
     await _invalidate_prompt_group_cache(request, created.group_key)
     await _reload_runtime(request)
+    await _notify_route_group_invalidation(request)
     response = _group_response_payload(created)
     await emit_admin_mutation_audit(
         request=request,
@@ -431,8 +527,13 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
     return response
 
 
-@router.put("/ui/api/route-groups/{group_key}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def update_route_group(request: Request, group_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.put(
+    "/ui/api/route-groups/{group_key}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def update_route_group(
+    request: Request, group_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
 
@@ -440,7 +541,11 @@ async def update_route_group(request: Request, group_key: str, payload: dict[str
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
-    name = str(payload.get("name")).strip() if "name" in payload and payload.get("name") is not None else existing.name
+    name = (
+        str(payload.get("name")).strip()
+        if "name" in payload and payload.get("name") is not None
+        else existing.name
+    )
     mode = _validate_mode(payload.get("mode", existing.mode))
     strategy = _validate_strategy(payload.get("strategy", existing.routing_strategy))
     enabled = bool(payload.get("enabled", existing.enabled))
@@ -467,6 +572,7 @@ async def update_route_group(request: Request, group_key: str, payload: dict[str
     await _invalidate_runtime_cache(request)
     await _invalidate_prompt_group_cache(request, group_key)
     await _reload_runtime(request)
+    await _notify_route_group_invalidation(request)
     before = _group_response_payload(existing)
     after = _group_response_payload(updated)
     await emit_admin_mutation_audit(
@@ -483,7 +589,10 @@ async def update_route_group(request: Request, group_key: str, payload: dict[str
     return after
 
 
-@router.delete("/ui/api/route-groups/{group_key}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.delete(
+    "/ui/api/route-groups/{group_key}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def delete_route_group(request: Request, group_key: str) -> dict[str, bool]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
@@ -496,6 +605,7 @@ async def delete_route_group(request: Request, group_key: str) -> dict[str, bool
     await _invalidate_runtime_cache(request)
     await _invalidate_prompt_group_cache(request, group_key)
     await _reload_runtime(request)
+    await _notify_route_group_invalidation(request)
     response = {"deleted": True}
     await emit_admin_mutation_audit(
         request=request,
@@ -508,7 +618,10 @@ async def delete_route_group(request: Request, group_key: str) -> dict[str, bool
     return response
 
 
-@router.get("/ui/api/route-group-bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/route-group-bindings",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def list_route_group_bindings(
     request: Request,
     group_key: str | None = Query(default=None),
@@ -518,7 +631,9 @@ async def list_route_group_bindings(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
-    normalized_scope_type = _validate_binding_scope_type(scope_type) if scope_type is not None else None
+    normalized_scope_type = (
+        _validate_binding_scope_type(scope_type) if scope_type is not None else None
+    )
     bindings, total = await repository.list_bindings(
         group_key=group_key,
         scope_type=normalized_scope_type,
@@ -528,11 +643,19 @@ async def list_route_group_bindings(
     )
     return {
         "data": [_binding_response_payload(binding) for binding in bindings],
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
-@router.post("/ui/api/route-group-bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.post(
+    "/ui/api/route-group-bindings",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def upsert_route_group_binding(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
@@ -585,17 +708,24 @@ async def upsert_route_group_binding(request: Request, payload: dict[str, Any]) 
     return response
 
 
-@router.delete("/ui/api/route-group-bindings/{binding_id}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.delete(
+    "/ui/api/route-group-bindings/{binding_id}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
 async def delete_route_group_binding(request: Request, binding_id: str) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     binding = await repository.get_binding(binding_id)
     if binding is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group binding not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Route group binding not found"
+        )
 
     deleted = await repository.delete_binding(binding_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group binding not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Route group binding not found"
+        )
 
     await delete_callable_target_binding_mirror(
         request,
@@ -622,7 +752,10 @@ async def delete_route_group_binding(request: Request, binding_id: str) -> dict[
     return response
 
 
-@router.get("/ui/api/route-groups/{group_key}/members", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/route-groups/{group_key}/members",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def list_route_group_members(request: Request, group_key: str) -> list[dict[str, Any]]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
@@ -632,13 +765,20 @@ async def list_route_group_members(request: Request, group_key: str) -> list[dic
     return [to_json_value(asdict(member)) for member in members]
 
 
-@router.post("/ui/api/route-groups/{group_key}/members", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def upsert_route_group_member(request: Request, group_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/route-groups/{group_key}/members",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def upsert_route_group_member(
+    request: Request, group_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     deployment_id = str(payload.get("deployment_id") or "").strip()
     if not deployment_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deployment_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="deployment_id is required"
+        )
 
     enabled = bool(payload.get("enabled", True))
     weight = _validate_int_or_none(payload.get("weight"), field_name="weight")
@@ -654,13 +794,16 @@ async def upsert_route_group_member(request: Request, group_key: str, payload: d
         )
     except Exception as exc:
         if "foreign key" in str(exc).lower():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deployment_id does not exist") from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="deployment_id does not exist"
+            ) from exc
         raise
     if member is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
     await _invalidate_runtime_cache(request)
     await _reload_runtime(request)
+    await _notify_route_group_invalidation(request)
     response = to_json_value(asdict(member))
     await emit_admin_mutation_audit(
         request=request,
@@ -674,16 +817,24 @@ async def upsert_route_group_member(request: Request, group_key: str, payload: d
     return response
 
 
-@router.delete("/ui/api/route-groups/{group_key}/members/{deployment_id:path}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def delete_route_group_member(request: Request, group_key: str, deployment_id: str) -> dict[str, bool]:
+@router.delete(
+    "/ui/api/route-groups/{group_key}/members/{deployment_id:path}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def delete_route_group_member(
+    request: Request, group_key: str, deployment_id: str
+) -> dict[str, bool]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     removed = await repository.remove_member(group_key, deployment_id)
     if not removed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group member not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Route group member not found"
+        )
 
     await _invalidate_runtime_cache(request)
     await _reload_runtime(request)
+    await _notify_route_group_invalidation(request)
     response = {"deleted": True}
     await emit_admin_mutation_audit(
         request=request,
@@ -696,7 +847,10 @@ async def delete_route_group_member(request: Request, group_key: str, deployment
     return response
 
 
-@router.get("/ui/api/route-groups/{group_key}/policy", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/route-groups/{group_key}/policy",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def get_route_group_policy(request: Request, group_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
@@ -708,7 +862,10 @@ async def get_route_group_policy(request: Request, group_key: str) -> dict[str, 
     return {"group_key": group_key, "policy": to_json_value(asdict(policy))}
 
 
-@router.get("/ui/api/route-groups/{group_key}/policies", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/route-groups/{group_key}/policies",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
 async def list_route_group_policies(request: Request, group_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
@@ -716,11 +873,19 @@ async def list_route_group_policies(request: Request, group_key: str) -> dict[st
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
     policies = await repository.list_policies(group_key)
-    return {"group_key": group_key, "policies": [to_json_value(asdict(policy)) for policy in policies]}
+    return {
+        "group_key": group_key,
+        "policies": [to_json_value(asdict(policy)) for policy in policies],
+    }
 
 
-@router.post("/ui/api/route-groups/{group_key}/policy/validate", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def validate_route_group_policy(request: Request, group_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/route-groups/{group_key}/policy/validate",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def validate_route_group_policy(
+    request: Request, group_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
@@ -732,8 +897,13 @@ async def validate_route_group_policy(request: Request, group_key: str, payload:
     return {"group_key": group_key, "valid": True, "policy": normalized, "warnings": warnings}
 
 
-@router.post("/ui/api/route-groups/{group_key}/policy/draft", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def save_route_group_policy_draft(request: Request, group_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/route-groups/{group_key}/policy/draft",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def save_route_group_policy_draft(
+    request: Request, group_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
@@ -747,7 +917,11 @@ async def save_route_group_policy_draft(request: Request, group_key: str, payloa
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
-    response = {"group_key": group_key, "policy": to_json_value(asdict(policy)), "warnings": warnings}
+    response = {
+        "group_key": group_key,
+        "policy": to_json_value(asdict(policy)),
+        "warnings": warnings,
+    }
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -760,8 +934,13 @@ async def save_route_group_policy_draft(request: Request, group_key: str, payloa
     return response
 
 
-@router.post("/ui/api/route-groups/{group_key}/policy/publish", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def publish_route_group_policy_v2(request: Request, group_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+@router.post(
+    "/ui/api/route-groups/{group_key}/policy/publish",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def publish_route_group_policy_v2(
+    request: Request, group_key: str, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
@@ -780,11 +959,18 @@ async def publish_route_group_policy_v2(request: Request, group_key: str, payloa
         policy = await repository.publish_latest_draft(group_key, published_by="admin_api")
 
     if policy is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group or draft policy not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Route group or draft policy not found"
+        )
 
     await _invalidate_runtime_cache(request)
     await _reload_runtime(request)
-    response = {"group_key": group_key, "policy": to_json_value(asdict(policy)), "warnings": warnings}
+    await _notify_route_group_invalidation(request)
+    response = {
+        "group_key": group_key,
+        "policy": to_json_value(asdict(policy)),
+        "warnings": warnings,
+    }
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -797,8 +983,13 @@ async def publish_route_group_policy_v2(request: Request, group_key: str, payloa
     return response
 
 
-@router.post("/ui/api/route-groups/{group_key}/policy/rollback", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def rollback_route_group_policy(request: Request, group_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/route-groups/{group_key}/policy/rollback",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def rollback_route_group_policy(
+    request: Request, group_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     if "version" not in payload:
@@ -808,13 +999,22 @@ async def rollback_route_group_policy(request: Request, group_key: str, payload:
     if version is None or version < 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="version must be >= 1")
 
-    policy = await repository.rollback_policy(group_key, target_version=version, published_by="admin_api")
+    policy = await repository.rollback_policy(
+        group_key, target_version=version, published_by="admin_api"
+    )
     if policy is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group or policy version not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Route group or policy version not found"
+        )
 
     await _invalidate_runtime_cache(request)
     await _reload_runtime(request)
-    response = {"group_key": group_key, "policy": to_json_value(asdict(policy)), "rolled_back_from_version": version}
+    await _notify_route_group_invalidation(request)
+    response = {
+        "group_key": group_key,
+        "policy": to_json_value(asdict(policy)),
+        "rolled_back_from_version": version,
+    }
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -827,8 +1027,13 @@ async def rollback_route_group_policy(request: Request, group_key: str, payload:
     return response
 
 
-@router.post("/ui/api/route-groups/{group_key}/policy/simulate", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
-async def simulate_route_group_policy(request: Request, group_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+@router.post(
+    "/ui/api/route-groups/{group_key}/policy/simulate",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+)
+async def simulate_route_group_policy(
+    request: Request, group_key: str, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
@@ -838,7 +1043,9 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
     iterations = _validate_iterations(body.get("iterations"))
     metadata = body.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object"
+        )
     metadata = metadata or {}
     user_id = str(body.get("user_id") or "policy-simulation")
 
@@ -850,7 +1057,9 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
     if "prompt_ref" in body:
         prompt_ref = parse_prompt_reference(body.get("prompt_ref"))
         if prompt_ref is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="prompt_ref could not be parsed")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="prompt_ref could not be parsed"
+            )
         prompt_repository = _prompt_resolution_repository(request)
         if prompt_repository is None:
             raise HTTPException(
@@ -863,9 +1072,13 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
             version=prompt_ref.version,
         )
         if resolved_prompt is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="prompt_ref could not be resolved")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="prompt_ref could not be resolved"
+            )
         try:
-            metadata, route_preferences = apply_route_preferences_to_metadata(metadata, resolved_prompt.route_preferences)
+            metadata, route_preferences = apply_route_preferences_to_metadata(
+                metadata, resolved_prompt.route_preferences
+            )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         prompt_summary = {
@@ -874,7 +1087,9 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
             "label": resolved_prompt.label or prompt_ref.label,
             "route_preferences": route_preferences,
         }
-        preferred_group = route_preferences.get("route_group") if isinstance(route_preferences, dict) else None
+        preferred_group = (
+            route_preferences.get("route_group") if isinstance(route_preferences, dict) else None
+        )
         if isinstance(preferred_group, str) and preferred_group and preferred_group != group_key:
             warnings.append(
                 f"prompt route_preferences.route_group={preferred_group!r} is advisory and does not override simulation group {group_key!r}"
@@ -883,14 +1098,22 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
     policy_override = body.get("policy")
     if policy_override is not None:
         if not isinstance(policy_override, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="policy must be an object")
-        normalized, policy_warnings = _validate_policy_payload(policy_override, available_member_ids=available_member_ids)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="policy must be an object"
+            )
+        normalized, policy_warnings = _validate_policy_payload(
+            policy_override, available_member_ids=available_member_ids
+        )
         warnings.extend(policy_warnings)
-        runtime_groups = _apply_policy_simulation_override(runtime_groups, group_key=group_key, policy=normalized)
+        runtime_groups = _apply_policy_simulation_override(
+            runtime_groups, group_key=group_key, policy=normalized
+        )
 
     base_router = getattr(request.app.state, "router", None)
     if base_router is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Router runtime unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Router runtime unavailable"
+        )
 
     model_registry = getattr(request.app.state, "model_registry", {})
     state_backend = getattr(request.app.state, "router_state_backend", base_router.state)
@@ -928,7 +1151,9 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
         if selected is None:
             no_selection_count += 1
             continue
-        selection_counts[selected.deployment_id] = selection_counts.get(selected.deployment_id, 0) + 1
+        selection_counts[selected.deployment_id] = (
+            selection_counts.get(selected.deployment_id, 0) + 1
+        )
 
     selections = [
         {
@@ -936,7 +1161,9 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
             "count": count,
             "ratio": count / iterations if iterations > 0 else 0.0,
         }
-        for deployment_id, count in sorted(selection_counts.items(), key=lambda item: (-item[1], item[0]))
+        for deployment_id, count in sorted(
+            selection_counts.items(), key=lambda item: (-item[1], item[0])
+        )
     ]
 
     return {
@@ -955,8 +1182,13 @@ async def simulate_route_group_policy(request: Request, group_key: str, payload:
     }
 
 
-@router.put("/ui/api/route-groups/{group_key}/policy", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
-async def publish_route_group_policy(request: Request, group_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.put(
+    "/ui/api/route-groups/{group_key}/policy",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def publish_route_group_policy(
+    request: Request, group_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
@@ -972,7 +1204,12 @@ async def publish_route_group_policy(request: Request, group_key: str, payload: 
 
     await _invalidate_runtime_cache(request)
     await _reload_runtime(request)
-    response = {"group_key": group_key, "policy": to_json_value(asdict(policy)), "warnings": warnings}
+    await _notify_route_group_invalidation(request)
+    response = {
+        "group_key": group_key,
+        "policy": to_json_value(asdict(policy)),
+        "warnings": warnings,
+    }
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

@@ -63,3 +63,55 @@ async def test_callback_manager_loads_success_failure_from_settings() -> None:
     )
     assert manager.success_callbacks == []
     assert manager.failure_callbacks == []
+
+
+def test_callback_manager_reload_replaces_config_managed_callbacks(monkeypatch) -> None:
+    manager = CallbackManager()
+    manually_registered = RecordingCallback()
+    manager.register_callback(manually_registered, callback_type="both")
+    created: list[RecordingCallback] = []
+
+    def resolve(_name, _settings):  # noqa: ANN001, ANN202
+        callback = RecordingCallback()
+        created.append(callback)
+        return callback
+
+    monkeypatch.setattr(manager, "_resolve_string_callback", resolve)
+    manager.load_from_settings(
+        success_callbacks=["custom"],
+        failure_callbacks=[],
+        callbacks=[],
+        callback_settings=None,
+    )
+    manager.load_from_settings(
+        success_callbacks=["custom"],
+        failure_callbacks=[],
+        callbacks=[],
+        callback_settings=None,
+    )
+
+    assert len(created) == 2
+    assert manager.success_callbacks == [manually_registered, created[-1]]
+    assert manager.failure_callbacks == [manually_registered]
+
+
+def test_callback_manager_deduplicates_names_and_both_lists(monkeypatch) -> None:
+    manager = CallbackManager()
+    created: list[RecordingCallback] = []
+
+    def resolve(_name, _settings):  # noqa: ANN001, ANN202
+        callback = RecordingCallback()
+        created.append(callback)
+        return callback
+
+    monkeypatch.setattr(manager, "_resolve_string_callback", resolve)
+    manager.load_from_settings(
+        success_callbacks=["custom", "custom"],
+        failure_callbacks=["custom"],
+        callbacks=["custom"],
+        callback_settings=None,
+    )
+
+    assert len(created) == 1
+    assert manager.success_callbacks == created
+    assert manager.failure_callbacks == created

@@ -20,17 +20,24 @@ class _RecordingAuditService:
 
 
 class _InjectingPromptService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
     async def resolve_and_render(self, **kwargs):  # noqa: ANN003, ANN201
-        del kwargs
+        self.calls.append(dict(kwargs))
         return PromptRenderOutput(
             messages=[{"role": "system", "content": "Route via support prompt."}],
-            provenance=PromptProvenance(source="binding", template_key="support.prompt", version=2, label="production"),
+            provenance=PromptProvenance(
+                source="binding", template_key="support.prompt", version=2, label="production"
+            ),
             rendered_prompt={"text": "Route via support prompt."},
         )
 
 
 class _BatchFileRecord:
-    def __init__(self, file_id: str, created_by_api_key: str, created_by_team_id: str | None) -> None:
+    def __init__(
+        self, file_id: str, created_by_api_key: str, created_by_team_id: str | None
+    ) -> None:
         self.file_id = file_id
         self.created_by_api_key = created_by_api_key
         self.created_by_team_id = created_by_team_id
@@ -39,7 +46,9 @@ class _BatchFileRecord:
 class _FakeBatchRepository:
     async def get_file(self, file_id: str):  # noqa: ANN201
         key_hash = hashlib.sha256("test-salt:sk-test".encode("utf-8")).hexdigest()
-        return _BatchFileRecord(file_id=file_id, created_by_api_key=key_hash, created_by_team_id=None)
+        return _BatchFileRecord(
+            file_id=file_id, created_by_api_key=key_hash, created_by_team_id=None
+        )
 
 
 class _FakeBatchService:
@@ -116,7 +125,13 @@ class _FakeBatchService:
             "failed_at": None,
             "expired_at": None,
             "errors": None,
-            "request_counts": {"total": 1, "completed": 0, "failed": 0, "cancelled": 0, "in_progress": 0},
+            "request_counts": {
+                "total": 1,
+                "completed": 0,
+                "failed": 0,
+                "cancelled": 0,
+                "in_progress": 0,
+            },
             "metadata": metadata or {},
         }
         if webhook_configured:
@@ -130,7 +145,10 @@ class _SpendQueryDB:
         normalized = " ".join(query.lower().split())
         if "count(*) as total" in normalized:
             return [{"total": 1}]
-        if "from deltallm_spendlog_events" in normalized and "order by start_time desc" in normalized:
+        if (
+            "from deltallm_spendlog_events" in normalized
+            and "order by start_time desc" in normalized
+        ):
             return [
                 {
                     "id": "log_1",
@@ -162,9 +180,25 @@ class _SpendQueryDB:
                 }
             ]
         if "group by model" in normalized:
-            return [{"model": "gpt-4o-mini", "total_spend": 1.25, "total_tokens": 200, "request_count": 5}]
+            return [
+                {
+                    "model": "gpt-4o-mini",
+                    "total_spend": 1.25,
+                    "total_tokens": 200,
+                    "request_count": 5,
+                }
+            ]
         if "from deltallm_verificationtoken" in normalized:
-            return [{"token": "t", "key_name": "k", "spend": 1.0, "max_budget": 10.0, "user_id": None, "team_id": None}]
+            return [
+                {
+                    "token": "t",
+                    "key_name": "k",
+                    "spend": 1.0,
+                    "max_budget": 10.0,
+                    "user_id": None,
+                    "team_id": None,
+                }
+            ]
         if "from deltallm_teamtable" in normalized:
             return [{"team_id": "team-1", "team_alias": "team", "spend": 1.0, "max_budget": 10.0}]
         if "group by end_user_id" in normalized:
@@ -176,9 +210,21 @@ class _SpendQueryDB:
 @pytest.mark.parametrize(
     ("path", "body", "expected_action"),
     [
-        ("/v1/images/generations", {"model": "gpt-4o-mini", "prompt": "cat"}, "IMAGE_GENERATION_REQUEST"),
-        ("/v1/audio/speech", {"model": "gpt-4o-mini", "input": "hello", "voice": "alloy"}, "AUDIO_SPEECH_REQUEST"),
-        ("/v1/rerank", {"model": "gpt-4o-mini", "query": "q", "documents": ["a", "b"]}, "RERANK_REQUEST"),
+        (
+            "/v1/images/generations",
+            {"model": "gpt-4o-mini", "prompt": "cat"},
+            "IMAGE_GENERATION_REQUEST",
+        ),
+        (
+            "/v1/audio/speech",
+            {"model": "gpt-4o-mini", "input": "hello", "voice": "alloy"},
+            "AUDIO_SPEECH_REQUEST",
+        ),
+        (
+            "/v1/rerank",
+            {"model": "gpt-4o-mini", "query": "q", "documents": ["a", "b"]},
+            "RERANK_REQUEST",
+        ),
     ],
 )
 async def test_media_routes_emit_audit_success(client, test_app, path, body, expected_action):
@@ -188,7 +234,9 @@ async def test_media_routes_emit_audit_success(client, test_app, path, body, exp
     async def media_post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
         del headers, timeout
         if url.endswith("/images/generations"):
-            return httpx.Response(200, json={"created": 1, "data": [{"url": "https://example.com/image.png"}]})
+            return httpx.Response(
+                200, json={"created": 1, "data": [{"url": "https://example.com/image.png"}]}
+            )
         if url.endswith("/audio/speech"):
             return httpx.Response(200, content=b"\x00\x01\x02")
         if url.endswith("/rerank"):
@@ -196,7 +244,10 @@ async def test_media_routes_emit_audit_success(client, test_app, path, body, exp
         return httpx.Response(404, json={"error": "not found"}, request=httpx.Request("POST", url))
 
     test_app.state.http_client.post = media_post
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": f"req-{expected_action}"}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": f"req-{expected_action}",
+    }
 
     response = await client.post(path, headers=headers, json=body)
     assert response.status_code == 200
@@ -214,6 +265,7 @@ async def test_audio_transcriptions_emits_audit_success(client, test_app):
 
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
+
     async def _noop_rate_limit():  # noqa: ANN202
         yield
 
@@ -226,11 +278,16 @@ async def test_audio_transcriptions_emits_audit_success(client, test_app):
         return httpx.Response(404, json={"error": "not found"}, request=httpx.Request("POST", url))
 
     test_app.state.http_client.post = stt_post
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-audio-transcript"}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-audio-transcript",
+    }
     files = {"file": ("audio.wav", b"abc", "audio/wav")}
     data = {"model": "gpt-4o-mini", "response_format": "json"}
 
-    response = await client.post("/v1/audio/transcriptions", headers=headers, files=files, data=data)
+    response = await client.post(
+        "/v1/audio/transcriptions", headers=headers, files=files, data=data
+    )
     assert response.status_code == 200
     event, _, _ = audit.records[-1]
     assert event.action == "AUDIO_TRANSCRIPTION_REQUEST"
@@ -239,25 +296,33 @@ async def test_audio_transcriptions_emits_audit_success(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_chat_prompt_resolution_emits_dedicated_audit_event(client, test_app):
+async def test_chat_prompt_resolution_routes_audit_context_through_prompt_service(
+    client,
+    test_app,
+):
     audit = _RecordingAuditService()
+    prompt_service = _InjectingPromptService()
     test_app.state.audit_service = audit
-    test_app.state.prompt_registry_service = _InjectingPromptService()
+    test_app.state.prompt_registry_service = prompt_service
 
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-prompt-audit"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-prompt-audit",
+    }
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 
-    matching = [event for event, _, critical in audit.records if event.action == "PROMPT_RESOLUTION_REQUEST" and critical is False]
-    assert matching
-    event = matching[-1]
-    assert event.request_id == "req-prompt-audit"
-    assert event.status == "success"
-    assert event.resource_type == "prompt"
-    assert event.resource_id == "support.prompt"
-    assert (event.metadata or {}).get("prompt_provenance", {}).get("version") == 2
+    assert len(prompt_service.calls) == 1
+    prompt_call = prompt_service.calls[0]
+    assert prompt_call["request_id"] == "req-prompt-audit"
+    assert prompt_call["client_ip"] == "127.0.0.1"
+    assert not any(event.action == "PROMPT_RESOLUTION_REQUEST" for event, _, _ in audit.records)
 
 
 @pytest.mark.asyncio
@@ -267,7 +332,10 @@ async def test_files_and_batches_emit_audit_success(client, test_app):
     test_app.state.batch_service = _FakeBatchService()
     test_app.state.batch_repository = _FakeBatchRepository()
 
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-files-batches"}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-files-batches",
+    }
 
     response = await client.post(
         "/v1/files",
@@ -305,7 +373,9 @@ async def test_files_and_batches_emit_audit_success(client, test_app):
     assert "BATCH_READ_REQUEST" in actions
     assert "BATCH_LIST_REQUEST" in actions
     assert "BATCH_CANCEL_REQUEST" in actions
-    batch_create_records = [record[0] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"]
+    batch_create_records = [
+        record[0] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"
+    ]
     assert batch_create_records
     assert batch_create_records[-1].metadata["create_path"] == "create_session"
     assert batch_create_records[-1].metadata["idempotency_key_present"] is False
@@ -331,11 +401,15 @@ async def test_batch_create_audit_marks_idempotency_key_presence(client, test_ap
     )
     assert response.status_code == 200
 
-    batch_create_records = [record[0] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"]
+    batch_create_records = [
+        record[0] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"
+    ]
     assert batch_create_records
     assert batch_create_records[-1].metadata["idempotency_key_present"] is True
     assert batch_create_records[-1].metadata["idempotency_resolution"] == "created"
-    batch_create_payloads = [record[1] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"]
+    batch_create_payloads = [
+        record[1] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"
+    ]
     assert batch_create_payloads
     assert batch_create_payloads[-1][0].content_json["idempotency_key_present"] is True
 
@@ -441,8 +515,7 @@ async def test_batch_read_list_and_cancel_audits_redact_caller_metadata(client, 
     batch_records = [
         record
         for record in audit.records
-        if record[0].action
-        in {"BATCH_READ_REQUEST", "BATCH_LIST_REQUEST", "BATCH_CANCEL_REQUEST"}
+        if record[0].action in {"BATCH_READ_REQUEST", "BATCH_LIST_REQUEST", "BATCH_CANCEL_REQUEST"}
     ]
     assert len(batch_records) == 3
     assert metadata_marker not in str(batch_records)

@@ -4,6 +4,7 @@ import asyncio
 import json as jsonlib
 from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
@@ -92,19 +93,46 @@ class _RecordingAuditService:
         self.records.append((event, list(payloads or []), critical))
 
 
+class _FailingBestEffortAuditService:
+    async def enqueue_event(self, *_args: Any, **kwargs: Any) -> str:
+        if str(kwargs.get("delivery_class")) == "best_effort":
+            raise ConnectionError("audit database unavailable")
+        return "persisted"
+
+
+class _FailingRequiredAuditService:
+    async def enqueue_event(self, *_args: Any, **kwargs: Any) -> str:
+        if str(getattr(kwargs.get("delivery_class"), "value", kwargs.get("delivery_class"))) == (
+            "required"
+        ):
+            raise ConnectionError("required audit database unavailable")
+        return "persisted"
+
+
 class _SpendRecorder:
     def __init__(self) -> None:
         self.events: list[dict] = []
+        self._events_changed = asyncio.Condition()
 
     async def log_spend(self, **kwargs):
-        self.events.append({"status": "success", **kwargs})
+        async with self._events_changed:
+            self.events.append({"status": "success", **kwargs})
+            self._events_changed.notify_all()
 
     async def log_request_failure(self, **kwargs):
         error_type = kwargs.get("error_type")
         if error_type is None:
             exc = kwargs.get("exc")
-            error_type = getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None)
-        self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
+            error_type = getattr(exc, "error_type", None) or (
+                exc.__class__.__name__ if exc is not None else None
+            )
+        async with self._events_changed:
+            self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
+            self._events_changed.notify_all()
+
+    async def wait_for_events(self, count: int) -> None:
+        async with self._events_changed:
+            await self._events_changed.wait_for(lambda: len(self.events) >= count)
 
 
 class _TierPricingService:
@@ -171,10 +199,25 @@ class _FakeMCPGateway:
             )()
         ]
 
-    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+    async def call_tool(
+        self,
+        auth,
+        *,
+        namespaced_tool_name,
+        arguments,
+        request_headers=None,
+        request_id=None,
+        correlation_id=None,
+    ):  # noqa: ANN001, ANN201
         del auth
         del correlation_id
-        self.tool_calls.append((namespaced_tool_name, dict(arguments or {}), request_id or (request_headers or {}).get("x-request-id")))
+        self.tool_calls.append(
+            (
+                namespaced_tool_name,
+                dict(arguments or {}),
+                request_id or (request_headers or {}).get("x-request-id"),
+            )
+        )
         return MCPToolCallResult(
             content=[{"type": "text", "text": "delta docs result"}],
             structured_content={"answer": "delta docs result"},
@@ -187,13 +230,31 @@ class _FakeMCPGateway:
 
 
 class _FailingMCPGateway(_FakeMCPGateway):
-    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+    async def call_tool(
+        self,
+        auth,
+        *,
+        namespaced_tool_name,
+        arguments,
+        request_headers=None,
+        request_id=None,
+        correlation_id=None,
+    ):  # noqa: ANN001, ANN201
         del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
         raise MCPTransportError("upstream MCP unavailable")
 
 
 class _RateLimitedMCPGateway(_FakeMCPGateway):
-    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+    async def call_tool(
+        self,
+        auth,
+        *,
+        namespaced_tool_name,
+        arguments,
+        request_headers=None,
+        request_id=None,
+        correlation_id=None,
+    ):  # noqa: ANN001, ANN201
         del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
         raise MCPRateLimitError("Rate limit exceeded for scope 'mcp_tool_rpm'", retry_after=42)
 
@@ -205,9 +266,20 @@ class _ManualApprovalMCPGateway(_FakeMCPGateway):
 
 
 class _TimeoutMCPGateway(_FakeMCPGateway):
-    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+    async def call_tool(
+        self,
+        auth,
+        *,
+        namespaced_tool_name,
+        arguments,
+        request_headers=None,
+        request_id=None,
+        correlation_id=None,
+    ):  # noqa: ANN001, ANN201
         del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
-        raise MCPToolTimeoutError("MCP tool 'docs.search' exceeded the policy execution limit of 10 ms", timeout_ms=10)
+        raise MCPToolTimeoutError(
+            "MCP tool 'docs.search' exceeded the policy execution limit of 10 ms", timeout_ms=10
+        )
 
 
 class _BuggyMCPGateway(_FakeMCPGateway):
@@ -310,7 +382,9 @@ async def test_chat_rate_limit_estimate_uses_final_transformed_payload(
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_uses_global_read_timeout_without_deployment_override(client, test_app):
+async def test_chat_completion_uses_global_read_timeout_without_deployment_override(
+    client, test_app
+):
     test_app.state.app_config.general_settings.upstream_http_read_timeout_seconds = 123
     test_app.state.app_config.general_settings.upstream_http_pool_timeout_seconds = 4
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
@@ -423,15 +497,7 @@ async def test_chat_completion_success_ignores_router_usage_write_failure(client
     assert response.json()["object"] == "chat.completion"
 
 
-@pytest.mark.asyncio
-async def test_chat_completion_with_mcp_tool_auto_executes_and_audits(client, test_app):
-    gateway = _FakeMCPGateway()
-    audit = _RecordingAuditService()
-    test_app.state.mcp_gateway_service = gateway
-    test_app.state.audit_service = audit
-
-    upstream_calls: list[dict[str, object]] = []
-
+def _mcp_success_post(upstream_calls: list[dict[str, object]]):  # noqa: ANN202
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del headers, timeout
         upstream_calls.append(json)
@@ -473,17 +539,44 @@ async def test_chat_completion_with_mcp_tool_auto_executes_and_audits(client, te
             "object": "chat.completion",
             "created": 1700000001,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "done"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
         }
         return httpx.Response(200, json=payload)
 
-    test_app.state.http_client.post = post
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-mcp-chat"}
+    return post
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_mcp_tool_auto_executes_and_audits(client, test_app):
+    gateway = _FakeMCPGateway()
+    audit = _RecordingAuditService()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = audit
+
+    upstream_calls: list[dict[str, object]] = []
+    test_app.state.http_client.post = _mcp_success_post(upstream_calls)
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-mcp-chat",
+    }
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -492,14 +585,130 @@ async def test_chat_completion_with_mcp_tool_auto_executes_and_audits(client, te
     assert response.json()["choices"][0]["message"]["content"] == "done"
     assert len(upstream_calls) == 2
     assert gateway.tool_calls == [("docs.search", {"query": "delta"}, "req-mcp-chat")]
-    assert any(getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value for event, _, _ in audit.records)
+    assert any(
+        getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value
+        for event, _, _ in audit.records
+    )
+    mcp_audits = [
+        (event, critical)
+        for event, _, critical in audit.records
+        if getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value
+    ]
+    assert [getattr(event, "status", None) for event, _ in mcp_audits] == [
+        "attempted",
+        "success",
+    ]
+    assert [critical for _, critical in mcp_audits] == [True, False]
+    assert mcp_audits[0][0].event_id != mcp_audits[1][0].event_id
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_success_survives_best_effort_audit_database_failure(client, test_app):
+    gateway = _FakeMCPGateway()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = _FailingBestEffortAuditService()
+
+    upstream_calls: list[dict[str, object]] = []
+    test_app.state.http_client.post = _mcp_success_post(upstream_calls)
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": "req-mcp-audit-outage",
+        },
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "done"
+    assert len(upstream_calls) == 2
+    assert gateway.tool_calls == [("docs.search", {"query": "delta"}, "req-mcp-audit-outage")]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_required_attempt_audit_fails_before_execution(client, test_app):
+    gateway = _FakeMCPGateway()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = _FailingRequiredAuditService()
+
+    upstream_calls: list[dict[str, object]] = []
+    test_app.state.http_client.post = _mcp_success_post(upstream_calls)
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": "req-mcp-required-audit-outage",
+        },
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert len(upstream_calls) == 1
+    assert gateway.tool_calls == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_missing_audit_service_fails_before_execution(client, test_app):
+    gateway = _FakeMCPGateway()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = None
+
+    upstream_calls: list[dict[str, object]] = []
+    test_app.state.http_client.post = _mcp_success_post(upstream_calls)
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": "req-mcp-missing-audit",
+        },
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert len(upstream_calls) == 1
+    assert gateway.tool_calls == []
 
 
 @pytest.mark.asyncio
 async def test_chat_completion_with_mcp_tool_guardrail_blocks_tool_execution(client, test_app):
     gateway = _FakeMCPGateway()
     test_app.state.mcp_gateway_service = gateway
-    test_app.state.guardrail_registry.register(BlockingMCPToolGuardrail(name="block-mcp-tool", default_on=True))
+    test_app.state.guardrail_registry.register(
+        BlockingMCPToolGuardrail(name="block-mcp-tool", default_on=True)
+    )
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del url, headers, timeout
@@ -518,7 +727,10 @@ async def test_chat_completion_with_mcp_tool_guardrail_blocks_tool_execution(cli
                             {
                                 "id": "call_docs_search",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": '{"query":"delta"}',
+                                },
                             }
                         ],
                     },
@@ -534,7 +746,14 @@ async def test_chat_completion_with_mcp_tool_guardrail_blocks_tool_execution(cli
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -568,7 +787,10 @@ async def test_chat_completion_with_mcp_tool_failure_emits_error_audit(client, t
                             {
                                 "id": "call_docs_search",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": '{"query":"delta"}',
+                                },
                             }
                         ],
                     },
@@ -580,17 +802,31 @@ async def test_chat_completion_with_mcp_tool_failure_emits_error_audit(client, t
         return httpx.Response(200, json=payload)
 
     test_app.state.http_client.post = post
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-mcp-tool-fail"}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-mcp-tool-fail",
+    }
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
     assert response.status_code == 503
-    matching = [event for event, _, _ in audit.records if getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value]
+    matching = [
+        event
+        for event, _, _ in audit.records
+        if getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value
+    ]
     assert matching
     assert matching[-1].status == "error"
     assert matching[-1].request_id == "req-mcp-tool-fail"
@@ -601,6 +837,7 @@ async def test_chat_completion_with_mcp_tool_failure_emits_error_audit(client, t
 @pytest.mark.asyncio
 async def test_chat_completion_with_mcp_tool_rate_limit_returns_429(client, test_app):
     test_app.state.mcp_gateway_service = _RateLimitedMCPGateway()
+    test_app.state.audit_service = _RecordingAuditService()
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del url, headers, timeout
@@ -619,7 +856,10 @@ async def test_chat_completion_with_mcp_tool_rate_limit_returns_429(client, test
                             {
                                 "id": "call_docs_search",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": '{"query":"delta"}',
+                                },
                             }
                         ],
                     },
@@ -635,7 +875,14 @@ async def test_chat_completion_with_mcp_tool_rate_limit_returns_429(client, test
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -665,7 +912,10 @@ async def test_chat_completion_with_mcp_tool_manual_approval_returns_400(client,
                             {
                                 "id": "call_docs_search",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": '{"query":"delta"}',
+                                },
                             }
                         ],
                     },
@@ -681,7 +931,14 @@ async def test_chat_completion_with_mcp_tool_manual_approval_returns_400(client,
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -694,6 +951,7 @@ async def test_chat_completion_with_mcp_tool_manual_approval_returns_400(client,
 @pytest.mark.asyncio
 async def test_chat_completion_with_mcp_tool_timeout_returns_503(client, test_app):
     test_app.state.mcp_gateway_service = _TimeoutMCPGateway()
+    test_app.state.audit_service = _RecordingAuditService()
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del url, headers, timeout
@@ -712,7 +970,10 @@ async def test_chat_completion_with_mcp_tool_timeout_returns_503(client, test_ap
                             {
                                 "id": "call_docs_search",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": '{"query":"delta"}',
+                                },
                             }
                         ],
                     },
@@ -728,7 +989,14 @@ async def test_chat_completion_with_mcp_tool_timeout_returns_503(client, test_ap
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -738,8 +1006,11 @@ async def test_chat_completion_with_mcp_tool_timeout_returns_503(client, test_ap
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_with_local_mcp_gateway_error_does_not_affect_deployment_health(client, test_app):
+async def test_chat_completion_with_local_mcp_gateway_error_does_not_affect_deployment_health(
+    client, test_app
+):
     test_app.state.mcp_gateway_service = _BuggyMCPGateway()
+    test_app.state.audit_service = _RecordingAuditService()
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
@@ -751,7 +1022,14 @@ async def test_chat_completion_with_local_mcp_gateway_error_does_not_affect_depl
     body = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -769,7 +1047,11 @@ async def test_chat_completion_with_local_mcp_gateway_error_does_not_affect_depl
 async def test_chat_completion_without_mcp_tools_skips_mcp_gateway(client, test_app):
     test_app.state.mcp_gateway_service = _ExplodingMCPGateway()
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -797,7 +1079,9 @@ async def test_chat_completion_streaming_success(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_streaming_success_ignores_router_usage_write_failure(client, test_app):
+async def test_chat_completion_streaming_success_ignores_router_usage_write_failure(
+    client, test_app
+):
     async def fail_usage(*args, **kwargs):  # noqa: ANN001, ANN201
         del args, kwargs
         raise ServiceUnavailableError(message="router usage unavailable")
@@ -818,7 +1102,9 @@ async def test_chat_completion_streaming_success_ignores_router_usage_write_fail
 
 @pytest.mark.asyncio
 async def test_chat_completion_guardrail_blocks(client, test_app):
-    test_app.state.guardrail_registry.register(BlockingChatGuardrail(name="block-chat", default_on=True))
+    test_app.state.guardrail_registry.register(
+        BlockingChatGuardrail(name="block-chat", default_on=True)
+    )
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {
         "model": "gpt-4o-mini",
@@ -855,7 +1141,11 @@ async def test_chat_completion_runs_success_callback(client, test_app):
     test_app.state.callback_manager = manager
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
@@ -880,7 +1170,11 @@ async def test_chat_completion_uses_explicit_provider_for_callbacks_and_spend(cl
     )
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
@@ -892,6 +1186,33 @@ async def test_chat_completion_uses_explicit_provider_for_callbacks_and_spend(cl
     spend_event = test_app.state.spend_tracking_service.events[-1]
     assert spend_event["metadata"]["provider"] == "groq"
     assert spend_event["metadata"]["deployment_model"] == "openai/gpt-oss-120b"
+
+
+@pytest.mark.asyncio
+async def test_reused_client_request_id_gets_distinct_server_billing_ids(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "client-controlled-id",
+    }
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
+
+    first = await client.post("/v1/chat/completions", headers=headers, json=body)
+    second = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    await asyncio.wait_for(recorder.wait_for_events(2), timeout=0.5)
+
+    assert len(recorder.events) == 2
+    assert {event["request_id"] for event in recorder.events} == {"client-controlled-id"}
+    event_ids = [event["event_id"] for event in recorder.events]
+    assert event_ids[0] != event_ids[1]
+    assert all(str(UUID(event_id)) == event_id for event_id in event_ids)
 
 
 @pytest.mark.asyncio
@@ -913,11 +1234,17 @@ async def test_chat_completion_runs_failure_callback(client, test_app):
         import httpx
 
         del headers, json, timeout
-        return httpx.Response(503, json={"error": "unavailable"}, request=httpx.Request("POST", url))
+        return httpx.Response(
+            503, json={"error": "unavailable"}, request=httpx.Request("POST", url)
+        )
 
     test_app.state.http_client.post = failing_post
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 503
@@ -942,7 +1269,11 @@ async def test_chat_upstream_rate_limit_returns_429(client, test_app):
 
     test_app.state.http_client.post = post
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -956,7 +1287,7 @@ async def test_chat_upstream_rate_limit_returns_429(client, test_app):
     }
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
-    assert int(health.get("consecutive_failures", 0) or 0) == 2
+    assert int(health.get("consecutive_failures", 0) or 0) == 1
     assert health.get("last_error") == "provider quota exhausted"
     assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
 
@@ -997,7 +1328,13 @@ async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(clie
                 "object": "chat.completion",
                 "created": 1700000000,
                 "model": json["model"],
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
             request=request,
@@ -1005,7 +1342,11 @@ async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(clie
 
     test_app.state.http_client.post = post
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
 
     failure = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert failure.status_code == 400
@@ -1023,7 +1364,9 @@ async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(clie
 
 
 class _StreamContext:
-    def __init__(self, status_code: int, lines: list[str], *, line_error: Exception | None = None) -> None:
+    def __init__(
+        self, status_code: int, lines: list[str], *, line_error: Exception | None = None
+    ) -> None:
         self.status_code = status_code
         self._lines = lines
         self._line_error = line_error
@@ -1064,7 +1407,11 @@ async def test_chat_stream_billing_uses_provider_usage_when_present(client, test
 
     test_app.state.http_client.stream = stream
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -1076,7 +1423,11 @@ async def test_chat_stream_billing_uses_provider_usage_when_present(client, test
     usage = await test_app.state.router_state_backend.get_usage(deployment_id)
     assert usage == {"rpm": 1, "tpm": 14}
     await asyncio.sleep(0.05)
-    assert recorder.events[-1]["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert recorder.events[-1]["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+    }
     assert recorder.events[-1]["cost"] == 18.0
     assert recorder.events[-1]["metadata"]["usage_source"] == "provider"
     assert recorder.events[-1]["metadata"]["usage_estimated"] is False
@@ -1108,7 +1459,11 @@ async def test_chat_stream_default_usage_collection_does_not_expose_usage_chunk(
 
     test_app.state.http_client.stream = stream
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -1117,7 +1472,11 @@ async def test_chat_stream_default_usage_collection_does_not_expose_usage_chunk(
     assert '"usage"' not in response.text
     assert '"choices":[]' not in response.text
     await asyncio.sleep(0.05)
-    assert recorder.events[-1]["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert recorder.events[-1]["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+    }
     assert recorder.events[-1]["cost"] == 18.0
     assert recorder.events[-1]["metadata"]["usage_source"] == "provider"
 
@@ -1158,12 +1517,18 @@ async def test_chat_stream_forwards_usage_chunk_when_client_requested_usage(clie
     assert '"usage"' in response.text
     assert '"choices":[]' in response.text
     await asyncio.sleep(0.05)
-    assert recorder.events[-1]["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert recorder.events[-1]["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+    }
     assert recorder.events[-1]["metadata"]["usage_source"] == "provider"
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pricing(client, test_app):
+async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pricing(
+    client, test_app
+):
     recorder = _SpendRecorder()
     test_app.state.spend_tracking_service = recorder
     test_app.state.tier_policy_service = _TierPricingService(
@@ -1185,7 +1550,11 @@ async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pric
 
     test_app.state.http_client.stream = stream
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -1194,7 +1563,11 @@ async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pric
     usage = await test_app.state.router_state_backend.get_usage(deployment_id)
     assert usage == {"rpm": 1, "tpm": 4}
     await asyncio.sleep(0.05)
-    assert recorder.events[-1]["usage"] == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+    assert recorder.events[-1]["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 1,
+        "total_tokens": 4,
+    }
     assert recorder.events[-1]["cost"] == 22.0
     assert recorder.events[-1]["metadata"]["provider_cost"] == 5.0
     assert recorder.events[-1]["metadata"]["pricing_source"] == "tier"
@@ -1221,14 +1594,21 @@ async def test_chat_billing_uses_deployment_pricing_when_tier_snapshot_is_stale(
 
     assert response.status_code == 200
     await asyncio.sleep(0.05)
-    assert recorder.events[-1]["usage"] == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    assert recorder.events[-1]["usage"] == {
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+        "total_tokens": 2,
+    }
     assert recorder.events[-1]["cost"] == 3.0
     assert recorder.events[-1]["metadata"]["provider_cost"] == 3.0
     assert recorder.events[-1]["metadata"]["pricing_source"] == "deployment"
     assert recorder.events[-1]["metadata"]["tier_snapshot_stale"] is True
     assert recorder.events[-1]["metadata"]["tier_pricing_authoritative"] is False
     assert recorder.events[-1]["metadata"]["tier_pricing_applied"] is False
-    assert recorder.events[-1]["metadata"]["tier_unavailable_reason"] == "tier_policy_unavailable_fail_open"
+    assert (
+        recorder.events[-1]["metadata"]["tier_unavailable_reason"]
+        == "tier_policy_unavailable_fail_open"
+    )
 
 
 @pytest.mark.asyncio
@@ -1256,12 +1636,8 @@ async def test_chat_billing_marks_partial_token_pricing_unpriced(client, test_ap
     }
     assert event["cost"] == 0.0
     assert event["metadata"]["billing_status"] == "unpriced"
-    assert event["metadata"]["billing"]["unpriced_reason"] == (
-        "no_configured_pricing"
-    )
-    assert event["metadata"]["missing_pricing_fields"] == [
-        "output_cost_per_token"
-    ]
+    assert event["metadata"]["billing"]["unpriced_reason"] == ("no_configured_pricing")
+    assert event["metadata"]["missing_pricing_fields"] == ["output_cost_per_token"]
 
 
 @pytest.mark.asyncio
@@ -1294,13 +1670,17 @@ async def test_stream_retries_before_first_token_with_failover(client, test_app)
             status_code=200,
             lines=[
                 'data: {"id":"chatcmpl-fb","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
-                'data: [DONE]',
+                "data: [DONE]",
             ],
         )
 
     test_app.state.http_client.stream = stream
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
@@ -1347,8 +1727,15 @@ async def test_stream_failure_after_failover_uses_last_attempted_deployment(clie
         )
 
     test_app.state.http_client.stream = stream
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-stream-fallback-failure"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-stream-fallback-failure",
+    }
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     with pytest.raises(httpx.ReadError, match="fallback stream broke"):
         await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -1404,7 +1791,13 @@ async def test_chat_completion_uses_azure_api_key_header_when_provider_is_azure(
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload)
@@ -1412,13 +1805,19 @@ async def test_chat_completion_uses_azure_api_key_header_when_provider_is_azure(
     test_app.state.http_client.post = post
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_uses_custom_auth_headers_for_openai_compatible_provider(client, test_app):
+async def test_chat_completion_uses_custom_auth_headers_for_openai_compatible_provider(
+    client, test_app
+):
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
     deployment.deltallm_params["provider"] = "vllm"
     deployment.deltallm_params["api_base"] = "https://vllm.example/v1"
@@ -1436,7 +1835,13 @@ async def test_chat_completion_uses_custom_auth_headers_for_openai_compatible_pr
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload)
@@ -1444,7 +1849,11 @@ async def test_chat_completion_uses_custom_auth_headers_for_openai_compatible_pr
     test_app.state.http_client.post = post
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 
@@ -1459,7 +1868,13 @@ async def test_chat_completion_does_not_forward_internal_metadata_upstream(clien
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload)
@@ -1478,7 +1893,9 @@ async def test_chat_completion_does_not_forward_internal_metadata_upstream(clien
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_does_not_forward_stream_options_for_non_stream_request(client, test_app):
+async def test_chat_completion_does_not_forward_stream_options_for_non_stream_request(
+    client, test_app
+):
     captured_payloads: list[dict[str, Any]] = []
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
     deployment.model_info = {"default_params": {"stream_options": {"include_usage": True}}}
@@ -1491,7 +1908,13 @@ async def test_chat_completion_does_not_forward_stream_options_for_non_stream_re
             "object": "chat.completion",
             "created": 1700000000,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
         return httpx.Response(200, json=payload)
@@ -1527,14 +1950,22 @@ async def test_chat_completion_uses_gemini_native_endpoint(client, test_app):
         payload = {
             "responseId": "resp_123",
             "candidates": [{"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
-            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 2,
+            },
         }
         return httpx.Response(200, json=payload)
 
     test_app.state.http_client.post = post
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == "ok"
@@ -1548,7 +1979,11 @@ async def test_chat_completion_rejects_gemini_streaming_for_now(client, test_app
     deployment.deltallm_params["api_key"] = "gemini-key"
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 400
     assert "not supported yet" in response.text
@@ -1581,7 +2016,11 @@ async def test_chat_completion_uses_bedrock_sigv4_headers(client, test_app):
     test_app.state.http_client.post = post
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == "ok"
@@ -1614,7 +2053,11 @@ async def test_chat_completion_bedrock_omits_implicit_sampling_defaults(client, 
     response = await client.post(
         "/v1/chat/completions",
         headers={"Authorization": f"Bearer {test_app.state._test_key}"},
-        json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        },
     )
 
     assert response.status_code == 200

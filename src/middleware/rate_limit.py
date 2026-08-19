@@ -18,6 +18,7 @@ from src.rate_limit_release_retry import get_rate_limit_release_retry_queue
 from src.rate_limit_policy import (
     RateLimitState,
     _model_limit as _model_limit,
+    acquire_parallel_limit_controls,
     acquire_rate_limit_controls,
     build_rate_limit_checks,
     compute_rate_limit_state,
@@ -134,14 +135,20 @@ async def _extract_model_from_request(request: Request, body: bytes) -> str | No
 
 
 def _build_429_state(
-    checks: list[RateLimitCheck], exc: RateLimitError, window_reset_at: int,
+    checks: list[RateLimitCheck],
+    exc: RateLimitError,
+    window_reset_at: int,
 ) -> RateLimitState:
     state = RateLimitState(warning="near_limit")
     violated_scope = getattr(exc, "param", None) or ""
 
     now = time.time()
     for check in checks:
-        is_rpm = check.scope.endswith("_rpm") or check.scope.endswith("_rph") or check.scope.endswith("_rpd")
+        is_rpm = (
+            check.scope.endswith("_rpm")
+            or check.scope.endswith("_rph")
+            or check.scope.endswith("_rpd")
+        )
         is_tpm = check.scope.endswith("_tpm") or check.scope.endswith("_tpd")
         if not is_rpm and not is_tpm:
             is_rpm = check.amount == 1
@@ -229,7 +236,9 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
             tokens = 1
             body = b""
         else:
-            raise InvalidRequestError(message="Could not parse request body for rate limiting") from exc
+            raise InvalidRequestError(
+                message="Could not parse request body for rate limiting"
+            ) from exc
 
     model = await _extract_model_from_request(request, body)
     await _acquire_rate_limits_for_values(
@@ -253,9 +262,7 @@ async def check_and_acquire_rate_limits_for_payload(
     """Admit a validated final payload without rereading the original body."""
 
     normalized_token_estimate = (
-        estimate_tokens(payload)
-        if token_estimate is None
-        else max(0, int(token_estimate))
+        estimate_tokens(payload) if token_estimate is None else max(0, int(token_estimate))
     )
     await _acquire_rate_limits_for_values(
         request,
@@ -266,6 +273,54 @@ async def check_and_acquire_rate_limits_for_payload(
             payload=payload,
         ),
     )
+
+
+async def acquire_parallel_limits_for_payload(
+    request: Request,
+    *,
+    model: str | None,
+    payload: Any,
+    token_estimate: int | None = None,
+) -> None:
+    """Acquire final-model parallel controls without consuming RPM/TPM."""
+    if getattr(request.state, "_rate_limit_lease", None) is not None:
+        return
+    auth = getattr(request.state, "user_api_key", None)
+    if auth is None:
+        return
+    normalized_tokens = (
+        estimate_tokens(payload) if token_estimate is None else max(0, int(token_estimate))
+    )
+    normalized_model = _normalize_model(model)
+    limiter: LimitCounter = request.app.state.limit_counter
+    try:
+        lease = await acquire_parallel_limit_controls(
+            limiter=limiter,
+            auth=auth,
+            tokens=normalized_tokens,
+            model=normalized_model,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+            tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(
+                request.app
+            ),
+            tier_capacity_fair_share_enabled=get_tier_capacity_fair_share_enabled_from_app(
+                request.app
+            ),
+        )
+    except RateLimitError as exc:
+        state_429 = _rate_limit_error_state(exc)
+        if state_429 is not None:
+            request.state._rate_limit_state = state_429
+        raise
+    request.state._rate_limit_lease = lease
+    request.state._parallel_admission_fingerprint = _rate_limit_admission_fingerprint(
+        model=normalized_model,
+        payload=payload,
+    )
+    refresher = RateLimitLeaseRefresher(limiter=limiter, lease=lease)
+    if refresher.start():
+        request.state._rate_limit_lease_refresher = refresher
 
 
 async def _acquire_rate_limits_for_values(
@@ -301,6 +356,13 @@ async def _acquire_rate_limits_for_values(
     )
 
     try:
+        preacquired_lease = getattr(request.state, "_rate_limit_lease", None)
+        parallel_fingerprint = getattr(request.state, "_parallel_admission_fingerprint", None)
+        if parallel_fingerprint is not None and parallel_fingerprint != admission_fingerprint:
+            raise InvalidRequestError(
+                message="Request changed after parallel-limit admission",
+                param="model",
+            )
         lease, rate_limit_state = await acquire_rate_limit_controls(
             limiter=limiter,
             auth=auth,
@@ -311,6 +373,7 @@ async def _acquire_rate_limits_for_values(
             tier_policy_missing_service_mode=tier_policy_missing_service_mode,
             tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
             tier_capacity_fair_share_active_ttl_seconds=tier_capacity_fair_share_active_ttl_seconds,
+            preacquired_parallel_lease=preacquired_lease,
         )
         request.state._rate_limit_state = rate_limit_state
     except RateLimitError as exc:
@@ -335,14 +398,16 @@ async def _acquire_rate_limits_for_values(
             window_reset_at = int((math.floor(now / min_window) + 1) * min_window)
             state_429 = _build_429_state(checks, exc, window_reset_at)
         request.state._rate_limit_state = state_429
+        await _release_rate_limits(request)
         raise
 
     request.state._rate_limit_checked = True
     request.state._rate_limit_admission_fingerprint = admission_fingerprint
     request.state._rate_limit_lease = lease
-    refresher = RateLimitLeaseRefresher(limiter=limiter, lease=lease)
-    if refresher.start():
-        request.state._rate_limit_lease_refresher = refresher
+    if getattr(request.state, "_rate_limit_lease_refresher", None) is None:
+        refresher = RateLimitLeaseRefresher(limiter=limiter, lease=lease)
+        if refresher.start():
+            request.state._rate_limit_lease_refresher = refresher
 
 
 def _rate_limit_admission_fingerprint(*, model: str | None, payload: Any) -> str:

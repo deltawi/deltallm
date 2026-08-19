@@ -28,6 +28,22 @@ DeltaLLM records:
 
 The audit log is meant for operational review, security investigations, and compliance workflows.
 
+For production, set `audit_ingestion_mode: outbox`. In the default `legacy` mode,
+required audit events and prompt-render records are persisted synchronously and
+fail closed when persistence is unavailable; only best-effort audit events use the
+bounded, non-durable compatibility queue. Durable required events retain a
+server-owned ID, use renewable fenced claims, and move to `blocked` instead of
+being deleted after retry exhaustion. Platform admins can replay an investigated
+blocked record through the telemetry-ingestion replay endpoint documented in the
+[rollout guide](../deployment/telemetry-ingestion-rollout.md). The replay mutation
+and its required operator audit commit in the same database transaction.
+Best-effort audit is explicitly non-authoritative: queue capacity or an audit
+dependency outage drops and counts that audit record without changing a request,
+MCP tool, notification, or callback result. Required audit remains fail-closed
+with a controlled service-unavailable response. MCP tool attempts are required
+audit events: if the audit service is unavailable, the gateway rejects the attempt
+before invoking the remote tool transport.
+
 ### Self-Service Key Audit Actions
 
 When team developers create or manage their own keys, DeltaLLM records distinct audit actions:
@@ -106,6 +122,8 @@ Audit payloads are handled differently depending on the event type:
 
 - control-plane payloads are redacted for sensitive values such as passwords, tokens, and secrets
 - data-plane payload content is stored only when the organization has `audit_content_storage_enabled = true`
+- disabling content storage and redacting active or blocked outbox envelopes commit in one PostgreSQL transaction; legacy and durable writers take the same organization policy lock, read policy in a fresh statement after acquiring it, and durable workers scrub claimed envelopes before completion
+- Redis invalidation removes stale policy-cache entries across replicas, but privacy correctness does not depend on Pub/Sub availability
 - when content storage is disabled, the event is still recorded but request and response bodies are omitted or marked redacted
 
 ## Retention

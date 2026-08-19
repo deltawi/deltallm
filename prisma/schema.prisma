@@ -1,6 +1,7 @@
 generator client {
-  provider  = "prisma-client-py"
-  interface = "asyncio"
+  provider                    = "prisma-client-py"
+  interface                   = "asyncio"
+  enable_experimental_decimal = true
 }
 
 datasource db {
@@ -24,6 +25,8 @@ model DeltaLLM_SpendLogEvents {
   api_base               String?
   spend                  Float
   provider_cost          Float?
+  spend_exact            Decimal? @db.Decimal(38, 18)
+  provider_cost_exact    Decimal? @db.Decimal(38, 18)
   billing_unit           String?
   pricing_tier           String?
   total_tokens           Int      @default(0)
@@ -68,6 +71,7 @@ model DeltaLLM_TeamModelSpendCounter {
   team_id     String
   model       String
   spend       Float    @default(0)
+  spend_exact Decimal? @db.Decimal(38, 18)
   updated_at  DateTime @updatedAt
 
   @@id([team_id, model])
@@ -87,6 +91,7 @@ model DeltaLLM_VerificationToken {
   max_budget            Float?
   soft_budget           Float?
   spend                 Float    @default(0)
+  spend_exact           Decimal? @db.Decimal(38, 18)
   budget_duration       String?
   budget_reset_at       DateTime?
   rpm_limit             Int?
@@ -121,6 +126,7 @@ model DeltaLLM_UserTable {
   max_budget      Float?
   soft_budget     Float?
   spend           Float    @default(0)
+  spend_exact     Decimal? @db.Decimal(38, 18)
   budget_duration String?
   budget_reset_at DateTime?
   models          String[]
@@ -149,6 +155,7 @@ model DeltaLLM_TeamTable {
   max_budget       Float?
   soft_budget      Float?
   spend            Float    @default(0)
+  spend_exact      Decimal? @db.Decimal(38, 18)
   budget_duration  String?
   budget_reset_at  DateTime?
   model_max_budget Json?
@@ -204,6 +211,7 @@ model DeltaLLM_OrganizationTable {
   organization_id   String   @unique
   organization_name String?
   audit_content_storage_enabled Boolean @default(false)
+  audit_content_policy_version BigInt @default(0)
   max_budget        Float?
   soft_budget       Float?
   rpm_limit         Int?
@@ -214,6 +222,7 @@ model DeltaLLM_OrganizationTable {
   model_rpm_limit   Json?
   model_tpm_limit   Json?
   spend             Float    @default(0)
+  spend_exact       Decimal? @db.Decimal(38, 18)
   budget_duration   String?
   budget_reset_at   DateTime?
   metadata          Json?
@@ -418,14 +427,35 @@ model DeltaLLM_EmailOutbox {
   created_at                DateTime @default(now())
   updated_at                DateTime @updatedAt
   sent_at                   DateTime?
+  delivery_locked_by             String?
+  delivery_claim_token           String?
+  delivery_lease_expires_at      DateTime?
+  delivery_started_at            DateTime?
+  delivery_blocked_at            DateTime?
+  delivery_audit_status           String   @default("not_required")
+  delivery_audit_event_id         String?
+  delivery_audit_attempt_count    Int      @default(0)
+  delivery_audit_max_attempts     Int      @default(10)
+  delivery_audit_next_attempt_at  DateTime?
+  delivery_audit_last_error       String?
+  delivery_audit_locked_by        String?
+  delivery_audit_claim_token      String?
+  delivery_audit_lease_expires_at DateTime?
+  delivery_audit_blocked_at       DateTime?
+  delivery_audit_replay_count     Int      @default(0)
+  delivery_audit_last_replayed_at DateTime?
+  delivery_audit_last_replayed_by String?
+  delivery_audited_at             DateTime?
 
   created_by DeltaLLM_PlatformAccount? @relation("created_email_messages", fields: [created_by_account_id], references: [account_id], onDelete: SetNull)
   invitation_messages DeltaLLM_PlatformInvitation[] @relation("invitation_message_email")
 
   @@index([status, next_attempt_at], map: "deltallm_emailoutbox_status_next_attempt_idx")
+  @@index([status, delivery_lease_expires_at], map: "deltallm_emailoutbox_delivery_lease_idx")
   @@index([created_at], map: "deltallm_emailoutbox_created_at_idx")
   @@index([created_by_account_id], map: "deltallm_emailoutbox_created_by_idx")
   @@index([provider, last_provider_message_id], map: "deltallm_emailoutbox_provider_message_idx")
+  @@index([delivery_audit_status, delivery_audit_next_attempt_at], map: "deltallm_emailoutbox_delivery_audit_due_idx")
   @@map("deltallm_emailoutbox")
 }
 
@@ -450,6 +480,32 @@ model DeltaLLM_CacheInvalidationOutbox {
   @@index([lease_expires_at], map: "deltallm_cacheinvalidationoutbox_lease_expires_idx")
   @@index([scope_type, scope_id], map: "deltallm_cacheinvalidationoutbox_scope_idx")
   @@map("deltallm_cacheinvalidationoutbox")
+}
+
+model DeltaLLM_SpendIngestionOutbox {
+  event_id        String    @id
+  event_type      String
+  payload_json    Json
+  status          String    @default("queued")
+  attempt_count   Int       @default(0)
+  max_attempts    Int       @default(10)
+  next_attempt_at DateTime  @default(now())
+  last_error      String?
+  locked_by       String?
+  claim_token     String?
+  lease_expires_at DateTime?
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  processed_at    DateTime?
+  blocked_at      DateTime?
+  replay_count    Int       @default(0)
+  last_replayed_at DateTime?
+  last_replayed_by String?
+
+  @@index([status, next_attempt_at], map: "deltallm_spendingestionoutbox_status_due_idx")
+  @@index([lease_expires_at], map: "deltallm_spendingestionoutbox_lease_idx")
+  @@index([created_at], map: "deltallm_spendingestionoutbox_created_idx")
+  @@map("deltallm_spend_ingestion_outbox")
 }
 
 model DeltaLLM_EmailWebhookEvent {
@@ -1043,6 +1099,7 @@ model DeltaLLM_PromptRenderLog {
   error_code           String?
   error_message        String?
   variables            Json?
+  variables_redacted   Boolean  @default(false)
   metadata             Json?
   created_at           DateTime @default(now())
 
@@ -1050,6 +1107,45 @@ model DeltaLLM_PromptRenderLog {
   @@index([prompt_key, label, created_at], map: "deltallm_promptrenderlog_prompt_lookup_idx")
   @@index([request_id], map: "deltallm_promptrenderlog_request_idx")
   @@map("deltallm_promptrenderlog")
+}
+
+model DeltaLLM_TelemetryIngestionCapacity {
+  queue_name    String   @id
+  pending_count BigInt   @default(0)
+  updated_at    DateTime @default(now())
+
+  @@map("deltallm_telemetry_ingestion_capacity")
+}
+
+model DeltaLLM_AuditIngestionOutbox {
+  event_id              String   @id
+  record_type           String
+  organization_id       String?
+  delivery_class        String   @default("best_effort")
+  payload_json          Json
+  redacted_payload_json Json
+  policy_version        BigInt   @default(0)
+  status                String   @default("queued")
+  attempt_count         Int      @default(0)
+  max_attempts          Int      @default(10)
+  next_attempt_at       DateTime @default(now())
+  last_error            String?
+  locked_by             String?
+  claim_token           String?
+  lease_expires_at      DateTime?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+  processed_at          DateTime?
+  blocked_at            DateTime?
+  replay_count          Int      @default(0)
+  last_replayed_at      DateTime?
+  last_replayed_by      String?
+
+  @@index([delivery_class, status, next_attempt_at, created_at], map: "deltallm_auditingestionoutbox_due_idx")
+  @@index([lease_expires_at], map: "deltallm_auditingestionoutbox_lease_idx")
+  @@index([organization_id, created_at], map: "deltallm_auditingestionoutbox_org_active_idx")
+  @@index([status, processed_at, updated_at], map: "deltallm_auditingestionoutbox_terminal_retention_idx")
+  @@map("deltallm_audit_ingestion_outbox")
 }
 
 model DeltaLLM_RouteGroupMember {

@@ -5,9 +5,28 @@ from types import SimpleNamespace
 import pytest
 
 from src.bootstrap.infrastructure import (
+    _startup_setting,
     init_infrastructure_runtime,
     shutdown_infrastructure_runtime,
 )
+from src.config import GeneralSettings, Settings
+
+
+def test_telemetry_startup_mode_uses_env_only_when_config_is_implicit() -> None:
+    settings = Settings.model_validate({"audit_ingestion_mode": "outbox"})
+
+    assert (
+        _startup_setting(GeneralSettings(), settings, "audit_ingestion_mode", "legacy") == "outbox"
+    )
+    assert (
+        _startup_setting(
+            GeneralSettings.model_validate({"audit_ingestion_mode": "legacy"}),
+            settings,
+            "audit_ingestion_mode",
+            "legacy",
+        )
+        == "legacy"
+    )
 
 
 @pytest.mark.asyncio

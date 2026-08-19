@@ -230,6 +230,23 @@ class _FakeTransport:
         )
 
 
+class _AuditSink:
+    def __init__(self, *, fail_required: bool = False, fail_best_effort: bool = False) -> None:
+        self.fail_required = fail_required
+        self.fail_best_effort = fail_best_effort
+        self.events: list[tuple[object, str]] = []
+
+    async def enqueue_event(self, event, *, payloads=None, delivery_class=None):  # noqa: ANN001, ANN201
+        del payloads
+        delivery = str(getattr(delivery_class, "value", delivery_class))
+        if delivery == "required" and self.fail_required:
+            raise ConnectionError("required audit unavailable")
+        if delivery == "best_effort" and self.fail_best_effort:
+            raise ConnectionError("outcome audit unavailable")
+        self.events.append((event, delivery))
+        return "persisted"
+
+
 class _FakeApprovalRepository:
     def __init__(self) -> None:
         self.records_by_fingerprint: dict[str, list[MCPApprovalRequestRecord]] = {}
@@ -389,6 +406,7 @@ async def test_mcp_gateway_initialize_and_tools_list(client, test_app):
 
 @pytest.mark.asyncio
 async def test_mcp_gateway_tools_call_routes_to_namespaced_upstream_tool(client, test_app):
+    test_app.state.audit_service = _AuditSink()
     key_record = next(iter(test_app.state._test_repo.records.values()))
     key_record.team_id = "team-ops"
     key_record.organization_id = "org-acme"
@@ -438,7 +456,146 @@ async def test_mcp_gateway_tools_call_routes_to_namespaced_upstream_tool(client,
 
 
 @pytest.mark.asyncio
+async def test_mcp_gateway_required_attempt_audit_fails_before_tool_execution(client, test_app):
+    key_record = next(iter(test_app.state._test_repo.records.values()))
+    key_record.team_id = "team-ops"
+    key_record.organization_id = "org-acme"
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[MCPToolSchema(name="search", input_schema={"type": "object"})],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[],
+    )
+    transport = _FakeTransport()
+    test_app.state.mcp_gateway_service = MCPGatewayService(registry, transport)  # type: ignore[arg-type]
+    test_app.state.audit_service = _AuditSink(fail_required=True)
+
+    response = await client.post(
+        "/mcp",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 30,
+            "method": "tools/call",
+            "params": {"name": "docs.search", "arguments": {"query": "hello"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == -32000
+    assert transport.calls == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_missing_required_audit_fails_before_tool_execution(client, test_app):
+    key_record = next(iter(test_app.state._test_repo.records.values()))
+    key_record.team_id = "team-ops"
+    key_record.organization_id = "org-acme"
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[MCPToolSchema(name="search", input_schema={"type": "object"})],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[],
+    )
+    transport = _FakeTransport()
+    test_app.state.mcp_gateway_service = MCPGatewayService(registry, transport)  # type: ignore[arg-type]
+    test_app.state.audit_service = None
+
+    response = await client.post(
+        "/mcp",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {"name": "docs.search", "arguments": {"query": "hello"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == -32000
+    assert transport.calls == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_success_survives_outcome_audit_failure(client, test_app):
+    key_record = next(iter(test_app.state._test_repo.records.values()))
+    key_record.team_id = "team-ops"
+    key_record.organization_id = "org-acme"
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[MCPToolSchema(name="search", input_schema={"type": "object"})],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[],
+    )
+    transport = _FakeTransport()
+    audit = _AuditSink(fail_best_effort=True)
+    test_app.state.mcp_gateway_service = MCPGatewayService(registry, transport)  # type: ignore[arg-type]
+    test_app.state.audit_service = audit
+
+    response = await client.post(
+        "/mcp",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {"name": "docs.search", "arguments": {"query": "hello"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert len(transport.calls) == 1
+    assert len(audit.events) == 1
+    attempt, delivery = audit.events[0]
+    assert delivery == "required"
+    assert getattr(attempt, "status") == "attempted"
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_rejects_non_object_tool_params_without_secondary_audit_error(
+    client, test_app
+) -> None:
+    test_app.state.audit_service = _AuditSink()
+    test_app.state.mcp_gateway_service = object()
+
+    response = await client.post(
+        "/mcp",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 32,
+            "method": "tools/call",
+            "params": ["not", "an", "object"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] == {
+        "code": -32602,
+        "message": "tools/call params must be an object",
+    }
+
+
+@pytest.mark.asyncio
 async def test_mcp_gateway_denies_policy_disabled_tool(client, test_app):
+    test_app.state.audit_service = _AuditSink()
     key_record = next(iter(test_app.state._test_repo.records.values()))
     key_record.team_id = "team-ops"
     key_record.organization_id = "org-acme"
@@ -1719,6 +1876,7 @@ async def test_mcp_gateway_manual_approval_expired_creates_new_request() -> None
 
 @pytest.mark.asyncio
 async def test_mcp_jsonrpc_manual_approval_returns_request_id(client, test_app):
+    test_app.state.audit_service = _AuditSink()
     key_record = next(iter(test_app.state._test_repo.records.values()))
     key_record.team_id = "team-ops"
     key_record.organization_id = "org-acme"

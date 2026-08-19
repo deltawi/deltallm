@@ -7,9 +7,15 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 
 from src.audit.actions import AuditAction
-from src.models.errors import ApprovalRequiredError, BudgetExceededError, PermissionDeniedError, ProxyError
+from src.models.errors import (
+    ApprovalRequiredError,
+    BudgetExceededError,
+    PermissionDeniedError,
+    ProxyError,
+)
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.utils import fire_and_forget
+from src.telemetry.event_identity import get_or_create_billing_event_id
 
 _REQUEST_LOG_EMITTED_ATTR = "_request_log_emitted"
 _REQUEST_FAILURE_CONTEXT_ATTR = "_request_failure_context"
@@ -30,14 +36,30 @@ class _GatewayRouteDefinition:
 
 
 _GATEWAY_ROUTE_DEFINITIONS: dict[str, _GatewayRouteDefinition] = {
-    "/v1/chat/completions": _GatewayRouteDefinition(call_type="completion", audit_action="CHAT_COMPLETION_REQUEST"),
-    "/v1/completions": _GatewayRouteDefinition(call_type="completion", audit_action="COMPLETION_REQUEST"),
-    "/v1/responses": _GatewayRouteDefinition(call_type="completion", audit_action="RESPONSES_REQUEST"),
-    "/v1/embeddings": _GatewayRouteDefinition(call_type="embedding", audit_action=AuditAction.EMBEDDING_REQUEST),
-    "/v1/images/generations": _GatewayRouteDefinition(call_type="image_generation", audit_action=AuditAction.IMAGE_GENERATION_REQUEST),
-    "/v1/audio/speech": _GatewayRouteDefinition(call_type="audio_speech", audit_action=AuditAction.AUDIO_SPEECH_REQUEST),
-    "/v1/audio/transcriptions": _GatewayRouteDefinition(call_type="audio_transcription", audit_action=AuditAction.AUDIO_TRANSCRIPTION_REQUEST),
-    "/v1/rerank": _GatewayRouteDefinition(call_type="rerank", audit_action=AuditAction.RERANK_REQUEST),
+    "/v1/chat/completions": _GatewayRouteDefinition(
+        call_type="completion", audit_action="CHAT_COMPLETION_REQUEST"
+    ),
+    "/v1/completions": _GatewayRouteDefinition(
+        call_type="completion", audit_action="COMPLETION_REQUEST"
+    ),
+    "/v1/responses": _GatewayRouteDefinition(
+        call_type="completion", audit_action="RESPONSES_REQUEST"
+    ),
+    "/v1/embeddings": _GatewayRouteDefinition(
+        call_type="embedding", audit_action=AuditAction.EMBEDDING_REQUEST
+    ),
+    "/v1/images/generations": _GatewayRouteDefinition(
+        call_type="image_generation", audit_action=AuditAction.IMAGE_GENERATION_REQUEST
+    ),
+    "/v1/audio/speech": _GatewayRouteDefinition(
+        call_type="audio_speech", audit_action=AuditAction.AUDIO_SPEECH_REQUEST
+    ),
+    "/v1/audio/transcriptions": _GatewayRouteDefinition(
+        call_type="audio_transcription", audit_action=AuditAction.AUDIO_TRANSCRIPTION_REQUEST
+    ),
+    "/v1/rerank": _GatewayRouteDefinition(
+        call_type="rerank", audit_action=AuditAction.RERANK_REQUEST
+    ),
 }
 
 
@@ -65,12 +87,16 @@ def mark_request_log_emitted(request: Request) -> None:
     setattr(request.state, _REQUEST_LOG_EMITTED_ATTR, True)
 
 
-def enqueue_request_log_write(request: Request, coro: Any) -> None:
+async def enqueue_request_log_write(request: Request, coro: Any) -> None:
     mark_request_log_emitted(request)
+    service = getattr(request.app.state, "spend_tracking_service", None)
+    if bool(getattr(service, "durable_ingestion_enabled", False)):
+        await coro
+        return
     fire_and_forget(coro)
 
 
-def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
+async def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
     if _request_log_already_emitted(request):
         return
     route = _route_definition(request)
@@ -85,9 +111,10 @@ def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
         "request_method": request.method,
         "failure_stage": "preflight",
     }
-    enqueue_request_log_write(
+    await enqueue_request_log_write(
         request,
         spend_tracking_service.log_request_failure(
+            event_id=get_or_create_billing_event_id(request),
             request_id=request.headers.get("x-request-id") or "",
             api_key=getattr(auth, "api_key", None) or "anonymous",
             user_id=getattr(auth, "user_id", None),
@@ -108,7 +135,7 @@ def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
         return
     if context is None or context.request_start is None:
         return
-    emit_audit_event(
+    await emit_audit_event(
         request=request,
         request_start=context.request_start,
         action=context.audit_action or route.audit_action or "GATEWAY_REQUEST",
@@ -124,7 +151,9 @@ def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
     )
 
 
-async def maybe_log_request_validation_failure(request: Request, exc: RequestValidationError) -> None:
+async def maybe_log_request_validation_failure(
+    request: Request, exc: RequestValidationError
+) -> None:
     if _request_log_already_emitted(request):
         return
     route = _route_definition(request)
@@ -150,9 +179,10 @@ async def maybe_log_request_validation_failure(request: Request, exc: RequestVal
         },
         "validation": _validation_metadata(errors),
     }
-    enqueue_request_log_write(
+    await enqueue_request_log_write(
         request,
         spend_tracking_service.log_request_failure(
+            event_id=get_or_create_billing_event_id(request),
             request_id=request.headers.get("x-request-id") or "",
             api_key=getattr(auth, "api_key", None) or "anonymous",
             user_id=getattr(auth, "user_id", None),

@@ -24,8 +24,8 @@ from src.metrics import (
 from src.providers.resolution import resolve_provider
 from src.router.health_policy import exception_status_code
 from src.telemetry.request_failures import enqueue_request_log_write
+from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.routers.routing_decision import attach_route_decision, resolve_failure_target
-from src.routers.utils import fire_and_forget
 
 
 def _append_route_decision_metadata(request: Request, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -44,7 +44,8 @@ def _resolve_failure_fields(
     fallback_params = getattr(fallback_deployment, "deltallm_params", {})
     fallback_model = fallback_params.get("model") if isinstance(fallback_params, dict) else None
     return {
-        "deployment_id": target.deployment_id or getattr(fallback_deployment, "deployment_id", None),
+        "deployment_id": target.deployment_id
+        or getattr(fallback_deployment, "deployment_id", None),
         "provider": target.provider or default_provider,
         "api_base": target.api_base or default_api_base,
         "deployment_model": target.deployment_model or default_deployment_model or fallback_model,
@@ -105,7 +106,6 @@ async def emit_stream_success(
     usage: dict[str, Any] | None = None,
     usage_metadata: dict[str, Any] | None = None,
 ) -> None:
-    await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
     api_provider = resolve_provider(params)
     usage_data, pricing, customer_billing, provider_billing = _resolve_completion_pricing_costs(
         request=request,
@@ -146,8 +146,10 @@ async def emit_stream_success(
         team=auth.team_id,
         spend=request_cost,
     )
-    fire_and_forget(
+    await enqueue_request_log_write(
+        request,
         request.app.state.spend_tracking_service.log_spend(
+            event_id=get_or_create_billing_event_id(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -179,7 +181,7 @@ async def emit_stream_success(
             cache_hit=cache_hit,
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),
-        )
+        ),
     )
     callback_payload = build_standard_logging_payload(
         call_type="completion",
@@ -196,7 +198,9 @@ async def emit_stream_success(
         cache_key=cache_key,
         response_cost=request_cost,
         api_provider=api_provider,
-        turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+        turn_off_message_logging=bool(
+            getattr(request.app.state, "turn_off_message_logging", False)
+        ),
     )
     callback_manager.dispatch_success_callbacks(callback_payload)
     await callback_manager.execute_post_call_success_hooks(
@@ -210,7 +214,7 @@ async def emit_stream_success(
         response_data={"object": stream_response_object},
         call_type="completion",
     )
-    emit_text_audit_event(
+    await emit_text_audit_event(
         request=request,
         auth=auth,
         action=audit_action,
@@ -261,9 +265,10 @@ async def emit_stream_failure(
         default_api_base=api_base,
         default_deployment_model=params.get("model"),
     )
-    enqueue_request_log_write(
+    await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_request_failure(
+            event_id=get_or_create_billing_event_id(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -290,9 +295,11 @@ async def emit_stream_failure(
             end_time=datetime.now(tz=UTC),
             http_status_code=exception_status_code(exc),
             exc=exc,
-        )
+        ),
     )
     if failure_fields["deployment_id"]:
+        # Streaming failures can happen after failover has returned the response
+        # iterator, so the failover manager cannot observe this terminal outcome.
         await request.app.state.passive_health_tracker.record_request_outcome(
             str(failure_fields["deployment_id"]),
             success=False,
@@ -317,7 +324,9 @@ async def emit_stream_failure(
             "error_type": getattr(exc, "error_type", None) or exc.__class__.__name__,
             "message": str(exc),
         },
-        turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+        turn_off_message_logging=bool(
+            getattr(request.app.state, "turn_off_message_logging", False)
+        ),
     )
     callback_manager.dispatch_failure_callbacks(callback_payload, exc)
     await callback_manager.execute_post_call_failure_hooks(
@@ -331,7 +340,7 @@ async def emit_stream_failure(
         original_exception=exc,
         call_type="completion",
     )
-    emit_text_audit_event(
+    await emit_text_audit_event(
         request=request,
         auth=auth,
         action=audit_action,
@@ -375,9 +384,12 @@ async def emit_nonstream_success(
     cache_key: str | None,
     audit_action: str,
 ) -> None:
-    await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
     api_provider = resolve_provider(served_deployment.deltallm_params)
-    api_base = str(served_deployment.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
+    api_base = str(
+        served_deployment.deltallm_params.get(
+            "api_base", request.app.state.settings.openai_base_url
+        )
+    ).rstrip("/")
     usage, pricing, customer_billing, provider_billing = _resolve_completion_pricing_costs(
         request=request,
         auth=auth,
@@ -417,8 +429,10 @@ async def emit_nonstream_success(
         team=auth.team_id,
         spend=request_cost,
     )
-    fire_and_forget(
+    await enqueue_request_log_write(
+        request,
         request.app.state.spend_tracking_service.log_spend(
+            event_id=get_or_create_billing_event_id(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -449,7 +463,7 @@ async def emit_nonstream_success(
             cache_hit=cache_hit,
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),
-        )
+        ),
     )
     observe_request_latency(
         model=payload.model,
@@ -457,7 +471,9 @@ async def emit_nonstream_success(
         status_code=200,
         latency_seconds=perf_counter() - request_start,
     )
-    observe_api_latency(model=payload.model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000)
+    observe_api_latency(
+        model=payload.model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000
+    )
     prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
     completion_tokens = int(usage.get("completion_tokens", 0) or 0)
     callback_payload = build_standard_logging_payload(
@@ -476,7 +492,9 @@ async def emit_nonstream_success(
         response_cost=request_cost,
         api_latency_ms=api_latency_ms,
         api_provider=api_provider,
-        turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+        turn_off_message_logging=bool(
+            getattr(request.app.state, "turn_off_message_logging", False)
+        ),
     )
     callback_manager.dispatch_success_callbacks(callback_payload)
     await callback_manager.execute_post_call_success_hooks(
@@ -490,7 +508,7 @@ async def emit_nonstream_success(
         response_data=response_payload,
         call_type="completion",
     )
-    emit_text_audit_event(
+    await emit_text_audit_event(
         request=request,
         auth=auth,
         action=audit_action,
@@ -543,9 +561,10 @@ async def emit_nonstream_failure(
         default_api_base=api_base,
         default_deployment_model=primary_deployment.deltallm_params.get("model"),
     )
-    enqueue_request_log_write(
+    await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_request_failure(
+            event_id=get_or_create_billing_event_id(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -572,19 +591,13 @@ async def emit_nonstream_failure(
             end_time=datetime.now(tz=UTC),
             http_status_code=status_code,
             exc=exc,
-        )
+        ),
     )
     await guardrail_middleware.run_post_call_failure(
         request_data=request_data,
         user_api_key_dict=auth.model_dump(mode="python"),
         original_exception=exc,
         call_type="completion",
-    )
-    await request.app.state.passive_health_tracker.record_request_outcome(
-        str(failure_fields["deployment_id"] or primary_deployment.deployment_id),
-        success=False,
-        error=str(exc),
-        exc=exc,
     )
     increment_request(
         model=payload.model,
@@ -620,7 +633,9 @@ async def emit_nonstream_failure(
         cache_key=cache_key,
         api_provider=str(failure_fields["provider"] or api_provider),
         error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
-        turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
+        turn_off_message_logging=bool(
+            getattr(request.app.state, "turn_off_message_logging", False)
+        ),
     )
     callback_manager.dispatch_failure_callbacks(callback_payload, exc)
     await callback_manager.execute_post_call_failure_hooks(
@@ -628,7 +643,7 @@ async def emit_nonstream_failure(
         original_exception=exc,
         user_api_key_dict=auth.model_dump(mode="json"),
     )
-    emit_text_audit_event(
+    await emit_text_audit_event(
         request=request,
         auth=auth,
         action=audit_action,

@@ -13,6 +13,7 @@ Use this section when you are moving from local evaluation to a repeatable envir
 | Batch webhook rollout | Optional terminal callbacks, split workers, alerts, rollout, and rollback | [Batch Webhook Rollout](batch-webhook-rollout.md) |
 | Upstream HTTP tuning | Production provider concurrency, streaming, and egress capacity planning | [Upstream HTTP Tuning](upstream-http.md) |
 | Scoped usage rollout | Safe activation of team and personal usage reporting | [Scoped Usage Reporting](usage-reporting-v2.md) |
+| Durable telemetry rollout | Bounded spend, audit, and prompt-render ingestion with isolated database capacity | [Durable Telemetry Ingestion](telemetry-ingestion-rollout.md) |
 
 ## Quick Path to Success
 
@@ -62,5 +63,6 @@ The application runs Prisma schema setup automatically during container startup.
 - [Kubernetes deployment guide](kubernetes.md)
 - [Upstream HTTP tuning](upstream-http.md)
 - [Scoped usage reporting rollout](usage-reporting-v2.md)
+- [Durable telemetry ingestion rollout](telemetry-ingestion-rollout.md)
 - [Batch webhook rollout](batch-webhook-rollout.md)
 - [Observability](../features/observability.md)

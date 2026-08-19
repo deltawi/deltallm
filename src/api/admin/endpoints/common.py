@@ -196,6 +196,18 @@ def db_or_503(request: Request) -> Any:
     return db
 
 
+def telemetry_db_or_503(request: Request) -> object:
+    """Resolve the dedicated telemetry client once at the HTTP boundary."""
+
+    db = getattr(getattr(request.app.state, "telemetry_prisma_manager", None), "client", None)
+    if db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Telemetry database unavailable",
+        )
+    return db
+
+
 async def get_runtime_user_row(db: Any, user_id: str) -> dict[str, Any]:
     rows = await db.query_raw(
         """

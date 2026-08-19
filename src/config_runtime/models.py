@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -171,31 +172,20 @@ class ModelHotReloadManager:
             app_config=app_config,
             settings=settings,
         )
-        app.state.model_registry = model_registry
-
         route_groups, _ = await load_route_groups(
             self.route_group_repository,
             app_config,
             route_group_cache=self.route_group_cache,
         )
+        callable_target_catalog = build_callable_target_catalog(model_registry, route_groups)
+        new_deployments = build_deployment_registry(model_registry, route_groups=route_groups)
+        app.state.model_registry = model_registry
         app.state.route_groups = route_groups
-        app.state.callable_target_catalog = build_callable_target_catalog(
-            app.state.model_registry,
-            route_groups,
-        )
-        new_deployments = build_deployment_registry(
-            app.state.model_registry, route_groups=route_groups
-        )
-        registries = [
-            getattr(app.state.router, "deployment_registry", None),
-            getattr(app.state.failover_manager, "registry", None),
-            getattr(app.state.router_health_handler, "registry", None),
-            getattr(app.state.background_health_checker, "registry", None),
-        ]
-        for registry in registries:
-            if isinstance(registry, dict):
-                registry.clear()
-                registry.update(new_deployments)
+        app.state.callable_target_catalog = callable_target_catalog
+        app.state.router.deployment_registry = dict(new_deployments)
+        app.state.failover_manager.registry = dict(new_deployments)
+        app.state.router_health_handler.registry = dict(new_deployments)
+        app.state.background_health_checker.registry = dict(new_deployments)
 
         router_settings = app_config.router_settings
         app.state.router.strategy = RoutingStrategy(router_settings.routing_strategy)
@@ -222,6 +212,94 @@ class ModelHotReloadManager:
             callback_settings=app_config.deltallm_settings.callback_settings,
         )
         app.state.turn_off_message_logging = app_config.deltallm_settings.turn_off_message_logging
+        general = app_config.general_settings
+        prompt_service = getattr(app.state, "prompt_registry_service", None)
+        if prompt_service is not None:
+            prompt_service.configure_cache(
+                l1_ttl_seconds=general.prompt_cache_l1_ttl_seconds,
+                l2_ttl_seconds=general.prompt_cache_l2_ttl_seconds,
+                negative_cache_enabled=general.prompt_negative_cache_enabled,
+                negative_l1_ttl_seconds=general.prompt_negative_l1_ttl_seconds,
+                negative_l2_ttl_seconds=general.prompt_negative_l2_ttl_seconds,
+                l1_max_entries=general.prompt_cache_l1_max_entries,
+            )
+        budget_service = getattr(app.state, "budget_service", None)
+        if budget_service is not None:
+            budget_service.query_mode = general.budget_enforcement_query_mode
+            budget_service.shadow_sample_rate = general.budget_enforcement_shadow_sample_rate
+            budget_service.query_timeout_seconds = general.budget_enforcement_query_timeout_seconds
+        spend_service = getattr(app.state, "spend_tracking_service", None)
+        if spend_service is not None and callable(getattr(spend_service, "reconfigure", None)):
+            await spend_service.reconfigure(
+                replace(
+                    spend_service.config,
+                    # Ingestion mode owns a dedicated startup-time database pool.
+                    # A rolling restart is required to switch modes safely.
+                    enabled=spend_service.config.enabled,
+                    batch_size=general.spend_ingestion_batch_size,
+                    flush_interval_seconds=general.spend_ingestion_flush_interval_ms / 1000.0,
+                    lease_seconds=general.spend_ingestion_lease_seconds,
+                    max_attempts=general.spend_ingestion_max_attempts,
+                    worker_enabled=general.spend_ingestion_worker_enabled,
+                    max_pending_events=general.spend_ingestion_max_pending_events,
+                    overload_policy=general.spend_ingestion_overload_policy,
+                    fallback_max_concurrency=general.spend_ingestion_fallback_max_concurrency,
+                    fallback_max_waiters=general.spend_ingestion_fallback_max_waiters,
+                    fallback_queue_timeout_seconds=(
+                        general.spend_ingestion_fallback_queue_timeout_ms / 1000.0
+                    ),
+                    fallback_execution_timeout_seconds=(
+                        general.spend_ingestion_fallback_execution_timeout_seconds
+                    ),
+                    completed_retention_hours=general.spend_ingestion_completed_retention_hours,
+                    failed_retention_days=general.spend_ingestion_failed_retention_days,
+                    cleanup_interval_seconds=general.spend_ingestion_cleanup_interval_seconds,
+                    cleanup_batch_size=general.spend_ingestion_cleanup_batch_size,
+                    cleanup_max_batches_per_run=(
+                        general.spend_ingestion_cleanup_max_batches_per_run
+                    ),
+                    cleanup_time_budget_seconds=(
+                        general.spend_ingestion_cleanup_time_budget_seconds
+                    ),
+                    worker_startup_timeout_seconds=(
+                        general.telemetry_worker_startup_timeout_seconds
+                    ),
+                    shutdown_drain_timeout_seconds=general.telemetry_shutdown_drain_timeout_seconds,
+                )
+            )
+        audit_service = getattr(app.state, "audit_service", None)
+        if audit_service is not None and callable(getattr(audit_service, "reconfigure", None)):
+            await audit_service.reconfigure(
+                replace(
+                    audit_service.ingestion_config,
+                    # Ingestion mode owns a dedicated startup-time database pool.
+                    # A rolling restart is required to switch modes safely.
+                    enabled=audit_service.ingestion_config.enabled,
+                    worker_enabled=general.audit_ingestion_worker_enabled,
+                    batch_size=general.audit_ingestion_batch_size,
+                    flush_interval_seconds=general.audit_ingestion_flush_interval_ms / 1000.0,
+                    lease_seconds=general.audit_ingestion_lease_seconds,
+                    max_attempts=general.audit_ingestion_max_attempts,
+                    max_pending_events=general.audit_ingestion_max_pending_events,
+                    required_reserve=general.audit_ingestion_required_reserve,
+                    completed_retention_hours=(general.audit_ingestion_completed_retention_hours),
+                    failed_retention_days=general.audit_ingestion_failed_retention_days,
+                    cleanup_interval_seconds=(general.audit_ingestion_cleanup_interval_seconds),
+                    cleanup_batch_size=general.audit_ingestion_cleanup_batch_size,
+                    cleanup_max_batches_per_run=(
+                        general.audit_ingestion_cleanup_max_batches_per_run
+                    ),
+                    cleanup_time_budget_seconds=(
+                        general.audit_ingestion_cleanup_time_budget_seconds
+                    ),
+                    worker_startup_timeout_seconds=(
+                        general.telemetry_worker_startup_timeout_seconds
+                    ),
+                    shutdown_drain_timeout_seconds=(
+                        general.telemetry_shutdown_drain_timeout_seconds
+                    ),
+                )
+            )
         configure_cache_runtime(
             app,
             app_config=app_config,
@@ -229,6 +307,7 @@ class ModelHotReloadManager:
             salt_key=salt_key,
         )
         await reload_callable_target_grants_for_app(app, notify=False)
+        app.state.app_config = app_config
 
     async def _reload_runtime(self) -> None:
         app_config = self.dynamic_config.get_app_config()

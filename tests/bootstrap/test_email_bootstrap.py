@@ -60,7 +60,9 @@ async def test_init_email_runtime_marks_invalid_config_degraded() -> None:
     runtime = await init_email_runtime(app, _config(email_from_address=None))
 
     assert runtime.statuses == (
-        BootstrapStatus("email", "degraded", "email_from_address is required when email is enabled"),
+        BootstrapStatus(
+            "email", "degraded", "email_from_address is required when email is enabled"
+        ),
         BootstrapStatus("email_worker", "disabled"),
     )
     await app.state.http_client.aclose()
@@ -96,45 +98,25 @@ async def test_init_email_runtime_requires_absolute_email_base_url() -> None:
 
 
 @pytest.mark.asyncio
-async def test_init_email_runtime_starts_worker_and_shutdown_cancels_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    created_tasks: list[object] = []
+async def test_init_email_runtime_starts_worker_and_shutdown_cancels_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = {"value": False}
     stopped = {"value": False}
 
     class FakeWorker:
         def __init__(self, **kwargs) -> None:  # noqa: ANN003
             self.kwargs = kwargs
 
-        async def run(self) -> None:
-            return None
+        task = None
 
-        def stop(self) -> None:
+        async def start(self) -> None:
+            started["value"] = True
+
+        async def shutdown(self) -> None:
             stopped["value"] = True
 
-    class FakeTask:
-        def __init__(self) -> None:
-            self.cancelled = False
-
-        def cancel(self) -> None:
-            self.cancelled = True
-
-        def __await__(self):
-            async def _inner():
-                raise asyncio.CancelledError
-
-            return _inner().__await__()
-
-    import asyncio
-
-    fake_task = FakeTask()
-
     monkeypatch.setattr("src.bootstrap.email.EmailOutboxWorker", FakeWorker)
-
-    def _create_task(coro):  # noqa: ANN001, ANN202
-        created_tasks.append(coro)
-        coro.close()
-        return fake_task
-
-    monkeypatch.setattr("src.bootstrap.email.create_task", _create_task)
 
     app = SimpleNamespace(state=_app_state())
     runtime = await init_email_runtime(app, _config())
@@ -143,7 +125,7 @@ async def test_init_email_runtime_starts_worker_and_shutdown_cancels_task(monkey
         BootstrapStatus("email", "ready"),
         BootstrapStatus("email_worker", "ready"),
     )
-    assert created_tasks
+    assert started["value"] is True
     assert runtime.worker is not None
     assert runtime.worker.kwargs["config"].max_concurrency == 3
     assert runtime.worker.kwargs["feedback_repository"] is app.state.email_feedback_repository
@@ -151,5 +133,4 @@ async def test_init_email_runtime_starts_worker_and_shutdown_cancels_task(monkey
     await shutdown_email_runtime(runtime)
 
     assert stopped["value"] is True
-    assert fake_task.cancelled is True
     await app.state.http_client.aclose()

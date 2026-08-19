@@ -176,7 +176,13 @@ class MultiEntityBudgetDB:
 
 
 class ResettingOrgBudgetDB:
-    def __init__(self, *, update_count: int = 1, conflict_row: dict | None = None, metadata: dict | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        update_count: int = 1,
+        conflict_row: dict | None = None,
+        metadata: dict | None = None,
+    ) -> None:
         self.query_calls: list[tuple[str, tuple]] = []
         self.execute_calls: list[tuple[str, tuple]] = []
         self.update_count = update_count
@@ -227,6 +233,21 @@ class RecordingAlertService:
         self.calls.append(kwargs)
 
 
+class CombinedBudgetDB:
+    def __init__(self, rows: list[dict] | None = None) -> None:
+        self.rows = rows or []
+        self.query_calls: list[tuple[str, tuple]] = []
+        self.execute_calls: list[tuple[str, tuple]] = []
+
+    async def query_raw(self, query: str, *args):  # noqa: ANN201
+        self.query_calls.append((query, args))
+        return [dict(row) for row in self.rows]
+
+    async def execute_raw(self, query: str, *args):  # noqa: ANN201
+        self.execute_calls.append((query, args))
+        return 1
+
+
 class SpendQueryDB:
     async def query_raw(self, query: str, *args):
         normalized = " ".join(query.lower().split())
@@ -242,7 +263,10 @@ class SpendQueryDB:
             ]
         if "count(*) as total" in normalized:
             return [{"total": 1}]
-        if "from deltallm_spendlog_events" in normalized and "order by start_time desc" in normalized:
+        if (
+            "from deltallm_spendlog_events" in normalized
+            and "order by start_time desc" in normalized
+        ):
             return [
                 {
                     "id": "log_1",
@@ -298,7 +322,9 @@ async def test_spend_tracking_writes_log_and_ledger_updates():
     assert any("update deltallm_usertable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_teamtable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_organizationtable" in q.lower() for q, _ in db.calls)
-    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    event_call = next(
+        args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower()
+    )
     assert event_call[41] == "acct-owner"
 
 
@@ -328,7 +354,9 @@ async def test_spend_tracking_writes_normalized_event_and_team_model_counter():
         },
     )
 
-    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    event_call = next(
+        args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower()
+    )
     assert event_call[6] == "org_1"
     assert event_call[10] == "openai"
     assert event_call[14] == "character"
@@ -339,7 +367,9 @@ async def test_spend_tracking_writes_normalized_event_and_team_model_counter():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exhausted_entity", ["key", "user", "team", "org"])
 async def test_sandbox_runtime_budget_enforcement_checks_all_scopes(exhausted_entity: str):
-    service = BudgetEnforcementService(db_client=MultiEntityBudgetDB(exhausted_entity=exhausted_entity))
+    service = BudgetEnforcementService(
+        db_client=MultiEntityBudgetDB(exhausted_entity=exhausted_entity)
+    )
 
     with pytest.raises(BudgetExceeded) as exc_info:
         await service.check_budgets(
@@ -442,7 +472,9 @@ async def test_spend_tracking_counts_audio_tokens_in_total_tokens_when_explicit_
         },
     )
 
-    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    event_call = next(
+        args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower()
+    )
     assert event_call[16] == 22
     assert event_call[21] == 3
     assert event_call[22] == 5
@@ -474,7 +506,9 @@ async def test_spend_tracking_persists_cached_token_counts():
         cache_hit=True,
     )
 
-    insert_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    insert_call = next(
+        args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower()
+    )
     assert insert_call[19] == 6
     assert insert_call[20] == 0
 
@@ -555,7 +589,9 @@ async def test_spend_tracking_preserves_explicit_provider_for_cache_rows():
         cache_hit=True,
     )
 
-    insert_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    insert_call = next(
+        args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower()
+    )
     assert insert_call[10] == "groq"
 
 
@@ -578,7 +614,9 @@ async def test_request_failure_logging_writes_error_event_without_ledger_updates
         exc=RuntimeError("upstream unavailable"),
     )
 
-    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    event_call = next(
+        args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower()
+    )
     assert event_call[12] == 0.0
     assert event_call[16] == 0
     assert event_call[38] == "error"
@@ -618,7 +656,10 @@ async def test_budget_enforcement_prefers_team_model_counter_when_available():
             model="gpt-4o-mini",
         )
 
-    assert any("from deltallm_teammodelspend" in query.lower() for query, _ in db.calls)
+    counter_query = next(
+        query for query, _ in db.calls if "from deltallm_teammodelspend" in query.lower()
+    )
+    assert "coalesce(spend_exact, spend::numeric)" in " ".join(counter_query.lower().split())
     assert not any("from deltallm_spendlog_events" in query.lower() for query, _ in db.calls)
 
 
@@ -636,7 +677,10 @@ async def test_budget_enforcement_falls_back_to_spend_events_when_counter_missin
             model="gpt-4o-mini",
         )
 
-    assert any("from deltallm_spendlog_events" in query.lower() for query, _ in db.calls)
+    fallback_query = next(
+        query for query, _ in db.calls if "from deltallm_spendlog_events" in query.lower()
+    )
+    assert "sum(coalesce(spend_exact, spend::numeric))" in " ".join(fallback_query.lower().split())
 
 
 @pytest.mark.asyncio
@@ -660,6 +704,116 @@ async def test_budget_enforcement_sends_org_soft_budget_alerts() -> None:
             "hard_budget": 40.0,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_combined_budget_enforcement_uses_one_normal_path_query() -> None:
+    db = CombinedBudgetDB(
+        [
+            {
+                "evaluation_order": 1,
+                "entity_type": "key",
+                "entity_id": "key-1",
+                "max_budget": 10.0,
+                "soft_budget": None,
+                "spend": 1.0,
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": {},
+            },
+            {
+                "evaluation_order": 2,
+                "entity_type": "user",
+                "entity_id": "user-1",
+                "max_budget": 10.0,
+                "soft_budget": None,
+                "spend": 1.0,
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": {},
+            },
+            {
+                "evaluation_order": 3,
+                "entity_type": "team",
+                "entity_id": "team-1",
+                "max_budget": 10.0,
+                "soft_budget": None,
+                "spend": 1.0,
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": {},
+            },
+            {
+                "evaluation_order": 4,
+                "entity_type": "org",
+                "entity_id": "org-1",
+                "max_budget": 10.0,
+                "soft_budget": 8.0,
+                "spend": 1.0,
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": {},
+            },
+            {
+                "evaluation_order": 5,
+                "entity_type": "team_model",
+                "entity_id": "team-1/model-1",
+                "max_budget": 10.0,
+                "soft_budget": None,
+                "spend": 1.0,
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": None,
+            },
+        ]
+    )
+    service = BudgetEnforcementService(db_client=db, query_mode="combined")
+
+    await service.check_budgets(
+        api_key="key-1",
+        user_id="user-1",
+        team_id="team-1",
+        organization_id="org-1",
+        model="model-1",
+    )
+
+    assert len(db.query_calls) == 1
+    query, parameters = db.query_calls[0]
+    assert "WITH requested AS" in query
+    assert parameters == ("key-1", "user-1", "team-1", "org-1", "model-1")
+    assert db.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_combined_budget_enforcement_preserves_first_hard_error_order() -> None:
+    db = CombinedBudgetDB(
+        [
+            {
+                "entity_type": "key",
+                "entity_id": "key-1",
+                "max_budget": 10.0,
+                "spend": 11.0,
+            },
+            {
+                "entity_type": "organization",
+                "entity_id": "org-1",
+                "max_budget": 10.0,
+                "spend": 12.0,
+            },
+        ]
+    )
+    service = BudgetEnforcementService(db_client=db, query_mode="combined")
+
+    with pytest.raises(BudgetExceeded) as exc_info:
+        await service.check_budgets(
+            api_key="key-1",
+            user_id=None,
+            team_id=None,
+            organization_id="org-1",
+        )
+
+    assert exc_info.value.entity_type == "key"
+    assert len(db.query_calls) == 1
 
 
 def test_next_reset_after_preserves_hour_and_day_durations() -> None:
@@ -774,24 +928,33 @@ def test_next_reset_after_advances_old_monthly_windows_without_iterating_windows
 
 
 def test_next_reset_after_rejects_unsupported_duration() -> None:
-    assert _next_reset_after(
-        duration="monthly",
-        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
-        now=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
-    ) is None
-    assert _next_reset_after(
-        duration="10001d",
-        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
-        now=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
-    ) is None
+    assert (
+        _next_reset_after(
+            duration="monthly",
+            previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+            now=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+        )
+        is None
+    )
+    assert (
+        _next_reset_after(
+            duration="10001d",
+            previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+            now=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+        )
+        is None
+    )
 
 
 def test_next_reset_after_returns_none_when_duration_overflows_datetime() -> None:
-    assert _next_reset_after(
-        duration="10000mo",
-        previous_reset_at=datetime(9990, 1, 1, 0, 0, tzinfo=UTC),
-        now=datetime(9990, 1, 2, 0, 0, tzinfo=UTC),
-    ) is None
+    assert (
+        _next_reset_after(
+            duration="10000mo",
+            previous_reset_at=datetime(9990, 1, 1, 0, 0, tzinfo=UTC),
+            now=datetime(9990, 1, 2, 0, 0, tzinfo=UTC),
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -809,12 +972,39 @@ async def test_budget_enforcement_resets_due_budget_before_hard_budget_check() -
     assert db.organization["spend"] == 0.0
     assert db.organization["budget_reset_at"].tzinfo is None
     assert db.organization["budget_reset_at"].replace(tzinfo=UTC) > datetime.now(tz=UTC)
-    assert not any("update deltallm_organizationtable" in query.lower() for query, _ in db.query_calls)
-    assert any("update deltallm_organizationtable" in query.lower() for query, _ in db.execute_calls)
+    assert not any(
+        "update deltallm_organizationtable" in query.lower() for query, _ in db.query_calls
+    )
+    assert any(
+        "update deltallm_organizationtable" in query.lower() for query, _ in db.execute_calls
+    )
     reset_query, reset_args = db.execute_calls[0]
-    assert "budget_reset_at is not distinct from $3::timestamp" in " ".join(reset_query.lower().split())
+    assert "budget_reset_at is not distinct from $3::timestamp" in " ".join(
+        reset_query.lower().split()
+    )
     assert reset_args[2] == datetime(2026, 1, 1)
     assert reset_args[3] is None
+
+
+@pytest.mark.asyncio
+async def test_shadow_budget_comparison_reads_snapshot_after_due_reset(caplog) -> None:
+    db = ResettingOrgBudgetDB()
+    service = BudgetEnforcementService(
+        db_client=db,
+        query_mode="shadow",
+        shadow_sample_rate=1.0,
+    )
+
+    await service.check_budgets(
+        api_key=None,
+        user_id=None,
+        team_id=None,
+        organization_id="org_1",
+    )
+
+    assert db.organization["spend"] == 0.0
+    assert len(db.query_calls) == 2
+    assert "budget query shadow mismatch" not in caplog.text
 
 
 @pytest.mark.asyncio

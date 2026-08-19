@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from src.api.admin.endpoints.common import AuthScope
+from src.audit.actions import AuditAction
 from src.db.email_feedback import EmailSuppressionRecord
 from src.services.email_feedback_service import EmailFeedbackError, EmailFeedbackOutcome
 
@@ -27,6 +29,9 @@ class _FakeEmailOutboxService:
 
 
 class _FakeEmailRepository:
+    async def count_delivery_audits_by_status(self) -> dict[str, int]:
+        return {"blocked": 1}
+
     async def summarize_status_counts(self):  # noqa: ANN201
         return [
             type("Count", (), {"status": "queued", "count": 2})(),
@@ -55,6 +60,10 @@ class _FakeEmailRepository:
                     "created_at": now,
                     "updated_at": now,
                     "sent_at": now,
+                    "delivery_audit_status": "persisted",
+                    "delivery_audit_attempt_count": 1,
+                    "delivery_audit_max_attempts": 10,
+                    "delivery_audit_last_error": None,
                     "text_body": "secret",
                     "html_body": "<p>secret</p>",
                 },
@@ -121,7 +130,9 @@ async def test_send_test_email_rejects_invalid_recipient(client, test_app) -> No
 
 
 @pytest.mark.asyncio
-async def test_send_test_email_uses_master_key_and_returns_provider_result(client, test_app) -> None:
+async def test_send_test_email_uses_master_key_and_returns_provider_result(
+    client, test_app
+) -> None:
     setattr(test_app.state.settings, "master_key", "mk-test")
     setattr(test_app.state.app_config.general_settings, "master_key", "mk-test")
     service = _FakeEmailOutboxService()
@@ -180,6 +191,7 @@ async def test_get_email_outbox_summary_returns_safe_fields(client, test_app) ->
     assert response.json() == {
         "status_counts": {"queued": 2, "sent": 5},
         "pending_count": 2,
+        "delivery_audit_counts": {"blocked": 1},
         "recent": [
             {
                 "email_id": "email-123",
@@ -194,9 +206,101 @@ async def test_get_email_outbox_summary_returns_safe_fields(client, test_app) ->
                 "created_at": response.json()["recent"][0]["created_at"],
                 "updated_at": response.json()["recent"][0]["updated_at"],
                 "sent_at": response.json()["recent"][0]["sent_at"],
+                "delivery_audit_status": "persisted",
+                "delivery_audit_attempt_count": 1,
+                "delivery_audit_max_attempts": 10,
+                "delivery_audit_last_error": None,
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_can_replay_blocked_email_delivery_audit(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test_app.state.settings.master_key = "mk-test"
+    database = object()
+    test_app.state.prisma_manager = type("Manager", (), {"client": database})()
+    calls: list[dict[str, object]] = []
+    audits: list[dict[str, object]] = []
+
+    class FakeReplayService:
+        def __init__(self, db: object, *, audit_service: object | None) -> None:
+            assert db is database
+            del audit_service
+
+        async def replay_blocked(self, **kwargs: object) -> bool:
+            calls.append(kwargs)
+            await kwargs["audit_writer"](object())  # type: ignore[operator]
+            return True
+
+    async def capture_audit(**kwargs: object) -> None:
+        audits.append(kwargs)
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.email.get_auth_scope",
+        lambda *args, **kwargs: AuthScope(account_id="account-1"),  # noqa: ARG005
+    )
+    monkeypatch.setattr("src.api.admin.endpoints.email.TelemetryReplayService", FakeReplayService)
+    monkeypatch.setattr("src.api.admin.endpoints.email.emit_admin_mutation_audit", capture_audit)
+
+    response = await client.post(
+        "/ui/api/email/outbox/email-1/delivery-audit/replay",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["queue_name"] == "email_delivery_audit"
+    assert calls[0]["event_id"] == "email-1"
+    assert audits[0]["action"] == AuditAction.ADMIN_TELEMETRY_INGESTION_REPLAY
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_can_resolve_unknown_email_delivery(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test_app.state.settings.master_key = "mk-test"
+    database = object()
+    test_app.state.prisma_manager = type("Manager", (), {"client": database})()
+    calls: list[dict[str, object]] = []
+    audits: list[dict[str, object]] = []
+
+    class FakeReplayService:
+        def __init__(self, db: object, *, audit_service: object | None) -> None:
+            assert db is database
+            del audit_service
+
+        async def resolve_unknown_email_delivery(self, **kwargs: object) -> bool:
+            calls.append(kwargs)
+            await kwargs["audit_writer"](object())  # type: ignore[operator]
+            return True
+
+    async def capture_audit(**kwargs: object) -> None:
+        audits.append(kwargs)
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.email.get_auth_scope",
+        lambda *args, **kwargs: AuthScope(account_id="account-1"),  # noqa: ARG005
+    )
+    monkeypatch.setattr("src.api.admin.endpoints.email.TelemetryReplayService", FakeReplayService)
+    monkeypatch.setattr("src.api.admin.endpoints.email.emit_admin_mutation_audit", capture_audit)
+
+    response = await client.post(
+        "/ui/api/email/outbox/email-1/resolve-delivery",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"resolution": "sent"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resolved": True,
+        "email_id": "email-1",
+        "resolution": "sent",
+    }
+    assert calls[0]["email_id"] == "email-1"
+    assert calls[0]["resolution"] == "sent"
+    assert audits[0]["action"] == AuditAction.ADMIN_EMAIL_DELIVERY_RESOLVE
 
 
 @pytest.mark.asyncio
@@ -251,7 +355,9 @@ async def test_list_and_delete_email_suppressions(client, test_app) -> None:
     repository = _FakeEmailFeedbackRepository()
     test_app.state.email_feedback_repository = repository
 
-    listed = await client.get("/ui/api/email/suppressions", headers={"Authorization": "Bearer mk-test"})
+    listed = await client.get(
+        "/ui/api/email/suppressions", headers={"Authorization": "Bearer mk-test"}
+    )
     deleted = await client.delete(
         "/ui/api/email/suppressions/user%40example.com",
         headers={"Authorization": "Bearer mk-test"},
