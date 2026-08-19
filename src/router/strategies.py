@@ -3,10 +3,12 @@ from __future__ import annotations
 import math
 import random
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from src.billing.cost import compute_billing_result
+from src.router.candidates import UsageCounterName
 
 
 @dataclass
@@ -38,11 +40,35 @@ class StateBackendLike(Protocol):
     async def get_usage_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, int]]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class StrategyStateQuery:
+    active_requests: bool = False
+    usage: bool = False
+    latency_window_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyStateSnapshot:
+    active_requests: Mapping[str, int] | None = None
+    usage: Mapping[str, dict[str, int]] | None = None
+    latency_windows: Mapping[int, Mapping[str, list[tuple[int, float]]]] | None = None
+
+
 class RoutingStrategyImpl(Protocol):
+    def state_query(self) -> StrategyStateQuery: ...
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]: ...
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None: ...
 
 
@@ -71,31 +97,94 @@ def weighted_random_choice(deployments: list[DeploymentLike]) -> DeploymentLike 
     return deployments[-1]
 
 
+def random_order(deployments: list[DeploymentLike]) -> list[DeploymentLike]:
+    remaining = list(deployments)
+    ordered: list[DeploymentLike] = []
+    while remaining:
+        selected = random_choice(remaining)
+        if selected is None:
+            break
+        ordered.append(selected)
+        remaining.remove(selected)
+    return ordered
+
+
+def weighted_random_order(deployments: list[DeploymentLike]) -> list[DeploymentLike]:
+    remaining = list(deployments)
+    ordered: list[DeploymentLike] = []
+    while remaining:
+        selected = weighted_random_choice(remaining)
+        if selected is None:
+            break
+        ordered.append(selected)
+        remaining.remove(selected)
+    return ordered
+
+
 class SimpleShuffleStrategy:
+    def state_query(self) -> StrategyStateQuery:
+        return StrategyStateQuery()
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        del context, state_snapshot
+        return random_order(deployments)
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        return random_choice(deployments)
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
 
 class LeastBusyStrategy:
     def __init__(self, state_backend: StateBackendLike):
         self.state = state_backend
 
+    def state_query(self) -> StrategyStateQuery:
+        return StrategyStateQuery(active_requests=True)
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        del context
+        if not deployments:
+            return []
+
+        if state_snapshot is not None and state_snapshot.active_requests is not None:
+            counts = state_snapshot.active_requests
+        else:
+            counts = await self.state.get_active_requests_batch(
+                [deployment.deployment_id for deployment in deployments]
+            )
+
+        by_count: dict[int, list[DeploymentLike]] = {}
+        for deployment in deployments:
+            by_count.setdefault(int(counts.get(deployment.deployment_id, 0)), []).append(deployment)
+
+        ordered: list[DeploymentLike] = []
+        for count in sorted(by_count):
+            ordered.extend(weighted_random_order(by_count[count]))
+        return ordered
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        if not deployments:
-            return None
-
-        counts = await self.state.get_active_requests_batch([d.deployment_id for d in deployments])
-        min_count = min(counts.get(d.deployment_id, 0) for d in deployments)
-        candidates = [d for d in deployments if counts.get(d.deployment_id, 0) == min_count]
-        return weighted_random_choice(candidates)
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
 
 class LatencyBasedStrategy:
@@ -103,35 +192,59 @@ class LatencyBasedStrategy:
         self.state = state_backend
         self.window_size_ms = window_size_ms
 
+    def state_query(self) -> StrategyStateQuery:
+        return StrategyStateQuery(latency_window_ms=self.window_size_ms)
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        del context
+        if not deployments:
+            return []
+
+        cached_windows = None
+        if state_snapshot is not None and state_snapshot.latency_windows is not None:
+            cached_windows = state_snapshot.latency_windows.get(self.window_size_ms)
+        windows = (
+            cached_windows
+            if cached_windows is not None
+            else await self.state.get_latency_windows_batch(
+                [deployment.deployment_id for deployment in deployments],
+                window_ms=self.window_size_ms,
+            )
+        )
+
+        by_latency: dict[float, list[DeploymentLike]] = {}
+        unsampled: list[DeploymentLike] = []
+        for deployment in deployments:
+            average = self._weighted_avg(windows.get(deployment.deployment_id, []))
+            if math.isfinite(average):
+                by_latency.setdefault(average, []).append(deployment)
+            else:
+                unsampled.append(deployment)
+
+        if not by_latency:
+            return weighted_random_order(deployments)
+
+        ordered: list[DeploymentLike] = []
+        latencies = sorted(by_latency)
+        first_pool = [*by_latency[latencies[0]], *unsampled]
+        ordered.extend(weighted_random_order(first_pool))
+        for latency in latencies[1:]:
+            ordered.extend(weighted_random_order(by_latency[latency]))
+        return ordered
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        if not deployments:
-            return None
-
-        windows = await self.state.get_latency_windows_batch(
-            [d.deployment_id for d in deployments],
-            window_ms=self.window_size_ms,
-        )
-        scored: list[tuple[DeploymentLike, float]] = []
-        unsampled: list[DeploymentLike] = []
-        for deployment in deployments:
-            avg = self._weighted_avg(windows.get(deployment.deployment_id, []))
-            if math.isfinite(avg):
-                scored.append((deployment, avg))
-            else:
-                unsampled.append(deployment)
-
-        if not scored:
-            return weighted_random_choice(deployments)
-
-        best_latency = min(score for _, score in scored)
-        candidates = [deployment for deployment, score in scored if score == best_latency]
-        if unsampled:
-            candidates.extend(unsampled)
-        return weighted_random_choice(candidates)
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
     def _weighted_avg(self, window: list[tuple[int, float]]) -> float:
         if not window:
@@ -150,22 +263,29 @@ class LatencyBasedStrategy:
 
 
 class CostBasedStrategy:
+    def state_query(self) -> StrategyStateQuery:
+        return StrategyStateQuery()
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        del context, state_snapshot
+        costs = [(deployment, self._estimated_unit_cost(deployment)) for deployment in deployments]
+        if not any(math.isfinite(cost) for _, cost in costs):
+            return weighted_random_order(deployments)
+        return [deployment for deployment, _ in sorted(costs, key=lambda item: item[1])]
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        if not deployments:
-            return None
-
-        best_deployment: DeploymentLike | None = None
-        best_cost = float("inf")
-        for deployment in deployments:
-            estimated_cost = self._estimated_unit_cost(deployment)
-            if estimated_cost < best_cost:
-                best_cost = estimated_cost
-                best_deployment = deployment
-        return best_deployment or weighted_random_choice(deployments)
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
     @staticmethod
     def _estimated_unit_cost(deployment: DeploymentLike) -> float:
@@ -213,73 +333,128 @@ class UsageBasedStrategy:
     def __init__(self, state_backend: StateBackendLike):
         self.state = state_backend
 
+    def state_query(self) -> StrategyStateQuery:
+        return StrategyStateQuery(usage=True)
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        del context
+        if not deployments:
+            return []
+
+        if state_snapshot is not None and state_snapshot.usage is not None:
+            usage = state_snapshot.usage
+        else:
+            usage = await self.state.get_usage_batch(
+                [deployment.deployment_id for deployment in deployments]
+            )
+        return sorted(
+            deployments,
+            key=lambda deployment: usage_utilization_for_deployment(
+                deployment,
+                usage.get(deployment.deployment_id, {}),
+            ),
+        )
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        if not deployments:
-            return None
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
-        usage = await self.state.get_usage_batch([d.deployment_id for d in deployments])
-        best: DeploymentLike | None = None
-        best_utilization = float("inf")
-
-        for deployment in deployments:
-            dep_usage = usage.get(deployment.deployment_id, {})
-            utilization = usage_utilization_for_deployment(deployment, dep_usage)
-            if utilization < best_utilization:
-                best_utilization = utilization
-                best = deployment
-
-        return best or weighted_random_choice(deployments)
 
 class TagBasedStrategy:
     def __init__(self, fallback_strategy: RoutingStrategyImpl | None = None):
         self.fallback = fallback_strategy or WeightedStrategy()
 
+    def state_query(self) -> StrategyStateQuery:
+        return self.fallback.state_query()
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        # Request-tag eligibility is enforced by Router before strategy ordering.
+        return await self.fallback.order(deployments, context, state_snapshot)
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        # Request-tag eligibility is already enforced by the router before strategy
-        # selection, so tag-based routing is intentionally just weighted selection on
-        # the remaining tag-matched pool.
-        return await self.fallback.select(deployments, context)
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
 
 class PriorityBasedStrategy:
     def __init__(self, fallback_strategy: RoutingStrategyImpl | None = None):
         self.fallback = fallback_strategy or WeightedStrategy()
 
-    async def select(
+    def state_query(self) -> StrategyStateQuery:
+        return self.fallback.state_query()
+
+    async def order(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
-    ) -> DeploymentLike | None:
-        if not deployments:
-            return None
-
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
         by_priority: dict[int, list[DeploymentLike]] = {}
         for deployment in deployments:
             by_priority.setdefault(int(deployment.priority), []).append(deployment)
 
+        ordered: list[DeploymentLike] = []
         for priority in sorted(by_priority):
-            selected = await self.fallback.select(by_priority[priority], context)
-            if selected:
-                return selected
+            ordered.extend(
+                await self.fallback.order(
+                    by_priority[priority],
+                    context,
+                    state_snapshot,
+                )
+            )
+        return ordered
 
-        return None
-
-
-class WeightedStrategy:
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        return weighted_random_choice(deployments)
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
+
+
+class WeightedStrategy:
+    def state_query(self) -> StrategyStateQuery:
+        return StrategyStateQuery()
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        del context, state_snapshot
+        return weighted_random_order(deployments)
+
+    async def select(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> DeploymentLike | None:
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
 
 class RateLimitAwareStrategy:
@@ -287,23 +462,44 @@ class RateLimitAwareStrategy:
         self.state = state_backend
         self.utilization_threshold = utilization_threshold
 
+    def state_query(self) -> StrategyStateQuery:
+        return StrategyStateQuery(usage=True)
+
+    async def order(
+        self,
+        deployments: list[DeploymentLike],
+        context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
+    ) -> list[DeploymentLike]:
+        del context
+        if not deployments:
+            return []
+
+        if state_snapshot is not None and state_snapshot.usage is not None:
+            usage = state_snapshot.usage
+        else:
+            usage = await self.state.get_usage_batch(
+                [deployment.deployment_id for deployment in deployments]
+            )
+        available = [
+            deployment
+            for deployment in deployments
+            if usage_utilization_for_deployment(
+                deployment,
+                usage.get(deployment.deployment_id, {}),
+            )
+            < self.utilization_threshold
+        ]
+        return weighted_random_order(available)
+
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
+        state_snapshot: StrategyStateSnapshot | None = None,
     ) -> DeploymentLike | None:
-        if not deployments:
-            return None
-
-        usage = await self.state.get_usage_batch([d.deployment_id for d in deployments])
-        available: list[DeploymentLike] = []
-        for deployment in deployments:
-            dep_usage = usage.get(deployment.deployment_id, {})
-            utilization = usage_utilization_for_deployment(deployment, dep_usage)
-            if utilization < self.utilization_threshold:
-                available.append(deployment)
-
-        return weighted_random_choice(available)
+        ordered = await self.order(deployments, context, state_snapshot)
+        return ordered[0] if ordered else None
 
 
 def usage_utilization_for_deployment(
@@ -311,35 +507,38 @@ def usage_utilization_for_deployment(
     usage: dict[str, int] | None,
 ) -> float:
     dep_usage = usage or {}
-    utilizations: list[float] = []
+    return max(
+        (
+            _calc_utilization(dep_usage.get(counter, 0), limit)
+            for counter, limit in usage_limits_for_deployment(deployment)
+        ),
+        default=0.0,
+    )
 
-    rpm_util = _calc_utilization(dep_usage.get("rpm", 0), deployment.rpm_limit)
-    if deployment.rpm_limit is not None:
-        utilizations.append(rpm_util)
 
+def usage_limits_for_deployment(
+    deployment: DeploymentLike,
+) -> tuple[tuple[UsageCounterName, int], ...]:
+    limits: list[tuple[UsageCounterName, int]] = []
+
+    def add(counter: UsageCounterName, limit: int | None) -> None:
+        if limit is not None and limit > 0:
+            limits.append((counter, limit))
+
+    add("rpm", deployment.rpm_limit)
     mode = str((deployment.model_info or {}).get("mode") or "chat").strip().lower() or "chat"
     if mode in {"chat", "embedding"}:
-        if deployment.tpm_limit is not None:
-            utilizations.append(_calc_utilization(dep_usage.get("tpm", 0), deployment.tpm_limit))
+        add("tpm", deployment.tpm_limit)
     elif mode == "image_generation":
-        if deployment.image_pm_limit is not None:
-            utilizations.append(_calc_utilization(dep_usage.get("image_pm", 0), deployment.image_pm_limit))
+        add("image_pm", deployment.image_pm_limit)
     elif mode in {"audio_speech", "audio_transcription"}:
-        if deployment.audio_seconds_pm_limit is not None:
-            utilizations.append(
-                _calc_utilization(dep_usage.get("audio_seconds_pm", 0), deployment.audio_seconds_pm_limit)
-            )
-        if deployment.char_pm_limit is not None:
-            utilizations.append(_calc_utilization(dep_usage.get("char_pm", 0), deployment.char_pm_limit))
+        add("audio_seconds_pm", deployment.audio_seconds_pm_limit)
+        add("char_pm", deployment.char_pm_limit)
     elif mode == "rerank":
-        if deployment.rerank_units_pm_limit is not None:
-            utilizations.append(
-                _calc_utilization(dep_usage.get("rerank_units_pm", 0), deployment.rerank_units_pm_limit)
-            )
-    elif deployment.tpm_limit is not None:
-        utilizations.append(_calc_utilization(dep_usage.get("tpm", 0), deployment.tpm_limit))
-
-    return max(utilizations, default=0.0)
+        add("rerank_units_pm", deployment.rerank_units_pm_limit)
+    else:
+        add("tpm", deployment.tpm_limit)
+    return tuple(limits)
 
 
 def usage_within_limits(

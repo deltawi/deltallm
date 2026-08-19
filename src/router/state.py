@@ -2,21 +2,157 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import time
 from datetime import UTC, datetime
 from typing import Any, Literal, Mapping, Protocol
 
 from src.models.errors import ServiceUnavailableError
+from src.router.candidates import (
+    DEFAULT_ATTEMPT_PERMIT_TTL_SECONDS,
+    AttemptCapacity,
+    AttemptPermit,
+    AttemptRejectionReason,
+    UsageCounterName,
+)
 
 logger = logging.getLogger(__name__)
 
 USAGE_COUNTER_NAMES = ("rpm", "tpm", "image_pm", "audio_seconds_pm", "char_pm", "rerank_units_pm")
+_ATTEMPT_LEASE_CLEANUP_GRACE_MS = 1_000
+_ATTEMPT_LEGACY_COMPAT_TTL_SECONDS = 86_400
+
+_ATTEMPT_ADMISSION_SCRIPT = """
+-- router_attempt_admission_v2
+local redis_time = redis.call('TIME')
+local now_ms = (tonumber(redis_time[1]) * 1000) + math.floor(tonumber(redis_time[2]) / 1000)
+local capacity_count = tonumber(ARGV[1]) or 0
+local lease_ttl_ms = tonumber(ARGV[2]) or 1000
+local legacy_compat_ttl_ms = tonumber(ARGV[3]) or lease_ttl_ms
+local owner_token = ARGV[4]
+
+local expired = redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now_ms)
+local current = tonumber(redis.call('GET', KEYS[1]) or '0') or 0
+current = math.max(0, current - expired)
+local owner_count = redis.call('ZCARD', KEYS[2])
+current = math.max(current, owner_count)
+
+local active_ttl_ms = redis.call('PTTL', KEYS[1])
+if current <= 0 then
+  redis.call('DEL', KEYS[1])
+elseif expired > 0 then
+  redis.call('SET', KEYS[1], current)
+  if active_ttl_ms > 0 then
+    redis.call('PEXPIRE', KEYS[1], active_ttl_ms)
+  end
+end
+
+if redis.call('EXISTS', KEYS[3]) == 1 then
+  return {0, 'cooldown', 0}
+end
+
+local healthy = redis.call('HGET', KEYS[4], 'healthy')
+if healthy == 'false' then
+  return {0, 'unhealthy', 0}
+end
+
+for index = 1, capacity_count do
+  local usage = tonumber(redis.call('GET', KEYS[4 + index]) or '0')
+  local limit = tonumber(ARGV[4 + index])
+  if usage >= limit then
+    return {0, 'capacity', 0}
+  end
+end
+
+local expires_at_ms = now_ms + lease_ttl_ms
+redis.call('ZADD', KEYS[2], expires_at_ms, owner_token)
+local active = current + 1
+redis.call('SET', KEYS[1], active)
+
+local latest = redis.call('ZREVRANGE', KEYS[2], 0, 0, 'WITHSCORES')
+local key_expires_at_ms = expires_at_ms
+if #latest >= 2 then
+  key_expires_at_ms = math.max(key_expires_at_ms, tonumber(latest[2]))
+end
+if current > owner_count then
+  key_expires_at_ms = math.max(key_expires_at_ms, now_ms + legacy_compat_ttl_ms)
+end
+key_expires_at_ms = key_expires_at_ms + tonumber(ARGV[5 + capacity_count])
+redis.call('PEXPIREAT', KEYS[1], key_expires_at_ms)
+redis.call('PEXPIREAT', KEYS[2], key_expires_at_ms)
+return {1, 'acquired', active, expires_at_ms}
+"""
+
+_ATTEMPT_RELEASE_SCRIPT = """
+-- router_attempt_release_v2
+local removed = redis.call('ZREM', KEYS[2], ARGV[1])
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local owner_count = redis.call('ZCARD', KEYS[2])
+if removed == 1 then
+  current = math.max(0, current - 1)
+end
+current = math.max(current, owner_count)
+
+if current <= 0 then
+  redis.call('DEL', KEYS[1])
+else
+  local active_ttl_ms = redis.call('PTTL', KEYS[1])
+  redis.call('SET', KEYS[1], current)
+  if active_ttl_ms > 0 then
+    redis.call('PEXPIRE', KEYS[1], active_ttl_ms)
+  end
+end
+if owner_count == 0 then
+  redis.call('DEL', KEYS[2])
+end
+return current
+"""
+
+_ATTEMPT_ACTIVE_BATCH_SCRIPT = """
+-- router_attempt_active_batch_v1
+local redis_time = redis.call('TIME')
+local now_ms = (tonumber(redis_time[1]) * 1000) + math.floor(tonumber(redis_time[2]) / 1000)
+local deployment_count = math.floor(#KEYS / 2)
+local results = {}
+
+for index = 1, deployment_count do
+  local active_key = KEYS[((index - 1) * 2) + 1]
+  local owners_key = KEYS[((index - 1) * 2) + 2]
+  local expired = redis.call('ZREMRANGEBYSCORE', owners_key, '-inf', now_ms)
+  local current = tonumber(redis.call('GET', active_key) or '0') or 0
+  current = math.max(0, current - expired)
+  local owner_count = redis.call('ZCARD', owners_key)
+  current = math.max(current, owner_count)
+
+  if current <= 0 then
+    redis.call('DEL', active_key)
+  elseif expired > 0 then
+    local active_ttl_ms = redis.call('PTTL', active_key)
+    redis.call('SET', active_key, current)
+    if active_ttl_ms > 0 then
+      redis.call('PEXPIRE', active_key, active_ttl_ms)
+    end
+  end
+  if owner_count == 0 then
+    redis.call('DEL', owners_key)
+  end
+  results[index] = current
+end
+
+return results
+"""
 
 
 class DeploymentStateBackend(Protocol):
-    async def increment_active(self, deployment_id: str) -> int: ...
+    async def acquire_attempt(
+        self,
+        deployment_id: str,
+        capacity: AttemptCapacity,
+        *,
+        lease_ttl_seconds: int = DEFAULT_ATTEMPT_PERMIT_TTL_SECONDS,
+    ) -> AttemptPermit: ...
 
-    async def decrement_active(self, deployment_id: str) -> int: ...
+    async def release_attempt(self, permit: AttemptPermit) -> int | None: ...
 
     async def get_active_requests(self, deployment_id: str) -> int: ...
 
@@ -24,7 +160,9 @@ class DeploymentStateBackend(Protocol):
 
     async def record_latency(self, deployment_id: str, latency_ms: float) -> None: ...
 
-    async def get_latency_window(self, deployment_id: str, window_ms: int) -> list[tuple[int, float]]: ...
+    async def get_latency_window(
+        self, deployment_id: str, window_ms: int
+    ) -> list[tuple[int, float]]: ...
 
     async def get_latency_windows_batch(
         self,
@@ -32,7 +170,9 @@ class DeploymentStateBackend(Protocol):
         window_ms: int,
     ) -> dict[str, list[tuple[int, float]]]: ...
 
-    async def increment_usage(self, deployment_id: str, tokens: int, window: str | None = None) -> None: ...
+    async def increment_usage(
+        self, deployment_id: str, tokens: int, window: str | None = None
+    ) -> None: ...
 
     async def increment_usage_counters(
         self,
@@ -65,7 +205,11 @@ class DeploymentStateBackend(Protocol):
 
 
 class RedisStateBackend:
-    """Redis-backed runtime state for deployments with explicit degraded-mode behavior."""
+    """Runtime state for the standalone Redis topology constructed by bootstrap.
+
+    Multi-key attempt admission intentionally uses one Lua call and is not compatible
+    with Redis Cluster's cross-slot execution model.
+    """
 
     def __init__(
         self,
@@ -78,10 +222,13 @@ class RedisStateBackend:
     ):
         self.redis = redis
         self.latency_window_ms = latency_window_ms
-        self.degraded_mode = degraded_mode if degraded_mode in {"fail_open", "fail_closed"} else "fail_open"
+        self.degraded_mode = (
+            degraded_mode if degraded_mode in {"fail_open", "fail_closed"} else "fail_open"
+        )
         self.local_state_ttl_sec = max(1, int(local_state_ttl_sec))
         self.max_local_latency_samples = max(1, int(max_local_latency_samples))
         self._active: dict[str, int] = {}
+        self._active_permits: dict[str, dict[str, float]] = {}
         self._latency: dict[str, list[tuple[int, float]]] = {}
         self._usage: dict[str, dict[str, Any]] = {}
         self._cooldown_until: dict[str, float] = {}
@@ -117,7 +264,9 @@ class RedisStateBackend:
         self._last_redis_error = str(exc) or "redis unavailable"
         self._last_redis_error_at = int(time.time())
         if previous_mode != next_mode:
-            logger.warning("router state backend entered %s mode: %s", next_mode, self._last_redis_error)
+            logger.warning(
+                "router state backend entered %s mode: %s", next_mode, self._last_redis_error
+            )
 
     def _mark_backend_healthy(self) -> None:
         if self.redis is None:
@@ -137,6 +286,7 @@ class RedisStateBackend:
         self._local_last_seen[deployment_id] = now or time.time()
 
     def _drop_local_state_if_unused(self, deployment_id: str) -> None:
+        self._prune_local_attempt_permits(deployment_id)
         if self._active.get(deployment_id, 0) > 0:
             return
         cooldown_until = self._cooldown_until.get(deployment_id)
@@ -163,6 +313,7 @@ class RedisStateBackend:
         cutoff = current_time - self.local_state_ttl_sec
 
         for deployment_id, seen_at in list(self._local_last_seen.items()):
+            self._prune_local_attempt_permits(deployment_id, now=current_time)
             if seen_at >= cutoff:
                 continue
 
@@ -174,6 +325,7 @@ class RedisStateBackend:
                 continue
 
             self._active.pop(deployment_id, None)
+            self._active_permits.pop(deployment_id, None)
             self._latency.pop(deployment_id, None)
             self._usage.pop(deployment_id, None)
             self._cooldown_until.pop(deployment_id, None)
@@ -189,57 +341,216 @@ class RedisStateBackend:
         self._mark_backend_healthy()
         return result
 
-    async def increment_active(self, deployment_id: str) -> int:
-        key = f"active_requests:{deployment_id}"
+    async def acquire_attempt(
+        self,
+        deployment_id: str,
+        capacity: AttemptCapacity,
+        *,
+        lease_ttl_seconds: int = DEFAULT_ATTEMPT_PERMIT_TTL_SECONDS,
+    ) -> AttemptPermit:
+        minute = self._minute_window()
+        normalized_ttl_seconds = max(1, int(lease_ttl_seconds))
+        owner_token = secrets.token_urlsafe(18)
+        capacity_keys = [
+            self._usage_key(deployment_id, item.counter, minute) for item in capacity.limits
+        ]
+        keys = [
+            f"active_requests:{deployment_id}",
+            self._attempt_owners_key(deployment_id),
+            f"cooldown:{deployment_id}",
+            f"health:{deployment_id}",
+            *capacity_keys,
+        ]
+        args = [
+            len(capacity.limits),
+            normalized_ttl_seconds * 1000,
+            _ATTEMPT_LEGACY_COMPAT_TTL_SECONDS * 1000,
+            owner_token,
+            *(item.limit for item in capacity.limits),
+            _ATTEMPT_LEASE_CLEANUP_GRACE_MS,
+        ]
         try:
-            return int(await self._redis_call("incr", key))
+            raw = await self._redis_call(
+                "eval",
+                _ATTEMPT_ADMISSION_SCRIPT,
+                len(keys),
+                *keys,
+                *args,
+            )
+            if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+                raise RuntimeError("invalid router attempt admission response")
+            acquired = int(raw[0]) == 1
+            if acquired:
+                if len(raw) < 4:
+                    raise RuntimeError("invalid acquired router attempt response")
+                return AttemptPermit(
+                    deployment_id=deployment_id,
+                    acquired=True,
+                    backend="redis",
+                    owner_token=owner_token,
+                    expires_at_ms=int(raw[3]),
+                    active_requests=int(raw[2]),
+                )
+            return AttemptPermit(
+                deployment_id=deployment_id,
+                acquired=False,
+                rejection_reason=AttemptRejectionReason(self._decode_redis_text(raw[1])),
+            )
         except Exception as exc:
             self._handle_backend_failure(exc)
-            self._active[deployment_id] = self._active.get(deployment_id, 0) + 1
-            self._touch_local_state(deployment_id)
-            return self._active[deployment_id]
+            rejection_reason = self._local_attempt_rejection(deployment_id, capacity)
+            if rejection_reason is not None:
+                return AttemptPermit(
+                    deployment_id=deployment_id,
+                    acquired=False,
+                    rejection_reason=rejection_reason,
+                )
+            now = time.time()
+            active_requests = self._prune_local_attempt_permits(deployment_id, now=now) + 1
+            expires_at = now + normalized_ttl_seconds
+            self._active_permits.setdefault(deployment_id, {})[owner_token] = expires_at
+            self._active[deployment_id] = active_requests
+            self._touch_local_state(deployment_id, now=now)
+            return AttemptPermit(
+                deployment_id=deployment_id,
+                acquired=True,
+                backend="local",
+                owner_token=owner_token,
+                expires_at_ms=int(expires_at * 1000),
+                active_requests=active_requests,
+            )
 
-    async def decrement_active(self, deployment_id: str) -> int:
-        key = f"active_requests:{deployment_id}"
+    async def release_attempt(self, permit: AttemptPermit) -> int | None:
+        if not permit.acquired or permit.backend is None:
+            return 0
+        if permit.backend == "local":
+            return self._release_local_attempt(permit)
+        if not permit.owner_token:
+            return await self.get_active_requests(permit.deployment_id)
+
+        keys = [
+            f"active_requests:{permit.deployment_id}",
+            self._attempt_owners_key(permit.deployment_id),
+        ]
         try:
-            value = int(await self._redis_call("decr", key))
-            if value < 0:
-                await self._redis_call("set", key, "0")
-                return 0
-            return value
+            return int(
+                await self._redis_call(
+                    "eval",
+                    _ATTEMPT_RELEASE_SCRIPT,
+                    len(keys),
+                    *keys,
+                    permit.owner_token,
+                )
+            )
         except Exception as exc:
             self._handle_backend_failure(exc)
-            value = max(0, self._active.get(deployment_id, 0) - 1)
-            if value == 0:
-                self._active.pop(deployment_id, None)
-                self._drop_local_state_if_unused(deployment_id)
-            else:
-                self._active[deployment_id] = value
-                self._touch_local_state(deployment_id)
-            return value
+            return None
+
+    def _local_attempt_rejection(
+        self,
+        deployment_id: str,
+        capacity: AttemptCapacity,
+    ) -> AttemptRejectionReason | None:
+        now = time.time()
+        cooldown_until = self._cooldown_until.get(deployment_id)
+        if cooldown_until is not None:
+            if cooldown_until > now:
+                self._touch_local_state(deployment_id, now=now)
+                return AttemptRejectionReason.COOLDOWN
+            self._cooldown_until.pop(deployment_id, None)
+
+        if self._health.get(deployment_id, {}).get("healthy", "true") == "false":
+            self._touch_local_state(deployment_id, now=now)
+            return AttemptRejectionReason.UNHEALTHY
+
+        usage = self._usage.get(deployment_id, {})
+        if usage.get("window") != self._minute_window():
+            usage = {}
+        if any(int(usage.get(item.counter, 0) or 0) >= item.limit for item in capacity.limits):
+            self._touch_local_state(deployment_id, now=now)
+            return AttemptRejectionReason.CAPACITY
+        return None
+
+    def _release_local_attempt(self, permit: AttemptPermit) -> int:
+        permits = self._active_permits.get(permit.deployment_id)
+        if permits is not None and permit.owner_token:
+            permits.pop(permit.owner_token, None)
+        value = self._prune_local_attempt_permits(permit.deployment_id)
+        if value == 0:
+            self._drop_local_state_if_unused(permit.deployment_id)
+        return value
+
+    def _prune_local_attempt_permits(
+        self,
+        deployment_id: str,
+        *,
+        now: float | None = None,
+    ) -> int:
+        permits = self._active_permits.get(deployment_id)
+        if not permits:
+            self._active_permits.pop(deployment_id, None)
+            self._active.pop(deployment_id, None)
+            return 0
+
+        current_time = time.time() if now is None else now
+        for owner_token, expires_at in list(permits.items()):
+            if expires_at <= current_time:
+                permits.pop(owner_token, None)
+        if not permits:
+            self._active_permits.pop(deployment_id, None)
+            self._active.pop(deployment_id, None)
+            return 0
+
+        value = len(permits)
+        self._active[deployment_id] = value
+        return value
+
+    @staticmethod
+    def _attempt_owners_key(deployment_id: str) -> str:
+        return f"router_attempt_owners:v1:{deployment_id}"
+
+    @staticmethod
+    def _usage_key(deployment_id: str, counter: UsageCounterName, minute: str) -> str:
+        return f"usage_{counter}:{deployment_id}:{minute}"
+
+    @staticmethod
+    def _decode_redis_text(value: Any) -> str:
+        return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
     async def get_active_requests(self, deployment_id: str) -> int:
-        key = f"active_requests:{deployment_id}"
-        try:
-            value = await self._redis_call("get", key)
-            return int(value or 0)
-        except Exception as exc:
-            self._handle_backend_failure(exc)
-            self._prune_local_state()
-            return self._active.get(deployment_id, 0)
+        active = await self.get_active_requests_batch([deployment_id])
+        return active.get(deployment_id, 0)
 
     async def get_active_requests_batch(self, deployment_ids: list[str]) -> dict[str, int]:
         if not deployment_ids:
             return {}
 
-        keys = [f"active_requests:{deployment_id}" for deployment_id in deployment_ids]
+        keys = [
+            key
+            for deployment_id in deployment_ids
+            for key in (
+                f"active_requests:{deployment_id}",
+                self._attempt_owners_key(deployment_id),
+            )
+        ]
         try:
-            values = await self._redis_call("mget", keys)
-            return {deployment_id: int(value or 0) for deployment_id, value in zip(deployment_ids, values, strict=False)}
+            values = await self._redis_call(
+                "eval",
+                _ATTEMPT_ACTIVE_BATCH_SCRIPT,
+                len(keys),
+                *keys,
+            )
+            return {
+                deployment_id: int(value or 0)
+                for deployment_id, value in zip(deployment_ids, values, strict=False)
+            }
         except Exception as exc:
             self._handle_backend_failure(exc)
             self._prune_local_state()
-            return {deployment_id: self._active.get(deployment_id, 0) for deployment_id in deployment_ids}
+            return {
+                deployment_id: self._prune_local_attempt_permits(deployment_id)
+                for deployment_id in deployment_ids
+            }
 
     async def record_latency(self, deployment_id: str, latency_ms: float) -> None:
         timestamp_ms = int(time.time() * 1000)
@@ -264,40 +575,60 @@ class RedisStateBackend:
             self._latency[deployment_id] = trimmed
             self._touch_local_state(deployment_id, now=time.time())
 
-    async def get_latency_window(self, deployment_id: str, window_ms: int) -> list[tuple[int, float]]:
-        now_ms = int(time.time() * 1000)
-        min_score = now_ms - window_ms
-        key = f"latency:{deployment_id}"
-        try:
-            items = await self._redis_call("zrangebyscore", key, min_score, "+inf")
-            window: list[tuple[int, float]] = []
-            for item in items:
-                ts_str, latency_str = str(item).split(":", 1)
-                window.append((int(ts_str), float(latency_str)))
-            return window
-        except Exception as exc:
-            self._handle_backend_failure(exc)
-            self._prune_local_state()
-            window = [(ts, lat) for ts, lat in self._latency.get(deployment_id, []) if ts >= min_score]
-            if window:
-                self._latency[deployment_id] = window[-self.max_local_latency_samples :]
-                self._touch_local_state(deployment_id, now=time.time())
-            else:
-                self._latency.pop(deployment_id, None)
-                self._drop_local_state_if_unused(deployment_id)
-            return window
+    async def get_latency_window(
+        self, deployment_id: str, window_ms: int
+    ) -> list[tuple[int, float]]:
+        windows = await self.get_latency_windows_batch([deployment_id], window_ms)
+        return windows.get(deployment_id, [])
 
     async def get_latency_windows_batch(
         self,
         deployment_ids: list[str],
         window_ms: int,
     ) -> dict[str, list[tuple[int, float]]]:
-        windows: dict[str, list[tuple[int, float]]] = {}
-        for deployment_id in deployment_ids:
-            windows[deployment_id] = await self.get_latency_window(deployment_id, window_ms)
-        return windows
+        if not deployment_ids:
+            return {}
 
-    async def increment_usage(self, deployment_id: str, tokens: int, window: str | None = None) -> None:
+        now_ms = int(time.time() * 1000)
+        min_score = now_ms - window_ms
+        try:
+            pipe = self.redis.pipeline()
+            for deployment_id in deployment_ids:
+                pipe.zrangebyscore(f"latency:{deployment_id}", min_score, "+inf")
+            results = await pipe.execute()
+            self._mark_backend_healthy()
+            windows: dict[str, list[tuple[int, float]]] = {}
+            for deployment_id, items in zip(deployment_ids, results, strict=False):
+                window: list[tuple[int, float]] = []
+                for item in items:
+                    text = item.decode("utf-8") if isinstance(item, bytes) else str(item)
+                    timestamp, latency = text.split(":", 1)
+                    window.append((int(timestamp), float(latency)))
+                windows[deployment_id] = window
+            return windows
+        except Exception as exc:
+            self._handle_backend_failure(exc)
+            self._prune_local_state()
+            windows = {}
+            now = time.time()
+            for deployment_id in deployment_ids:
+                window = [
+                    (timestamp, latency)
+                    for timestamp, latency in self._latency.get(deployment_id, [])
+                    if timestamp >= min_score
+                ]
+                if window:
+                    self._latency[deployment_id] = window[-self.max_local_latency_samples :]
+                    self._touch_local_state(deployment_id, now=now)
+                else:
+                    self._latency.pop(deployment_id, None)
+                    self._drop_local_state_if_unused(deployment_id)
+                windows[deployment_id] = window
+            return windows
+
+    async def increment_usage(
+        self, deployment_id: str, tokens: int, window: str | None = None
+    ) -> None:
         await self.increment_usage_counters(
             deployment_id,
             {"rpm": 1, "tpm": max(0, int(tokens))},
@@ -348,29 +679,56 @@ class RedisStateBackend:
             self._touch_local_state(deployment_id, now=time.time())
 
     async def get_usage(self, deployment_id: str) -> dict[str, int]:
+        usage = await self.get_usage_batch([deployment_id])
+        return usage.get(deployment_id, {"rpm": 0, "tpm": 0})
+
+    async def get_usage_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, int]]:
+        if not deployment_ids:
+            return {}
+
         minute = self._minute_window()
-        keys = [f"usage_{counter_name}:{deployment_id}:{minute}" for counter_name in USAGE_COUNTER_NAMES]
+        keys = [
+            f"usage_{counter_name}:{deployment_id}:{minute}"
+            for deployment_id in deployment_ids
+            for counter_name in USAGE_COUNTER_NAMES
+        ]
         try:
             values = await self._redis_call("mget", keys)
-            usage = {"rpm": int(values[0] or 0), "tpm": int(values[1] or 0)}
-            for counter_name, value in zip(USAGE_COUNTER_NAMES[2:], values[2:], strict=False):
-                parsed = int(value or 0)
-                if parsed > 0:
-                    usage[counter_name] = parsed
-            return usage
+            width = len(USAGE_COUNTER_NAMES)
+            snapshots: dict[str, dict[str, int]] = {}
+            for index, deployment_id in enumerate(deployment_ids):
+                offset = index * width
+                deployment_values = list(values[offset : offset + width])
+                deployment_values.extend([None] * (width - len(deployment_values)))
+                usage = {
+                    "rpm": int(deployment_values[0] or 0),
+                    "tpm": int(deployment_values[1] or 0),
+                }
+                for counter_name, value in zip(
+                    USAGE_COUNTER_NAMES[2:],
+                    deployment_values[2:],
+                    strict=False,
+                ):
+                    parsed = int(value or 0)
+                    if parsed > 0:
+                        usage[counter_name] = parsed
+                snapshots[deployment_id] = usage
+            return snapshots
         except Exception as exc:
             self._handle_backend_failure(exc)
             self._prune_local_state()
-            usage = self._usage.get(deployment_id, {})
-            if usage.get("window") != minute:
-                self._usage.pop(deployment_id, None)
-                self._drop_local_state_if_unused(deployment_id)
-                return {"rpm": 0, "tpm": 0}
-            self._touch_local_state(deployment_id, now=time.time())
-            return self._materialize_usage_snapshot(usage)
-
-    async def get_usage_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, int]]:
-        return {deployment_id: await self.get_usage(deployment_id) for deployment_id in deployment_ids}
+            snapshots = {}
+            now = time.time()
+            for deployment_id in deployment_ids:
+                usage = self._usage.get(deployment_id, {})
+                if usage.get("window") != minute:
+                    self._usage.pop(deployment_id, None)
+                    self._drop_local_state_if_unused(deployment_id)
+                    snapshots[deployment_id] = {"rpm": 0, "tpm": 0}
+                    continue
+                self._touch_local_state(deployment_id, now=now)
+                snapshots[deployment_id] = self._materialize_usage_snapshot(usage)
+            return snapshots
 
     @staticmethod
     def _normalize_usage_counters(counters: Mapping[str, int]) -> dict[str, int]:
@@ -540,14 +898,27 @@ class RedisStateBackend:
             self._touch_local_state(deployment_id, now=time.time())
 
     async def get_health(self, deployment_id: str) -> dict[str, Any]:
-        health_key = f"health:{deployment_id}"
+        health = await self.get_health_batch([deployment_id])
+        return health.get(deployment_id, {})
+
+    async def get_health_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not deployment_ids:
+            return {}
+
         try:
-            raw = await self._redis_call("hgetall", health_key)
-            return dict(raw or {})
+            pipe = self.redis.pipeline()
+            for deployment_id in deployment_ids:
+                pipe.hgetall(f"health:{deployment_id}")
+            results = await pipe.execute()
+            self._mark_backend_healthy()
+            return {
+                deployment_id: dict(raw or {})
+                for deployment_id, raw in zip(deployment_ids, results, strict=False)
+            }
         except Exception as exc:
             self._handle_backend_failure(exc)
             self._prune_local_state()
-            return dict(self._health.get(deployment_id, {}))
-
-    async def get_health_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, Any]]:
-        return {deployment_id: await self.get_health(deployment_id) for deployment_id in deployment_ids}
+            return {
+                deployment_id: dict(self._health.get(deployment_id, {}))
+                for deployment_id in deployment_ids
+            }

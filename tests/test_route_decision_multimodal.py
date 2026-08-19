@@ -12,7 +12,11 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
         if url.endswith("/images/generations"):
             return httpx.Response(
                 200,
-                json={"created": 1700000000, "data": [{"url": "https://example.com/image.png"}], "model": json["model"]},
+                json={
+                    "created": 1700000000,
+                    "data": [{"url": "https://example.com/image.png"}],
+                    "model": json["model"],
+                },
                 request=request,
             )
         if url.endswith("/audio/speech"):
@@ -29,7 +33,9 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
 
     test_app.state.http_client.post = post
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
 
+    deployment.model_info["mode"] = "image_generation"
     image_response = await client.post(
         "/v1/images/generations",
         headers=headers,
@@ -40,10 +46,13 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert image_response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert image_response.headers.get("x-deltallm-route-deployment")
     assert image_response.headers.get("x-deltallm-route-fallback-used") == "false"
-    image_usage = await test_app.state.router_state_backend.get_usage(image_response.headers["x-deltallm-route-deployment"])
+    image_usage = await test_app.state.router_state_backend.get_usage(
+        image_response.headers["x-deltallm-route-deployment"]
+    )
     assert image_usage == {"rpm": 1, "tpm": 0, "image_pm": 1}
     test_app.state.redis.store.clear()
 
+    deployment.model_info["mode"] = "audio_speech"
     speech_response = await client.post(
         "/v1/audio/speech",
         headers=headers,
@@ -54,12 +63,15 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert speech_response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert speech_response.headers.get("x-deltallm-route-deployment")
     assert speech_response.headers.get("x-deltallm-route-fallback-used") == "false"
-    speech_usage = await test_app.state.router_state_backend.get_usage(speech_response.headers["x-deltallm-route-deployment"])
+    speech_usage = await test_app.state.router_state_backend.get_usage(
+        speech_response.headers["x-deltallm-route-deployment"]
+    )
     assert speech_usage["rpm"] == 1
     assert speech_usage.get("tpm", 0) == 0
     assert speech_usage["char_pm"] > 0
     test_app.state.redis.store.clear()
 
+    deployment.model_info["mode"] = "audio_transcription"
     transcription_response = await client.post(
         "/v1/audio/transcriptions",
         headers=headers,
@@ -79,6 +91,8 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert transcription_usage["audio_seconds_pm"] > 0
     test_app.state.redis.store.clear()
 
+    deployment.model_info["mode"] = "rerank"
+    deployment.deltallm_params["provider"] = "vllm"
     rerank_response = await client.post(
         "/v1/rerank",
         headers=headers,
@@ -89,15 +103,19 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert rerank_response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert rerank_response.headers.get("x-deltallm-route-deployment")
     assert rerank_response.headers.get("x-deltallm-route-fallback-used") == "false"
-    rerank_usage = await test_app.state.router_state_backend.get_usage(rerank_response.headers["x-deltallm-route-deployment"])
+    rerank_usage = await test_app.state.router_state_backend.get_usage(
+        rerank_response.headers["x-deltallm-route-deployment"]
+    )
     assert rerank_usage == {"rpm": 1, "tpm": 0, "rerank_units_pm": 2}
 
 
 @pytest.mark.asyncio
-async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatible_providers(client, test_app):
+async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatible_providers(
+    client, test_app
+):
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
-    deployment.deltallm_params["provider"] = "openrouter"
-    deployment.deltallm_params["api_base"] = "https://openrouter.example/api/v1"
+    deployment.deltallm_params["provider"] = "vllm"
+    deployment.deltallm_params["api_base"] = "https://vllm.example/api/v1"
     deployment.deltallm_params["api_key"] = "provider-key"
     deployment.deltallm_params["auth_header_name"] = "X-Provider-Auth"
     deployment.deltallm_params["auth_header_format"] = "Token {api_key}"
@@ -111,7 +129,11 @@ async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatibl
         if url.endswith("/images/generations"):
             return httpx.Response(
                 200,
-                json={"created": 1700000000, "data": [{"url": "https://example.com/image.png"}], "model": json["model"]},
+                json={
+                    "created": 1700000000,
+                    "data": [{"url": "https://example.com/image.png"}],
+                    "model": json["model"],
+                },
                 request=request,
             )
         if url.endswith("/audio/speech"):
@@ -129,6 +151,7 @@ async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatibl
     test_app.state.http_client.post = post
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
 
+    deployment.model_info["mode"] = "image_generation"
     image_response = await client.post(
         "/v1/images/generations",
         headers=headers,
@@ -137,6 +160,7 @@ async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatibl
     assert image_response.status_code == 200
     test_app.state.redis.store.clear()
 
+    deployment.model_info["mode"] = "audio_speech"
     speech_response = await client.post(
         "/v1/audio/speech",
         headers=headers,
@@ -145,6 +169,7 @@ async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatibl
     assert speech_response.status_code == 200
     test_app.state.redis.store.clear()
 
+    deployment.model_info["mode"] = "audio_transcription"
     transcription_response = await client.post(
         "/v1/audio/transcriptions",
         headers=headers,
@@ -154,6 +179,7 @@ async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatibl
     assert transcription_response.status_code == 200
     test_app.state.redis.store.clear()
 
+    deployment.model_info["mode"] = "rerank"
     rerank_response = await client.post(
         "/v1/rerank",
         headers=headers,
@@ -161,18 +187,18 @@ async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatibl
     )
     assert rerank_response.status_code == 200
 
-    assert captured["https://openrouter.example/api/v1/images/generations"] == {
+    assert captured["https://vllm.example/api/v1/images/generations"] == {
         "X-Provider-Auth": "Token provider-key",
         "Content-Type": "application/json",
     }
-    assert captured["https://openrouter.example/api/v1/audio/speech"] == {
+    assert captured["https://vllm.example/api/v1/audio/speech"] == {
         "X-Provider-Auth": "Token provider-key",
         "Content-Type": "application/json",
     }
-    assert captured["https://openrouter.example/api/v1/audio/transcriptions"] == {
+    assert captured["https://vllm.example/api/v1/audio/transcriptions"] == {
         "X-Provider-Auth": "Token provider-key",
     }
-    assert captured["https://openrouter.example/api/v1/rerank"] == {
+    assert captured["https://vllm.example/api/v1/rerank"] == {
         "X-Provider-Auth": "Token provider-key",
         "Content-Type": "application/json",
     }

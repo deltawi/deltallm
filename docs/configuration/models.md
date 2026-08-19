@@ -434,12 +434,12 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | Gemini | Y | N | N | N | N | N |
 | AWS Bedrock | Y | N | N | N | N | N |
 | ElevenLabs | N | N | N | Y | Y | N |
-| vLLM | Y | Y | Y | Y | Y | N |
+| vLLM | Y | Y | Y | Y | Y | Y |
 | LM Studio | Y | Y | N | N | N | N |
 | Ollama | Y | Y | N | N | N | N |
 
 !!! note
-    `rerank` exists as a DeltaLLM mode, but no provider is currently marked as rerank-capable in the backend capability matrix.
+    vLLM rerank deployments use the OpenAI-compatible `/rerank` endpoint. Providers not marked as rerank-capable are excluded before routing attempts.
 
 ## Related Pages
 

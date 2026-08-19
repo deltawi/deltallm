@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from src.models.errors import ModelNotFoundError, NO_HEALTHY_DEPLOYMENTS_CODE, ServiceUnavailableError
+from src.models.errors import (
+    ModelNotFoundError,
+    NO_HEALTHY_DEPLOYMENTS_CODE,
+    ServiceUnavailableError,
+)
 import src.router.strategies as strategies_module
 from src.router import (
+    AttemptCapacity,
+    AttemptCapacityLimit,
+    AttemptRejectionReason,
     HealthEndpointHandler,
     RedisStateBackend,
     Router,
@@ -14,6 +21,7 @@ from src.router import (
     build_route_group_policies,
 )
 from src.router.usage import normalize_router_usage
+from tests.conftest import FakeRedis
 
 
 @pytest.mark.asyncio
@@ -44,10 +52,13 @@ async def test_least_busy_strategy_selects_lowest_active_requests():
         deployment_registry=registry,
     )
 
-    await state.increment_active("dep-a")
-    selected = await router.select_deployment("gpt-4o-mini", {})
-    assert selected is not None
-    assert selected.deployment_id == "dep-b"
+    permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+    try:
+        selected = await router.select_deployment("gpt-4o-mini", {})
+        assert selected is not None
+        assert selected.deployment_id == "dep-b"
+    finally:
+        await state.release_attempt(permit)
 
 
 @pytest.mark.asyncio
@@ -163,13 +174,21 @@ async def test_priority_based_strategy_applies_priority_filtering(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_latency_based_strategy_keeps_unsampled_members_eligible(monkeypatch):
-    monkeypatch.setattr(strategies_module.random, "uniform", lambda start, end: (start + end) * 0.75)
+    monkeypatch.setattr(
+        strategies_module.random, "uniform", lambda start, end: (start + end) * 0.75
+    )
     state = RedisStateBackend(redis=None)
     registry = build_deployment_registry(
         {
             "gpt-4o-mini": [
-                {"deployment_id": "dep-sampled", "deltallm_params": {"model": "openai/gpt-4o-mini"}},
-                {"deployment_id": "dep-unsampled", "deltallm_params": {"model": "openai/gpt-4o-mini"}},
+                {
+                    "deployment_id": "dep-sampled",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                },
+                {
+                    "deployment_id": "dep-unsampled",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                },
             ]
         }
     )
@@ -265,13 +284,279 @@ async def test_cooldown_batch_uses_local_fallback_state():
     assert cooldowns == {"dep-a": True, "dep-b": False}
 
 
+@pytest.mark.asyncio
+async def test_redis_state_batch_reads_use_one_round_trip_per_metric(test_app, monkeypatch):
+    redis = test_app.state.redis
+    state = RedisStateBackend(redis)
+    await state.increment_usage("dep-a", 7)
+    await state.record_latency("dep-a", 12.5)
+    permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+    await state.set_health("dep-a", False)
+
+    calls = {"eval": 0, "mget": 0, "pipeline": 0}
+    original_eval = redis.eval
+    original_mget = redis.mget
+    original_pipeline = redis.pipeline
+
+    async def counting_eval(script, numkeys, *args):  # noqa: ANN001, ANN202
+        calls["eval"] += 1
+        return await original_eval(script, numkeys, *args)
+
+    async def counting_mget(keys):  # noqa: ANN001, ANN202
+        calls["mget"] += 1
+        return await original_mget(keys)
+
+    def counting_pipeline():  # noqa: ANN202
+        calls["pipeline"] += 1
+        return original_pipeline()
+
+    monkeypatch.setattr(redis, "eval", counting_eval)
+    monkeypatch.setattr(redis, "mget", counting_mget)
+    monkeypatch.setattr(redis, "pipeline", counting_pipeline)
+
+    active = await state.get_active_requests_batch(["dep-a", "dep-b"])
+    usage = await state.get_usage_batch(["dep-a", "dep-b"])
+    health = await state.get_health_batch(["dep-a", "dep-b"])
+    latency = await state.get_latency_windows_batch(["dep-a", "dep-b"], 300_000)
+
+    assert calls == {"eval": 1, "mget": 1, "pipeline": 2}
+    assert active == {"dep-a": 1, "dep-b": 0}
+    assert usage["dep-a"] == {"rpm": 1, "tpm": 7}
+    assert usage["dep-b"] == {"rpm": 0, "tpm": 0}
+    assert health["dep-a"]["healthy"] == "false"
+    assert health["dep-b"] == {}
+    assert len(latency["dep-a"]) == 1
+    assert latency["dep-b"] == []
+    await state.release_attempt(permit)
+
+
+@pytest.mark.asyncio
+async def test_attempt_admission_uses_one_atomic_redis_call_and_owned_release():
+    class CountingRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempt_eval_calls = 0
+
+        async def eval(self, script, numkeys, *args):  # noqa: ANN001, ANN201
+            if "router_attempt_admission_v2" in script:
+                self.attempt_eval_calls += 1
+            return await super().eval(script, numkeys, *args)
+
+    redis = CountingRedis()
+    state = RedisStateBackend(redis)
+    capacity = AttemptCapacity((AttemptCapacityLimit("rpm", 1),))
+
+    permit = await state.acquire_attempt("dep-a", capacity)
+
+    assert permit.acquired is True
+    assert permit.backend == "redis"
+    assert permit.owner_token
+    assert permit.expires_at_ms
+    assert permit.active_requests == 1
+    assert redis.attempt_eval_calls == 1
+    assert redis.ttl_store["active_requests:dep-a"] > 0
+    assert redis.ttl_store[state._attempt_owners_key("dep-a")] > 0
+    assert await state.get_active_requests("dep-a") == 1
+
+    released = await state.release_attempt(permit)
+
+    assert released == 0
+    assert await state.release_attempt(permit) == 0
+    assert await state.get_active_requests("dep-a") == 0
+
+
+@pytest.mark.parametrize(
+    ("state_change", "expected_reason"),
+    [
+        ("cooldown", AttemptRejectionReason.COOLDOWN),
+        ("unhealthy", AttemptRejectionReason.UNHEALTHY),
+        ("capacity", AttemptRejectionReason.CAPACITY),
+    ],
+)
+@pytest.mark.asyncio
+async def test_attempt_admission_rejects_dynamic_state_without_incrementing_active(
+    state_change: str,
+    expected_reason: AttemptRejectionReason,
+):
+    redis = FakeRedis()
+    state = RedisStateBackend(redis)
+    capacity = AttemptCapacity((AttemptCapacityLimit("rpm", 1),))
+    if state_change == "cooldown":
+        await state.set_cooldown("dep-a", 30, "manual")
+    elif state_change == "unhealthy":
+        await state.set_health("dep-a", False)
+    else:
+        await state.increment_usage("dep-a", 0)
+
+    permit = await state.acquire_attempt("dep-a", capacity)
+
+    assert permit.acquired is False
+    assert permit.rejection_reason == expected_reason
+    assert "active_requests:dep-a" not in redis.store
+    assert await state.release_attempt(permit) == 0
+    assert "active_requests:dep-a" not in redis.store
+
+
+@pytest.mark.asyncio
+async def test_local_attempt_permit_releases_locally_after_redis_recovery():
+    class FailingOnceRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_attempt = True
+
+        async def eval(self, script, numkeys, *args):  # noqa: ANN001, ANN201
+            if "router_attempt_admission_v2" in script and self.fail_next_attempt:
+                self.fail_next_attempt = False
+                raise RuntimeError("redis unavailable")
+            return await super().eval(script, numkeys, *args)
+
+    redis = FailingOnceRedis()
+    state = RedisStateBackend(redis, degraded_mode="fail_open")
+
+    local_permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+
+    assert local_permit.acquired is True
+    assert local_permit.backend == "local"
+    assert state.get_backend_status()["mode"] == "degraded"
+    assert await state.release_attempt(local_permit) == 0
+    assert "active_requests:dep-a" not in redis.store
+
+    redis_permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+
+    assert redis_permit.acquired is True
+    assert redis_permit.backend == "redis"
+    assert state.get_backend_status()["mode"] == "redis"
+    assert await state.release_attempt(redis_permit) == 0
+
+
+@pytest.mark.asyncio
+async def test_attempt_release_is_owner_guarded_and_idempotent():
+    state = RedisStateBackend(FakeRedis())
+    first = await state.acquire_attempt("dep-a", AttemptCapacity())
+    second = await state.acquire_attempt("dep-a", AttemptCapacity())
+
+    assert first.owner_token != second.owner_token
+    assert await state.release_attempt(first) == 1
+    assert await state.release_attempt(first) == 1
+    assert await state.get_active_requests("dep-a") == 1
+    assert await state.release_attempt(second) == 0
+
+
+@pytest.mark.asyncio
+async def test_attempt_release_outage_recovers_from_expiring_owner_state():
+    class ReleaseOutageRedis(FakeRedis):
+        fail_release = False
+
+        async def eval(self, script, numkeys, *args):  # noqa: ANN001, ANN201
+            if self.fail_release and "router_attempt_release_v2" in script:
+                raise RuntimeError("redis unavailable during release")
+            return await super().eval(script, numkeys, *args)
+
+    redis = ReleaseOutageRedis()
+    state = RedisStateBackend(redis, degraded_mode="fail_open")
+    permit = await state.acquire_attempt(
+        "dep-a",
+        AttemptCapacity(),
+        lease_ttl_seconds=1,
+    )
+    redis.fail_release = True
+
+    assert await state.release_attempt(permit) is None
+    assert state.get_backend_status()["mode"] == "degraded"
+    assert redis.ttl_store["active_requests:dep-a"] > 0
+
+    redis.fail_release = False
+    owners_key = state._attempt_owners_key("dep-a")
+    redis.zset_store[owners_key] = [(0, str(permit.owner_token))]
+
+    assert await state.get_active_requests("dep-a") == 0
+    recovered = await state.acquire_attempt("dep-a", AttemptCapacity())
+    assert recovered.active_requests == 1
+    assert state.get_backend_status()["mode"] == "redis"
+    assert await state.release_attempt(recovered) == 0
+
+
+@pytest.mark.asyncio
+async def test_local_attempt_permit_expires_without_release(monkeypatch: pytest.MonkeyPatch):
+    now = {"value": 1_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+
+    permit = await state.acquire_attempt(
+        "dep-a",
+        AttemptCapacity(),
+        lease_ttl_seconds=1,
+    )
+    assert permit.active_requests == 1
+
+    now["value"] = 1_002.0
+    assert await state.get_active_requests("dep-a") == 0
+    assert "dep-a" not in state._active_permits
+
+
+@pytest.mark.parametrize(
+    ("mode", "counter", "limit_field"),
+    [
+        ("chat", "tpm", "tpm_limit"),
+        ("embedding", "tpm", "tpm_limit"),
+        ("image_generation", "image_pm", "image_pm_limit"),
+        ("audio_speech", "audio_seconds_pm", "audio_seconds_pm_limit"),
+        ("audio_transcription", "char_pm", "char_pm_limit"),
+        ("rerank", "rerank_units_pm", "rerank_units_pm_limit"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_attempt_capacity_revalidation_uses_workload_specific_counter(
+    mode: str,
+    counter: str,
+    limit_field: str,
+):
+    state = RedisStateBackend(FakeRedis())
+    registry = build_deployment_registry(
+        {
+            "model-group": [
+                {
+                    "deployment_id": "dep-a",
+                    "deltallm_params": {
+                        "provider": "vllm",
+                        "model": "vllm/test-model",
+                    },
+                    "model_info": {
+                        "mode": mode,
+                        limit_field: 1,
+                    },
+                }
+            ]
+        }
+    )
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state,
+        config=RouterConfig(enable_pre_call_checks=True),
+        deployment_registry=registry,
+    )
+    routing_context = {"routing_mode": mode, "metadata": {}}
+    selected = await router.select_deployment("model-group", routing_context)
+    assert selected is not None
+    await state.increment_usage_counters(selected.deployment_id, {counter: 1})
+
+    permit = await router.acquire_attempt(selected, routing_context)
+
+    assert permit.acquired is False
+    assert permit.rejection_reason == AttemptRejectionReason.CAPACITY
+
+
 def test_require_deployment_raises_service_unavailable_when_group_exists_but_none_healthy():
     router = Router(
         strategy=RoutingStrategy.SIMPLE_SHUFFLE,
         state_backend=RedisStateBackend(redis=None),
         config=RouterConfig(),
         deployment_registry=build_deployment_registry(
-            {"gpt-4o-mini": [{"deployment_id": "dep-a", "deltallm_params": {"model": "openai/gpt-4o-mini"}}]}
+            {
+                "gpt-4o-mini": [
+                    {"deployment_id": "dep-a", "deltallm_params": {"model": "openai/gpt-4o-mini"}}
+                ]
+            }
         ),
     )
 
@@ -306,12 +591,20 @@ async def test_usage_based_strategy_uses_image_limits_when_configured():
                 {
                     "deployment_id": "dep-hot",
                     "deltallm_params": {"model": "openai/image"},
-                    "model_info": {"mode": "image_generation", "rpm_limit": 10, "image_pm_limit": 10},
+                    "model_info": {
+                        "mode": "image_generation",
+                        "rpm_limit": 10,
+                        "image_pm_limit": 10,
+                    },
                 },
                 {
                     "deployment_id": "dep-cool",
                     "deltallm_params": {"model": "openai/image"},
-                    "model_info": {"mode": "image_generation", "rpm_limit": 10, "image_pm_limit": 10},
+                    "model_info": {
+                        "mode": "image_generation",
+                        "rpm_limit": 10,
+                        "image_pm_limit": 10,
+                    },
                 },
             ]
         }
@@ -375,12 +668,20 @@ async def test_rate_limit_aware_strategy_uses_audio_limits_when_configured():
                 {
                     "deployment_id": "dep-hot",
                     "deltallm_params": {"model": "openai/audio"},
-                    "model_info": {"mode": "audio_transcription", "rpm_limit": 10, "audio_seconds_pm_limit": 10},
+                    "model_info": {
+                        "mode": "audio_transcription",
+                        "rpm_limit": 10,
+                        "audio_seconds_pm_limit": 10,
+                    },
                 },
                 {
                     "deployment_id": "dep-cool",
                     "deltallm_params": {"model": "openai/audio"},
-                    "model_info": {"mode": "audio_transcription", "rpm_limit": 10, "audio_seconds_pm_limit": 10},
+                    "model_info": {
+                        "mode": "audio_transcription",
+                        "rpm_limit": 10,
+                        "audio_seconds_pm_limit": 10,
+                    },
                 },
             ]
         }
@@ -476,7 +777,9 @@ def test_normalize_router_usage_keeps_non_token_modes_out_of_tpm():
     )
     assert audio_usage == {"rpm": 1, "audio_seconds_pm": 2}
 
-    rerank_usage = normalize_router_usage(mode="rerank", usage={"rerank_units": 4, "prompt_tokens": 120})
+    rerank_usage = normalize_router_usage(
+        mode="rerank", usage={"rerank_units": 4, "prompt_tokens": 120}
+    )
     assert rerank_usage == {"rpm": 1, "rerank_units_pm": 4}
 
 
@@ -571,16 +874,22 @@ async def test_group_policy_overrides_global_strategy():
         deployment_registry=registry,
     )
 
-    await state.increment_active("dep-a")
-    await state.increment_active("dep-a")
+    permits = [
+        await state.acquire_attempt("dep-a", AttemptCapacity()),
+        await state.acquire_attempt("dep-a", AttemptCapacity()),
+    ]
 
-    selected_in_group = await router.select_deployment("support-route", {})
-    selected_legacy = await router.select_deployment("gpt-4o-mini", {})
+    try:
+        selected_in_group = await router.select_deployment("support-route", {})
+        selected_legacy = await router.select_deployment("gpt-4o-mini", {})
 
-    assert selected_in_group is not None
-    assert selected_in_group.deployment_id == "dep-b"
-    assert selected_legacy is not None
-    assert selected_legacy.deployment_id == "dep-a"
+        assert selected_in_group is not None
+        assert selected_in_group.deployment_id == "dep-b"
+        assert selected_legacy is not None
+        assert selected_legacy.deployment_id == "dep-a"
+    finally:
+        for permit in permits:
+            await state.release_attempt(permit)
 
 
 @pytest.mark.asyncio
@@ -666,7 +975,7 @@ async def test_router_exposes_failover_overrides_from_policy():
 async def test_router_state_fail_open_uses_bounded_local_fallback():
     state = RedisStateBackend(redis=None, degraded_mode="fail_open", max_local_latency_samples=2)
 
-    await state.increment_active("dep-a")
+    permit = await state.acquire_attempt("dep-a", AttemptCapacity())
     await state.record_latency("dep-a", 10.0)
     await state.record_latency("dep-a", 20.0)
     await state.record_latency("dep-a", 30.0)
@@ -675,6 +984,7 @@ async def test_router_state_fail_open_uses_bounded_local_fallback():
     latency_window = await state.get_latency_window("dep-a", 300_000)
     assert [lat for _, lat in latency_window] == [20.0, 30.0]
     assert state.get_backend_status()["mode"] == "degraded"
+    assert await state.release_attempt(permit) == 0
 
 
 @pytest.mark.asyncio
@@ -691,8 +1001,8 @@ async def test_router_state_fail_closed_raises_when_backend_unavailable():
 async def test_router_state_drops_zero_active_local_entries():
     state = RedisStateBackend(redis=None, degraded_mode="fail_open")
 
-    await state.increment_active("dep-a")
-    value = await state.decrement_active("dep-a")
+    permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+    value = await state.release_attempt(permit)
 
     assert value == 0
     assert await state.get_active_requests("dep-a") == 0

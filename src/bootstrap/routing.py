@@ -28,7 +28,10 @@ from src.router import (
     build_route_group_policies,
 )
 from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
+from src.services.model_deployments import (
+    bootstrap_model_deployments_from_config,
+    load_model_registry,
+)
 from src.services.route_groups import load_route_groups
 
 logger = logging.getLogger(__name__)
@@ -65,11 +68,7 @@ async def _load_model_registry_compat(
         "secret_resolver": secret_resolver,
     }
     signature = inspect.signature(loader)
-    supported_kwargs = {
-        key: value
-        for key, value in kwargs.items()
-        if key in signature.parameters
-    }
+    supported_kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
     return await loader(repository, cfg, settings, **supported_kwargs)
 
 
@@ -83,7 +82,9 @@ async def init_routing_runtime(
     salt_key: str,
 ) -> RoutingRuntime:
     if cfg.general_settings.model_deployment_bootstrap_from_config:
-        did_bootstrap = await bootstrap_model_deployments_from_config(app.state.model_deployment_repository, cfg)
+        did_bootstrap = await bootstrap_model_deployments_from_config(
+            app.state.model_deployment_repository, cfg
+        )
         if did_bootstrap:
             logger.info("bootstrapped model deployments from config into database")
 
@@ -115,7 +116,9 @@ async def init_routing_runtime(
     )
     state_backend = RedisStateBackend(redis_client, degraded_mode=degraded_mode)
     route_groups = list(getattr(app.state, "route_groups", []))
-    deployment_registry = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
+    deployment_registry = build_deployment_registry(
+        app.state.model_registry, route_groups=route_groups
+    )
     router_config = RouterConfig(
         num_retries=cfg.router_settings.num_retries,
         retry_after=cfg.router_settings.retry_after,
@@ -144,11 +147,15 @@ async def init_routing_runtime(
             retry_after=cfg.router_settings.retry_after,
             timeout=cfg.router_settings.timeout,
             fallbacks=_normalize_fallbacks(cfg.deltallm_settings.fallbacks),
-            context_window_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.context_window_fallbacks),
-            content_policy_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.content_policy_fallbacks),
+            context_window_fallbacks=_normalize_fallbacks(
+                cfg.deltallm_settings.context_window_fallbacks
+            ),
+            content_policy_fallbacks=_normalize_fallbacks(
+                cfg.deltallm_settings.content_policy_fallbacks
+            ),
             event_history_size=cfg.general_settings.failover_event_history_size,
         ),
-        deployment_registry=deployment_registry,
+        candidate_planner=app.state.router,
         state_backend=state_backend,
         cooldown_manager=app.state.cooldown_manager,
     )
@@ -208,7 +215,9 @@ async def init_routing_runtime(
                 "ready",
                 f"models={len(app.state.model_registry)} route_groups={len(app.state.route_groups)} callable_targets={len(app.state.callable_target_catalog)}",
             ),
-            BootstrapStatus("background_health_checks", "ready" if health_task is not None else "disabled"),
+            BootstrapStatus(
+                "background_health_checks", "ready" if health_task is not None else "disabled"
+            ),
         ),
     )
 

@@ -703,7 +703,7 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     cooldown_manager = CooldownManager(state_backend=state_backend)
     failover_manager = FailoverManager(
         config=FallbackConfig(),
-        deployment_registry=deployment_registry,
+        candidate_planner=router,
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
@@ -836,7 +836,7 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     cooldown_manager = CooldownManager(state_backend=state_backend)
     failover_manager = FailoverManager(
         config=FallbackConfig(),
-        deployment_registry=deployment_registry,
+        candidate_planner=router,
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
@@ -941,7 +941,7 @@ async def test_model_hot_reload_manager_reloads_runtime_on_model_updated_event()
     cooldown_manager = CooldownManager(state_backend=state_backend)
     failover_manager = FailoverManager(
         config=FallbackConfig(),
-        deployment_registry=deployment_registry,
+        candidate_planner=router,
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
@@ -1039,7 +1039,7 @@ async def test_model_hot_reload_manager_invalidates_route_group_l1_cache_on_mode
     cooldown_manager = CooldownManager(state_backend=state_backend)
     failover_manager = FailoverManager(
         config=FallbackConfig(),
-        deployment_registry=deployment_registry,
+        candidate_planner=router,
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
@@ -1150,7 +1150,7 @@ async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
     cooldown_manager = CooldownManager(state_backend=state_backend)
     failover_manager = FailoverManager(
         config=FallbackConfig(),
-        deployment_registry=deployment_registry,
+        candidate_planner=router,
         state_backend=state_backend,
         cooldown_manager=cooldown_manager,
     )
