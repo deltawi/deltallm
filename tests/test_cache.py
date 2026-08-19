@@ -696,6 +696,53 @@ async def test_streaming_cache_write_failure_does_not_fail_stream_response(clien
 
 
 @pytest.mark.asyncio
+async def test_cancelled_stream_discards_active_cache_accumulator(client, test_app):
+    _enable_stream_cache(test_app)
+    waiting_for_next_chunk = asyncio.Event()
+
+    class BlockingStreamContext(_StreamContext):
+        async def aiter_lines(self):
+            yield (
+                'data: {"id":"chatcmpl-cancel-cache","object":"chat.completion.chunk",'
+                '"choices":[{"index":0,"delta":{"content":"partial"},'
+                '"finish_reason":null}]}'
+            )
+            waiting_for_next_chunk.set()
+            await asyncio.Event().wait()
+
+    def stream(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: int,
+    ):  # noqa: ANN201
+        del method, url, headers, json, timeout
+        return BlockingStreamContext(lines=[])
+
+    test_app.state.http_client.stream = stream
+    request_task = asyncio.create_task(
+        client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+    )
+    await waiting_for_next_chunk.wait()
+
+    assert test_app.state.streaming_cache_handler.active_stream_count == 1
+    request_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request_task
+
+    assert test_app.state.streaming_cache_handler.active_stream_count == 0
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_still_requires_auth(client, test_app):
     _enable_cache(test_app)
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}

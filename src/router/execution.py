@@ -54,9 +54,11 @@ class ManagedFailoverResult(Generic[T]):
     deadline: RequestDeadline
     _release: Callable[[], Awaitable[None]] = field(repr=False)
     _released: bool = field(default=False, init=False, repr=False)
+    _release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def release(self) -> None:
-        if self._released:
-            return
-        self._released = True
-        await self._release()
+        async with self._release_lock:
+            if self._released:
+                return
+            await self._release()
+            self._released = True

@@ -1079,6 +1079,43 @@ async def test_chat_completion_streaming_success(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_stream_releases_capacity_before_post_call_hooks(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    observed_active_requests: list[int] = []
+
+    class CapacityObservingCallback(CustomLogger):
+        async def async_post_call_success_hook(
+            self,
+            data: dict[str, Any],
+            user_api_key_dict: dict[str, Any],
+            response: Any,
+        ) -> None:
+            del data, user_api_key_dict, response
+            observed_active_requests.append(
+                await test_app.state.router_state_backend.get_active_requests(
+                    deployment.deployment_id
+                )
+            )
+
+    manager = CallbackManager()
+    manager.register_callback(CapacityObservingCallback())
+    test_app.state.callback_manager = manager
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert observed_active_requests == [0]
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_streaming_success_ignores_router_usage_write_failure(
     client, test_app
 ):

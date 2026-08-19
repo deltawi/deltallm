@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
+import asyncio
 import httpx
 from fastapi import Request
 
@@ -31,22 +32,24 @@ class OpenedStream:
     internal_stream_usage_requested: bool
     upstream_started: float
     _closed: bool = False
+    _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def close(self, exc: BaseException | None = None) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if exc is None:
-            await self.context_manager.__aexit__(None, None, None)
-        else:
-            await self.context_manager.__aexit__(type(exc), exc, exc.__traceback__)
-        observe_request_phase(
-            route="chat_completions",
-            phase="upstream_stream",
-            outcome="error" if exc is not None else "success",
-            response_kind="stream",
-            latency_seconds=perf_counter() - self.upstream_started,
-        )
+        async with self._close_lock:
+            if self._closed:
+                return
+            if exc is None:
+                await self.context_manager.__aexit__(None, None, None)
+            else:
+                await self.context_manager.__aexit__(type(exc), exc, exc.__traceback__)
+            self._closed = True
+            observe_request_phase(
+                route="chat_completions",
+                phase="upstream_stream",
+                outcome="error" if exc is not None else "success",
+                response_kind="stream",
+                latency_seconds=perf_counter() - self.upstream_started,
+            )
 
 
 async def execute_chat(
