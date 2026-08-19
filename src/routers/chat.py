@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Callable
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from src.cache.pricing import cache_pricing_snapshot_from_deployment
 from src.cache.streaming import StreamWriteContext
@@ -21,6 +22,11 @@ from src.chat import (
     run_text_preflight,
 )
 from src.chat.stream_usage import StreamUsageTracker
+from src.chat.stream_response import (
+    DeadlineStreamingResponse,
+    ManagedStreamLifecycle,
+    close_stream_resources,
+)
 from src.middleware.auth import require_api_key
 from src.mcp.orchestrator import MCPChatOrchestrator, chat_request_has_mcp_tools
 from src.models.errors import InvalidRequestError, ServiceUnavailableError
@@ -108,36 +114,38 @@ async def handle_chat_like_request(
             # so unsupported stream providers fail as a normal HTTP error.
             resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
 
+            managed_stream = await request.app.state.failover_manager.execute_managed_with_failover(
+                primary_deployment=primary,
+                model_group=model_group,
+                execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
+                on_attempt=track_attempt,
+                routing_context=request_context,
+                **failover_kwargs,
+            )
+            opened_stream = managed_stream.value
+            stream_lifecycle = ManagedStreamLifecycle(opened_stream, managed_stream)
+            served_deployment = managed_stream.deployment
+            try:
+                update_served_route_decision(
+                    request,
+                    primary_deployment_id=primary.deployment_id,
+                    served_deployment_id=served_deployment.deployment_id,
+                )
+            except BaseException as exc:
+                await close_stream_resources(lambda failure=exc: stream_lifecycle.close(failure))
+                raise
+
             async def stream_sse():
                 cache_context = getattr(request.state, "cache_context", None)
                 stream_handler = getattr(request.app.state, "streaming_cache_handler", None)
                 stream_id = None
                 stream_write_context: StreamWriteContext | None = None
                 stream_usage = StreamUsageTracker()
-                opened_stream = None
-                served_deployment = None
-                failure_exc: Exception | None = None
+                failure_exc: BaseException | None = None
+                stream_error: Exception | None = None
                 stream_cache_complete = False
+                resolved_usage = None
                 try:
-                    (
-                        opened_stream,
-                        served_deployment,
-                    ) = await request.app.state.failover_manager.execute_with_failover(
-                        primary_deployment=primary,
-                        model_group=model_group,
-                        execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
-                        return_deployment=True,
-                        on_attempt=track_attempt,
-                        routing_context=request_context,
-                        **failover_kwargs,
-                    )
-                    update_served_route_decision(
-                        request,
-                        primary_deployment_id=primary.deployment_id,
-                        served_deployment_id=served_deployment.deployment_id,
-                    )
-                    params = opened_stream.params
-                    api_base_local = opened_stream.api_base
                     if (
                         enable_stream_cache
                         and request.url.path == "/v1/chat/completions"
@@ -213,57 +221,24 @@ async def handle_chat_like_request(
                             continue
                         yield f"{out_line}\n\n"
                     resolved_usage = stream_usage.resolve(payload)
+                except asyncio.CancelledError as exc:
+                    failure_exc = exc
+                    raise
+                except Exception as exc:
+                    failure_exc = exc
+                    stream_error = exc
+                finally:
                     if (
                         stream_id is not None
                         and stream_handler is not None
-                        and stream_write_context is not None
+                        and (failure_exc is not None or not stream_cache_complete)
                     ):
-                        if stream_cache_complete:
-                            await stream_handler.finalize_and_store(
-                                stream_id,
-                                stream_write_context,
-                                usage=resolved_usage.usage,
-                            )
-                        else:
-                            stream_handler.discard_stream(stream_id)
-                    await record_router_usage(
-                        request.app.state.router_state_backend,
-                        served_deployment.deployment_id,
-                        mode="chat",
-                        usage=resolved_usage.usage,
-                    )
-                    await emit_stream_success(
-                        request=request,
-                        auth=auth,
-                        payload=payload,
-                        request_data=request_data,
-                        callback_manager=callback_manager,
-                        guardrail_middleware=guardrail_middleware,
-                        callback_start=callback_start,
-                        request_start=request_start,
-                        request_id=request_id,
-                        stream_response_object=stream_response_object,
-                        cache_hit=cache_hit,
-                        cache_key=cache_key,
-                        audit_action=audit_action,
-                        served_deployment=served_deployment,
-                        api_base=api_base_local,
-                        params=params,
-                        usage=resolved_usage.usage,
-                        usage_metadata=resolved_usage.metadata(),
-                    )
-                except Exception as exc:
-                    failure_exc = exc
-                    if stream_id is not None and stream_handler is not None:
                         stream_handler.discard_stream(stream_id)
-                    failure_params = (
-                        opened_stream.params
-                        if opened_stream is not None
-                        else primary.deltallm_params
-                    )
-                    failure_api_base = (
-                        opened_stream.api_base if opened_stream is not None else api_base
-                    )
+                    await close_stream_resources(lambda: stream_lifecycle.close(failure_exc))
+
+                if stream_error is not None:
+                    failure_params = opened_stream.params
+                    failure_api_base = opened_stream.api_base
                     await emit_stream_failure(
                         request=request,
                         auth=auth,
@@ -280,23 +255,69 @@ async def handle_chat_like_request(
                         primary_deployment=primary,
                         api_base=failure_api_base,
                         params=failure_params,
-                        exc=exc,
+                        exc=stream_error,
                     )
-                    raise
-                finally:
-                    if opened_stream is not None:
-                        await opened_stream.close(failure_exc)
+                    raise stream_error
 
-            return StreamingResponse(
-                stream_sse(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "x-deltallm-cache-hit": "false",
-                    **route_decision_headers(request),
-                },
-            )
+                if resolved_usage is None:
+                    return
+                if (
+                    stream_id is not None
+                    and stream_handler is not None
+                    and stream_write_context is not None
+                ):
+                    if stream_cache_complete:
+                        await stream_handler.finalize_and_store(
+                            stream_id,
+                            stream_write_context,
+                            usage=resolved_usage.usage,
+                        )
+                    else:
+                        stream_handler.discard_stream(stream_id)
+                await record_router_usage(
+                    request.app.state.router_state_backend,
+                    served_deployment.deployment_id,
+                    mode="chat",
+                    usage=resolved_usage.usage,
+                )
+                await emit_stream_success(
+                    request=request,
+                    auth=auth,
+                    payload=payload,
+                    request_data=request_data,
+                    callback_manager=callback_manager,
+                    guardrail_middleware=guardrail_middleware,
+                    callback_start=callback_start,
+                    request_start=request_start,
+                    request_id=request_id,
+                    stream_response_object=stream_response_object,
+                    cache_hit=cache_hit,
+                    cache_key=cache_key,
+                    audit_action=audit_action,
+                    served_deployment=served_deployment,
+                    api_base=opened_stream.api_base,
+                    params=opened_stream.params,
+                    usage=resolved_usage.usage,
+                    usage_metadata=resolved_usage.metadata(),
+                )
+
+            try:
+                response = DeadlineStreamingResponse(
+                    stream_sse(),
+                    deadline=managed_stream.deadline,
+                    close=stream_lifecycle.close,
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "x-deltallm-cache-hit": "false",
+                        **route_decision_headers(request),
+                    },
+                )
+            except BaseException as exc:
+                await close_stream_resources(lambda failure=exc: stream_lifecycle.close(failure))
+                raise
+            return response
 
         async def _execute_for_deployment(deployment):  # noqa: ANN001, ANN202
             if not has_mcp_tools:

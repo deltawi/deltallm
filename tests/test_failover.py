@@ -1232,7 +1232,7 @@ async def test_failover_applies_timeout_resolver_to_classified_fallbacks():
 @pytest.mark.parametrize(
     ("status_code", "headers"),
     [
-        (429, {"Retry-After": "7"}),
+        (429, {"Retry-After": "0"}),
         (503, {}),
     ],
 )
@@ -1308,6 +1308,97 @@ async def test_failover_retries_raw_http_timeout_when_route_policy_targets_timeo
     health = await state.get_health(primary.deployment_id)
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_budget_is_shared_across_fallback_candidates():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    fallback = _deployment("dep-b")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            num_retries=1,
+            retry_after=0.001,
+            timeout=1.0,
+            backoff_jitter=False,
+            fallbacks={"group-a": ["group-b"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary], "group-b": [fallback]},
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        raise TimeoutError(message="provider timed out")
+
+    with pytest.raises(TimeoutError):
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    assert attempts == ["dep-a", "dep-a", "dep-b"]
+
+
+@pytest.mark.asyncio
+async def test_total_deadline_bounds_retry_backoff():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            num_retries=1,
+            retry_after=0.05,
+            timeout=0.01,
+            backoff_jitter=False,
+        ),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts = 0
+
+    async def run(_deployment: Deployment) -> str:
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError(message="provider timed out")
+
+    with pytest.raises(TimeoutError, match="Request deadline exceeded"):
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_managed_attempt_holds_capacity_until_caller_releases():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+
+    async def run(_deployment: Deployment) -> str:
+        return "stream-open"
+
+    managed = await manager.execute_managed_with_failover(
+        primary,
+        "group-a",
+        run,
+        routing_context={ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}},
+    )
+
+    assert managed.value == "stream-open"
+    assert managed.deployment is primary
+    assert await state.get_active_requests(primary.deployment_id) == 1
+
+    await managed.release()
+    await managed.release()
+
+    assert await state.get_active_requests(primary.deployment_id) == 0
 
 
 @pytest.mark.asyncio

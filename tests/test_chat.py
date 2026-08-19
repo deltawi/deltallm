@@ -1079,6 +1079,43 @@ async def test_chat_completion_streaming_success(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_stream_releases_capacity_before_post_call_hooks(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    observed_active_requests: list[int] = []
+
+    class CapacityObservingCallback(CustomLogger):
+        async def async_post_call_success_hook(
+            self,
+            data: dict[str, Any],
+            user_api_key_dict: dict[str, Any],
+            response: Any,
+        ) -> None:
+            del data, user_api_key_dict, response
+            observed_active_requests.append(
+                await test_app.state.router_state_backend.get_active_requests(
+                    deployment.deployment_id
+                )
+            )
+
+    manager = CallbackManager()
+    manager.register_callback(CapacityObservingCallback())
+    test_app.state.callback_manager = manager
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert observed_active_requests == [0]
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_streaming_success_ignores_router_usage_write_failure(
     client, test_app
 ):
@@ -1370,11 +1407,13 @@ class _StreamContext:
         self.status_code = status_code
         self._lines = lines
         self._line_error = line_error
+        self.exited = False
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
+        self.exited = True
         return None
 
     async def aiter_lines(self):
@@ -1686,6 +1725,58 @@ async def test_stream_retries_before_first_token_with_failover(client, test_app)
     assert response.status_code == 200
     assert "data: [DONE]" in response.text
     assert calls["count"] == 2
+    assert response.headers["x-deltallm-route-deployment"] == "gpt-4o-mini-fallback"
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_stream_cancellation_closes_upstream_and_releases_active_permit(client, test_app):
+    stream_started = asyncio.Event()
+    keep_stream_open = asyncio.Event()
+
+    class BlockingStreamContext(_StreamContext):
+        async def aiter_lines(self):
+            yield (
+                'data: {"id":"chatcmpl-cancel","object":"chat.completion.chunk",'
+                '"choices":[{"index":0,"delta":{"role":"assistant"},'
+                '"finish_reason":null}]}'
+            )
+            stream_started.set()
+            await keep_stream_open.wait()
+
+    context = BlockingStreamContext(status_code=200, lines=[])
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
+        del method, url, headers, json, timeout
+        return context
+
+    test_app.state.http_client.stream = stream
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    request_task = asyncio.create_task(
+        client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+    )
+    await asyncio.wait_for(stream_started.wait(), timeout=1.0)
+
+    assert (
+        await test_app.state.router_state_backend.get_active_requests(deployment.deployment_id) == 1
+    )
+
+    request_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request_task
+
+    assert context.exited is True
+    assert (
+        await test_app.state.router_state_backend.get_active_requests(deployment.deployment_id) == 0
+    )
 
 
 @pytest.mark.asyncio
@@ -1713,18 +1804,23 @@ async def test_stream_failure_after_failover_uses_last_attempted_deployment(clie
 
     test_app.state.router.select_deployment = choose_primary
 
+    stream_contexts: list[_StreamContext] = []
+
     def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
         del method, url, json, timeout
         auth = headers.get("Authorization", "")
         if auth.endswith("provider-key"):
-            return _StreamContext(status_code=503, lines=[])
-        return _StreamContext(
-            status_code=200,
-            lines=[
-                'data: {"id":"chatcmpl-fb","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}',
-            ],
-            line_error=httpx.ReadError("fallback stream broke"),
-        )
+            context = _StreamContext(status_code=503, lines=[])
+        else:
+            context = _StreamContext(
+                status_code=200,
+                lines=[
+                    'data: {"id":"chatcmpl-fb","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}',
+                ],
+                line_error=httpx.ReadError("fallback stream broke"),
+            )
+        stream_contexts.append(context)
+        return context
 
     test_app.state.http_client.stream = stream
     headers = {
@@ -1754,6 +1850,11 @@ async def test_stream_failure_after_failover_uses_last_attempted_deployment(clie
     fallback_health = await test_app.state.router_state_backend.get_health("gpt-4o-mini-fallback")
     assert primary_health.get("last_error") == "Provider error: 503"
     assert fallback_health.get("last_error") == "fallback stream broke"
+    assert len(stream_contexts) == 2
+    assert all(context.exited for context in stream_contexts)
+    assert (
+        await test_app.state.router_state_backend.get_active_requests(fallback.deployment_id) == 0
+    )
 
 
 @pytest.mark.asyncio

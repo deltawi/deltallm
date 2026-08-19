@@ -7,6 +7,7 @@ import random
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -21,8 +22,13 @@ from src.models.errors import (
     TimeoutError,
     parse_retry_after_header,
 )
-from src.router.candidates import DEFAULT_ATTEMPT_PERMIT_TTL_SECONDS, RouteCandidatePlanner
+from src.router.candidates import (
+    AttemptPermit,
+    DEFAULT_ATTEMPT_PERMIT_TTL_SECONDS,
+    RouteCandidatePlanner,
+)
 from src.router.cooldown import CooldownManager
+from src.router.execution import ManagedFailoverResult, RequestDeadline
 from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
 from src.router.state import DeploymentStateBackend
@@ -232,13 +238,19 @@ class FailoverManager:
                 error_msg[:200],
             )
 
-    def _compute_backoff(self, attempt: int) -> float:
+    def _compute_backoff(self, attempt: int, error: Exception | None = None) -> float:
         base = self.config.retry_after or 1.0
         delay = base * (self.config.backoff_multiplier**attempt)
         delay = min(delay, self.config.backoff_max)
         if self.config.backoff_jitter:
             delay = delay * (0.5 + random.random() * 0.5)
-        return delay
+        retry_after = getattr(error, "retry_after", None)
+        if retry_after is not None:
+            try:
+                delay = max(delay, max(0.0, float(retry_after)))
+            except (TypeError, ValueError):
+                pass
+        return min(delay, self.config.backoff_max)
 
     @staticmethod
     def _notify_attempt(
@@ -347,13 +359,17 @@ class FailoverManager:
         retry_max_attempts: int | None = None,
         retryable_error_classes: list[str] | set[str] | None = None,
         routing_context: dict[str, Any] | None = None,
+        _manage_attempt_lifecycle: bool = False,
     ) -> Any:
         routing_context = routing_context if routing_context is not None else {}
-        chain = await self._build_fallback_chain(
-            primary_deployment,
-            model_group,
-            request_tokens,
-            routing_context,
+        deadline = RequestDeadline.after(self._effective_timeout(timeout_seconds))
+        chain = await deadline.wait_for(
+            self._build_fallback_chain(
+                primary_deployment,
+                model_group,
+                request_tokens,
+                routing_context,
+            )
         )
         effective_retries = self._effective_retry_count(retry_max_attempts)
         effective_retry_classes = self._normalize_retryable_error_classes(retryable_error_classes)
@@ -361,19 +377,22 @@ class FailoverManager:
         previous_deployment_id = primary_deployment.deployment_id
         visited_ids: set[str] = set()
         attempted_ids: set[str] = set()
+        retries_used = 0
 
         for chain_index, deployment in enumerate(chain):
             if deployment.deployment_id in visited_ids:
                 continue
             visited_ids.add(deployment.deployment_id)
             deployment_was_attempted = False
-            for attempt in range(effective_retries + 1):
+            attempt = 0
+            while True:
                 try:
-                    attempted, result = await self._execute_attempt(
+                    attempted, result, permit = await self._execute_attempt(
                         deployment,
                         execute,
                         routing_context,
                         attempted_ids,
+                        deadline,
                         on_attempt=on_attempt,
                         timeout_seconds=timeout_seconds,
                         timeout_for_deployment=timeout_for_deployment,
@@ -381,22 +400,36 @@ class FailoverManager:
                     if not attempted:
                         break
                     deployment_was_attempted = True
+                    try:
+                        if chain_index > 0:
+                            self._record_fallback_event(
+                                model_group=model_group,
+                                from_id=previous_deployment_id,
+                                to_id=deployment.deployment_id,
+                                reason="primary_failed",
+                                classification="success",
+                                error_msg="",
+                                attempt=attempt,
+                                success=True,
+                            )
 
-                    if chain_index > 0:
-                        self._record_fallback_event(
-                            model_group=model_group,
-                            from_id=previous_deployment_id,
-                            to_id=deployment.deployment_id,
-                            reason="primary_failed",
-                            classification="success",
-                            error_msg="",
-                            attempt=attempt,
-                            success=True,
-                        )
-
-                    if return_deployment:
-                        return result, deployment
-                    return result
+                        if _manage_attempt_lifecycle:
+                            managed = ManagedFailoverResult(
+                                value=result,
+                                deployment=deployment,
+                                deadline=deadline,
+                                _release=partial(self._release_attempt, permit, deployment),
+                            )
+                            permit = None
+                            return managed
+                        await self._release_attempt(permit, deployment)
+                        permit = None
+                        if return_deployment:
+                            return result, deployment
+                        return result
+                    finally:
+                        if permit is not None:
+                            await self._release_attempt(permit, deployment)
                 except Exception as exc:
                     deployment_was_attempted = deployment.deployment_id in attempted_ids
                     last_error, classification, allow_classified_fallbacks = (
@@ -429,11 +462,13 @@ class FailoverManager:
                     )
 
                     if allow_classified_fallbacks:
-                        extra_chain = await self._get_classified_fallbacks(
-                            classification,
-                            model_group,
-                            routing_context,
-                            excluded_ids=visited_ids | attempted_ids,
+                        extra_chain = await deadline.wait_for(
+                            self._get_classified_fallbacks(
+                                classification,
+                                model_group,
+                                routing_context,
+                                excluded_ids=visited_ids | attempted_ids,
+                            )
                         )
                         if extra_chain:
                             extra_result = await self._try_classified_fallbacks(
@@ -445,15 +480,26 @@ class FailoverManager:
                                 routing_context,
                                 visited_ids,
                                 attempted_ids,
+                                deadline,
                                 on_attempt=on_attempt,
                                 timeout_seconds=timeout_seconds,
                                 timeout_for_deployment=timeout_for_deployment,
                             )
                             if extra_result is not None:
+                                result, served, permit = extra_result
+                                if _manage_attempt_lifecycle:
+                                    managed = ManagedFailoverResult(
+                                        value=result,
+                                        deployment=served,
+                                        deadline=deadline,
+                                        _release=partial(self._release_attempt, permit, served),
+                                    )
+                                    permit = None
+                                    return managed
+                                await self._release_attempt(permit, served)
                                 if return_deployment:
-                                    result, served = extra_result
                                     return result, served
-                                return extra_result[0]
+                                return result
 
                     if not affects_deployment_health(last_error):
                         if last_error is exc:
@@ -467,9 +513,12 @@ class FailoverManager:
                             last_error,
                             effective_retry_classes,
                         )
-                        and attempt < effective_retries
+                        and retries_used < effective_retries
                     ):
-                        await asyncio.sleep(self._compute_backoff(attempt))
+                        delay = self._compute_backoff(retries_used, last_error)
+                        retries_used += 1
+                        await deadline.wait_for(asyncio.sleep(delay))
+                        attempt += 1
                         continue
                     break
 
@@ -483,6 +532,34 @@ class FailoverManager:
         raise ServiceUnavailableError(
             message="No healthy deployments available",
             code=NO_HEALTHY_DEPLOYMENTS_CODE,
+        )
+
+    async def execute_managed_with_failover(
+        self,
+        primary_deployment: Deployment,
+        model_group: str,
+        execute: Callable[[Deployment], Awaitable[Any]],
+        request_tokens: int = 0,
+        *,
+        on_attempt: Callable[[Deployment], None] | None = None,
+        timeout_seconds: float | None = None,
+        timeout_for_deployment: TimeoutForDeployment | None = None,
+        retry_max_attempts: int | None = None,
+        retryable_error_classes: list[str] | set[str] | None = None,
+        routing_context: dict[str, Any] | None = None,
+    ) -> ManagedFailoverResult[Any]:
+        return await self.execute_with_failover(
+            primary_deployment=primary_deployment,
+            model_group=model_group,
+            execute=execute,
+            request_tokens=request_tokens,
+            on_attempt=on_attempt,
+            timeout_seconds=timeout_seconds,
+            timeout_for_deployment=timeout_for_deployment,
+            retry_max_attempts=retry_max_attempts,
+            retryable_error_classes=retryable_error_classes,
+            routing_context=routing_context,
+            _manage_attempt_lifecycle=True,
         )
 
     async def _get_classified_fallbacks(
@@ -530,21 +607,23 @@ class FailoverManager:
         routing_context: dict[str, Any],
         visited_ids: set[str],
         attempted_ids: set[str],
+        deadline: RequestDeadline,
         *,
         on_attempt: Callable[[Deployment], None] | None = None,
         timeout_seconds: float | None,
         timeout_for_deployment: TimeoutForDeployment | None = None,
-    ) -> tuple[Any, Deployment] | None:
+    ) -> tuple[Any, Deployment, AttemptPermit] | None:
         for deployment in chain:
             if deployment.deployment_id in visited_ids:
                 continue
             visited_ids.add(deployment.deployment_id)
             try:
-                attempted, result = await self._execute_attempt(
+                attempted, result, permit = await self._execute_attempt(
                     deployment,
                     execute,
                     routing_context,
                     attempted_ids,
+                    deadline,
                     on_attempt=on_attempt,
                     timeout_seconds=timeout_seconds,
                     timeout_for_deployment=timeout_for_deployment,
@@ -562,7 +641,7 @@ class FailoverManager:
                     success=True,
                 )
 
-                return result, deployment
+                return result, deployment, permit
             except Exception as exc:
                 normalized_error, failure_classification, allow_classified_fallbacks = (
                     self._normalize_execution_error(
@@ -606,48 +685,57 @@ class FailoverManager:
         execute: Callable[[Deployment], Awaitable[Any]],
         routing_context: dict[str, Any],
         attempted_ids: set[str],
+        deadline: RequestDeadline,
         *,
         on_attempt: Callable[[Deployment], None] | None,
         timeout_seconds: float | None,
         timeout_for_deployment: TimeoutForDeployment | None,
-    ) -> tuple[bool, Any]:
+    ) -> tuple[bool, Any, AttemptPermit | None]:
         attempt_timeout = self._effective_attempt_timeout(
             deployment,
             timeout_seconds,
             timeout_for_deployment,
         )
-        permit = await self.candidate_planner.acquire_attempt(
-            deployment,
-            routing_context,
-            lease_ttl_seconds=self._attempt_permit_ttl_seconds(attempt_timeout),
+        attempt_timeout = min(attempt_timeout, deadline.require_remaining())
+        permit = await deadline.wait_for(
+            self.candidate_planner.acquire_attempt(
+                deployment,
+                routing_context,
+                lease_ttl_seconds=self._attempt_permit_ttl_seconds(attempt_timeout),
+            )
         )
         if not permit.acquired:
-            return False, None
+            return False, None, None
 
         attempted_ids.add(deployment.deployment_id)
         try:
             self._notify_attempt(on_attempt, deployment)
             started = time.monotonic()
-            result = await asyncio.wait_for(
-                execute(deployment),
-                timeout=attempt_timeout,
-            )
+            result = await deadline.wait_for(execute(deployment), limit=attempt_timeout)
             latency_ms = (time.monotonic() - started) * 1000
             await self.state.record_latency(deployment.deployment_id, latency_ms)
             await self.cooldown.record_success(deployment.deployment_id)
-            return True, result
-        finally:
-            try:
-                await self.candidate_planner.release_attempt(permit)
-            except Exception:
-                # Cleanup failure is local routing-state degradation. The expiring,
-                # owner-scoped permit bounds the stale count, and a provider result or
-                # provider error must never be replaced or retried because release failed.
-                logger.warning(
-                    "router attempt permit release failed deployment_id=%s",
-                    deployment.deployment_id,
-                    exc_info=True,
-                )
+            return True, result, permit
+        except BaseException:
+            await self._release_attempt(permit, deployment)
+            raise
+
+    async def _release_attempt(
+        self,
+        permit: AttemptPermit,
+        deployment: Deployment,
+    ) -> None:
+        try:
+            await self.candidate_planner.release_attempt(permit)
+        except Exception:
+            # Cleanup failure is local routing-state degradation. The expiring,
+            # owner-scoped permit bounds the stale count, and a provider result or
+            # provider error must never be replaced or retried because release failed.
+            logger.warning(
+                "router attempt permit release failed deployment_id=%s",
+                deployment.deployment_id,
+                exc_info=True,
+            )
 
     @staticmethod
     def _attempt_permit_ttl_seconds(attempt_timeout: float) -> int:

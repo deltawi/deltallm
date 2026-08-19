@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from redis.asyncio import Redis
 
+from src.chat.stream_response import DeadlineStreamingResponse
 from src.router import (
     AttemptCapacity,
     AttemptCapacityLimit,
@@ -17,6 +18,7 @@ from src.router import (
     RoutingStrategy,
 )
 from src.router.candidates import ROUTING_MODE_CONTEXT_KEY
+from src.router.execution import ManagedFailoverResult, RequestDeadline
 from src.router.router import Deployment
 
 
@@ -110,6 +112,64 @@ async def test_candidate_eligibility_uses_real_redis_batch_state_under_concurren
             for plan in plans
         ] == [[eligible.deployment_id] for _ in contexts]
         assert state.get_backend_status()["mode"] == "redis"
+    finally:
+        keys = [key async for key in redis.scan_iter(match=f"*{unique}*")]
+        if keys:
+            await redis.delete(*keys)
+        await redis.aclose()
+
+
+@pytest.mark.skipif(
+    not os.getenv("DELTALLM_TEST_REDIS_URL"),
+    reason="DELTALLM_TEST_REDIS_URL is required for the Redis integration test",
+)
+async def test_stream_disconnect_releases_managed_attempt_in_real_redis() -> None:
+    redis = Redis.from_url(
+        os.environ["DELTALLM_TEST_REDIS_URL"],
+        decode_responses=True,
+    )
+    unique = uuid4().hex
+    deployment = Deployment(
+        deployment_id=f"router-managed-stream-{unique}",
+        model_name="integration-group",
+        deltallm_params={"provider": "openai", "model": "openai/integration-model"},
+        model_info={"mode": "chat"},
+    )
+    state = RedisStateBackend(redis, degraded_mode="fail_closed")
+
+    try:
+        permit = await state.acquire_attempt(deployment.deployment_id, AttemptCapacity())
+        assert permit.acquired is True
+
+        async def release() -> None:
+            await state.release_attempt(permit)
+
+        managed = ManagedFailoverResult(
+            value="opened-stream",
+            deployment=deployment,
+            deadline=RequestDeadline.after(10),
+            _release=release,
+        )
+
+        async def body():
+            yield "data: chunk\n\n"
+
+        async def send(message):  # noqa: ANN001, ANN202
+            if message["type"] != "http.response.body" or not message.get("more_body"):
+                return
+            assert int(await redis.get(f"active_requests:{deployment.deployment_id}") or 0) == 1
+            raise OSError("client disconnected")
+
+        response = DeadlineStreamingResponse(
+            body(),
+            deadline=managed.deadline,
+            close=lambda _exc: managed.release(),
+            media_type="text/event-stream",
+        )
+        with pytest.raises(OSError, match="client disconnected"):
+            await response.stream_response(send)
+
+        assert int(await redis.get(f"active_requests:{deployment.deployment_id}") or 0) == 0
     finally:
         keys = [key async for key in redis.scan_iter(match=f"*{unique}*")]
         if keys:
