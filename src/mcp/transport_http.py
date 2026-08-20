@@ -21,6 +21,7 @@ MCP_PROTOCOL_VERSION = "2025-11-25"
 _MCP_ACCEPT = "application/json, text/event-stream"
 _MCP_SESSION_TTL_SECONDS = 30 * 60
 _MCP_MAX_SESSION_STATES = 1024
+_SESSION_REPLAY_SAFE_METHODS = frozenset({"tools/list"})
 
 
 @dataclass
@@ -132,6 +133,11 @@ class StreamableHTTPMCPClient:
             )
         except _StaleMCPSessionError as exc:
             await self._clear_session(key, state, stale_session_id=exc.session_id)
+            if envelope.method not in _SESSION_REPLAY_SAFE_METHODS:
+                raise MCPTransportError(
+                    f"MCP session expired during non-replay-safe method '{envelope.method}'; "
+                    "the request was not retried"
+                ) from exc
             state = await self._ensure_initialized(server, request_headers=request_headers, key=key)
             try:
                 return await self._send(

@@ -14,6 +14,7 @@ class _AlwaysBudgetExceeded:
     async def check_budgets(self, **kwargs):
         del kwargs
         from src.billing.budget import BudgetExceeded
+
         raise BudgetExceeded(entity_type="key", entity_id="k1", spend=10.0, max_budget=5.0)
 
 
@@ -45,7 +46,16 @@ class _FakeMCPGateway:
             )()
         ]
 
-    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+    async def call_tool(
+        self,
+        auth,
+        *,
+        namespaced_tool_name,
+        arguments,
+        request_headers=None,
+        request_id=None,
+        correlation_id=None,
+    ):  # noqa: ANN001, ANN201
         del auth, request_headers, request_id, correlation_id
         self.tool_calls.append((namespaced_tool_name, dict(arguments or {})))
         return MCPToolCallResult(
@@ -115,7 +125,14 @@ def test_responses_to_chat_request_preserves_mcp_tools() -> None:
         {
             "model": "gpt-4o-mini",
             "input": "hello",
-            "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
             "tool_choice": "auto",
         }
     )
@@ -133,11 +150,31 @@ async def test_responses_with_mcp_tool_auto_executes(client, test_app):
     gateway = _FakeMCPGateway()
     test_app.state.mcp_gateway_service = gateway
     test_app.state.audit_service = _RecordingAuditService()
+    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    primary = registry[0]
+    fallback = type(primary)(
+        deployment_id="gpt-4o-mini-responses-fallback",
+        model_name=primary.model_name,
+        deltallm_params={
+            **primary.deltallm_params,
+            "api_key": "provider-key-fallback",
+        },
+        model_info=dict(primary.model_info),
+    )
+    registry.append(fallback)
+
+    async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
+        del model_group, request_context
+        return primary
+
+    test_app.state.router.select_deployment = choose_primary
     upstream_calls: list[dict[str, object]] = []
+    attempted_auths: list[str | None] = []
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
-        del headers, timeout
+        del timeout
         upstream_calls.append(json)
+        attempted_auths.append(headers.get("Authorization"))
         assert url.endswith("/chat/completions")
         if len(upstream_calls) == 1:
             payload = {
@@ -170,12 +207,24 @@ async def test_responses_with_mcp_tool_auto_executes(client, test_app):
             return httpx.Response(200, json=payload)
 
         assert any(message.get("role") == "tool" for message in json["messages"])
+        if headers.get("Authorization") == "Bearer provider-key":
+            return httpx.Response(
+                503,
+                json={"error": {"message": "follow-up unavailable"}},
+                request=httpx.Request("POST", url),
+            )
         payload = {
             "id": "chatcmpl-resp-tool-2",
             "object": "chat.completion",
             "created": 1700000001,
             "model": json["model"],
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "done"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
         }
         return httpx.Response(200, json=payload)
@@ -185,7 +234,14 @@ async def test_responses_with_mcp_tool_auto_executes(client, test_app):
     body = {
         "model": "gpt-4o-mini",
         "input": "Search docs for DeltaLLM",
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/responses", headers=headers, json=body)
@@ -193,7 +249,14 @@ async def test_responses_with_mcp_tool_auto_executes(client, test_app):
     assert response.status_code == 200
     assert response.json()["object"] == "response"
     assert response.json()["output"][0]["content"][0]["text"] == "done"
-    assert len(upstream_calls) == 2
+    assert len(upstream_calls) == 3
+    assert attempted_auths == [
+        "Bearer provider-key",
+        "Bearer provider-key",
+        "Bearer provider-key-fallback",
+    ]
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
     assert gateway.tool_calls == [("docs.search", {"query": "delta"})]
 
 
@@ -217,7 +280,14 @@ async def test_responses_stream_with_mcp_tools_returns_400(client, test_app):
         "model": "gpt-4o-mini",
         "input": "hello",
         "stream": True,
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/responses", headers=headers, json=body)
@@ -233,7 +303,14 @@ async def test_responses_with_manual_approval_mcp_tools_returns_400(client, test
     body = {
         "model": "gpt-4o-mini",
         "input": "Search docs for DeltaLLM",
-        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+        "tools": [
+            {
+                "type": "mcp",
+                "server": "docs",
+                "allowed_tools": ["search"],
+                "require_approval": "never",
+            }
+        ],
     }
 
     response = await client.post("/v1/responses", headers=headers, json=body)
@@ -246,7 +323,10 @@ async def test_responses_with_manual_approval_mcp_tools_returns_400(client, test
 @pytest.mark.parametrize(
     ("path", "body"),
     [
-        ("/v1/chat/completions", {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
+        (
+            "/v1/chat/completions",
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+        ),
         ("/v1/completions", {"model": "gpt-4o-mini", "prompt": "hello"}),
         ("/v1/responses", {"model": "gpt-4o-mini", "input": "hello"}),
     ],
@@ -265,17 +345,40 @@ async def test_text_endpoints_budget_exceeded_returns_429(client, test_app, path
 @pytest.mark.parametrize(
     ("path", "body", "expected_action"),
     [
-        ("/v1/chat/completions", {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}, "CHAT_COMPLETION_REQUEST"),
-        ("/v1/completions", {"model": "gpt-4o-mini", "prompt": "hello", "stream": False}, "COMPLETION_REQUEST"),
-        ("/v1/responses", {"model": "gpt-4o-mini", "input": "hello", "stream": False}, "RESPONSES_REQUEST"),
-        ("/v1/embeddings", {"model": "text-embedding-3-small", "input": "hello"}, "EMBEDDING_REQUEST"),
+        (
+            "/v1/chat/completions",
+            {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
+            "CHAT_COMPLETION_REQUEST",
+        ),
+        (
+            "/v1/completions",
+            {"model": "gpt-4o-mini", "prompt": "hello", "stream": False},
+            "COMPLETION_REQUEST",
+        ),
+        (
+            "/v1/responses",
+            {"model": "gpt-4o-mini", "input": "hello", "stream": False},
+            "RESPONSES_REQUEST",
+        ),
+        (
+            "/v1/embeddings",
+            {"model": "text-embedding-3-small", "input": "hello"},
+            "EMBEDDING_REQUEST",
+        ),
     ],
 )
 async def test_data_plane_routes_emit_audit_success(client, test_app, path, body, expected_action):
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
 
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-audit-success"}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-audit-success",
+    }
     response = await client.post(path, headers=headers, json=body)
     assert response.status_code == 200
 
@@ -294,8 +397,15 @@ async def test_data_plane_routes_emit_audit_success(client, test_app, path, body
 async def test_chat_stream_emits_audit_success(client, test_app):
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
-    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-stream-audit"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-stream-audit",
+    }
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200

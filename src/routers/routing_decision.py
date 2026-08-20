@@ -47,7 +47,9 @@ def _build_failure_target(request: Request, deployment: Any) -> FailureTarget:
         raw_provider = str(params.get("provider") or "").strip()
         provider = raw_provider or None
 
-    default_api_base = getattr(getattr(request.app.state, "settings", None), "openai_base_url", None)
+    default_api_base = getattr(
+        getattr(request.app.state, "settings", None), "openai_base_url", None
+    )
     raw_api_base = params.get("api_base", default_api_base)
     api_base = str(raw_api_base).rstrip("/") if raw_api_base else None
     deployment_model = params.get("model")
@@ -79,7 +81,9 @@ def resolve_failure_target(
     return FailureTarget()
 
 
-def capture_initial_route_decision(request: Request, request_context: dict[str, Any]) -> dict[str, Any] | None:
+def capture_initial_route_decision(
+    request: Request, request_context: dict[str, Any]
+) -> dict[str, Any] | None:
     decision = request_context.get("route_decision")
     if not isinstance(decision, dict):
         return None
@@ -94,12 +98,15 @@ def update_served_route_decision(
     *,
     primary_deployment_id: str,
     served_deployment_id: str,
+    fallback_used: bool | None = None,
 ) -> dict[str, Any]:
     current = getattr(request.state, "route_decision", None)
     decision = dict(current) if isinstance(current, dict) else {}
     decision["primary_deployment_id"] = primary_deployment_id
     decision["served_deployment_id"] = served_deployment_id
-    decision["fallback_used"] = primary_deployment_id != served_deployment_id
+    decision["fallback_used"] = (
+        primary_deployment_id != served_deployment_id if fallback_used is None else fallback_used
+    )
     request.state.route_decision = decision
     _refresh_request_resolution(request)
     return decision
@@ -112,7 +119,9 @@ def route_decision_metadata(request: Request) -> dict[str, Any] | None:
     return deepcopy(decision)
 
 
-def set_prompt_provenance(request: Request, provenance: dict[str, Any] | None) -> dict[str, Any] | None:
+def set_prompt_provenance(
+    request: Request, provenance: dict[str, Any] | None
+) -> dict[str, Any] | None:
     request.state.prompt_provenance = deepcopy(provenance) if isinstance(provenance, dict) else None
     return _refresh_request_resolution(request)
 

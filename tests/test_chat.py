@@ -9,6 +9,7 @@ from uuid import UUID
 import httpx
 import pytest
 
+import src.routers.chat as chat_router
 from src.audit.actions import AuditAction
 from src.callbacks import CallbackManager, CustomLogger
 from src.guardrails.base import CustomGuardrail, GuardrailAction
@@ -175,6 +176,17 @@ class _ExplodingMCPGateway:
     async def call_tool(self, auth, **kwargs):  # noqa: ANN001, ANN201
         del auth, kwargs
         raise AssertionError("MCP gateway should not be used for non-MCP requests")
+
+
+class _RaisingMCPOrchestrator:
+    def __init__(self, gateway, audit_service=None, max_mcp_tool_hops=4, max_mcp_tools_per_turn=8):
+        del gateway, audit_service, max_mcp_tool_hops, max_mcp_tools_per_turn
+
+    async def execute(
+        self, request_context, auth, payload, execute_chat_call, guardrail_middleware
+    ):  # noqa: ANN001, ANN002, ANN003, ANN204
+        del request_context, auth, payload, execute_chat_call, guardrail_middleware
+        raise RuntimeError("unexpected orchestration failure")
 
 
 class _FakeMCPGateway:
@@ -553,6 +565,81 @@ def _mcp_success_post(upstream_calls: list[dict[str, object]]):  # noqa: ANN202
     return post
 
 
+def _mcp_tool_call_response(model: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-tool-call",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_docs_search",
+                                "type": "function",
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": jsonlib.dumps({"query": "delta"}),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        },
+    )
+
+
+def _mcp_final_response(model: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-tool-final",
+            "object": "chat.completion",
+            "created": 1700000001,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "done"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        },
+    )
+
+
+def _configure_chat_fallback(test_app):  # noqa: ANN001, ANN201
+    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    primary = registry[0]
+    fallback = type(primary)(
+        deployment_id="gpt-4o-mini-mcp-fallback",
+        model_name=primary.model_name,
+        deltallm_params={
+            **primary.deltallm_params,
+            "api_key": "provider-key-fallback",
+        },
+        model_info=dict(primary.model_info),
+    )
+    registry.append(fallback)
+
+    async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
+        del model_group, request_context
+        return primary
+
+    test_app.state.router.select_deployment = choose_primary
+    return primary, fallback
+
+
 @pytest.mark.asyncio
 async def test_chat_completion_with_mcp_tool_auto_executes_and_audits(client, test_app):
     gateway = _FakeMCPGateway()
@@ -600,6 +687,193 @@ async def test_chat_completion_with_mcp_tool_auto_executes_and_audits(client, te
     ]
     assert [critical for _, critical in mcp_audits] == [True, False]
     assert mcp_audits[0][0].event_id != mcp_audits[1][0].event_id
+
+
+@pytest.mark.parametrize("followup_failure", ["429", "5xx", "timeout"])
+@pytest.mark.asyncio
+async def test_mcp_tool_is_not_replayed_when_followup_model_fails_over(
+    client,
+    test_app,
+    followup_failure: str,
+):
+    gateway = _FakeMCPGateway()
+    audit = _RecordingAuditService()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = audit
+    primary, fallback = _configure_chat_fallback(test_app)
+    upstream_calls: list[tuple[str | None, bool]] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del timeout
+        has_tool_result = any(message.get("role") == "tool" for message in json["messages"])
+        authorization = headers.get("Authorization")
+        upstream_calls.append((authorization, has_tool_result))
+        if not has_tool_result:
+            return _mcp_tool_call_response(json["model"])
+        if authorization == "Bearer provider-key":
+            request = httpx.Request("POST", url)
+            if followup_failure == "timeout":
+                raise httpx.ReadTimeout("final model timed out", request=request)
+            status_code = 429 if followup_failure == "429" else 503
+            return httpx.Response(
+                status_code,
+                json={"error": {"message": f"follow-up {followup_failure}"}},
+                request=request,
+            )
+        return _mcp_final_response(json["model"])
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "x-request-id": f"req-mcp-followup-{followup_failure}",
+        },
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Search docs"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "done"
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    assert gateway.tool_calls == [
+        ("docs.search", {"query": "delta"}, f"req-mcp-followup-{followup_failure}")
+    ]
+    assert upstream_calls == [
+        ("Bearer provider-key", False),
+        ("Bearer provider-key", True),
+        ("Bearer provider-key-fallback", True),
+    ]
+    tool_audits = [
+        event
+        for event, _, _ in audit.records
+        if getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value
+    ]
+    assert [event.status for event in tool_audits] == ["attempted", "success"]
+    assert primary.deployment_id != fallback.deployment_id
+
+
+@pytest.mark.asyncio
+async def test_mcp_model_phases_keep_fallback_affinity_and_report_any_fallback(
+    client,
+    test_app,
+):
+    gateway = _FakeMCPGateway()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = _RecordingAuditService()
+    primary, fallback = _configure_chat_fallback(test_app)
+    upstream_calls: list[tuple[str | None, bool]] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del timeout
+        has_tool_result = any(message.get("role") == "tool" for message in json["messages"])
+        authorization = headers.get("Authorization")
+        upstream_calls.append((authorization, has_tool_result))
+        if not has_tool_result and authorization == "Bearer provider-key":
+            return httpx.Response(
+                503,
+                json={"error": {"message": "initial primary unavailable"}},
+                request=httpx.Request("POST", url),
+            )
+        if not has_tool_result:
+            return _mcp_tool_call_response(json["model"])
+        if authorization == "Bearer provider-key-fallback":
+            return httpx.Response(
+                503,
+                json={"error": {"message": "fallback follow-up unavailable"}},
+                request=httpx.Request("POST", url),
+            )
+        return _mcp_final_response(json["model"])
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Search docs"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "done"
+    assert upstream_calls == [
+        ("Bearer provider-key", False),
+        ("Bearer provider-key-fallback", False),
+        ("Bearer provider-key-fallback", True),
+        ("Bearer provider-key", True),
+    ]
+    assert gateway.tool_calls == [("docs.search", {"query": "delta"}, None)]
+    assert response.headers["x-deltallm-route-deployment"] == primary.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    assert primary.deployment_id != fallback.deployment_id
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_is_not_replayed_when_followup_model_retries(client, test_app):
+    gateway = _FakeMCPGateway()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = _RecordingAuditService()
+    test_app.state.failover_manager.config.num_retries = 1
+    test_app.state.failover_manager.config.retry_after = 0.001
+    test_app.state.failover_manager.config.backoff_jitter = False
+    upstream_phases: list[bool] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del headers, timeout
+        has_tool_result = any(message.get("role") == "tool" for message in json["messages"])
+        upstream_phases.append(has_tool_result)
+        if not has_tool_result:
+            return _mcp_tool_call_response(json["model"])
+        if upstream_phases.count(True) == 1:
+            return httpx.Response(
+                503,
+                json={"error": {"message": "retry follow-up"}},
+                request=httpx.Request("POST", url),
+            )
+        return _mcp_final_response(json["model"])
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Search docs"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert upstream_phases == [False, True, True]
+    assert gateway.tool_calls == [("docs.search", {"query": "delta"}, None)]
+    assert response.headers["x-deltallm-route-fallback-used"] == "false"
 
 
 @pytest.mark.asyncio
@@ -1006,6 +1280,35 @@ async def test_chat_completion_with_mcp_tool_timeout_returns_503(client, test_ap
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_with_mcp_orchestration_unexpected_error_returns_503(
+    client, test_app, monkeypatch
+):
+    monkeypatch.setattr(chat_router, "MCPChatOrchestrator", _RaisingMCPOrchestrator)
+    test_app.state.mcp_gateway_service = _FakeMCPGateway()
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server": "docs",
+                    "allowed_tools": ["search"],
+                    "require_approval": "never",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "service_unavailable"
+    assert response.json()["error"]["message"] == "MCP orchestration failed"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_with_local_mcp_gateway_error_does_not_affect_deployment_health(
     client, test_app
 ):
@@ -1036,6 +1339,7 @@ async def test_chat_completion_with_local_mcp_gateway_error_does_not_affect_depl
 
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "service_unavailable"
+    assert response.json()["error"]["message"] == "MCP orchestration failed"
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 0
