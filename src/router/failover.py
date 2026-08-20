@@ -359,10 +359,11 @@ class FailoverManager:
         retry_max_attempts: int | None = None,
         retryable_error_classes: list[str] | set[str] | None = None,
         routing_context: dict[str, Any] | None = None,
+        request_deadline: RequestDeadline | None = None,
         _manage_attempt_lifecycle: bool = False,
     ) -> Any:
         routing_context = routing_context if routing_context is not None else {}
-        deadline = RequestDeadline.after(self._effective_timeout(timeout_seconds))
+        deadline = request_deadline or self.create_request_deadline(timeout_seconds)
         chain = await deadline.wait_for(
             self._build_fallback_chain(
                 primary_deployment,
@@ -533,6 +534,9 @@ class FailoverManager:
             message="No healthy deployments available",
             code=NO_HEALTHY_DEPLOYMENTS_CODE,
         )
+
+    def create_request_deadline(self, timeout_seconds: float | None = None) -> RequestDeadline:
+        return RequestDeadline.after(self._effective_timeout(timeout_seconds))
 
     async def execute_managed_with_failover(
         self,

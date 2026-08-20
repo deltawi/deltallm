@@ -25,6 +25,7 @@ from src.router import (
     HealthCheckConfig,
     PassiveHealthTracker,
     RedisStateBackend,
+    RequestDeadline,
     ROUTING_MODE_CONTEXT_KEY,
     RouteGroupPolicy,
     Router,
@@ -1368,6 +1369,35 @@ async def test_total_deadline_bounds_retry_backoff():
         await manager.execute_with_failover(primary, "group-a", run)
 
     assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_failover_reuses_caller_owned_request_deadline():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(timeout=10.0),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    deadline = RequestDeadline(expires_at=asyncio.get_running_loop().time())
+    attempts = 0
+
+    async def run(_deployment: Deployment) -> str:
+        nonlocal attempts
+        attempts += 1
+        return "unexpected"
+
+    with pytest.raises(TimeoutError, match="Request deadline exceeded"):
+        await manager.execute_with_failover(
+            primary,
+            "group-a",
+            run,
+            request_deadline=deadline,
+        )
+
+    assert attempts == 0
 
 
 @pytest.mark.asyncio

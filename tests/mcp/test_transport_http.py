@@ -707,6 +707,61 @@ async def test_send_reinitializes_once_after_stale_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_call_tool_does_not_replay_after_stale_session() -> None:
+    client = _FakeHTTPClient(
+        responses=[
+            _response(
+                200,
+                {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-11-25"}},
+                headers={"MCP-Session-Id": "stale-session"},
+            ),
+            _accepted_response(),
+            _response(
+                404,
+                {
+                    "jsonrpc": "2.0",
+                    "id": "server-error",
+                    "error": {"message": "session expired"},
+                },
+            ),
+            _response(
+                200,
+                {"jsonrpc": "2.0", "id": 3, "result": {"protocolVersion": "2025-11-25"}},
+                headers={"MCP-Session-Id": "fresh-session"},
+            ),
+            _accepted_response(),
+            _response(
+                200,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "result": {
+                        "content": [{"type": "text", "text": "ok"}],
+                        "isError": False,
+                    },
+                },
+            ),
+        ]
+    )
+    transport = StreamableHTTPMCPClient(client)  # type: ignore[arg-type]
+
+    with pytest.raises(MCPTransportError, match="request was not retried"):
+        await transport.call_tool(_server(), tool_name="search", arguments={"q": "test"})
+
+    recovered = await transport.call_tool(
+        _server(),
+        tool_name="search",
+        arguments={"q": "retry-from-caller"},
+    )
+    tool_calls = [call for call in client.calls if call["json"].get("method") == "tools/call"]
+    assert len(tool_calls) == 2
+    assert recovered.content == [{"type": "text", "text": "ok"}]
+    recovered_headers = tool_calls[1]["headers"]
+    assert isinstance(recovered_headers, dict)
+    assert recovered_headers["MCP-Session-Id"] == "fresh-session"
+
+
+@pytest.mark.asyncio
 async def test_send_maps_second_stale_session_to_transport_error() -> None:
     client = _FakeHTTPClient(
         responses=[

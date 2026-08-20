@@ -21,6 +21,11 @@ from src.chat import (
     open_stream_with_first_chunk,
     run_text_preflight,
 )
+from src.chat.audit import request_client_ip
+from src.chat.mcp_execution import (
+    MCPChatExecutionService,
+    MCPModelRouting,
+)
 from src.chat.stream_usage import StreamUsageTracker
 from src.chat.stream_response import (
     DeadlineStreamingResponse,
@@ -28,7 +33,11 @@ from src.chat.stream_response import (
     close_stream_resources,
 )
 from src.middleware.auth import require_api_key
-from src.mcp.orchestrator import MCPChatOrchestrator, chat_request_has_mcp_tools
+from src.mcp.orchestrator import (
+    MCPChatOrchestrator,
+    MCPRequestContext,
+    chat_request_has_mcp_tools,
+)
 from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
@@ -319,9 +328,8 @@ async def handle_chat_like_request(
                 raise
             return response
 
-        async def _execute_for_deployment(deployment):  # noqa: ANN001, ANN202
-            if not has_mcp_tools:
-                return await execute_chat(request, payload, deployment)
+        route_fallback_used: bool | None = None
+        if has_mcp_tools:
             gateway = getattr(request.app.state, "mcp_gateway_service", None)
             if gateway is None:
                 raise ServiceUnavailableError(message="MCP gateway service is not available")
@@ -329,32 +337,60 @@ async def handle_chat_like_request(
                 gateway,
                 audit_service=getattr(request.app.state, "audit_service", None),
             )
-            return await orchestrator.execute(
-                request=request,
+            mcp_result = await MCPChatExecutionService(
+                failover_manager=request.app.state.failover_manager,
+                orchestrator=orchestrator,
+                execute_chat_call=lambda phase_payload, deployment: execute_chat(
+                    request,
+                    phase_payload,
+                    deployment,
+                ),
+            ).execute(
+                request_context=MCPRequestContext(
+                    request_headers=dict(request.headers),
+                    request_id=request_id,
+                    correlation_id=request_id,
+                    client_ip=request_client_ip(request),
+                    user_agent=request.headers.get("user-agent"),
+                ),
                 auth=auth,
                 payload=payload,
-                execute_chat_call=lambda request_payload: execute_chat(
-                    request, request_payload, deployment
-                ),
                 guardrail_middleware=guardrail_middleware,
+                routing=MCPModelRouting(
+                    primary_deployment=primary,
+                    model_group=model_group,
+                    routing_context=request_context,
+                    timeout_seconds=failover_kwargs.get("timeout_seconds"),
+                    retry_max_attempts=failover_kwargs.get("retry_max_attempts"),
+                    retryable_error_classes=tuple(
+                        failover_kwargs.get("retryable_error_classes", [])
+                    )
+                    or None,
+                ),
+                on_attempt=track_attempt,
             )
-
-        (
-            (payload_data, api_latency_ms),
-            served_deployment,
-        ) = await request.app.state.failover_manager.execute_with_failover(
-            primary_deployment=primary,
-            model_group=model_group,
-            execute=_execute_for_deployment,
-            return_deployment=True,
-            on_attempt=track_attempt,
-            routing_context=request_context,
-            **failover_kwargs,
-        )
+            payload_data = mcp_result.payload
+            api_latency_ms = mcp_result.api_latency_ms
+            served_deployment = mcp_result.served_deployment
+            route_fallback_used = mcp_result.fallback_used
+        else:
+            (
+                (payload_data, api_latency_ms),
+                served_deployment,
+            ) = await request.app.state.failover_manager.execute_with_failover(
+                primary_deployment=primary,
+                model_group=model_group,
+                execute=lambda deployment: execute_chat(request, payload, deployment),
+                return_deployment=True,
+                on_attempt=track_attempt,
+                routing_context=request_context,
+                **failover_kwargs,
+            )
         update_served_route_decision(
             request,
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
+            fallback_used=route_fallback_used,
         )
         request.state.cache_store_pricing = cache_pricing_snapshot_from_deployment(
             served_deployment
