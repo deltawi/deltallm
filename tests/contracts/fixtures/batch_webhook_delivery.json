@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "event": {
+    "id": "evt_contract_001",
+    "object": "event",
+    "type": "batch.completed",
+    "created_at": 1700000400,
+    "data": {
+      "batch": {
+        "id": "batch_completed_001",
+        "object": "batch",
+        "endpoint": "/v1/embeddings",
+        "completion_window": "24h",
+        "status": "completed",
+        "input_file_id": "file_input_001",
+        "output_file_id": "file_output_001",
+        "error_file_id": null,
+        "created_at": 1700000000,
+        "expires_at": 1702592000,
+        "in_progress_at": 1700000060,
+        "completed_at": 1700000300,
+        "failed_at": null,
+        "expired_at": null,
+        "errors": null,
+        "request_counts": {
+          "total": 2,
+          "completed": 2,
+          "failed": 0,
+          "cancelled": 0,
+          "in_progress": 0
+        },
+        "metadata": {
+          "customer_job_id": "job-42"
+        },
+        "webhook": {
+          "configured": true
+        }
+      }
+    }
+  },
+  "canonical_body_sha256": "28e34233ca15784e7f554c383ff988f2fc31be4bc6c29c3a67d60fbbacffaeb4",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "DeltaLLM-Webhooks/1.0",
+    "Idempotency-Key": "evt_contract_001",
+    "X-DeltaLLM-Event-Id": "evt_contract_001",
+    "X-DeltaLLM-Event-Type": "batch.completed",
+    "X-DeltaLLM-Webhook-Attempt": "2",
+    "X-DeltaLLM-Timestamp": "1700000500",
+    "X-DeltaLLM-Signature": "v1=5c134fe83e50a0bdd077e3066e7ab83a5df1754890b04598b3efd103c13c9c99"
+  }
+}

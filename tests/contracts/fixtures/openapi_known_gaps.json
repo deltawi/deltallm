@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "9e21536e4f3e65257e182784f7b1245312eb91eb",
+  "gaps": [
+    {
+      "id": "auth_is_optional_header_without_bearer_scheme",
+      "summary": "Protected developer routes expose Authorization as an optional header parameter and define no BearerAuth security scheme.",
+      "target_slice": 2
+    },
+    {
+      "id": "batch_create_body_is_untyped",
+      "summary": "POST /v1/batches accepts an arbitrary JSON object in OpenAPI.",
+      "target_slice": 1
+    },
+    {
+      "id": "batch_cursor_contract_is_missing",
+      "summary": "GET /v1/batches has no after cursor and no typed page metadata.",
+      "target_slice": 3
+    },
+    {
+      "id": "file_content_is_documented_as_json",
+      "summary": "GET file content is documented as an empty application/json response instead of application/jsonl bytes.",
+      "target_slice": 1
+    },
+    {
+      "id": "file_list_and_delete_are_missing",
+      "summary": "The public Files list and delete operations are not implemented.",
+      "target_slice": 4
+    },
+    {
+      "id": "file_purpose_is_query_not_multipart",
+      "summary": "POST /v1/files documents purpose as a query parameter rather than a multipart form field.",
+      "target_slice": 2
+    },
+    {
+      "id": "files_and_batches_success_schemas_are_empty",
+      "summary": "Files and Batches operations expose empty successful response schemas.",
+      "target_slice": 1
+    },
+    {
+      "id": "full_schema_mixes_developer_and_private_routes",
+      "summary": "The default OpenAPI document mixes developer APIs with auth, admin, health, metrics, and reporting routes.",
+      "target_slice": 5
+    },
+    {
+      "id": "validation_errors_are_fastapi_422",
+      "summary": "Public request validation is documented with FastAPI's 422 HTTPValidationError rather than a stable dialect-aware 400 envelope.",
+      "target_slice": 2
+    }
+  ]
+}

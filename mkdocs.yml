@@ -93,6 +93,7 @@ nav:
           - Settings: admin-ui/settings.md
   - API Reference:
       - api/index.md
+      - Public Compatibility Baseline: api/compatibility.md
       - Proxy Endpoints: api/proxy.md
       - Anthropic Messages: api/messages.md
       - MCP Gateway & Tooling: api/mcp.md
