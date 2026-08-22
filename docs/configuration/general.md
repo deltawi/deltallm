@@ -34,9 +34,9 @@ general_settings:
 general_settings:
   instance_name: DeltaLLM
   ui_branding:
-    primary_color: "#2563EB"
-    secondary_color: "#7C3AED"
-    menu_hover_color: "#F9FAFB"
+    primary_color: "#5B50D6"
+    secondary_color: "#8B7CFF"
+    menu_hover_color: "#F7F5FF"
   master_key: os.environ/DELTALLM_MASTER_KEY
   deltallm_key_header_name: Authorization
   salt_key: os.environ/DELTALLM_SALT_KEY
@@ -197,13 +197,13 @@ Platform administrators can update the installation-wide appearance from the **T
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `instance_name` | `DeltaLLM` | Product name shown in the shell, authentication flows, browser title, examples, and notification copy. |
-| `ui_branding.primary_color` | `#2563EB` | Primary actions, links, and focus treatments. |
-| `ui_branding.secondary_color` | `#7C3AED` | Secondary actions and navigation accents. |
-| `ui_branding.menu_hover_color` | `#F9FAFB` | Navigation hover background. |
+| `ui_branding.primary_color` | `#5B50D6` | Primary actions, links, and focus treatments. |
+| `ui_branding.secondary_color` | `#8B7CFF` | Secondary actions and navigation accents. |
+| `ui_branding.menu_hover_color` | `#F7F5FF` | Navigation hover background. |
 
 Logo and favicon files are managed from **Settings > Theme**, not from file configuration. The service accepts PNG, JPEG, WebP, and SVG files, plus ICO for favicons, with a 2 MB limit per asset. SVG files containing scripts, executable attributes, document type/entity declarations, embedded documents, or external resource references are rejected. Asset bytes are stored in PostgreSQL `BYTEA` columns; the dynamic configuration contains only the versioned internal asset reference.
 
-The supplied colours are base colours, not a request to use one fixed text colour. DeltaLLM derives normal, hover, foreground, and soft-surface tokens at runtime so button labels and branded text retain WCAG AA contrast. Very light primary or secondary colours are adjusted for visible control boundaries, and a menu hover colour that would disappear against the white navigation background is adjusted slightly. A full wordmark falls back to the configured mark and instance name when it cannot load. Failed logo assets receive one delayed retry and become eligible again after branding is saved or refreshed; a failed custom favicon falls back to the built-in favicon.
+The supplied colours are base colours, not a request to use one fixed text colour. DeltaLLM derives normal, hover, foreground, and soft-surface tokens at runtime so button labels and branded text retain WCAG AA contrast. Very light primary or secondary colours are adjusted for visible control boundaries, and a menu hover colour that would disappear against the white navigation background is adjusted slightly. A full wordmark falls back to the configured mark and instance name when it cannot load. When no custom logo assets are configured, the built-in Delta mark and wordmark are used. Failed logo assets receive one delayed retry and become eligible again after branding is saved or refreshed; a failed custom favicon falls back to the built-in favicon.
 
 Theme values saved in the Admin UI are persisted as dynamic database overrides and take precedence over file configuration until changed again. Asset BLOB changes and their versioned theme references commit in the same serialized database transaction. Redis broadcasts the small configuration change; each replica then refreshes its in-memory asset cache from PostgreSQL once, while the existing database poll remains the fallback when pub/sub is unavailable. Public asset reads are served from replica memory with ETags and immutable caching, so normal page rendering does not query PostgreSQL. Theme-only updates refresh application identity without rebuilding model and routing runtime state. Clients load only the public branding projection, never the broader settings payload, and an already-open browser refreshes it when the page regains focus or visibility. During the initial request, the UI shows a neutral loading state and does not render default DeltaLLM branding before the configured branding is known; if that request fails or exceeds three seconds, the built-in defaults are used.
 

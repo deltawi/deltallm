@@ -3,19 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --brand-primary: 37 99 235;
-  --brand-primary-ink: 37 99 235;
-  --brand-primary-ink-hover: 32 85 202;
-  --brand-primary-hover: 32 85 202;
-  --brand-primary-soft: 233 239 253;
+  --brand-primary: 91 80 214;
+  --brand-primary-ink: 91 80 214;
+  --brand-primary-ink-hover: 78 69 184;
+  --brand-primary-hover: 78 69 184;
+  --brand-primary-soft: 239 238 251;
   --brand-on-primary: 255 255 255;
-  --brand-secondary: 124 58 237;
-  --brand-secondary-ink: 124 58 237;
-  --brand-secondary-ink-hover: 107 50 204;
-  --brand-secondary-hover: 107 50 204;
-  --brand-secondary-soft: 245 239 254;
-  --brand-on-secondary: 255 255 255;
-  --brand-menu-hover: 249 250 251;
+  --brand-secondary: 139 124 255;
+  --brand-secondary-ink: 108 97 199;
+  --brand-secondary-ink-hover: 93 83 171;
+  --brand-secondary-hover: 155 142 255;
+  --brand-secondary-soft: 246 245 255;
+  --brand-on-secondary: 17 24 39;
+  --brand-menu-hover: 237 235 245;
   --brand-menu-hover-foreground: 17 24 39;
 }
 
@@ -24,6 +24,18 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: rgb(var(--brand-secondary-soft));
+  color: rgb(var(--brand-secondary-ink));
+}
+
+.brand-auth-background {
+  background-color: #fff;
+  background-image:
+    radial-gradient(circle at 50% -12%, rgb(var(--brand-primary) / 0.16), transparent 34rem),
+    radial-gradient(circle at 100% 100%, rgb(var(--brand-primary) / 0.08), transparent 28rem);
 }
 
 #root {

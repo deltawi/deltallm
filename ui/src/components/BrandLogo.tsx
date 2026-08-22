@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Zap } from 'lucide-react';
 import clsx from 'clsx';
-import { normalizeBranding, type UIBranding } from '../lib/branding';
+import {
+  BUILT_IN_BRAND_ASSETS,
+  DEFAULT_BRANDING,
+  normalizeBranding,
+  type UIBranding,
+} from '../lib/branding';
 import { useBranding } from '../lib/brandingContext';
 
 interface BrandLogoProps {
@@ -26,6 +31,7 @@ export default function BrandLogo({
   const failureKey = JSON.stringify([
     assetRevision,
     variant,
+    branding.instance_name,
     branding.logo_full_url || '',
     branding.logo_mark_url || '',
   ]);
@@ -33,9 +39,12 @@ export default function BrandLogo({
   const retryCounts = useRef(new Map<string, number>());
   const retryTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const failedUrls = failures.key === failureKey ? failures.urls : [];
+  const builtInExpandedAsset = branding.instance_name === DEFAULT_BRANDING.instance_name
+    ? BUILT_IN_BRAND_ASSETS.logo_full
+    : BUILT_IN_BRAND_ASSETS.logo_mark;
   const candidates = variant === 'expanded'
-    ? [branding.logo_full_url, branding.logo_mark_url]
-    : [branding.logo_mark_url];
+    ? [branding.logo_full_url, branding.logo_mark_url, builtInExpandedAsset]
+    : [branding.logo_mark_url, BUILT_IN_BRAND_ASSETS.logo_mark];
   const visibleUrl = candidates.find((candidate) => candidate && !failedUrls.includes(candidate)) || null;
 
   useEffect(() => {
@@ -74,14 +83,20 @@ export default function BrandLogo({
     retryTimers.current.set(retryKey, timer);
   };
 
-  if (variant === 'expanded' && visibleUrl && visibleUrl === branding.logo_full_url) {
+  const fullLogoUrl = variant === 'expanded'
+    && visibleUrl
+    && (visibleUrl === branding.logo_full_url || visibleUrl === BUILT_IN_BRAND_ASSETS.logo_full)
+    ? visibleUrl
+    : null;
+
+  if (fullLogoUrl) {
     return (
       <div className={clsx('flex min-w-0 items-center', className)}>
         <img
-          src={visibleUrl}
+          src={fullLogoUrl}
           alt={branding.instance_name}
           className={clsx('h-8 w-auto max-w-full object-contain object-left', fullClassName)}
-          onError={() => markFailed(visibleUrl)}
+          onError={() => markFailed(fullLogoUrl)}
         />
       </div>
     );

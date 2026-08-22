@@ -151,13 +151,13 @@ function SidebarContent({
     <>
       <div
         className={clsx(
-          'min-w-0 shrink-0 px-3 py-4',
+          'min-w-0 shrink-0 gap-2 px-3 py-4',
           showExpanded ? 'flex items-center justify-between' : 'flex flex-col items-center gap-2',
         )}
       >
         <BrandLogo
           variant={showExpanded ? 'expanded' : 'mark'}
-          className={clsx(!showExpanded && 'w-full justify-center')}
+          className={clsx(showExpanded ? 'max-w-[9.5rem]' : 'w-full justify-center')}
         />
         {canCollapse && showExpanded && (
           <button

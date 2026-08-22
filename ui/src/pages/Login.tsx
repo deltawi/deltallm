@@ -61,7 +61,7 @@ export default function Login() {
 
   if (isLoading || ssoLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="brand-auth-background min-h-screen flex items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
       </div>
     );
@@ -129,7 +129,7 @@ export default function Login() {
   tabs.push({ key: 'master_key', label: 'Master Key', icon: KeyRound });
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+    <div className="brand-auth-background min-h-screen flex items-center justify-center px-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <BrandLogo variant="mark" className="mb-4 justify-center" markClassName="h-16 w-16 rounded-2xl" />
