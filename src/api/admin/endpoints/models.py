@@ -27,7 +27,9 @@ from src.providers.resolution import (
     resolve_provider,
     validate_provider_mode_compatibility,
 )
-from src.router import build_deployment_registry
+from src.router import HealthCheckInProgressError, build_deployment_registry
+from src.router.health_state import HealthRefInput
+from src.router.registry import DeploymentRegistryStore
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import (
@@ -108,6 +110,11 @@ def _find_runtime_deployment(app: Any, deployment_id: str) -> Any | None:
     return None
 
 
+def _runtime_health_ref(app: Any, deployment_id: str) -> HealthRefInput:
+    deployment = _find_runtime_deployment(app, deployment_id)
+    return deployment.health_ref if deployment is not None else deployment_id
+
+
 def _to_int_or_none(value: Any) -> int | None:
     if value in (None, ""):
         return None
@@ -177,8 +184,9 @@ async def _deployment_health_flags(app: Any, deployment_ids: list[str]) -> dict[
     if health_backend is None:
         return {deployment_id: True for deployment_id in deployment_ids}
 
-    health_by_deployment = await health_backend.get_health_batch(deployment_ids)
-    cooldown_by_deployment = await health_backend.get_cooldown_batch(deployment_ids)
+    health_refs = [_runtime_health_ref(app, deployment_id) for deployment_id in deployment_ids]
+    health_by_deployment = await health_backend.get_health_batch(health_refs)
+    cooldown_by_deployment = await health_backend.get_cooldown_batch(health_refs)
     return {
         deployment_id: str(health_by_deployment.get(deployment_id, {}).get("healthy", "true"))
         != "false"
@@ -199,8 +207,9 @@ async def _serialize_deployment_health(app: Any, deployment_id: str) -> dict[str
             "last_success_at": None,
         }
 
-    health = await health_backend.get_health(deployment_id)
-    in_cooldown = await health_backend.is_cooled_down(deployment_id)
+    health_ref = _runtime_health_ref(app, deployment_id)
+    health = await health_backend.get_health(health_ref)
+    in_cooldown = await health_backend.is_cooled_down(health_ref)
     healthy = str(health.get("healthy", "true")) != "false" and not in_cooldown
     return {
         "healthy": healthy,
@@ -258,16 +267,16 @@ def _rebuild_runtime_registry(app: Any) -> None:
     rebuilt = build_deployment_registry(model_registry, route_groups=route_groups)
 
     runtime_registry = getattr(getattr(app.state, "router", None), "deployment_registry", None)
-    if isinstance(runtime_registry, dict):
-        runtime_registry.clear()
-        runtime_registry.update(rebuilt)
+    if isinstance(runtime_registry, DeploymentRegistryStore):
+        runtime_registry.replace(rebuilt)
+    elif runtime_registry is not None:
+        runtime_registry = DeploymentRegistryStore(rebuilt)
+        app.state.router.deployment_registry = runtime_registry
 
     for attr in ("router_health_handler", "background_health_checker"):
         holder = getattr(app.state, attr, None)
-        registry = getattr(holder, "registry", None)
-        if isinstance(registry, dict) and registry is not runtime_registry:
-            registry.clear()
-            registry.update(rebuilt)
+        if holder is not None and runtime_registry is not None:
+            holder.registry = runtime_registry
 
 
 async def _invalidate_route_group_runtime_cache(app: Any) -> None:
@@ -447,7 +456,9 @@ async def list_models(
     for entry in page:
         healthy = True
         if health_backend is not None:
-            health = await health_backend.get_health(entry["deployment_id"])
+            health = await health_backend.get_health(
+                _runtime_health_ref(request.app, entry["deployment_id"])
+            )
             healthy = str(health.get("healthy", "true")) != "false"
         entry["healthy"] = healthy
 
@@ -591,7 +602,13 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
 
     health_checker = getattr(request.app.state, "background_health_checker", None)
     if health_checker is not None:
-        result = await health_checker.check_deployment_once(deployment)
+        try:
+            result = await health_checker.check_deployment_once(deployment)
+        except HealthCheckInProgressError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
     else:
         result = await probe_provider_health(
             request.app.state.http_client,
@@ -606,13 +623,17 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
         )
 
     health = await _serialize_deployment_health(request.app, deployment_id)
+    if result.healthy and health["healthy"]:
+        message = "Health check passed"
+    elif result.healthy:
+        message = "Provider health check passed; deployment remains in cooldown"
+    else:
+        message = result.error or "Health check failed"
     return {
         "deployment_id": deployment_id,
         "healthy": health["healthy"],
         "health": health,
-        "message": "Health check passed"
-        if result.healthy
-        else (result.error or "Health check failed"),
+        "message": message,
         "status_code": result.status_code,
         "checked_at": result.checked_at,
     }

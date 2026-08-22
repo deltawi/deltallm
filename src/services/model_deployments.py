@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any
 from src.config import AppConfig
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
-from src.services.named_credentials import merge_named_credential_params, resolve_named_credential_record
+from src.services.named_credentials import (
+    merge_named_credential_params,
+    resolve_named_credential_record,
+)
 
 if TYPE_CHECKING:
     from src.config_runtime.secrets import SecretResolver
@@ -77,11 +80,18 @@ def model_records_from_config(cfg: AppConfig) -> list[ModelDeploymentRecord]:
     for index, entry in enumerate(cfg.model_list):
         records.append(
             ModelDeploymentRecord(
-                deployment_id=_deployment_id(entry.model_name, index, getattr(entry, "deployment_id", None)),
+                deployment_id=_deployment_id(
+                    entry.model_name, index, getattr(entry, "deployment_id", None)
+                ),
                 model_name=entry.model_name,
-                named_credential_id=str(entry.named_credential_id).strip() or None if entry.named_credential_id is not None else None,
+                named_credential_id=str(entry.named_credential_id).strip() or None
+                if entry.named_credential_id is not None
+                else None,
                 deltallm_params=entry.deltallm_params.model_dump(exclude_none=True),
-                model_info=entry.model_info.model_dump(exclude_none=True) if entry.model_info else {},
+                model_info=entry.model_info.model_dump(exclude_none=True)
+                if entry.model_info
+                else {},
+                routing_state_incarnation=entry.routing_state_incarnation,
             )
         )
     return records
@@ -97,23 +107,43 @@ async def build_model_registry_from_config(
     ensure_unique_model_names([entry.model_name for entry in cfg.model_list])
     named_credentials = await _named_credentials_by_id(
         named_credential_repository,
-        [str(entry.named_credential_id).strip() for entry in cfg.model_list if entry.named_credential_id is not None],
+        [
+            str(entry.named_credential_id).strip()
+            for entry in cfg.model_list
+            if entry.named_credential_id is not None
+        ],
     )
     model_registry: dict[str, list[dict[str, Any]]] = {}
     for index, entry in enumerate(cfg.model_list):
-        raw_named_credential = named_credentials.get(str(entry.named_credential_id).strip()) if entry.named_credential_id is not None else None
-        named_credential = resolve_named_credential_record(raw_named_credential, secret_resolver=secret_resolver)
+        raw_named_credential = (
+            named_credentials.get(str(entry.named_credential_id).strip())
+            if entry.named_credential_id is not None
+            else None
+        )
+        named_credential = resolve_named_credential_record(
+            raw_named_credential, secret_resolver=secret_resolver
+        )
         model_registry.setdefault(entry.model_name, []).append(
             {
-                "deployment_id": _deployment_id(entry.model_name, index, getattr(entry, "deployment_id", None)),
+                "deployment_id": _deployment_id(
+                    entry.model_name, index, getattr(entry, "deployment_id", None)
+                ),
                 "deltallm_params": resolve_runtime_deltallm_params(
                     entry.deltallm_params.model_dump(exclude_none=True),
                     settings,
                     named_credential=named_credential,
                 ),
-                "model_info": entry.model_info.model_dump(exclude_none=True) if entry.model_info else {},
-                "named_credential_id": str(entry.named_credential_id).strip() or None if entry.named_credential_id is not None else None,
-                "named_credential_name": named_credential.name if named_credential is not None else None,
+                "model_info": entry.model_info.model_dump(exclude_none=True)
+                if entry.model_info
+                else {},
+                "named_credential_id": str(entry.named_credential_id).strip() or None
+                if entry.named_credential_id is not None
+                else None,
+                "named_credential_name": named_credential.name
+                if named_credential is not None
+                else None,
+                "routing_state_incarnation": entry.routing_state_incarnation
+                or _deployment_id(entry.model_name, index, getattr(entry, "deployment_id", None)),
             }
         )
     return model_registry
@@ -134,12 +164,18 @@ async def build_model_registry_from_records(
     model_registry: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         raw_named_credential = named_credentials.get(record.named_credential_id or "")
-        named_credential = resolve_named_credential_record(raw_named_credential, secret_resolver=secret_resolver)
+        named_credential = resolve_named_credential_record(
+            raw_named_credential, secret_resolver=secret_resolver
+        )
         model_registry.setdefault(record.model_name, []).append(
             {
                 "deployment_id": record.deployment_id,
                 "named_credential_id": record.named_credential_id,
-                "named_credential_name": named_credential.name if named_credential is not None else None,
+                "named_credential_name": named_credential.name
+                if named_credential is not None
+                else None,
+                "routing_state_incarnation": record.routing_state_incarnation
+                or record.deployment_id,
                 "deltallm_params": resolve_runtime_deltallm_params(
                     record.deltallm_params,
                     settings,
@@ -182,7 +218,9 @@ async def load_model_registry(
             records = await repository.list_all()
         except Exception:
             if source_mode == "db_only":
-                raise RuntimeError("model deployment source is db_only, but loading deployments from DB failed")
+                raise RuntimeError(
+                    "model deployment source is db_only, but loading deployments from DB failed"
+                )
             records = []
         if records:
             return await build_model_registry_from_records(
@@ -192,10 +230,14 @@ async def load_model_registry(
                 secret_resolver=secret_resolver,
             ), "db"
         if source_mode == "db_only":
-            raise RuntimeError("model deployment source is db_only, but no deployments were found in DB")
+            raise RuntimeError(
+                "model deployment source is db_only, but no deployments were found in DB"
+            )
 
     if source_mode == "db_only":
-        raise RuntimeError("model deployment source is db_only, but model repository is unavailable")
+        raise RuntimeError(
+            "model deployment source is db_only, but model repository is unavailable"
+        )
 
     return await build_model_registry_from_config(
         cfg,

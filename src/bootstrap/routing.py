@@ -19,8 +19,8 @@ from src.router import (
     FailoverManager,
     HealthCheckConfig,
     HealthEndpointHandler,
-    PassiveHealthTracker,
     RedisStateBackend,
+    RouterRedisKeyspace,
     Router,
     RouterConfig,
     RoutingStrategy,
@@ -114,7 +114,11 @@ async def init_routing_runtime(
         getattr(cfg.general_settings, "redis_degraded_mode", None)
         or getattr(settings, "redis_degraded_mode", "fail_open")
     )
-    state_backend = RedisStateBackend(redis_client, degraded_mode=degraded_mode)
+    state_backend = RedisStateBackend(
+        redis_client,
+        degraded_mode=degraded_mode,
+        keyspace=RouterRedisKeyspace(environment=getattr(settings, "app_env", "dev")),
+    )
     route_groups = list(getattr(app.state, "route_groups", []))
     deployment_registry = build_deployment_registry(
         app.state.model_registry, route_groups=route_groups
@@ -159,9 +163,8 @@ async def init_routing_runtime(
         state_backend=state_backend,
         cooldown_manager=app.state.cooldown_manager,
     )
-    app.state.passive_health_tracker = PassiveHealthTracker(state_backend=state_backend)
     app.state.router_health_handler = HealthEndpointHandler(
-        deployment_registry=deployment_registry,
+        deployment_registry=app.state.router.deployment_registry,
         state_backend=state_backend,
     )
     configure_cache_runtime(
@@ -188,8 +191,8 @@ async def init_routing_runtime(
             interval_seconds=cfg.general_settings.health_check_interval,
             timeout_seconds=health_check_timeout_seconds,
         ),
-        deployment_registry=deployment_registry,
-        state_backend=state_backend,
+        deployment_registry=app.state.router.deployment_registry,
+        health_manager=app.state.cooldown_manager,
         checker=_deployment_health_check,
     )
     app.state.background_health_checker = health_checker
@@ -200,6 +203,7 @@ async def init_routing_runtime(
         named_credential_repository=getattr(app.state, "named_credential_repository", None),
         route_group_repository=app.state.route_group_repository,
         route_group_cache=app.state.route_group_runtime_cache,
+        router_state_backend=state_backend,
     )
 
     health_task: Task[None] | None = None

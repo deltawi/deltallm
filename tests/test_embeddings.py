@@ -252,7 +252,8 @@ async def test_embeddings_upstream_timeout_retries_when_route_policy_targets_tim
 
 @pytest.mark.asyncio
 async def test_embeddings_upstream_bad_request_does_not_mark_deployment_unhealthy(client, test_app):
-    registry = test_app.state.router.deployment_registry["text-embedding-3-small"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["text-embedding-3-small"])
     deployment = registry[0]
     deployment.deltallm_params["api_key"] = "provider-key"
     registry.append(
@@ -266,6 +267,7 @@ async def test_embeddings_upstream_bad_request_does_not_mark_deployment_unhealth
             model_info={},
         )
     )
+    registry_store.replace({**registry_store.snapshot(), "text-embedding-3-small": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del model_group, request_context

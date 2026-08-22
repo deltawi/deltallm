@@ -203,6 +203,7 @@ class ModelDeploymentRecord:
     deltallm_params: dict[str, Any]
     named_credential_id: str | None = None
     model_info: dict[str, Any] | None = None
+    routing_state_incarnation: str | None = None
 
 
 class ModelDeploymentRepository:
@@ -215,7 +216,8 @@ class ModelDeploymentRepository:
 
         rows = await self.prisma.query_raw(
             """
-            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info
+            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info,
+                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
             FROM deltallm_modeldeployment
             ORDER BY model_name ASC, created_at ASC
             """
@@ -229,6 +231,9 @@ class ModelDeploymentRepository:
                 else None,
                 deltallm_params=_parse_json_object(row.get("deltallm_params")),
                 model_info=_parse_metadata(row.get("model_info")),
+                routing_state_incarnation=str(row.get("routing_state_incarnation"))
+                if row.get("routing_state_incarnation") is not None
+                else None,
             )
             for row in rows
         ]
@@ -239,7 +244,8 @@ class ModelDeploymentRepository:
 
         rows = await self.prisma.query_raw(
             """
-            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info
+            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info,
+                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
             FROM deltallm_modeldeployment
             WHERE deployment_id = $1
             LIMIT 1
@@ -257,6 +263,9 @@ class ModelDeploymentRepository:
             else None,
             deltallm_params=_parse_json_object(row.get("deltallm_params")),
             model_info=_parse_metadata(row.get("model_info")),
+            routing_state_incarnation=str(row.get("routing_state_incarnation"))
+            if row.get("routing_state_incarnation") is not None
+            else None,
         )
 
     async def list_by_deployment_ids(
@@ -272,7 +281,8 @@ class ModelDeploymentRepository:
         placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
         rows = await self.prisma.query_raw(
             f"""
-            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info
+            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info,
+                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
             FROM deltallm_modeldeployment
             WHERE deployment_id IN ({placeholders})
             ORDER BY model_name ASC, created_at ASC
@@ -288,6 +298,9 @@ class ModelDeploymentRepository:
                 else None,
                 deltallm_params=_parse_json_object(row.get("deltallm_params")),
                 model_info=_parse_metadata(row.get("model_info")),
+                routing_state_incarnation=str(row.get("routing_state_incarnation"))
+                if row.get("routing_state_incarnation") is not None
+                else None,
             )
             for row in rows
         ]
@@ -338,7 +351,8 @@ class ModelDeploymentRepository:
                 model_info = $5::jsonb,
                 updated_at = NOW()
             WHERE deployment_id = $1
-            RETURNING deployment_id, model_name, named_credential_id, deltallm_params, model_info
+            RETURNING deployment_id, model_name, named_credential_id, deltallm_params, model_info,
+                      to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
             """,
             deployment_id,
             model_name,
@@ -357,6 +371,9 @@ class ModelDeploymentRepository:
             else None,
             deltallm_params=_parse_json_object(row.get("deltallm_params")),
             model_info=_parse_metadata(row.get("model_info")),
+            routing_state_incarnation=str(row.get("routing_state_incarnation"))
+            if row.get("routing_state_incarnation") is not None
+            else None,
         )
 
     async def delete(self, deployment_id: str) -> bool:

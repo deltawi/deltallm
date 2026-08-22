@@ -35,9 +35,10 @@ class BatchModelCapacityConfig:
     @classmethod
     def from_settings(cls, settings: Any) -> "BatchModelCapacityConfig":
         scheduler_modes = resolve_scheduler_modes_from_settings(settings)
-        explicit_mode_control = (
-            "embeddings_batch_scheduler_mode" in getattr(settings, "model_fields_set", set())
-            or "embeddings_batch_scheduler_shadow_mode" in getattr(settings, "model_fields_set", set())
+        explicit_mode_control = "embeddings_batch_scheduler_mode" in getattr(
+            settings, "model_fields_set", set()
+        ) or "embeddings_batch_scheduler_shadow_mode" in getattr(
+            settings, "model_fields_set", set()
         )
         mode_enabled = (
             scheduler_modes.active_uses_model_capacity or scheduler_modes.shadow_uses_model_capacity
@@ -55,15 +56,25 @@ class BatchModelCapacityConfig:
             ),
             default_model_max_claim_work_units=max(
                 1,
-                int(getattr(settings, "embeddings_batch_default_model_max_claim_work_units", 64) or 64),
+                int(
+                    getattr(settings, "embeddings_batch_default_model_max_claim_work_units", 64)
+                    or 64
+                ),
             ),
             capacity_fraction=min(
                 1.0,
-                max(0.0001, float(getattr(settings, "embeddings_batch_model_capacity_fraction", 0.25) or 0.25)),
+                max(
+                    0.0001,
+                    float(
+                        getattr(settings, "embeddings_batch_model_capacity_fraction", 0.25) or 0.25
+                    ),
+                ),
             ),
             refresh_seconds=max(
                 0.1,
-                float(getattr(settings, "embeddings_batch_model_capacity_refresh_seconds", 5.0) or 5.0),
+                float(
+                    getattr(settings, "embeddings_batch_model_capacity_refresh_seconds", 5.0) or 5.0
+                ),
             ),
             fail_open=bool(getattr(settings, "embeddings_batch_model_capacity_fail_open", False)),
         )
@@ -128,6 +139,16 @@ class _CapacityLimits:
     reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _DeploymentCapacitySet:
+    healthy: tuple[Any, ...]
+    recoverable: tuple[Any, ...]
+
+    @property
+    def routable(self) -> tuple[Any, ...]:
+        return self.healthy + self.recoverable
+
+
 class BatchModelCapacityResolver:
     def __init__(
         self,
@@ -155,7 +176,9 @@ class BatchModelCapacityResolver:
         max_items: int,
         max_work_units: int,
     ) -> BatchModelCapacitySelection | None:
-        selections = await self.select_model_groups(max_items=max_items, max_work_units=max_work_units)
+        selections = await self.select_model_groups(
+            max_items=max_items, max_work_units=max_work_units
+        )
         selection = selections[0] if selections else None
         if selection is not None:
             self.record_selection(selection.snapshot)
@@ -208,7 +231,9 @@ class BatchModelCapacityResolver:
         self._last_selected_at[(snapshot.model_group, snapshot.service_tier)] = selected_at
         snapshot.last_selected_at = selected_at
 
-    async def build_snapshots(self, *, force_refresh: bool = False) -> list[BatchModelCapacitySnapshot]:
+    async def build_snapshots(
+        self, *, force_refresh: bool = False
+    ) -> list[BatchModelCapacitySnapshot]:
         now = time.monotonic()
         if (
             not force_refresh
@@ -240,8 +265,12 @@ class BatchModelCapacityResolver:
                 aggregate=aggregate,
                 in_flight=in_flight_record,
             )
-            snapshot.last_selected_at = self._last_selected_at.get((snapshot.model_group, snapshot.service_tier))
-            snapshot.skip_reasons = dict(self._skip_reasons.get((snapshot.model_group, snapshot.service_tier), {}))
+            snapshot.last_selected_at = self._last_selected_at.get(
+                (snapshot.model_group, snapshot.service_tier)
+            )
+            snapshot.skip_reasons = dict(
+                self._skip_reasons.get((snapshot.model_group, snapshot.service_tier), {})
+            )
             snapshots.append(snapshot)
             publish_batch_model_capacity_snapshot(snapshot)
         self._snapshot_cache = snapshots
@@ -313,7 +342,9 @@ class BatchModelCapacityResolver:
                 queued_jobs=aggregate.queued_jobs,
                 queued_work_units=aggregate.queued_work_units,
                 in_flight_items=max(0, int(getattr(in_flight, "in_flight_items", 0) or 0)),
-                in_flight_work_units=max(0, int(getattr(in_flight, "in_flight_work_units", 0) or 0)),
+                in_flight_work_units=max(
+                    0, int(getattr(in_flight, "in_flight_work_units", 0) or 0)
+                ),
                 oldest_queue_entered_at=aggregate.oldest_queue_entered_at,
             )
 
@@ -382,10 +413,10 @@ class BatchModelCapacityResolver:
         if not deployments:
             return self._blocked_limits(reason="unknown_model_group")
 
-        healthy = await self._healthy_deployments(deployments)
-        if healthy is None:
+        capacity_set = await self._deployment_capacity_set(deployments)
+        if capacity_set is None:
             return self._blocked_limits(reason="health_state_unavailable")
-        if not healthy:
+        if not capacity_set.routable:
             return _CapacityLimits(
                 max_in_flight_items=0,
                 max_claim_work_units=0,
@@ -396,11 +427,16 @@ class BatchModelCapacityResolver:
                 reason="no_healthy_deployments",
             )
 
-        max_in_flight, source = self._max_in_flight_from_deployments(healthy)
-        max_claim_work_units = self._max_claim_work_units_from_deployments(healthy)
-        rpm_remaining, tpm_remaining = await self._remaining_usage(healthy)
+        max_in_flight, source = self._max_in_flight_from_deployments(list(capacity_set.healthy))
+        max_claim_work_units = self._max_claim_work_units_from_deployments(
+            list(capacity_set.routable)
+        )
+        rpm_remaining, tpm_remaining = await self._remaining_usage(list(capacity_set.routable))
         if max_in_flight is None:
-            if self.config.fail_open:
+            if not capacity_set.healthy:
+                max_in_flight = 0
+                source = "router_recovery"
+            elif self.config.fail_open:
                 max_in_flight = self.config.default_model_max_in_flight
                 source = "default"
             else:
@@ -409,16 +445,17 @@ class BatchModelCapacityResolver:
                     max_claim_work_units=max_claim_work_units,
                     rpm_remaining=rpm_remaining,
                     tpm_remaining=tpm_remaining,
-                    healthy_deployments=len(healthy),
+                    healthy_deployments=len(capacity_set.routable),
                     source="unknown",
                     reason="unknown_capacity",
                 )
+        max_in_flight += len(capacity_set.recoverable)
         return _CapacityLimits(
             max_in_flight_items=max(1, int(max_in_flight)),
             max_claim_work_units=max(1, int(max_claim_work_units)),
             rpm_remaining=rpm_remaining,
             tpm_remaining=tpm_remaining,
-            healthy_deployments=len(healthy),
+            healthy_deployments=len(capacity_set.routable),
             source=source,
         )
 
@@ -441,21 +478,32 @@ class BatchModelCapacityResolver:
         deployments = registry.get(model_group, [])
         return list(deployments or [])
 
-    async def _healthy_deployments(self, deployments: list[Any]) -> list[Any] | None:
+    async def _deployment_capacity_set(
+        self,
+        deployments: list[Any],
+    ) -> _DeploymentCapacitySet | None:
         state = self._router_state()
         if state is None:
             increment_batch_model_capacity_snapshot_failure(reason="router_state_unavailable")
             return None
-        deployment_ids = [str(getattr(deployment, "deployment_id", "") or "") for deployment in deployments]
+        deployment_ids = [
+            str(getattr(deployment, "deployment_id", "") or "") for deployment in deployments
+        ]
         deployment_ids = [deployment_id for deployment_id in deployment_ids if deployment_id]
+        health_refs = [
+            deployment.health_ref
+            for deployment in deployments
+            if str(getattr(deployment, "deployment_id", "") or "")
+        ]
         try:
-            health = await state.get_health_batch(deployment_ids)
-            cooldown = await state.get_cooldown_batch(deployment_ids)
+            health = await state.get_health_batch(health_refs)
+            cooldown = await state.get_cooldown_batch(health_refs)
         except Exception:
             logger.warning("batch model capacity router state lookup failed", exc_info=True)
             increment_batch_model_capacity_snapshot_failure(reason="router_state_lookup_failed")
             return None
         healthy: list[Any] = []
+        recoverable: list[Any] = []
         for deployment in deployments:
             deployment_id = str(getattr(deployment, "deployment_id", "") or "")
             if not deployment_id:
@@ -463,10 +511,14 @@ class BatchModelCapacityResolver:
             if cooldown.get(deployment_id):
                 continue
             deployment_health = health.get(deployment_id, {})
-            if deployment_health.get("healthy", "true") == "false":
-                continue
-            healthy.append(deployment)
-        return healthy
+            if deployment_health.get("healthy", "true") != "false":
+                healthy.append(deployment)
+            elif deployment_health.get("recovery_required") == "true":
+                recoverable.append(deployment)
+        return _DeploymentCapacitySet(
+            healthy=tuple(healthy),
+            recoverable=tuple(recoverable),
+        )
 
     def _router_state(self) -> Any | None:
         return self.router_state_backend or getattr(self.router, "state", None)
@@ -521,7 +573,9 @@ class BatchModelCapacityResolver:
 
     async def _remaining_usage(self, deployments: list[Any]) -> tuple[int | None, int | None]:
         state = self._router_state()
-        deployment_ids = [str(getattr(deployment, "deployment_id", "") or "") for deployment in deployments]
+        deployment_ids = [
+            str(getattr(deployment, "deployment_id", "") or "") for deployment in deployments
+        ]
         deployment_ids = [deployment_id for deployment_id in deployment_ids if deployment_id]
         if state is None or not deployment_ids:
             return None, None

@@ -105,7 +105,8 @@ async def test_budget_enforced_for_audio_transcriptions(client, test_app):
 async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client, test_app):
     test_app.state.spend_tracking_service = _SpendRecorder()
 
-    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["gpt-4o-mini"])
     registry[0].deltallm_params["api_base"] = "https://primary.example/v1"
     registry[0].deltallm_params["api_key"] = "primary-key"
     fallback = type(registry[0])(
@@ -119,6 +120,7 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
         model_info={"mode": "chat"},
     )
     registry.append(fallback)
+    registry_store.replace({**registry_store.snapshot(), "gpt-4o-mini": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del request_context
@@ -285,7 +287,8 @@ async def test_embedding_failover_failure_uses_last_attempted_deployment_metadat
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
 
-    registry = test_app.state.router.deployment_registry["text-embedding-3-small"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["text-embedding-3-small"])
     registry[0].deltallm_params["api_base"] = "https://primary.example/v1"
     registry[0].deltallm_params["api_key"] = "primary-key"
     fallback = type(registry[0])(
@@ -299,6 +302,7 @@ async def test_embedding_failover_failure_uses_last_attempted_deployment_metadat
         model_info={"mode": "embedding"},
     )
     registry.append(fallback)
+    registry_store.replace({**registry_store.snapshot(), "text-embedding-3-small": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del request_context
@@ -507,7 +511,13 @@ async def test_audio_transcription_short_primary_timeout_uses_per_deployment_fai
         },
         model_info={"mode": "audio_transcription"},
     )
-    test_app.state.router.deployment_registry["gpt-4o-mini"].append(fallback)
+    registry_store = test_app.state.router.deployment_registry
+    registry_store.replace(
+        {
+            **registry_store.snapshot(),
+            "gpt-4o-mini": (*registry_store["gpt-4o-mini"], fallback),
+        }
+    )
     captured: dict[str, object] = {}
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201

@@ -234,7 +234,23 @@ async def _serialize_group_members(request: Request, members: list[Any]) -> list
 
         healthy = True
         if health_backend is not None:
-            health = await health_backend.get_health(member.deployment_id)
+            runtime_deployment = next(
+                (
+                    deployment
+                    for deployments in getattr(
+                        request.app.state.router, "deployment_registry", {}
+                    ).values()
+                    for deployment in deployments
+                    if deployment.deployment_id == member.deployment_id
+                ),
+                None,
+            )
+            health_ref = (
+                runtime_deployment.health_ref
+                if runtime_deployment is not None
+                else member.deployment_id
+            )
+            health = await health_backend.get_health(health_ref)
             healthy = str(health.get("healthy", "true")) != "false"
 
         item["model_name"] = runtime_entry.get("model_name")

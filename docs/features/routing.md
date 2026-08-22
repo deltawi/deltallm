@@ -364,6 +364,65 @@ router_settings:
 - `cooldown_time`: how long a failing deployment stays out of rotation
 - `allowed_fails`: how many failures are allowed before cooldown starts
 
+Failover owns health bookkeeping for routed provider attempts. Each health-affecting attempt is
+recorded once against the deployment that was actually called; authentication, policy, budget,
+guardrail, local gateway-capacity, and cancellation failures do not penalize a provider.
+
+Cooldown expiry moves an unhealthy deployment into bounded recovery instead of leaving it
+permanently excluded. Shared Redis admits one owner-scoped half-open request at a time. A success
+clears the cooldown and failure state; a failed half-open request immediately starts a new
+cooldown. This request-driven recovery works even when background health checks are disabled.
+When background checks are enabled, duplicate registry members are probed once per interval and
+the probe claim is coordinated across gateway replicas. Operator-issued manual cooldowns remain
+authoritative until their TTL expires. After any automatic or manual cooldown, only the
+owner-scoped half-open request or probe may restore health; stale in-flight successes and failures
+cannot override that recovery decision. Manual health checks use a separate short-lived probe claim
+but contend for the same recovery token, so they can run on demand without racing an active
+background or request-driven recovery. A concurrent manual recovery returns HTTP `409`.
+
+Streaming attempts keep the same single health owner, but once response bytes have been emitted a
+router-health persistence failure cannot replace the stream or suppress usage, spend, audit, and
+cleanup finalization. Those update failures are logged and counted separately for reconciliation.
+
+All router keys are built as `deltallm:<app_env>:v1:<router-capability>:<identifiers>`. Mutable
+provider-health keys also include an opaque deployment generation; active admission, usage, and
+latency remain deployment-ID scoped. Separate environments sharing a Redis service therefore share
+neither routing state nor claim ownership. Generation values are digests and never expose provider
+credentials. This changes no hot-path call count: attempt admission and health transitions remain
+one Lua round trip each, and batch reads remain one pipeline or `MGET`.
+
+Health hashes have a rolling 30-day retention period. Each health transition refreshes that TTL,
+and a cooldown longer than 30 days extends retention through the cooldown plus the failure window.
+Adding or removing a deployment ID, changing that ID's model/provider parameters, or recreating it
+publishes a new immutable registry generation with isolated health, failure, cooldown, recovery,
+and probe keys. In-flight attempts and probes retain the retired generation, so their late outcomes
+cannot affect the replacement. Exact deletion of retired health keys is bounded best-effort cleanup
+after publication; cleanup failure is observable but cannot corrupt or fail the new configuration,
+and retained keys expire by TTL. Changes limited to `model_info`, such as weight or priority,
+preserve health history. Admission owners, active counts, usage, and latency are not generation
+scoped or deleted.
+
+This namespace is a schema cutover from the earlier raw router keys. Drain replicas running the old
+binary before namespaced replicas accept traffic, and use the same drain procedure for rollback;
+mixed binaries would otherwise maintain separate admission and cooldown state.
+
+During a Redis outage, `redis_degraded_mode: fail_open` uses bounded process-local health state and
+reports the router backend as degraded; it does not claim that state is cluster-wide. After Redis
+reconnects, shared Redis becomes authoritative and the temporary local health evidence is dropped.
+With `fail_closed`, health transitions fail with service unavailable while Redis is unavailable.
+
+### Internal health API migration
+
+`BackgroundHealthChecker` now takes `health_manager=CooldownManager(state_backend)` so all health
+transitions pass through the same fenced owner. The former positional or keyword `state_backend`
+constructor form remains accepted with a deprecation warning for one migration window.
+
+`PassiveHealthTracker` was removed from the `src.router` and `src.domain.routing` compatibility
+namespaces, and `CooldownRecoveryMonitor` was removed from `src.router`. Do not recreate them beside
+the current router: `FailoverManager` owns request-result health accounting, while request half-open
+admission and the optional `BackgroundHealthChecker` own recovery. Running the legacy helpers as
+well would duplicate health writes and could let an unfenced success override cooldown recovery.
+
 Tip: verify the effective `allowed_fails` value in the config your environment actually applies. In practice that usually means your mounted `config.yaml`, your Helm `values.yaml`, or the rendered ConfigMap in the cluster.
 
 When you publish a route-group policy, that group can override timeout and retry behavior without changing the global config.

@@ -37,7 +37,11 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, MCPToolDefinition
 from src.providers.resolution import resolve_provider
-from src.router import ROUTING_MODE_CONTEXT_KEY
+from src.router import ProviderAttemptResult, ROUTING_MODE_CONTEXT_KEY
+from src.router.execution import (
+    attach_failover_attempt_context,
+    get_failover_attempt_context,
+)
 from src.router.health_policy import affects_deployment_health
 from src.routers.routing_decision import route_failover_kwargs
 
@@ -665,14 +669,15 @@ class ChatWorkerExecutionMixin:
         )
         served_deployment: Any | None = None
         last_retryable_microbatch_exc: Exception | None = None
-        last_retryable_microbatch_deployment_id: str | None = None
         request_context = self._build_chat_microbatch_request_context(
             job=job,
             prepared_items=prepared_items,
         )
 
-        async def _execute_for_deployment(deployment: Any) -> Sequence[Any]:
-            nonlocal last_retryable_microbatch_deployment_id, last_retryable_microbatch_exc
+        async def _execute_for_deployment(
+            deployment: Any,
+        ) -> Sequence[Any] | ProviderAttemptResult[Sequence[Any]]:
+            nonlocal last_retryable_microbatch_exc
             deployment_executor = self._resolve_chat_microbatch_capable_executor(
                 first_item,
                 deployment=deployment,
@@ -680,11 +685,29 @@ class ChatWorkerExecutionMixin:
                 input_tokens=chunk_input_tokens,
             )
             try:
-                return await deployment_executor.execute_chat_microbatch(
+                raw_results = await deployment_executor.execute_chat_microbatch(
                     requests=[prepared.payload for prepared in prepared_items],
                     deployment=deployment,
                     request_context=request_context,
                 )
+                normalized_results = normalize_chat_microbatch_results(
+                    raw_results,
+                    expected_count=chunk_size,
+                    custom_ids=[prepared.item.custom_id for prepared in prepared_items],
+                )
+                health_errors = [
+                    result.error
+                    for result in normalized_results
+                    if result.error is not None and affects_deployment_health(result.error)
+                ]
+                if len(health_errors) == len(normalized_results):
+                    raise health_errors[0]
+                if health_errors:
+                    return ProviderAttemptResult(
+                        value=normalized_results,
+                        health_error=health_errors[0],
+                    )
+                return normalized_results
             except Exception as exc:
                 retry_decision = classify_batch_retry(exc)
                 if (
@@ -692,9 +715,7 @@ class ChatWorkerExecutionMixin:
                     and retry_decision.retryable
                     and affects_deployment_health(exc)
                 ):
-                    deployment_id = str(getattr(deployment, "deployment_id", None) or "")
                     last_retryable_microbatch_exc = exc
-                    last_retryable_microbatch_deployment_id = deployment_id or None
                 raise
 
         try:
@@ -713,7 +734,7 @@ class ChatWorkerExecutionMixin:
                 )
 
             observe_batch_chat_microbatch_size(batch_size=chunk_size)
-            raw_results, served_deployment = await self._await_with_lease_loss_cancellation(
+            normalized_results, served_deployment = await self._await_with_lease_loss_cancellation(
                 self.app.state.failover_manager.execute_with_failover(
                     primary_deployment=first_item.primary_deployment,
                     model_group=first_item.model_group,
@@ -724,11 +745,6 @@ class ChatWorkerExecutionMixin:
                 ),
                 lease_lost_event=item_lease_lost,
                 label=f"chat_microbatch:{microbatch_id}",
-            )
-            normalized_results = normalize_chat_microbatch_results(
-                raw_results,
-                expected_count=chunk_size,
-                custom_ids=[prepared.item.custom_id for prepared in prepared_items],
             )
         except BatchItemLeaseLostError as exc:
             logger.warning(
@@ -763,19 +779,14 @@ class ChatWorkerExecutionMixin:
                         max_in_flight=chat_settings.max_in_flight,
                     )
                     return
+                terminal_context = get_failover_attempt_context(exc)
                 exc = last_retryable_microbatch_exc
-                failure_deployment_id = last_retryable_microbatch_deployment_id
-            else:
-                failure_deployment = served_deployment or first_item.primary_deployment
-                failure_deployment_id = (
-                    str(getattr(failure_deployment, "deployment_id", None) or "") or None
-                )
-            await self._record_upstream_failure_runtime_hook(
-                batch_id=batch_id,
-                deployment_id=failure_deployment_id,
-                exc=exc,
-                reference=microbatch_id,
-            )
+                if terminal_context is not None:
+                    attach_failover_attempt_context(
+                        exc,
+                        model_group=terminal_context.model_group,
+                        attempted_deployment_ids=list(terminal_context.attempted_deployment_ids),
+                    )
             retry_decision = classify_batch_retry(exc)
             requeued = await self._release_failed_chat_microbatch_for_retry(
                 job=job,

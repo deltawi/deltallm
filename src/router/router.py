@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass, field, replace
 from enum import Enum
 import logging
+from collections.abc import Mapping
 from typing import Any, Sequence, cast
 
 from src.config import ModelMode
@@ -23,6 +24,11 @@ from src.router.candidates import (
     RouteCandidatePlan,
     candidate_plan_cache,
 )
+from src.router.health_state import (
+    DeploymentHealthRef,
+    build_deployment_health_ref,
+)
+from src.router.registry import DeploymentRegistryStore
 from src.router.state import DeploymentStateBackend
 from src.router.strategies import (
     CostBasedStrategy,
@@ -71,6 +77,21 @@ class Deployment:
     audio_seconds_pm_limit: int | None = None
     char_pm_limit: int | None = None
     rerank_units_pm_limit: int | None = None
+    health_incarnation: str | None = None
+    named_credential_id: str | None = None
+    health_ref: DeploymentHealthRef = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.health_incarnation is None:
+            self.health_ref = DeploymentHealthRef(self.deployment_id)
+            return
+        self.health_ref = build_deployment_health_ref(
+            deployment_id=self.deployment_id,
+            model_name=self.model_name,
+            deltallm_params=self.deltallm_params,
+            incarnation=self.health_incarnation,
+            named_credential_id=self.named_credential_id,
+        )
 
 
 @dataclass
@@ -118,12 +139,16 @@ class Router:
         strategy: RoutingStrategy,
         state_backend: DeploymentStateBackend,
         config: RouterConfig,
-        deployment_registry: dict[str, list[Deployment]],
+        deployment_registry: Mapping[str, Sequence[Deployment]] | DeploymentRegistryStore,
     ):
         self.strategy = strategy
         self.state = state_backend
         self.config = config
-        self.deployment_registry = deployment_registry
+        self.deployment_registry = (
+            deployment_registry
+            if isinstance(deployment_registry, DeploymentRegistryStore)
+            else DeploymentRegistryStore(deployment_registry)
+        )
         self._strategies = self._build_strategy_map()
         self._strategy_impl = self._load_strategy(strategy)
 
@@ -187,13 +212,16 @@ class Router:
                 )
             )
 
-        deployment_ids = list(
-            dict.fromkeys(
-                deployment.deployment_id for group in pending for deployment in group.candidates
-            )
-        )
+        unique_deployments = {
+            deployment.deployment_id: deployment
+            for group in pending
+            for deployment in group.candidates
+        }
+        deployment_ids = list(unique_deployments)
+        health_refs = [deployment.health_ref for deployment in unique_deployments.values()]
         health, cooldowns, state_snapshot = await self._load_planning_state(
             deployment_ids,
+            health_refs,
             pending,
         )
 
@@ -228,6 +256,7 @@ class Router:
         if not self._apply_filters([deployment], request_context):
             return AttemptPermit(
                 deployment_id=deployment.deployment_id,
+                health_ref=deployment.health_ref,
                 acquired=False,
                 rejection_reason=AttemptRejectionReason.STATIC_POLICY,
             )
@@ -238,7 +267,7 @@ class Router:
             else AttemptCapacity()
         )
         return await self.state.acquire_attempt(
-            deployment.deployment_id,
+            deployment.health_ref,
             capacity,
             lease_ttl_seconds=lease_ttl_seconds,
         )
@@ -252,6 +281,7 @@ class Router:
     async def _load_planning_state(
         self,
         deployment_ids: list[str],
+        health_refs: list[DeploymentHealthRef],
         groups: list[_CandidatePlanInput],
     ) -> tuple[dict[str, dict[str, Any]], dict[str, bool], StrategyStateSnapshot]:
         if not deployment_ids:
@@ -271,8 +301,8 @@ class Router:
         )
 
         calls: dict[str, Any] = {
-            "health": self.state.get_health_batch(deployment_ids),
-            "cooldowns": self.state.get_cooldown_batch(deployment_ids),
+            "health": self.state.get_health_batch(health_refs),
+            "cooldowns": self.state.get_cooldown_batch(health_refs),
         }
         if needs_active:
             calls["active"] = self.state.get_active_requests_batch(deployment_ids)
@@ -306,7 +336,10 @@ class Router:
             if cooldowns.get(deployment.deployment_id, False):
                 continue
             dep_health = health.get(deployment.deployment_id, {})
-            if dep_health.get("healthy", "true") == "false":
+            if (
+                dep_health.get("healthy", "true") == "false"
+                and dep_health.get("recovery_required") != "true"
+            ):
                 continue
             filtered.append(deployment)
 
@@ -640,6 +673,16 @@ def _deployment_from_entry(model_name: str, entry: dict[str, Any], index: int) -
         rerank_units_pm_limit=(
             int(model_info["rerank_units_pm_limit"])
             if model_info.get("rerank_units_pm_limit") is not None
+            else None
+        ),
+        health_incarnation=(
+            str(entry["routing_state_incarnation"])
+            if entry.get("routing_state_incarnation") is not None
+            else None
+        ),
+        named_credential_id=(
+            str(entry["named_credential_id"])
+            if entry.get("named_credential_id") is not None
             else None
         ),
     )

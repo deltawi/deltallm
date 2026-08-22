@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from src.models.errors import (
@@ -12,14 +14,22 @@ from src.router import (
     AttemptCapacity,
     AttemptCapacityLimit,
     AttemptRejectionReason,
+    CooldownManager,
     HealthEndpointHandler,
     RedisStateBackend,
+    RouterRedisKeyspace,
     Router,
     RouterConfig,
     RoutingStrategy,
     build_deployment_registry,
     build_route_group_policies,
 )
+from src.router.health_state import (
+    DeploymentHealthRef,
+    FAILURE_WINDOW_SECONDS,
+    HEALTH_STATE_RETENTION_SECONDS,
+)
+from src.router.router import Deployment
 from src.router.usage import normalize_router_usage
 from tests.conftest import FakeRedis
 
@@ -277,11 +287,475 @@ async def test_usage_based_strategy_uses_router_state_usage():
 async def test_cooldown_batch_uses_local_fallback_state():
     state = RedisStateBackend(redis=None)
 
-    await state.set_cooldown("dep-a", 30, "manual")
+    await CooldownManager(state).manual_cooldown("dep-a", 30, "manual")
 
     cooldowns = await state.get_cooldown_batch(["dep-a", "dep-b"])
 
     assert cooldowns == {"dep-a": True, "dep-b": False}
+
+
+@pytest.mark.asyncio
+async def test_redis_health_transitions_apply_bounded_hash_ttls() -> None:
+    redis = FakeRedis()
+    state = RedisStateBackend(redis)
+    cooldown = CooldownManager(state, cooldown_time=60, allowed_fails=0)
+
+    await cooldown.record_success("healthy")
+    await cooldown.record_failure("failed", "provider unavailable")
+    long_cooldown = HEALTH_STATE_RETENTION_SECONDS + 10
+    await cooldown.manual_cooldown("manual", long_cooldown, "operator hold")
+
+    assert await redis.ttl(state.keyspace.health("healthy")) == HEALTH_STATE_RETENTION_SECONDS
+    assert await redis.ttl(state.keyspace.health("failed")) == HEALTH_STATE_RETENTION_SECONDS
+    assert await redis.ttl(state.keyspace.health("manual")) == (
+        long_cooldown + FAILURE_WINDOW_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_health_invalidation_deletes_exact_health_keys_in_one_redis_call() -> None:
+    class CountingRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.delete_calls: list[tuple[str, ...]] = []
+
+        async def delete(self, *keys: str):
+            self.delete_calls.append(keys)
+            await super().delete(*keys)
+
+    redis = CountingRedis()
+    state = RedisStateBackend(redis)
+    deployment_id = "dep-replaced"
+    unrelated_id = "dep-current"
+
+    def health_keys(item: str) -> tuple[str, ...]:
+        return (
+            state.keyspace.health_failures(item),
+            state.keyspace.health(item),
+            state.keyspace.cooldown(item),
+            state.keyspace.health_recovery(item),
+            state.keyspace.health_probe(item, "background"),
+            state.keyspace.health_probe(item, "manual"),
+        )
+
+    for item in (deployment_id, unrelated_id):
+        failures, health, *string_keys = health_keys(item)
+        await redis.zadd(failures, {"failure": 1})
+        await redis.hset(health, mapping={"healthy": "false"})
+        for key in string_keys:
+            await redis.set(key, "owner", ex=60)
+
+    preserved_keys = (
+        state.keyspace.active_requests(deployment_id),
+        state.keyspace.attempt_owners(deployment_id),
+        state.keyspace.latency(deployment_id),
+        state.keyspace.usage(deployment_id, "requests", "123"),
+    )
+    for key in preserved_keys:
+        await redis.set(key, "1", ex=60)
+
+    assert await state.invalidate_health_state([deployment_id, deployment_id]) is True
+
+    assert len(redis.delete_calls) == 1
+    assert set(redis.delete_calls[0]) == set(health_keys(deployment_id))
+    for key in health_keys(deployment_id):
+        assert key not in redis.store
+        assert key not in redis.hash_store
+        assert key not in redis.zset_store
+    for key in health_keys(unrelated_id):
+        assert key in redis.store or key in redis.hash_store or key in redis.zset_store
+    for key in preserved_keys:
+        assert key in redis.store
+
+
+@pytest.mark.asyncio
+async def test_health_invalidation_is_generation_exact_for_reused_deployment_id() -> None:
+    redis = FakeRedis()
+    state = RedisStateBackend(redis)
+    retired = DeploymentHealthRef("dep-reused", "retired")
+    current = DeploymentHealthRef("dep-reused", "current")
+
+    for item in (retired, current):
+        await redis.hset(
+            state.keyspace.health(item.deployment_id, item.generation),
+            mapping={"healthy": "false"},
+        )
+        await redis.set(
+            state.keyspace.cooldown(item.deployment_id, item.generation),
+            "provider unavailable",
+            ex=60,
+        )
+
+    assert await state.invalidate_health_state([retired]) is True
+
+    assert await state.get_health(retired) == {}
+    assert (await state.get_health(current))["healthy"] == "false"
+    assert await state.is_cooled_down(current) is True
+
+
+@pytest.mark.asyncio
+async def test_health_invalidation_chunks_control_plane_redis_work() -> None:
+    class CountingRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.delete_calls: list[tuple[str, ...]] = []
+
+        async def delete(self, *keys: str):
+            self.delete_calls.append(keys)
+            return await super().delete(*keys)
+
+    redis = CountingRedis()
+    state = RedisStateBackend(redis)
+    health_refs = [DeploymentHealthRef(f"dep-{index}", "generation") for index in range(101)]
+
+    assert await state.invalidate_health_state(health_refs) is True
+
+    assert [len(keys) for keys in redis.delete_calls] == [600, 6]
+
+
+@pytest.mark.asyncio
+async def test_health_invalidation_caps_control_plane_redis_work() -> None:
+    class CountingRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.delete_calls: list[tuple[str, ...]] = []
+
+        async def delete(self, *keys: str):
+            self.delete_calls.append(keys)
+            return await super().delete(*keys)
+
+    redis = CountingRedis()
+    state = RedisStateBackend(redis)
+    health_refs = [DeploymentHealthRef(f"dep-{index}", "generation") for index in range(1_001)]
+
+    assert await state.invalidate_health_state(health_refs) is False
+
+    assert len(redis.delete_calls) == 10
+    assert all(len(keys) == 600 for keys in redis.delete_calls)
+
+
+@pytest.mark.asyncio
+async def test_health_invalidation_clears_local_health_but_preserves_admission_state() -> None:
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state, cooldown_time=60, allowed_fails=0)
+    permit = await state.acquire_attempt("dep-replaced", AttemptCapacity())
+    await cooldown.record_failure("dep-replaced", "provider unavailable")
+
+    assert await state.invalidate_health_state(["dep-replaced"]) is False
+
+    assert await state.get_health("dep-replaced") == {}
+    assert await state.is_cooled_down("dep-replaced") is False
+    assert await state.get_active_requests("dep-replaced") == 1
+    await state.release_attempt(permit)
+
+
+def test_deployment_health_generation_changes_only_for_provider_identity() -> None:
+    base = Deployment(
+        deployment_id="dep-generation",
+        model_name="group",
+        deltallm_params={"model": "openai/a", "api_key": "secret-value"},
+        model_info={"weight": 1},
+        health_incarnation="incarnation-a",
+        named_credential_id="credential-a",
+    )
+    metadata_update = Deployment(
+        deployment_id="dep-generation",
+        model_name="group",
+        deltallm_params={"model": "openai/a", "api_key": "secret-value"},
+        model_info={"weight": 10},
+        health_incarnation="incarnation-a",
+        named_credential_id="credential-a",
+    )
+    provider_update = Deployment(
+        deployment_id="dep-generation",
+        model_name="group",
+        deltallm_params={"model": "openai/b", "api_key": "secret-value"},
+        health_incarnation="incarnation-a",
+        named_credential_id="credential-a",
+    )
+    recreated = Deployment(
+        deployment_id="dep-generation",
+        model_name="group",
+        deltallm_params={"model": "openai/a", "api_key": "secret-value"},
+        health_incarnation="incarnation-b",
+        named_credential_id="credential-a",
+    )
+
+    assert base.health_ref == metadata_update.health_ref
+    assert base.health_ref != provider_update.health_ref
+    assert base.health_ref != recreated.health_ref
+    assert "secret-value" not in base.health_ref.generation
+
+
+@pytest.mark.asyncio
+async def test_retired_generation_outcome_cannot_change_replacement_health() -> None:
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state, cooldown_time=60, allowed_fails=0)
+    old = Deployment(
+        deployment_id="dep-reused",
+        model_name="group",
+        deltallm_params={"model": "openai/old"},
+        health_incarnation="incarnation-old",
+    )
+    replacement = Deployment(
+        deployment_id="dep-reused",
+        model_name="group",
+        deltallm_params={"model": "openai/new"},
+        health_incarnation="incarnation-old",
+    )
+
+    permit = await state.acquire_attempt(old.health_ref, AttemptCapacity())
+    assert permit.acquired is True
+    assert await state.invalidate_health_state([old.health_ref]) is False
+
+    await cooldown.record_failure(old.health_ref, "late provider failure")
+
+    assert (await state.get_health(old.health_ref))["healthy"] == "false"
+    assert await state.get_health(replacement.health_ref) == {}
+    assert await state.is_cooled_down(replacement.health_ref) is False
+    await state.release_attempt(permit)
+
+
+@pytest.mark.asyncio
+async def test_probe_claims_are_fenced_by_health_generation() -> None:
+    redis = FakeRedis()
+    state = RedisStateBackend(redis)
+    old = DeploymentHealthRef("dep-reused", "old-generation")
+    replacement = DeploymentHealthRef("dep-reused", "new-generation")
+
+    old_claim = await state.claim_health_probe(old, 60)
+    duplicate_old_claim = await state.claim_health_probe(old, 60)
+    replacement_claim = await state.claim_health_probe(replacement, 60)
+
+    assert old_claim is not None
+    assert duplicate_old_claim is None
+    assert replacement_claim is not None
+    assert old_claim.health_ref == old
+    assert replacement_claim.health_ref == replacement
+    await state.release_health_probe(old, old_claim)
+    await state.release_health_probe(replacement, replacement_claim)
+
+
+@pytest.mark.asyncio
+async def test_expired_local_cooldown_allows_one_half_open_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 1_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    monkeypatch.setattr("src.router.cooldown.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+
+    assert await cooldown.record_failure("dep-a", "provider unavailable") is True
+    assert await state.is_cooled_down("dep-a") is True
+
+    now["value"] = 1_002.0
+    permits = await asyncio.gather(
+        *(state.acquire_attempt("dep-a", AttemptCapacity()) for _ in range(8))
+    )
+
+    acquired = [permit for permit in permits if permit.acquired]
+    rejected = [permit for permit in permits if not permit.acquired]
+    assert len(acquired) == 1
+    assert acquired[0].recovery is True
+    assert {permit.rejection_reason for permit in rejected} == {
+        AttemptRejectionReason.RECOVERY_IN_PROGRESS
+    }
+
+    await cooldown.record_success("dep-a", recovery_token=acquired[0].owner_token)
+    await state.release_attempt(acquired[0])
+
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "true"
+    assert health["consecutive_failures"] == "0"
+    ordinary = await state.acquire_attempt("dep-a", AttemptCapacity())
+    assert ordinary.acquired is True
+    assert ordinary.recovery is False
+    await state.release_attempt(ordinary)
+
+
+@pytest.mark.asyncio
+async def test_failed_local_half_open_attempt_reenters_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 2_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    monkeypatch.setattr("src.router.cooldown.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+    await cooldown.record_failure("dep-a", "first failure")
+
+    now["value"] = 2_002.0
+    permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+    assert permit.acquired is True
+    assert permit.recovery is True
+
+    assert (
+        await cooldown.record_failure(
+            "dep-a",
+            "recovery failed",
+            recovery_token=permit.owner_token,
+        )
+        is True
+    )
+    await state.release_attempt(permit)
+
+    assert await state.is_cooled_down("dep-a") is True
+    rejected = await state.acquire_attempt("dep-a", AttemptCapacity())
+    assert rejected.rejection_reason == AttemptRejectionReason.COOLDOWN
+
+
+@pytest.mark.asyncio
+async def test_failed_local_half_open_attempt_reenters_cooldown_after_failure_window_expires(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 3_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    monkeypatch.setattr("src.router.cooldown.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state, cooldown_time=301, allowed_fails=2)
+
+    await cooldown.manual_cooldown("dep-a", 301, "operator cooldown")
+    now["value"] = 3_302.0
+    permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+    assert permit.acquired is True
+    assert permit.recovery is True
+
+    assert (
+        await cooldown.record_failure(
+            "dep-a",
+            "recovery failed",
+            recovery_token=permit.owner_token,
+        )
+        is True
+    )
+
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "false"
+    assert health["consecutive_failures"] == "1"
+    assert await state.is_cooled_down("dep-a") is True
+
+
+@pytest.mark.asyncio
+async def test_expired_local_half_open_result_is_fenced(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 4_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+    await cooldown.record_failure("dep-a", "provider unavailable")
+
+    now["value"] = 4_002.0
+    permit = await state.acquire_attempt(
+        "dep-a",
+        AttemptCapacity(),
+        lease_ttl_seconds=1,
+    )
+    assert permit.acquired is True
+    assert permit.recovery is True
+
+    now["value"] = 4_004.0
+    await cooldown.record_success("dep-a", recovery_token=permit.owner_token)
+
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "false"
+    next_permit = await state.acquire_attempt("dep-a", AttemptCapacity())
+    assert next_permit.acquired is True
+    assert next_permit.recovery is True
+
+
+@pytest.mark.asyncio
+async def test_active_manual_cooldown_is_not_cleared_by_inflight_success(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 5_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state)
+    await cooldown.manual_cooldown("dep-a", 60, "operator hold")
+
+    await cooldown.record_success("dep-a")
+
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "false"
+    assert health["cooldown_kind"] == "manual"
+    assert await state.is_cooled_down("dep-a") is True
+
+    now["value"] = 5_061.0
+    await cooldown.record_success("dep-a")
+
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "false"
+    assert health["cooldown_kind"] == "manual"
+    assert await state.is_cooled_down("dep-a") is False
+
+    recovery = await state.acquire_attempt("dep-a", AttemptCapacity())
+    assert recovery.acquired is True
+    assert recovery.recovery is True
+    await cooldown.record_success("dep-a", recovery_token=recovery.owner_token)
+
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "true"
+    assert "cooldown_kind" not in health
+
+
+@pytest.mark.asyncio
+async def test_inflight_tokenless_outcomes_cannot_override_automatic_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 5_500.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+
+    await cooldown.record_failure("dep-a", "provider unavailable")
+    await cooldown.record_success("dep-a")
+    await cooldown.record_failure("dep-a", "stale in-flight failure")
+
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "false"
+    assert health["consecutive_failures"] == "1"
+
+    now["value"] = 5_502.0
+    await cooldown.record_success("dep-a")
+    health = await state.get_health("dep-a")
+    assert health["healthy"] == "false"
+
+
+@pytest.mark.asyncio
+async def test_router_state_keys_are_isolated_by_environment():
+    redis = FakeRedis()
+    staging_keys = RouterRedisKeyspace(environment="staging")
+    production_keys = RouterRedisKeyspace(environment="production")
+    first = RedisStateBackend(
+        redis,
+        keyspace=staging_keys,
+    )
+    second = RedisStateBackend(
+        redis,
+        keyspace=production_keys,
+    )
+
+    first_claim = await first.claim_health_probe("dep:a", 60)
+    second_claim = await second.claim_health_probe("dep:a", 60)
+    await CooldownManager(first, allowed_fails=0).record_failure("dep:a", "staging failure")
+    production_permit = await second.acquire_attempt("dep:a", AttemptCapacity())
+
+    assert first_claim is not None
+    assert second_claim is not None
+    assert staging_keys.health_probe("dep:a", "background") in redis.store
+    assert production_keys.health_probe("dep:a", "background") in redis.store
+    assert (await first.get_health("dep:a"))["healthy"] == "false"
+    assert await first.is_cooled_down("dep:a") is True
+    assert await second.get_health("dep:a") == {}
+    assert await second.is_cooled_down("dep:a") is False
+    assert production_permit.acquired is True
+    assert production_permit.recovery is False
+    assert staging_keys.health("dep:a") != production_keys.health("dep:a")
+    assert staging_keys.cooldown("dep:a") != production_keys.cooldown("dep:a")
+    assert staging_keys.active_requests("dep:a") != production_keys.active_requests("dep:a")
+    await second.release_attempt(production_permit)
 
 
 @pytest.mark.asyncio
@@ -291,7 +765,7 @@ async def test_redis_state_batch_reads_use_one_round_trip_per_metric(test_app, m
     await state.increment_usage("dep-a", 7)
     await state.record_latency("dep-a", 12.5)
     permit = await state.acquire_attempt("dep-a", AttemptCapacity())
-    await state.set_health("dep-a", False)
+    await redis.hset(state.keyspace.health("dep-a"), mapping={"healthy": "false"})
 
     calls = {"eval": 0, "mget": 0, "pipeline": 0}
     original_eval = redis.eval
@@ -354,7 +828,7 @@ async def test_attempt_admission_uses_one_atomic_redis_call_and_owned_release():
     assert permit.expires_at_ms
     assert permit.active_requests == 1
     assert redis.attempt_eval_calls == 1
-    assert redis.ttl_store["active_requests:dep-a"] > 0
+    assert redis.ttl_store[state.keyspace.active_requests("dep-a")] > 0
     assert redis.ttl_store[state._attempt_owners_key("dep-a")] > 0
     assert await state.get_active_requests("dep-a") == 1
 
@@ -382,9 +856,9 @@ async def test_attempt_admission_rejects_dynamic_state_without_incrementing_acti
     state = RedisStateBackend(redis)
     capacity = AttemptCapacity((AttemptCapacityLimit("rpm", 1),))
     if state_change == "cooldown":
-        await state.set_cooldown("dep-a", 30, "manual")
+        await CooldownManager(state).manual_cooldown("dep-a", 30, "manual")
     elif state_change == "unhealthy":
-        await state.set_health("dep-a", False)
+        await redis.hset(state.keyspace.health("dep-a"), mapping={"healthy": "false"})
     else:
         await state.increment_usage("dep-a", 0)
 
@@ -392,9 +866,9 @@ async def test_attempt_admission_rejects_dynamic_state_without_incrementing_acti
 
     assert permit.acquired is False
     assert permit.rejection_reason == expected_reason
-    assert "active_requests:dep-a" not in redis.store
+    assert state.keyspace.active_requests("dep-a") not in redis.store
     assert await state.release_attempt(permit) == 0
-    assert "active_requests:dep-a" not in redis.store
+    assert state.keyspace.active_requests("dep-a") not in redis.store
 
 
 @pytest.mark.asyncio
@@ -419,7 +893,7 @@ async def test_local_attempt_permit_releases_locally_after_redis_recovery():
     assert local_permit.backend == "local"
     assert state.get_backend_status()["mode"] == "degraded"
     assert await state.release_attempt(local_permit) == 0
-    assert "active_requests:dep-a" not in redis.store
+    assert state.keyspace.active_requests("dep-a") not in redis.store
 
     redis_permit = await state.acquire_attempt("dep-a", AttemptCapacity())
 
@@ -463,7 +937,7 @@ async def test_attempt_release_outage_recovers_from_expiring_owner_state():
 
     assert await state.release_attempt(permit) is None
     assert state.get_backend_status()["mode"] == "degraded"
-    assert redis.ttl_store["active_requests:dep-a"] > 0
+    assert redis.ttl_store[state.keyspace.active_requests("dep-a")] > 0
 
     redis.fail_release = False
     owners_key = state._attempt_owners_key("dep-a")
@@ -998,6 +1472,17 @@ async def test_router_state_fail_closed_raises_when_backend_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_health_transition_fails_closed_when_backend_is_unavailable():
+    state = RedisStateBackend(redis=None, degraded_mode="fail_closed")
+    cooldown = CooldownManager(state, allowed_fails=0)
+
+    with pytest.raises(ServiceUnavailableError, match="Router state backend unavailable"):
+        await cooldown.record_failure("dep-a", "provider unavailable")
+
+    assert state.get_backend_status()["mode"] == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_router_state_drops_zero_active_local_entries():
     state = RedisStateBackend(redis=None, degraded_mode="fail_open")
 
@@ -1016,7 +1501,7 @@ async def test_router_state_prunes_stale_local_entries(monkeypatch: pytest.Monke
     now = {"value": 1_000.0}
 
     monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
-    await state.record_failure("dep-a", "boom")
+    await CooldownManager(state, allowed_fails=10).record_failure("dep-a", "boom")
 
     now["value"] = 1_005.0
     health = await state.get_health("dep-a")

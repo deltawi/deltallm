@@ -164,10 +164,8 @@ class _FailingCacheBackend(CacheBackend):
 
 def _refresh_runtime_registry(test_app) -> None:
     rebuilt = build_deployment_registry(test_app.state.model_registry)
-    test_app.state.router.deployment_registry.clear()
-    test_app.state.router.deployment_registry.update(rebuilt)
-    test_app.state.router_health_handler.registry.clear()
-    test_app.state.router_health_handler.registry.update(rebuilt)
+    test_app.state.router.deployment_registry.replace(rebuilt)
+    test_app.state.router_health_handler.registry = test_app.state.router.deployment_registry
 
 
 def _configure_groq_openai_compatible_chat_model(test_app) -> None:

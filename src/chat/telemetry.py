@@ -297,15 +297,6 @@ async def emit_stream_failure(
             exc=exc,
         ),
     )
-    if failure_fields["deployment_id"]:
-        # Streaming failures can happen after failover has returned the response
-        # iterator, so the failover manager cannot observe this terminal outcome.
-        await request.app.state.passive_health_tracker.record_request_outcome(
-            str(failure_fields["deployment_id"]),
-            success=False,
-            error=str(exc),
-            exc=exc,
-        )
     callback_payload = build_standard_logging_payload(
         call_type="completion",
         request_id=request_id,

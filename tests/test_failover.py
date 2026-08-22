@@ -7,6 +7,8 @@ from email.utils import format_datetime
 import httpx
 import pytest
 
+from src.batch.retry import BatchResponseShapeError
+from src.chat.stream_response import DeadlineStreamingResponse
 from src.models.errors import (
     GatewayCapacityError,
     InvalidRequestError,
@@ -18,22 +20,28 @@ from src.models.errors import (
 )
 from src.providers.healthcheck import HealthProbeResult, probe_provider_health
 from src.router import (
+    AttemptCapacity,
     BackgroundHealthChecker,
     CooldownManager,
     FallbackConfig,
     FailoverManager,
+    HealthCheckInProgressError,
     HealthCheckConfig,
-    PassiveHealthTracker,
+    HealthEndpointHandler,
     RedisStateBackend,
+    ProviderAttemptResult,
     RequestDeadline,
     ROUTING_MODE_CONTEXT_KEY,
     RouteGroupPolicy,
     Router,
     RouterConfig,
     RoutingStrategy,
+    get_failover_attempt_context,
+    get_failover_original_error,
 )
 from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
+from tests.conftest import FakeRedis
 
 
 def _deployment(
@@ -75,7 +83,127 @@ def _planner(
 
 
 @pytest.mark.asyncio
-async def test_failover_applies_retry_override():
+async def test_failover_does_not_retry_wrapped_nonretryable_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=3, retry_after=0, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=10),
+    )
+    monkeypatch.setattr(manager, "_compute_backoff", lambda *_: 0.0)
+    attempts = 0
+
+    async def run(_deployment: Deployment) -> str:
+        nonlocal attempts
+        attempts += 1
+        raise BatchResponseShapeError("malformed provider result")
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    assert attempts == 1
+    assert isinstance(get_failover_original_error(exc_info.value), BatchResponseShapeError)
+
+
+@pytest.mark.asyncio
+async def test_failover_records_mixed_result_health_once_without_replaying_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=3, retry_after=0, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=10),
+    )
+    monkeypatch.setattr(manager, "_compute_backoff", lambda *_: 0.0)
+    attempts = 0
+
+    async def run(_deployment: Deployment) -> ProviderAttemptResult[str]:
+        nonlocal attempts
+        attempts += 1
+        return ProviderAttemptResult(
+            value="mixed-result",
+            health_error=ServiceUnavailableError(
+                message="one item failed upstream",
+                affects_deployment_health=True,
+            ),
+        )
+
+    result = await manager.execute_with_failover(primary, "group-a", run)
+
+    assert result == "mixed-result"
+    assert attempts == 1
+    health = await state.get_health(primary.deployment_id)
+    assert health["consecutive_failures"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_failover_does_not_replay_provider_success_when_state_reporting_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    cooldown = CooldownManager(state)
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=3, retry_after=0, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=cooldown,
+    )
+    attempts = 0
+
+    async def fail_state_update(*_args, **_kwargs):
+        raise ServiceUnavailableError(message="router state unavailable")
+
+    async def run(_deployment: Deployment) -> str:
+        nonlocal attempts
+        attempts += 1
+        return "provider-result"
+
+    monkeypatch.setattr(state, "record_latency", fail_state_update)
+    monkeypatch.setattr(cooldown, "record_success", fail_state_update)
+
+    result = await manager.execute_with_failover(primary, "group-a", run)
+
+    assert result == "provider-result"
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_failover_attaches_empty_attempt_context_to_planning_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    planner = _planner(state, {"group-a": [primary]})
+    manager = FailoverManager(
+        config=FallbackConfig(timeout=1.0),
+        candidate_planner=planner,
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+
+    async def fail_planning(*_args, **_kwargs):
+        raise RuntimeError("planning unavailable")
+
+    monkeypatch.setattr(planner, "plan_deployments", fail_planning)
+    with pytest.raises(RuntimeError) as exc_info:
+        await manager.execute_with_failover(primary, "group-a", lambda _deployment: None)
+
+    context = get_failover_attempt_context(exc_info.value)
+    assert context is not None
+    assert context.model_group == "group-a"
+    assert context.attempted_deployment_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_failover_applies_retry_override(monkeypatch: pytest.MonkeyPatch):
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
     manager = FailoverManager(
@@ -84,6 +212,7 @@ async def test_failover_applies_retry_override():
         state_backend=state,
         cooldown_manager=CooldownManager(state),
     )
+    monkeypatch.setattr(manager, "_compute_backoff", lambda *_: 0.0)
     attempts = {"count": 0}
 
     async def run(_deployment: Deployment) -> str:
@@ -297,8 +426,8 @@ async def test_general_fallback_group_reuses_all_router_eligibility_checks():
         "group-a": [primary],
         "fallback-group": [wrong_tag, unhealthy, cooled, at_capacity, eligible],
     }
-    await state.set_health(unhealthy.deployment_id, False)
-    await state.set_cooldown(cooled.deployment_id, 30, "manual")
+    state._health[unhealthy.health_ref] = {"healthy": "false"}
+    await CooldownManager(state).manual_cooldown(cooled.deployment_id, 30, "manual")
     await state.increment_usage(at_capacity.deployment_id, 0)
     planner = _planner(
         state,
@@ -484,7 +613,7 @@ async def test_stale_primary_cooldown_is_revalidated_before_provider_attempt():
         async def acquire_attempt(  # noqa: ANN001, ANN201
             self, deployment_id, capacity, *, lease_ttl_seconds=630
         ):
-            self.acquisitions.append(deployment_id)
+            self.acquisitions.append(deployment_id.deployment_id)
             return await super().acquire_attempt(
                 deployment_id,
                 capacity,
@@ -512,7 +641,11 @@ async def test_stale_primary_cooldown_is_revalidated_before_provider_attempt():
     routing_context = {ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}}
     selected = await planner.select_deployment("group-a", routing_context)
     assert selected is primary
-    await state.set_cooldown(primary.deployment_id, 30, "changed-after-selection")
+    await CooldownManager(state).manual_cooldown(
+        primary.deployment_id,
+        30,
+        "changed-after-selection",
+    )
     attempts: list[str] = []
 
     async def run(deployment: Deployment) -> str:
@@ -558,9 +691,13 @@ async def test_stale_fallback_dynamic_eligibility_is_revalidated_before_attempt(
     selected = await planner.select_deployment("group-a", routing_context)
     assert selected is primary
     if changed_state == "cooldown":
-        await state.set_cooldown(fallback.deployment_id, 30, "changed-after-selection")
+        await CooldownManager(state).manual_cooldown(
+            fallback.deployment_id,
+            30,
+            "changed-after-selection",
+        )
     elif changed_state == "unhealthy":
-        await state.set_health(fallback.deployment_id, False)
+        state._health[fallback.health_ref] = {"healthy": "false"}
     else:
         await state.increment_usage(fallback.deployment_id, 0)
 
@@ -806,6 +943,69 @@ async def test_cooldown_manager_default_marks_unhealthy_on_third_failure():
     assert health.get("last_error") == "boom-3"
 
 
+@pytest.mark.asyncio
+async def test_failover_records_each_failed_deployment_once():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary", priority=0)
+    fallback = _deployment("dep-fallback", priority=1)
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0, timeout=1.0),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary, fallback]},
+            strategy=RoutingStrategy.PRIORITY_BASED,
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=10),
+    )
+
+    async def run(deployment: Deployment) -> str:
+        raise ServiceUnavailableError(
+            message=f"{deployment.deployment_id} unavailable",
+            affects_deployment_health=True,
+        )
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    primary_health = await state.get_health(primary.deployment_id)
+    fallback_health = await state.get_health(fallback.deployment_id)
+    assert primary_health["consecutive_failures"] == "1"
+    assert fallback_health["consecutive_failures"] == "1"
+    context = get_failover_attempt_context(exc_info.value)
+    assert context is not None
+    assert context.model_group == "group-a"
+    assert context.attempted_deployment_ids == ("dep-primary", "dep-fallback")
+    assert context.last_attempted_deployment_id == "dep-fallback"
+
+
+@pytest.mark.asyncio
+async def test_failover_records_explicit_health_affecting_execution_failure_once():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=10),
+    )
+
+    async def run(_deployment: Deployment) -> str:
+        exc = RuntimeError("malformed upstream response")
+        exc.affects_deployment_health = True  # type: ignore[attr-defined]
+        raise exc
+
+    with pytest.raises(ServiceUnavailableError, match="malformed upstream response") as exc_info:
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    health = await state.get_health(primary.deployment_id)
+    assert health["consecutive_failures"] == "1"
+    assert health["last_error"] == "malformed upstream response"
+    original = get_failover_original_error(exc_info.value)
+    assert isinstance(original, RuntimeError)
+    assert str(original) == "malformed upstream response"
+
+
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
@@ -1014,7 +1214,7 @@ async def test_failover_transport_error_maps_to_health_affecting_service_unavail
 async def test_failover_returns_structured_no_healthy_deployments_error_when_all_candidates_cooled_down():
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
-    await state.set_cooldown(primary.deployment_id, 30, "manual")
+    await CooldownManager(state).manual_cooldown(primary.deployment_id, 30, "manual")
     manager = FailoverManager(
         config=FallbackConfig(num_retries=0, timeout=1.0),
         candidate_planner=_planner(state, {"group-a": [primary]}),
@@ -1432,14 +1632,70 @@ async def test_managed_attempt_holds_capacity_until_caller_releases():
 
 
 @pytest.mark.asyncio
-async def test_passive_health_tracker_ignores_invalid_request_errors():
-    state = RedisStateBackend(redis=None)
-    tracker = PassiveHealthTracker(state_backend=state, failure_threshold=1)
+async def test_managed_stream_deadline_precedes_permit_expiry_and_releases_once() -> None:
+    class CountingState(RedisStateBackend):
+        def __init__(self) -> None:
+            super().__init__(redis=None)
+            self.lease_ttls: list[int] = []
+            self.release_calls = 0
 
-    await tracker.record_request_outcome(
+        async def acquire_attempt(  # noqa: ANN001, ANN201
+            self, health_ref, capacity, *, lease_ttl_seconds=630
+        ):
+            self.lease_ttls.append(lease_ttl_seconds)
+            return await super().acquire_attempt(
+                health_ref,
+                capacity,
+                lease_ttl_seconds=lease_ttl_seconds,
+            )
+
+        async def release_attempt(self, permit):  # noqa: ANN001, ANN201
+            self.release_calls += 1
+            return await super().release_attempt(permit)
+
+    state = CountingState()
+    primary = _deployment("dep-stream-deadline")
+    manager = FailoverManager(
+        config=FallbackConfig(timeout=0.05),
+        candidate_planner=_planner(state, {"group-a": [primary]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    managed = await manager.execute_managed_with_failover(
+        primary,
+        "group-a",
+        lambda _deployment: asyncio.sleep(0, result="stream-open"),
+        routing_context={ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}},
+    )
+
+    async def body():
+        await asyncio.Event().wait()
+        yield "unreachable"
+
+    async def send(_message):  # noqa: ANN001, ANN202
+        return None
+
+    response = DeadlineStreamingResponse(
+        body(),
+        deadline=managed.deadline,
+        close=lambda _exc: managed.release(),
+    )
+    with pytest.raises(TimeoutError, match="Request deadline exceeded"):
+        await response.stream_response(send)
+
+    assert state.lease_ttls == [31]
+    assert state.release_calls == 1
+    assert await state.get_active_requests(primary.deployment_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_cooldown_manager_ignores_invalid_request_errors():
+    state = RedisStateBackend(redis=None)
+    tracker = CooldownManager(state_backend=state, allowed_fails=0)
+
+    await tracker.record_failure(
         "dep-a",
-        success=False,
-        error="bad request",
+        "bad request",
         exc=InvalidRequestError(message="bad request"),
     )
 
@@ -1623,13 +1879,65 @@ async def test_provider_health_check_marks_elevenlabs_missing_api_key_unhealthy(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("use_keyword", [False, True])
+async def test_background_health_checker_accepts_deprecated_state_backend_constructor(
+    use_keyword: bool,
+):
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-legacy-constructor")
+    kwargs = {
+        "config": HealthCheckConfig(enabled=False),
+        "deployment_registry": {"group": [deployment]},
+        "checker": lambda _: asyncio.sleep(0, result=HealthProbeResult(healthy=True)),
+    }
+
+    with pytest.warns(DeprecationWarning, match="state_backend"):
+        if use_keyword:
+            checker = BackgroundHealthChecker(**kwargs, state_backend=state)
+        else:
+            checker = BackgroundHealthChecker(
+                kwargs["config"],
+                kwargs["deployment_registry"],
+                state,
+                kwargs["checker"],
+            )
+
+    result = await checker.check_deployment_once(deployment)
+
+    assert result.healthy is True
+    assert (await state.get_health(deployment.deployment_id))["healthy"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_deprecated_health_checker_constructor_retains_first_failure_threshold():
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-legacy-failure")
+
+    with pytest.warns(DeprecationWarning, match="state_backend"):
+        checker = BackgroundHealthChecker(
+            HealthCheckConfig(enabled=False),
+            {"group": [deployment]},
+            state,
+            lambda _: asyncio.sleep(
+                0,
+                result=HealthProbeResult(healthy=False, error="provider unavailable"),
+            ),
+        )
+
+    result = await checker.check_deployment_once(deployment)
+
+    assert result.healthy is False
+    assert (await state.get_health(deployment.deployment_id))["healthy"] == "false"
+
+
+@pytest.mark.asyncio
 async def test_background_health_checker_ignores_non_health_affecting_result():
     state = RedisStateBackend(redis=None)
     deployment = _deployment("dep-a")
     checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry={"group-a": [deployment]},
-        state_backend=state,
+        health_manager=CooldownManager(state),
         checker=lambda _: asyncio.sleep(
             0,
             result=HealthProbeResult(
@@ -1647,6 +1955,331 @@ async def test_background_health_checker_ignores_non_health_affecting_result():
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 0
     assert health.get("last_error") is None
+
+
+@pytest.mark.asyncio
+async def test_manual_health_check_recovers_expired_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 3_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-manual-recovery")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+    await cooldown.record_failure(deployment.deployment_id, "provider unavailable")
+    now["value"] = 3_002.0
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry={"group": [deployment]},
+        health_manager=cooldown,
+        checker=lambda _: asyncio.sleep(0, result=HealthProbeResult(healthy=True)),
+    )
+
+    result = await checker.check_deployment_once(deployment)
+
+    assert result.healthy is True
+    health = await state.get_health(deployment.deployment_id)
+    assert health["healthy"] == "true"
+    assert health["recovery_required"] == "false"
+    assert health["consecutive_failures"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_manual_health_probe_claim_is_released_after_completion():
+    state = RedisStateBackend(FakeRedis())
+    deployment = _deployment("dep-manual")
+    calls = 0
+
+    async def check(_candidate: Deployment) -> HealthProbeResult:
+        nonlocal calls
+        calls += 1
+        return HealthProbeResult(healthy=True)
+
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry={"group": [deployment]},
+        health_manager=CooldownManager(state),
+        checker=check,
+    )
+
+    await checker.check_deployment_once(deployment)
+    await checker.check_deployment_once(deployment)
+
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_manual_recovery_does_not_race_background_recovery():
+    redis = FakeRedis()
+    state = RedisStateBackend(redis)
+    deployment = _deployment("dep-shared-recovery")
+    cooldown = CooldownManager(state, cooldown_time=60, allowed_fails=0)
+    await cooldown.record_failure(deployment.deployment_id, "provider unavailable")
+    await redis.delete(state.keyspace.cooldown(deployment.deployment_id))
+    background_started = asyncio.Event()
+
+    async def background_check(_candidate: Deployment) -> HealthProbeResult:
+        background_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    background = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=True, interval_seconds=60),
+        deployment_registry={"group": [deployment]},
+        health_manager=cooldown,
+        checker=background_check,
+    )
+    manual = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry={"group": [deployment]},
+        health_manager=cooldown,
+        checker=lambda _: asyncio.sleep(0, result=HealthProbeResult(healthy=True)),
+    )
+    background_task = asyncio.create_task(background._run_coordinated_check(deployment))
+    await background_started.wait()
+
+    with pytest.raises(HealthCheckInProgressError):
+        await manual.check_deployment_once(deployment)
+
+    background_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await background_task
+    recovery = await state.acquire_attempt(deployment.deployment_id, AttemptCapacity())
+    assert recovery.acquired is True
+    assert recovery.recovery is True
+    await state.release_attempt(recovery)
+
+
+@pytest.mark.asyncio
+async def test_background_health_checker_deduplicates_shared_deployments():
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-shared")
+    calls: list[str] = []
+
+    async def check(candidate: Deployment) -> HealthProbeResult:
+        calls.append(candidate.deployment_id)
+        return HealthProbeResult(healthy=True)
+
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=True),
+        deployment_registry={
+            "base-group": [deployment],
+            "route-group": [deployment],
+        },
+        health_manager=CooldownManager(state),
+        checker=check,
+    )
+
+    await checker._run_health_checks()
+
+    assert calls == [deployment.deployment_id]
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_claim_is_shared_between_replicas():
+    state = RedisStateBackend(FakeRedis())
+    deployment = _deployment("dep-shared")
+    calls: list[str] = []
+
+    async def check(candidate: Deployment) -> HealthProbeResult:
+        calls.append(candidate.deployment_id)
+        return HealthProbeResult(healthy=True)
+
+    config = HealthCheckConfig(enabled=True, interval_seconds=60)
+    first = BackgroundHealthChecker(
+        config=config,
+        deployment_registry={"group": [deployment]},
+        health_manager=CooldownManager(state),
+        checker=check,
+    )
+    second = BackgroundHealthChecker(
+        config=config,
+        deployment_registry={"group": [deployment]},
+        health_manager=CooldownManager(state),
+        checker=check,
+    )
+
+    await asyncio.gather(first._run_health_checks(), second._run_health_checks())
+
+    assert calls == [deployment.deployment_id]
+
+
+@pytest.mark.asyncio
+async def test_background_health_checker_bounds_scheduled_probe_fanout():
+    state = RedisStateBackend(redis=None)
+    deployments = [_deployment(f"dep-{index}") for index in range(12)]
+    active = 0
+    max_active = 0
+
+    async def check(_candidate: Deployment) -> HealthProbeResult:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.001)
+        active -= 1
+        return HealthProbeResult(healthy=True)
+
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=True, max_concurrency=3),
+        deployment_registry={"group": deployments},
+        health_manager=CooldownManager(state),
+        checker=check,
+    )
+
+    await checker._run_health_checks()
+
+    assert max_active == 3
+
+
+@pytest.mark.asyncio
+async def test_background_health_probe_restores_expired_cooldown_without_request_traffic(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 4_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-recovery")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+    await cooldown.record_failure(deployment.deployment_id, "provider unavailable")
+    now["value"] = 4_002.0
+
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=True, interval_seconds=60),
+        deployment_registry={"group": [deployment]},
+        health_manager=cooldown,
+        checker=lambda _: asyncio.sleep(0, result=HealthProbeResult(healthy=True)),
+    )
+    await checker._run_health_checks()
+
+    health = await state.get_health(deployment.deployment_id)
+    assert health["healthy"] == "true"
+    assert health["consecutive_failures"] == "0"
+    permit = await state.acquire_attempt(deployment.deployment_id, AttemptCapacity())
+    assert permit.acquired is True
+    assert permit.recovery is False
+
+
+@pytest.mark.asyncio
+async def test_background_recovery_probe_does_not_race_request_half_open(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 5_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-recovery")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+    await cooldown.record_failure(deployment.deployment_id, "provider unavailable")
+    now["value"] = 5_002.0
+    request_permit = await state.acquire_attempt(deployment.deployment_id, AttemptCapacity())
+    assert request_permit.acquired is True
+    assert request_permit.recovery is True
+    probe_calls: list[str] = []
+
+    async def check(candidate: Deployment) -> HealthProbeResult:
+        probe_calls.append(candidate.deployment_id)
+        return HealthProbeResult(healthy=True)
+
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=True, interval_seconds=60),
+        deployment_registry={"group": [deployment]},
+        health_manager=cooldown,
+        checker=check,
+    )
+
+    await checker._run_health_checks()
+    assert probe_calls == []
+
+    await state.release_attempt(request_permit)
+    await checker._run_health_checks()
+    assert probe_calls == [deployment.deployment_id]
+    assert (await state.get_health(deployment.deployment_id))["healthy"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_health_neutral_background_recovery_releases_half_open_claim(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 6_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-recovery")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+    await cooldown.record_failure(deployment.deployment_id, "provider unavailable")
+    now["value"] = 6_002.0
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=True, interval_seconds=60),
+        deployment_registry={"group": [deployment]},
+        health_manager=cooldown,
+        checker=lambda _: asyncio.sleep(
+            0,
+            result=HealthProbeResult(
+                healthy=False,
+                error="probe is not supported",
+                affects_deployment_health=False,
+            ),
+        ),
+    )
+
+    await checker._run_health_checks()
+
+    health = await state.get_health(deployment.deployment_id)
+    assert health["healthy"] == "false"
+    permit = await state.acquire_attempt(deployment.deployment_id, AttemptCapacity())
+    assert permit.acquired is True
+    assert permit.recovery is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_background_recovery_releases_half_open_claim(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = {"value": 7_000.0}
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-recovery")
+    cooldown = CooldownManager(state, cooldown_time=1, allowed_fails=0)
+    await cooldown.record_failure(deployment.deployment_id, "provider unavailable")
+    now["value"] = 7_002.0
+    started = asyncio.Event()
+
+    async def check(_candidate: Deployment) -> HealthProbeResult:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=True, interval_seconds=60),
+        deployment_registry={"group": [deployment]},
+        health_manager=cooldown,
+        checker=check,
+    )
+    task = asyncio.create_task(checker._run_coordinated_check(deployment))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    permit = await state.acquire_attempt(deployment.deployment_id, AttemptCapacity())
+    assert permit.acquired is True
+    assert permit.recovery is True
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_deduplicates_shared_deployments():
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-shared")
+    handler = HealthEndpointHandler(
+        deployment_registry={
+            "base-group": [deployment],
+            "route-group": [deployment],
+        },
+        state_backend=state,
+    )
+
+    payload = await handler.get_health_status()
+
+    assert payload["total_count"] == 1
+    assert [item["deployment_id"] for item in payload["deployments"]] == [deployment.deployment_id]
 
 
 def test_failover_event_history_is_bounded_and_preserves_recent_order():

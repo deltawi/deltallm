@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 from uuid import uuid4
@@ -11,13 +13,16 @@ from src.config_runtime.dynamic import DynamicConfigManager
 from src.db.named_credentials import NamedCredentialRepository
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
+from src.metrics import increment_router_health_update_failure
 from src.providers.resolution import validate_provider_mode_compatibility
 from src.router import (
+    DeploymentStateBackend,
     RouterConfig,
     RoutingStrategy,
     build_deployment_registry,
     build_route_group_policies,
 )
+from src.router.registry import DeploymentRegistryStore
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import ensure_model_name_available, load_model_registry
@@ -26,6 +31,7 @@ from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
 
 _THEME_GENERAL_FIELDS = frozenset({"instance_name", "ui_branding"})
+logger = logging.getLogger(__name__)
 
 
 def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[str]]:
@@ -47,6 +53,7 @@ class ModelHotReloadManager:
         named_credential_repository: NamedCredentialRepository | None = None,
         route_group_repository: RouteGroupRepository | None = None,
         route_group_cache: RouteGroupRuntimeCache | None = None,
+        router_state_backend: DeploymentStateBackend | None = None,
     ) -> None:
         self.app = app
         self.dynamic_config = dynamic_config
@@ -54,12 +61,14 @@ class ModelHotReloadManager:
         self.named_credential_repository = named_credential_repository
         self.route_group_repository = route_group_repository
         self.route_group_cache = route_group_cache
+        self.router_state_backend = router_state_backend
         self.dynamic_config.subscribe(self._on_config_change)
 
     async def add_model(self, model_config: dict[str, Any], updated_by: str = "admin_api") -> str:
         deployment = model_config.copy()
         deployment_id = str(deployment.get("deployment_id") or uuid4())
         deployment["deployment_id"] = deployment_id
+        deployment["routing_state_incarnation"] = str(uuid4())
 
         self._validate_model_config(deployment)
         ensure_model_name_available(
@@ -107,6 +116,9 @@ class ModelHotReloadManager:
             updated = False
             for idx, item in enumerate(model_list):
                 if item.get("deployment_id") == deployment_id:
+                    deployment["routing_state_incarnation"] = str(
+                        item.get("routing_state_incarnation") or deployment_id
+                    )
                     model_list[idx] = deployment
                     updated = True
                     break
@@ -179,13 +191,15 @@ class ModelHotReloadManager:
         )
         callable_target_catalog = build_callable_target_catalog(model_registry, route_groups)
         new_deployments = build_deployment_registry(model_registry, route_groups=route_groups)
-        app.state.model_registry = model_registry
-        app.state.route_groups = route_groups
-        app.state.callable_target_catalog = callable_target_catalog
-        app.state.router.deployment_registry = dict(new_deployments)
-        app.state.router_health_handler.registry = dict(new_deployments)
-        app.state.background_health_checker.registry = dict(new_deployments)
+        registry_store = getattr(app.state.router, "deployment_registry", None)
+        if not isinstance(registry_store, DeploymentRegistryStore):
+            registry_store = DeploymentRegistryStore(registry_store or {})
+            app.state.router.deployment_registry = registry_store
+        current_deployments = registry_store.snapshot()
 
+        # Update the routing policy and each shared registry reference without an
+        # await between them. The event loop therefore cannot expose a request to
+        # a half-published routing generation.
         router_settings = app_config.router_settings
         app.state.router.strategy = RoutingStrategy(router_settings.routing_strategy)
         app.state.router._strategy_impl = app.state.router._load_strategy(app.state.router.strategy)
@@ -200,6 +214,13 @@ class ModelHotReloadManager:
         app.state.failover_manager.config.fallbacks = _normalize_fallbacks(
             app_config.deltallm_settings.fallbacks
         )
+
+        app.state.router_health_handler.registry = registry_store
+        app.state.background_health_checker.registry = registry_store
+        app.state.model_registry = model_registry
+        app.state.route_groups = route_groups
+        app.state.callable_target_catalog = callable_target_catalog
+        registry_store.replace(new_deployments)
 
         if app_config.deltallm_settings.guardrails:
             app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
@@ -306,7 +327,54 @@ class ModelHotReloadManager:
             salt_key=salt_key,
         )
         await reload_callable_target_grants_for_app(app, notify=False)
+        await self._cleanup_replaced_deployment_health(
+            current=current_deployments,
+            replacement=new_deployments,
+        )
         app.state.app_config = app_config
+
+    async def _cleanup_replaced_deployment_health(
+        self,
+        *,
+        current: Mapping[str, Sequence[Any]],
+        replacement: Mapping[str, Sequence[Any]],
+    ) -> None:
+        if self.router_state_backend is None:
+            return
+        current_by_id = self._deployments_by_id(current)
+        replacement_by_id = self._deployments_by_id(replacement)
+        retired_refs = [
+            deployment.health_ref
+            for deployment_id, deployment in current_by_id.items()
+            if deployment_id not in replacement_by_id
+            or deployment.health_ref != replacement_by_id[deployment_id].health_ref
+        ]
+        if not retired_refs:
+            return
+        try:
+            invalidated = await self.router_state_backend.invalidate_health_state(retired_refs)
+        except Exception:
+            increment_router_health_update_failure()
+            logger.warning(
+                "router health invalidation failed during model runtime replacement count=%s",
+                len(retired_refs),
+                exc_info=True,
+            )
+            return
+        if not invalidated:
+            increment_router_health_update_failure()
+            logger.warning(
+                "router health invalidation degraded during model runtime replacement count=%s",
+                len(retired_refs),
+            )
+
+    @staticmethod
+    def _deployments_by_id(registry: Mapping[str, Sequence[Any]]) -> dict[str, Any]:
+        return {
+            str(deployment.deployment_id): deployment
+            for deployments in registry.values()
+            for deployment in deployments
+        }
 
     async def _reload_runtime(self) -> None:
         app_config = self.dynamic_config.get_app_config()

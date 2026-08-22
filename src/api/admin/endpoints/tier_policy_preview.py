@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -36,7 +37,7 @@ def _tier_policy_service(request: Request) -> Any:
 def _configured_deployments(request: Request, callable_key: str) -> tuple[Any, ...]:
     app_router = getattr(request.app.state, "router", None)
     registry = getattr(app_router, "deployment_registry", None)
-    if app_router is None or not isinstance(registry, dict):
+    if app_router is None or not isinstance(registry, Mapping):
         return ()
     model_group = app_router.resolve_model_group(callable_key)
     return tuple(registry.get(model_group, ()))

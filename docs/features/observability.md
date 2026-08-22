@@ -64,6 +64,8 @@ Core metrics include:
 | `deltallm_deployment_state` | Gauge | Deployment health state |
 | `deltallm_deployment_active_requests` | Gauge | In-flight requests per deployment |
 | `deltallm_deployment_cooldown` | Gauge | Whether a deployment is cooled down |
+| `deltallm_router_health_transitions_total` | Counter | Actual cooldown, manual-cooldown, and recovery transitions |
+| `deltallm_router_health_update_failures_total` | Counter | Post-outcome router health updates that could not be persisted |
 | `deltallm_prompt_resolutions_total` | Counter | Prompt registry resolution results |
 | `deltallm_prompt_resolution_latency_seconds` | Histogram | Prompt resolution latency |
 | `deltallm_prompt_singleflight_inflight` | Gauge | Distinct process-owned prompt cold-load tasks currently running |
