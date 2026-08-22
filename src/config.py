@@ -491,9 +491,9 @@ class UIBrandingSettings(BaseModel):
     logo_mark_url: str | None = None
     logo_full_url: str | None = None
     favicon_url: str | None = None
-    primary_color: str = Field(default="#2563EB", pattern=r"^#[0-9A-Fa-f]{6}$")
-    secondary_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
-    menu_hover_color: str = Field(default="#F9FAFB", pattern=r"^#[0-9A-Fa-f]{6}$")
+    primary_color: str = Field(default="#5B50D6", pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default="#8B7CFF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default="#F7F5FF", pattern=r"^#[0-9A-Fa-f]{6}$")
 
     @field_validator("logo_mark_url", "logo_full_url", "favicon_url", mode="before")
     @classmethod
@@ -521,9 +521,9 @@ class UIBrandingUpdatePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
-    primary_color: str = Field(default="#2563EB", pattern=r"^#[0-9A-Fa-f]{6}$")
-    secondary_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
-    menu_hover_color: str = Field(default="#F9FAFB", pattern=r"^#[0-9A-Fa-f]{6}$")
+    primary_color: str = Field(default="#5B50D6", pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default="#8B7CFF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default="#F7F5FF", pattern=r"^#[0-9A-Fa-f]{6}$")
 
     @field_validator("instance_name")
     @classmethod

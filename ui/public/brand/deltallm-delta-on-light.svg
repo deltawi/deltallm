@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">DeltaLLM Delta mark on light surfaces</title>
+  <path fill="#090A16" fill-rule="evenodd" d="M10 52 28 12h8l18 40H10Zm13-8h20L32 23 23 44Z"/>
+  <path fill="#5B50D6" d="M36 12h7l12 20-12 20h-7l12-20-12-20Z"/>
+</svg>

@@ -1,5 +1,7 @@
-<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>DeltaLLM</title>
-  <rect x="8" y="8" width="48" height="48" rx="14" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="2"/>
-  <path d="M35.1614 12L22 31.7188H31.4642L28.8386 52L42 32.2812H32.5358L35.1614 12Z" fill="#7C3AED"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="DeltaLLM">
+  <rect width="32" height="32" rx="7" fill="#090A16"/>
+  <g transform="translate(4.5 4.5) scale(.36)">
+    <path fill="#F2F0FF" fill-rule="evenodd" d="M10 52 28 12h8l18 40H10Zm13-8h20L32 23 23 44Z"/>
+    <path fill="#8B7CFF" d="M36 12h7l12 20-12 20h-7l12-20-12-20Z"/>
+  </g>
 </svg>

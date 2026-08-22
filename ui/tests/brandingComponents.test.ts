@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import BrandLogo from '../src/components/BrandLogo';
 import Button from '../src/components/Button';
-import { DEFAULT_BRANDING, type UIBranding } from '../src/lib/branding';
+import { BUILT_IN_BRAND_ASSETS, DEFAULT_BRANDING, type UIBranding } from '../src/lib/branding';
 import { BrandingContext, type BrandingContextValue } from '../src/lib/brandingContext';
 
 function renderLogo(branding: UIBranding, variant: 'mark' | 'expanded'): string {
@@ -22,12 +23,25 @@ function renderLogo(branding: UIBranding, variant: 'mark' | 'expanded'): string 
   ));
 }
 
-test('expanded logo falls back to the built-in mark and instance name', () => {
+test('built-in brand asset URLs resolve to packaged public files', () => {
+  Object.values(BUILT_IN_BRAND_ASSETS).forEach((assetUrl) => {
+    const asset = readFileSync(`public${assetUrl}`, 'utf8');
+    assert.match(asset, /^<svg\b/);
+  });
+});
+
+test('expanded default branding uses the built-in Delta wordmark', () => {
   const markup = renderLogo(DEFAULT_BRANDING, 'expanded');
 
-  assert.match(markup, />DeltaLLM</);
-  assert.doesNotMatch(markup, /<img/);
-  assert.match(markup, /h-1\/2 w-1\/2/);
+  assert.match(markup, /src="\/brand\/deltallm-delta-lockup-on-light\.svg"/);
+  assert.match(markup, /alt="DeltaLLM"/);
+});
+
+test('a custom instance without uploads uses the built-in mark and configured name', () => {
+  const markup = renderLogo({ ...DEFAULT_BRANDING, instance_name: 'Acme AI' }, 'expanded');
+
+  assert.match(markup, /src="\/brand\/deltallm-delta-on-light\.svg"/);
+  assert.match(markup, />Acme AI</);
 });
 
 test('logo previews normalize unsafe asset overrides before rendering', () => {
@@ -49,8 +63,7 @@ test('logo previews normalize unsafe asset overrides before rendering', () => {
     }),
   ));
 
-  assert.doesNotMatch(markup, /<img/);
-  assert.match(markup, />DeltaLLM</);
+  assert.match(markup, /src="\/brand\/deltallm-delta-lockup-on-light\.svg"/);
 });
 
 test('expanded logo prefers a configured full wordmark', () => {

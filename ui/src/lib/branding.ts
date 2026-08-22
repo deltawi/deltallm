@@ -8,14 +8,19 @@ export interface UIBranding {
   menu_hover_color: string;
 }
 
+export const BUILT_IN_BRAND_ASSETS = {
+  logo_mark: '/brand/deltallm-delta-on-light.svg',
+  logo_full: '/brand/deltallm-delta-lockup-on-light.svg',
+} as const;
+
 export const DEFAULT_BRANDING: UIBranding = {
   instance_name: 'DeltaLLM',
   logo_mark_url: null,
   logo_full_url: null,
   favicon_url: null,
-  primary_color: '#2563EB',
-  secondary_color: '#7C3AED',
-  menu_hover_color: '#F9FAFB',
+  primary_color: '#5B50D6',
+  secondary_color: '#8B7CFF',
+  menu_hover_color: '#F7F5FF',
 };
 
 const HEX_COLOR = /^#[0-9A-F]{6}$/;
