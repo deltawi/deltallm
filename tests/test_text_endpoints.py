@@ -150,7 +150,8 @@ async def test_responses_with_mcp_tool_auto_executes(client, test_app):
     gateway = _FakeMCPGateway()
     test_app.state.mcp_gateway_service = gateway
     test_app.state.audit_service = _RecordingAuditService()
-    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["gpt-4o-mini"])
     primary = registry[0]
     fallback = type(primary)(
         deployment_id="gpt-4o-mini-responses-fallback",
@@ -162,6 +163,7 @@ async def test_responses_with_mcp_tool_auto_executes(client, test_app):
         model_info=dict(primary.model_info),
     )
     registry.append(fallback)
+    registry_store.replace({**registry_store.snapshot(), "gpt-4o-mini": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del model_group, request_context

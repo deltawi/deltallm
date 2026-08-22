@@ -133,6 +133,19 @@ async def test_metrics_endpoint_exposes_deployment_gauges(client):
     assert "deltallm_deployment_cooldown" in text
 
 
+async def test_metrics_endpoint_exposes_router_health_transitions(client, test_app):
+    await test_app.state.cooldown_manager.manual_cooldown(
+        "metrics-health-transition",
+        1,
+        "metrics test",
+    )
+
+    metrics = await client.get("/metrics")
+    text = metrics.text
+    assert "deltallm_router_health_transitions_total" in text
+    assert 'transition="manual_cooldown"' in text
+
+
 async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app):
     test_app.state.prompt_registry_service = PromptRegistryService(
         repository=_PromptMetricsRepository()

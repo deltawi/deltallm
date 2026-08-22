@@ -139,11 +139,20 @@ class FakeDB:
 class InMemoryModelRepository:
     def __init__(self, records: list[ModelDeploymentRecord] | None = None) -> None:
         self.records = records or []
+        self._incarnation = len(self.records)
+        for record in self.records:
+            record.routing_state_incarnation = (
+                record.routing_state_incarnation or f"incarnation-{self._incarnation}"
+            )
 
     async def list_all(self) -> list[ModelDeploymentRecord]:
         return list(self.records)
 
     async def create(self, record: ModelDeploymentRecord) -> ModelDeploymentRecord:
+        self._incarnation += 1
+        record.routing_state_incarnation = (
+            record.routing_state_incarnation or f"incarnation-{self._incarnation}"
+        )
         self.records.append(record)
         return record
 
@@ -162,6 +171,7 @@ class InMemoryModelRepository:
                     model_name=model_name,
                     deltallm_params=deltallm_params,
                     model_info=model_info,
+                    routing_state_incarnation=record.routing_state_incarnation,
                 )
                 self.records[idx] = updated
                 return updated
@@ -713,7 +723,7 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
-        state_backend=state_backend,
+        health_manager=cooldown_manager,
         checker=lambda _: asyncio.sleep(0, result=True),
     )
 
@@ -846,7 +856,7 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
-        state_backend=state_backend,
+        health_manager=cooldown_manager,
         checker=lambda _: asyncio.sleep(0, result=True),
     )
     app = SimpleNamespace(
@@ -882,8 +892,10 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
         dynamic_config=dynamic,
         model_repository=repo,
         route_group_cache=route_group_cache,
+        router_state_backend=state_backend,
     )
 
+    await cooldown_manager.manual_cooldown("new-dep", 60, "stale deployment state")
     new_id = await manager.add_model(
         {
             "model_name": "gpt-4.1-mini",
@@ -894,7 +906,16 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     )
     assert new_id == "new-dep"
     assert "gpt-4.1-mini" in app.state.model_registry
+    new_deployment = app.state.router.deployment_registry["gpt-4.1-mini"][0]
+    assert await state_backend.get_health(new_deployment.health_ref) == {}
+    assert app.state.router.deployment_registry is app.state.router_health_handler.registry
+    assert app.state.router.deployment_registry is app.state.background_health_checker.registry
 
+    await cooldown_manager.manual_cooldown(
+        new_deployment.health_ref,
+        60,
+        "preserve metadata-only state",
+    )
     updated = await manager.update_model(
         "new-dep",
         {
@@ -905,11 +926,42 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     )
     assert updated is True
     assert app.state.model_registry["gpt-4.1-mini"][0]["model_info"]["weight"] == 4
+    updated_deployment = app.state.router.deployment_registry["gpt-4.1-mini"][0]
+    assert updated_deployment.health_ref == new_deployment.health_ref
+    assert (await state_backend.get_health(updated_deployment.health_ref))["healthy"] == "false"
 
+    invalidate_health_state = state_backend.invalidate_health_state
+
+    async def fail_retired_health_cleanup(_health_refs):  # noqa: ANN001, ANN202
+        raise RuntimeError("redis cleanup unavailable")
+
+    state_backend.invalidate_health_state = fail_retired_health_cleanup  # type: ignore[method-assign]
+
+    provider_updated = await manager.update_model(
+        "new-dep",
+        {
+            "model_name": "gpt-4.1-mini",
+            "deltallm_params": {"model": "openai/gpt-4.1"},
+            "model_info": {"weight": 4},
+        },
+    )
+    assert provider_updated is True
+    provider_deployment = app.state.router.deployment_registry["gpt-4.1-mini"][0]
+    assert provider_deployment.health_ref != updated_deployment.health_ref
+    assert await state_backend.get_health(provider_deployment.health_ref) == {}
+    assert (await state_backend.get_health(updated_deployment.health_ref))["healthy"] == "false"
+    state_backend.invalidate_health_state = invalidate_health_state  # type: ignore[method-assign]
+
+    await cooldown_manager.manual_cooldown(
+        provider_deployment.health_ref,
+        60,
+        "removed deployment state",
+    )
     removed = await manager.remove_model("new-dep")
     assert removed is True
     assert "gpt-4.1-mini" not in app.state.model_registry
-    assert route_group_cache.invalidate_calls == 3
+    assert await state_backend.get_health(provider_deployment.health_ref) == {}
+    assert route_group_cache.invalidate_calls == 4
 
     await dynamic.close()
 
@@ -951,7 +1003,7 @@ async def test_model_hot_reload_manager_reloads_runtime_on_model_updated_event()
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
-        state_backend=state_backend,
+        health_manager=cooldown_manager,
         checker=lambda _: asyncio.sleep(0, result=True),
     )
     app = SimpleNamespace(
@@ -1049,7 +1101,7 @@ async def test_model_hot_reload_manager_invalidates_route_group_l1_cache_on_mode
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
-        state_backend=state_backend,
+        health_manager=cooldown_manager,
         checker=lambda _: asyncio.sleep(0, result=True),
     )
     app = SimpleNamespace(
@@ -1160,7 +1212,7 @@ async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(enabled=False),
         deployment_registry=deployment_registry,
-        state_backend=state_backend,
+        health_manager=cooldown_manager,
         checker=lambda _: asyncio.sleep(0, result=True),
     )
     app = SimpleNamespace(

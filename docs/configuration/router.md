@@ -34,6 +34,35 @@ Tip: check the effective `allowed_fails` value in the config your deployment act
 | `model_group_alias` | `{}` | Friendly names that map to real model groups |
 | `route_groups` | `[]` | File-defined route groups and membership |
 
+`allowed_fails: 0` starts cooldown on the first health-affecting provider failure. After
+`cooldown_time` expires, the router admits one shared-Redis half-open request for that deployment;
+successful recovery restores normal routing and failed recovery re-enters cooldown. Request-side
+validation, policy, budget, guardrail, cancellation, and local gateway-capacity failures are
+health-neutral. Background health checks are optional because request traffic can perform the
+bounded recovery transition.
+
+Operator-triggered health checks use a short-lived manual probe claim. After cooldown expiry they
+may own the same fenced recovery transition as request traffic or the background checker. During an
+active manual cooldown, a successful provider probe reports that the provider responded but does
+not restore routing health. A concurrent owned recovery returns HTTP `409` instead of running a
+second recovery probe.
+
+Health hashes use rolling 30-day retention, extended when a longer cooldown requires it. Mutable
+provider-health keys include an opaque deployment generation derived from the provider
+configuration and its durable incarnation. A late result from a retired provider configuration can
+therefore update only the retired generation. Runtime reload atomically publishes the new registry
+generation before attempting bounded, exact cleanup of retired health keys. Cleanup failure is
+reported as degraded maintenance and does not make a persisted model mutation fail. Metadata-only
+changes such as weight and priority retain the existing health generation and state.
+
+Router state currently targets the standalone Redis topology created by application bootstrap;
+Redis Cluster is not supported by its multi-key admission and health-transition scripts.
+Every router key is scoped as `deltallm:<app_env>:v1:<router-capability>:<identifiers>`. This is a
+schema cutover from the previous unscoped ephemeral router keys: drain replicas running the old
+binary before sending traffic to namespaced replicas, and use the same drain procedure for
+rollback. Do not run the two key schemas concurrently because admission and cooldown ownership
+would be split.
+
 ## Supported Strategies
 
 These strategy names are valid today:

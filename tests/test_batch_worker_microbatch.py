@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from src.batch.retry import BatchResponseShapeError
+
 from src.batch.backpressure import BatchModelGroupDeferral
 from src.batch.embedding_microbatch import (
     allocate_embedding_usage,
@@ -130,7 +132,9 @@ class _Router:
         return f"group:{model}"
 
     async def select_deployment(self, model_group: str, request_context: dict) -> object:
-        self.select_calls.append({"model_group": model_group, "request_context": dict(request_context)})
+        self.select_calls.append(
+            {"model_group": model_group, "request_context": dict(request_context)}
+        )
         if self.inject_route_policy:
             request_context["route_policy"] = {
                 "timeout_seconds": 12.5,
@@ -243,7 +247,10 @@ def _build_item(
 def _build_worker(*, deployment_model_info: dict | None = None, inject_route_policy: bool = False):
     deployment = SimpleNamespace(
         deployment_id="dep-1",
-        deltallm_params={"model": "openai/text-embedding-3-small", "api_base": "http://localhost:9090/v1"},
+        deltallm_params={
+            "model": "openai/text-embedding-3-small",
+            "api_base": "http://localhost:9090/v1",
+        },
         input_cost_per_token=0.001,
         output_cost_per_token=0.0,
         model_info=dict(deployment_model_info or {}),
@@ -319,7 +326,9 @@ class _BackpressureRecorder:
         if self.defer_return is not None:
             self.deferral = self.defer_return
             return self.defer_return
-        effective_delay_seconds = self.defer_delay_seconds if self.defer_delay_seconds is not None else delay_seconds
+        effective_delay_seconds = (
+            self.defer_delay_seconds if self.defer_delay_seconds is not None else delay_seconds
+        )
         deferral = BatchModelGroupDeferral(
             model_group=model_group,
             reason=reason,
@@ -334,7 +343,9 @@ async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
     worker, repo, _, _, _ = _build_worker()
     worker.config.max_attempts = 5
 
-    monkeypatch.setattr("src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper)
+    monkeypatch.setattr(
+        "src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper
+    )
 
     item = _build_item(item_id="i1", input_value="hello")
     item.attempts = 1
@@ -413,7 +424,9 @@ async def test_batch_no_healthy_deployments_creates_model_group_deferral(monkeyp
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 1}
+    )
     backpressure = _BackpressureRecorder()
     worker.app.state.batch_backpressure = backpressure
     worker.config.max_attempts = 5
@@ -491,7 +504,9 @@ async def test_batch_backpressure_write_failure_does_not_break_item_retry(monkey
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 1}
+    )
     worker.app.state.batch_backpressure = _BackpressureRecorder(fail_defer=True)
     worker.config.max_attempts = 5
     worker.config.retry_jitter = False
@@ -521,7 +536,9 @@ async def test_batch_backpressure_read_failure_fails_open_before_route_selection
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, router, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    worker, repo, _, router, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 1}
+    )
     worker.app.state.batch_backpressure = _BackpressureRecorder(fail_read=True)
     worker.config.worker_concurrency = 1
 
@@ -621,7 +638,9 @@ async def test_batch_retry_delay_caps_retry_after_header(monkeypatch):
     worker.config.max_attempts = 5
     worker.config.retry_max_seconds = 60
 
-    monkeypatch.setattr("src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper)
+    monkeypatch.setattr(
+        "src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper
+    )
 
     request = httpx.Request("POST", "http://localhost:9090/v1/embeddings")
     response = httpx.Response(429, headers={"Retry-After": "1200"}, request=request)
@@ -651,7 +670,9 @@ async def test_batch_retry_delay_caps_rate_limit_retry_after(monkeypatch):
     worker.config.max_attempts = 5
     worker.config.retry_max_seconds = 45
 
-    monkeypatch.setattr("src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper)
+    monkeypatch.setattr(
+        "src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper
+    )
 
     item = _build_item(item_id="i1", input_value="hello")
     item.attempts = 1
@@ -777,8 +798,12 @@ def test_resolve_effective_upstream_max_batch_inputs_defaults_to_one():
         ([[1, 2, 3], [4, 5, 6]], False, "multi_input_token_array"),
     ],
 )
-def test_classify_embedding_microbatch_request(input_value, expected_eligible: bool, expected_reason: str | None):
-    payload = EmbeddingRequest.model_validate({"model": "text-embedding-3-small", "input": input_value})
+def test_classify_embedding_microbatch_request(
+    input_value, expected_eligible: bool, expected_reason: str | None
+):
+    payload = EmbeddingRequest.model_validate(
+        {"model": "text-embedding-3-small", "input": input_value}
+    )
     _, eligible, reason = classify_embedding_microbatch_request(payload)
     assert eligible is expected_eligible
     assert reason == expected_reason
@@ -906,7 +931,9 @@ async def test_prepare_item_for_execution_returns_reusable_metadata_without_exec
         inject_route_policy=True,
     )
 
-    prepared = await worker._prepare_item_for_execution(_build_job(), _build_item(item_id="i1", input_value="hello"))
+    prepared = await worker._prepare_item_for_execution(
+        _build_job(), _build_item(item_id="i1", input_value="hello")
+    )
 
     assert prepared.model_name == "text-embedding-3-small"
     assert prepared.model_group == "group:text-embedding-3-small"
@@ -986,7 +1013,9 @@ async def test_worker_process_items_uses_worker_prepare_override(monkeypatch):
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 1}
+    )
     worker.config.worker_concurrency = 1
 
     prepare_calls: list[str] = []
@@ -1022,7 +1051,9 @@ async def test_worker_groups_eligible_items_into_upstream_microbatch_chunks(monk
         inputs = payload.input if isinstance(payload.input, list) else [payload.input]
         return {
             "object": "list",
-            "data": [{"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)],
+            "data": [
+                {"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)
+            ],
             "usage": {
                 "prompt_tokens": 5 * len(inputs),
                 "completion_tokens": 0,
@@ -1032,7 +1063,9 @@ async def test_worker_groups_eligible_items_into_upstream_microbatch_chunks(monk
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, budget, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 2})
+    worker, repo, budget, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 2}
+    )
     worker.config.worker_concurrency = 1
 
     await worker._process_items(
@@ -1072,7 +1105,9 @@ async def test_worker_keeps_single_prepare_behavior_when_microbatching_is_disabl
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, budget, router, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    worker, repo, budget, router, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 1}
+    )
     worker.config.worker_concurrency = 1
 
     await worker._process_items(
@@ -1106,7 +1141,9 @@ async def test_worker_keeps_ineligible_item_shapes_on_single_item_execution(monk
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
 
     await worker._process_items(
@@ -1263,7 +1300,9 @@ async def test_worker_fans_out_grouped_embedding_responses_into_single_item_rows
 
 
 @pytest.mark.asyncio
-async def test_worker_isolates_duplicate_response_indexes_back_to_single_item_execution(monkeypatch):
+async def test_worker_isolates_duplicate_response_indexes_back_to_single_item_execution(
+    monkeypatch,
+):
     execute_inputs: list[object] = []
 
     async def _fake_execute_embedding(request, payload, deployment):
@@ -1286,7 +1325,9 @@ async def test_worker_isolates_duplicate_response_indexes_back_to_single_item_ex
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
 
     await worker._process_items(
@@ -1324,7 +1365,9 @@ async def test_worker_isolates_response_length_mismatch_back_to_single_item_exec
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
 
     await worker._process_items(
@@ -1358,7 +1401,9 @@ async def test_worker_isolates_upstream_exception_back_to_single_item_execution(
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
 
     await worker._process_items(
@@ -1388,7 +1433,9 @@ async def test_worker_requeues_retryable_grouped_http_failures_before_isolation(
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
     worker.config.retry_jitter = False
 
@@ -1434,7 +1481,9 @@ async def test_worker_requeues_no_healthy_grouped_failures_before_isolation(monk
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
     worker.config.retry_jitter = False
 
@@ -1450,7 +1499,9 @@ async def test_worker_requeues_no_healthy_grouped_failures_before_isolation(monk
     assert len(failover.calls) == 1
     assert repo.completed_calls == []
     assert repo.failed_calls == []
-    assert repo.release_for_retry_calls[0]["error_body"]["retry_category"] == "no_healthy_deployments"
+    assert (
+        repo.release_for_retry_calls[0]["error_body"]["retry_category"] == "no_healthy_deployments"
+    )
     assert repo.release_for_retry_calls[0]["error_body"]["microbatch"]["last_result"] == "scheduled"
 
 
@@ -1465,7 +1516,9 @@ async def test_worker_reduces_grouped_retry_size_after_group_retries_exhaust(mon
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
     worker.config.retry_jitter = False
     worker.config.microbatch_max_group_retries = 2
@@ -1511,7 +1564,9 @@ async def test_worker_uses_reduced_microbatch_size_metadata_for_later_attempts(m
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
     retry_metadata = {"microbatch": {"retry_count": 3, "original_size": 4, "next_max_inputs": 1}}
 
@@ -1540,7 +1595,9 @@ async def test_worker_disables_group_retry_and_uses_isolation_when_configured(mo
         del request, deployment
         execute_inputs.append(payload.input)
         if isinstance(payload.input, list):
-            raise httpx.HTTPStatusError("upstream unavailable", request=http_request, response=response)
+            raise httpx.HTTPStatusError(
+                "upstream unavailable", request=http_request, response=response
+            )
         return {
             "object": "list",
             "data": [{"index": 0, "embedding": [0.1]}],
@@ -1549,7 +1606,9 @@ async def test_worker_disables_group_retry_and_uses_isolation_when_configured(mo
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
     worker.config.microbatch_retry_enabled = False
 
@@ -1580,7 +1639,9 @@ async def test_worker_grouped_fallback_uses_worker_process_item_override(monkeyp
             "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
         }
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
 
     overridden_item_ids: list[str] = []
@@ -1621,7 +1682,9 @@ async def test_worker_grouped_fallback_reprepares_items_before_isolated_retries(
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, router, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, router, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     worker.config.worker_concurrency = 1
 
     prepare_calls: list[str] = []
@@ -1677,7 +1740,9 @@ async def test_worker_records_one_upstream_failure_before_isolation_fallback(mon
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     passive_health = _PassiveHealthRecorder()
     worker.app.state.passive_health_tracker = passive_health
     worker.config.worker_concurrency = 1
@@ -1692,15 +1757,11 @@ async def test_worker_records_one_upstream_failure_before_isolation_fallback(mon
 
     assert len(failover.calls) == 3
     assert len(repo.completed_calls) == 2
-    assert passive_health.calls == [
-        ("dep-1", False, "upstream exploded"),
-        ("dep-1", True, None),
-        ("dep-1", True, None),
-    ]
+    assert passive_health.calls == []
 
 
 @pytest.mark.asyncio
-async def test_worker_attributes_grouped_response_validation_failures_to_served_deployment(monkeypatch):
+async def test_worker_validates_grouped_response_inside_served_attempt(monkeypatch):
     class _PassiveHealthRecorder:
         def __init__(self) -> None:
             self.calls: list[tuple[str, bool, str | None]] = []
@@ -1736,17 +1797,25 @@ async def test_worker_attributes_grouped_response_validation_failures_to_served_
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, _, router, _ = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, repo, _, router, _ = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     passive_health = _PassiveHealthRecorder()
     served_deployment = SimpleNamespace(
         deployment_id="dep-2",
-        deltallm_params={"model": "openai/text-embedding-3-small", "api_base": "http://localhost:9090/v1"},
+        deltallm_params={
+            "model": "openai/text-embedding-3-small",
+            "api_base": "http://localhost:9090/v1",
+        },
         input_cost_per_token=0.001,
         output_cost_per_token=0.0,
         model_info={"upstream_max_batch_inputs": 4},
     )
 
     class _FailoverToDep2:
+        def __init__(self) -> None:
+            self.validation_failure_deployment_id: str | None = None
+
         async def execute_with_failover(
             self,
             *,
@@ -1757,12 +1826,17 @@ async def test_worker_attributes_grouped_response_validation_failures_to_served_
             **kwargs,
         ):
             del primary_deployment, model_group, kwargs
-            data = await execute(served_deployment)
+            try:
+                data = await execute(served_deployment)
+            except BatchResponseShapeError:
+                self.validation_failure_deployment_id = served_deployment.deployment_id
+                raise
             if return_deployment:
                 return data, served_deployment
             return data
 
-    worker.app.state.failover_manager = _FailoverToDep2()
+    failover = _FailoverToDep2()
+    worker.app.state.failover_manager = failover
     worker.app.state.passive_health_tracker = passive_health
     worker.config.worker_concurrency = 1
 
@@ -1776,16 +1850,21 @@ async def test_worker_attributes_grouped_response_validation_failures_to_served_
 
     assert len(repo.completed_calls) == 2
     assert len(router.select_calls) == 4
-    assert passive_health.calls[0] == ("dep-2", False, "microbatch response contains duplicate index=0")
+    assert failover.validation_failure_deployment_id == "dep-2"
+    assert passive_health.calls == []
 
 
 @pytest.mark.asyncio
-async def test_worker_salvages_grouped_chunk_when_bulk_completion_fails_without_reexecuting_upstream(monkeypatch):
+async def test_worker_salvages_grouped_chunk_when_bulk_completion_fails_without_reexecuting_upstream(
+    monkeypatch,
+):
     class _RouterStateBackend:
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict[str, int]]] = []
 
-        async def increment_usage_counters(self, deployment_id: str, counters: dict[str, int]) -> None:
+        async def increment_usage_counters(
+            self, deployment_id: str, counters: dict[str, int]
+        ) -> None:
             self.calls.append((deployment_id, dict(counters)))
 
     class _PassiveHealthRecorder:
@@ -1808,7 +1887,9 @@ async def test_worker_salvages_grouped_chunk_when_bulk_completion_fails_without_
         inputs = payload.input if isinstance(payload.input, list) else [payload.input]
         return {
             "object": "list",
-            "data": [{"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)],
+            "data": [
+                {"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)
+            ],
             "usage": {
                 "prompt_tokens": 5 * len(inputs),
                 "completion_tokens": 0,
@@ -1823,7 +1904,9 @@ async def test_worker_salvages_grouped_chunk_when_bulk_completion_fails_without_
             self.completed_bulk_calls.append(kwargs)
             raise RuntimeError("database unavailable")
 
-    worker, _, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, _, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     repo = _BulkFailRepo()
     router_state_backend = _RouterStateBackend()
     passive_health = _PassiveHealthRecorder()
@@ -1851,12 +1934,14 @@ async def test_worker_salvages_grouped_chunk_when_bulk_completion_fails_without_
         }
     ]
     assert repo.failed_calls == []
-    assert passive_health.calls == [("dep-1", True, None)]
+    assert passive_health.calls == []
     assert router_state_backend.calls == [("dep-1", {"rpm": 1, "tpm": 10})]
 
 
 @pytest.mark.asyncio
-async def test_worker_treats_ambiguous_single_item_completion_exception_as_already_persisted(monkeypatch):
+async def test_worker_treats_ambiguous_single_item_completion_exception_as_already_persisted(
+    monkeypatch,
+):
     execute_inputs: list[object] = []
 
     async def _fake_execute_embedding(request, payload, deployment):
@@ -1909,7 +1994,9 @@ async def test_worker_requeues_unpersisted_items_after_grouped_completion_salvag
         inputs = payload.input if isinstance(payload.input, list) else [payload.input]
         return {
             "object": "list",
-            "data": [{"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)],
+            "data": [
+                {"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)
+            ],
             "usage": {"prompt_tokens": 5 * len(inputs), "total_tokens": 5 * len(inputs)},
         }
 
@@ -1920,7 +2007,9 @@ async def test_worker_requeues_unpersisted_items_after_grouped_completion_salvag
             self.completed_bulk_calls.append(kwargs)
             return "not_owned"
 
-    worker, _, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker, _, _, _, failover = _build_worker(
+        deployment_model_info={"upstream_max_batch_inputs": 4}
+    )
     repo = _LeaseLossRepo()
     worker.repository = repo  # type: ignore[assignment]
     worker.config.worker_concurrency = 1
@@ -1955,7 +2044,9 @@ async def test_worker_replans_later_chunks_after_earlier_chunk_usage_is_recorded
         inputs = payload.input if isinstance(payload.input, list) else [payload.input]
         return {
             "object": "list",
-            "data": [{"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)],
+            "data": [
+                {"index": index, "embedding": [0.1 + index]} for index, _ in enumerate(inputs)
+            ],
             "usage": {
                 "prompt_tokens": 5 * len(inputs),
                 "completion_tokens": 0,
@@ -1969,19 +2060,27 @@ async def test_worker_replans_later_chunks_after_earlier_chunk_usage_is_recorded
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict[str, int]]] = []
 
-        async def increment_usage_counters(self, deployment_id: str, counters: dict[str, int]) -> None:
+        async def increment_usage_counters(
+            self, deployment_id: str, counters: dict[str, int]
+        ) -> None:
             self.calls.append((deployment_id, dict(counters)))
 
     deployment_one = SimpleNamespace(
         deployment_id="dep-1",
-        deltallm_params={"model": "openai/text-embedding-3-small", "api_base": "http://localhost:9090/v1"},
+        deltallm_params={
+            "model": "openai/text-embedding-3-small",
+            "api_base": "http://localhost:9090/v1",
+        },
         input_cost_per_token=0.001,
         output_cost_per_token=0.0,
         model_info={"upstream_max_batch_inputs": 2},
     )
     deployment_two = SimpleNamespace(
         deployment_id="dep-2",
-        deltallm_params={"model": "openai/text-embedding-3-small", "api_base": "http://localhost:9090/v1"},
+        deltallm_params={
+            "model": "openai/text-embedding-3-small",
+            "api_base": "http://localhost:9090/v1",
+        },
         input_cost_per_token=0.001,
         output_cost_per_token=0.0,
         model_info={"upstream_max_batch_inputs": 2},

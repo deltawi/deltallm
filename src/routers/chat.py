@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import logging
 from time import perf_counter
 from typing import Any, Callable
 
@@ -33,6 +34,7 @@ from src.chat.stream_response import (
     close_stream_resources,
 )
 from src.middleware.auth import require_api_key
+from src.metrics import increment_router_health_update_failure
 from src.mcp.orchestrator import (
     MCPChatOrchestrator,
     MCPRequestContext,
@@ -43,6 +45,7 @@ from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
 from src.router import ROUTING_MODE_CONTEXT_KEY
+from src.router.health_state import DeploymentHealthRef
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import seed_request_failure_context
 from src.routers.routing_decision import (
@@ -54,6 +57,37 @@ from src.routers.routing_decision import (
 )
 
 router = APIRouter(prefix="/v1", tags=["chat"])
+logger = logging.getLogger(__name__)
+
+
+async def _record_stream_health_outcome(
+    *,
+    cooldown_manager: Any,
+    health_ref: DeploymentHealthRef,
+    health_error: Exception | None,
+    succeeded: bool,
+    recovery_token: str | None,
+) -> None:
+    try:
+        if health_error is not None:
+            await cooldown_manager.record_failure(
+                health_ref,
+                str(health_error),
+                exc=health_error,
+                recovery_token=recovery_token,
+            )
+        elif succeeded:
+            await cooldown_manager.record_success(
+                health_ref,
+                recovery_token=recovery_token,
+            )
+    except Exception:
+        increment_router_health_update_failure()
+        logger.warning(
+            "post-stream router health update failed deployment_id=%s",
+            health_ref.deployment_id,
+            exc_info=True,
+        )
 
 
 @router.post("/chat/completions", dependencies=[Depends(require_api_key)])
@@ -152,6 +186,7 @@ async def handle_chat_like_request(
                 stream_usage = StreamUsageTracker()
                 failure_exc: BaseException | None = None
                 stream_error: Exception | None = None
+                health_error: Exception | None = None
                 stream_cache_complete = False
                 resolved_usage = None
                 try:
@@ -191,7 +226,11 @@ async def handle_chat_like_request(
 
                     initial = opened_stream.first_line
                     if initial:
-                        line_info = stream_usage.add_line(initial)
+                        try:
+                            line_info = stream_usage.add_line(initial)
+                        except Exception as exc:
+                            health_error = exc
+                            raise
                         if stream_id is not None and stream_handler is not None:
                             stream_handler.add_chunk_from_line(stream_id, initial)
                         if not (
@@ -205,11 +244,23 @@ async def handle_chat_like_request(
                             )
                             if out_line is not None:
                                 yield f"{out_line}\n\n"
-                    async for line in opened_stream.translated_stream:
+                    stream_iterator = opened_stream.translated_stream.__aiter__()
+                    while True:
+                        try:
+                            line = await anext(stream_iterator)
+                        except StopAsyncIteration:
+                            break
+                        except Exception as exc:
+                            health_error = exc
+                            raise
                         if not line:
                             continue
 
-                        line_info = stream_usage.add_line(line)
+                        try:
+                            line_info = stream_usage.add_line(line)
+                        except Exception as exc:
+                            health_error = exc
+                            raise
                         if stream_id is not None and stream_handler is not None:
                             stream_handler.add_chunk_from_line(stream_id, line)
                             if line.strip() == "data: [DONE]":
@@ -243,7 +294,16 @@ async def handle_chat_like_request(
                         and (failure_exc is not None or not stream_cache_complete)
                     ):
                         stream_handler.discard_stream(stream_id)
-                    await close_stream_resources(lambda: stream_lifecycle.close(failure_exc))
+                    try:
+                        await _record_stream_health_outcome(
+                            cooldown_manager=request.app.state.cooldown_manager,
+                            health_ref=served_deployment.health_ref,
+                            health_error=health_error,
+                            succeeded=failure_exc is None and resolved_usage is not None,
+                            recovery_token=managed_stream.recovery_token,
+                        )
+                    finally:
+                        await close_stream_resources(lambda: stream_lifecycle.close(failure_exc))
 
                 if stream_error is not None:
                     failure_params = opened_stream.params

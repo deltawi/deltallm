@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Sequence
 
+from src.router.health_state import DeploymentHealthRef
+
 if TYPE_CHECKING:
     from src.router.router import Deployment
 
@@ -26,6 +28,7 @@ class AttemptRejectionReason(str, Enum):
     STATIC_POLICY = "static_policy"
     COOLDOWN = "cooldown"
     UNHEALTHY = "unhealthy"
+    RECOVERY_IN_PROGRESS = "recovery_in_progress"
     CAPACITY = "capacity"
 
 
@@ -47,11 +50,13 @@ class AttemptCapacity:
 @dataclass(frozen=True, slots=True)
 class AttemptPermit:
     deployment_id: str
+    health_ref: DeploymentHealthRef
     acquired: bool
     backend: Literal["redis", "local"] | None = None
     owner_token: str | None = None
     expires_at_ms: int | None = None
     active_requests: int | None = None
+    recovery: bool = False
     rejection_reason: AttemptRejectionReason | None = None
 
 

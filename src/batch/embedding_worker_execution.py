@@ -39,6 +39,7 @@ from src.metrics import (
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider
 from src.router import ROUTING_MODE_CONTEXT_KEY
+from src.router.execution import get_failover_original_error
 from src.routers.routing_decision import route_failover_kwargs
 
 logger = logging.getLogger(__name__)
@@ -457,13 +458,23 @@ class EmbeddingWorkerExecutionMixin:
                 label=f"item:{prepared.item.item_id}",
                 lease_lost_event=item_lease_lost,
             )
-            data, served_deployment = await self._await_with_lease_loss_cancellation(
+
+            async def _execute_for_deployment(
+                deployment: Any,
+            ) -> tuple[dict[str, Any], str | None, str | None]:
+                data = await self._execute_embedding(
+                    prepared.request_shim, prepared.payload, deployment
+                )
+                return self._sanitize_embedding_response(data)
+
+            (
+                (response_body, api_base, deployment_model),
+                served_deployment,
+            ) = await self._await_with_lease_loss_cancellation(
                 self.app.state.failover_manager.execute_with_failover(
                     primary_deployment=prepared.primary_deployment,
                     model_group=prepared.model_group,
-                    execute=lambda dep: self._execute_embedding(
-                        prepared.request_shim, prepared.payload, dep
-                    ),
+                    execute=_execute_for_deployment,
                     return_deployment=True,
                     routing_context=prepared.request_context,
                     **prepared.failover_kwargs,
@@ -471,7 +482,6 @@ class EmbeddingWorkerExecutionMixin:
                 lease_lost_event=item_lease_lost,
                 label=f"item:{prepared.item.item_id}",
             )
-            response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
             usage_allocations = allocate_embedding_usage(
                 response_body.get("usage"), item_weights=[1]
             )
@@ -637,24 +647,34 @@ class EmbeddingWorkerExecutionMixin:
             increment_batch_microbatch_requests()
             increment_batch_microbatch_inputs(count=chunk_size)
             observe_batch_microbatch_size(batch_size=chunk_size)
-            data, served_deployment = await self._await_with_lease_loss_cancellation(
+
+            async def _execute_for_deployment(
+                deployment: Any,
+            ) -> tuple[dict[str, Any], str | None, str | None, list[dict[str, Any]]]:
+                data = await self._execute_embedding(
+                    first_item.request_shim, chunk_payload, deployment
+                )
+                response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
+                item_responses = self._validate_embedding_microbatch_response(
+                    response_body=response_body,
+                    expected_count=chunk_size,
+                )
+                return response_body, api_base, deployment_model, item_responses
+
+            (
+                (response_body, api_base, deployment_model, item_responses),
+                served_deployment,
+            ) = await self._await_with_lease_loss_cancellation(
                 self.app.state.failover_manager.execute_with_failover(
                     primary_deployment=first_item.primary_deployment,
                     model_group=first_item.model_group,
-                    execute=lambda dep: self._execute_embedding(
-                        first_item.request_shim, chunk_payload, dep
-                    ),
+                    execute=_execute_for_deployment,
                     return_deployment=True,
                     routing_context=first_item.request_context,
                     **first_item.failover_kwargs,
                 ),
                 lease_lost_event=item_lease_lost,
                 label=f"microbatch:{batch_id}:{item_ids[0]}:{chunk_size}",
-            )
-            response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
-            item_responses = self._validate_embedding_microbatch_response(
-                response_body=response_body,
-                expected_count=chunk_size,
             )
             usage_allocations = allocate_embedding_usage(
                 response_body.get("usage"),
@@ -673,18 +693,8 @@ class EmbeddingWorkerExecutionMixin:
             item_heartbeats.clear()
             return
         except Exception as exc:
-            await self._record_upstream_failure_runtime_hook(
-                batch_id=batch_id,
-                deployment_id=str(
-                    getattr(served_deployment, "deployment_id", None)
-                    or getattr(first_item.primary_deployment, "deployment_id", None)
-                    or ""
-                )
-                or None,
-                exc=exc,
-                reference=",".join(item_ids),
-            )
-            if isinstance(exc, BatchResponseShapeError):
+            original_error = get_failover_original_error(exc)
+            if isinstance(original_error, BatchResponseShapeError):
                 logger.warning(
                     "batch embedding microbatch response mismatch batch_id=%s deployment_id=%s size=%s error=%s",
                     batch_id,
@@ -692,7 +702,7 @@ class EmbeddingWorkerExecutionMixin:
                         served_deployment or first_item.primary_deployment, "deployment_id", None
                     ),
                     chunk_size,
-                    exc,
+                    original_error,
                 )
             else:
                 retry_decision = classify_batch_retry(exc)

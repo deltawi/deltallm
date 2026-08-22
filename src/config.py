@@ -203,6 +203,7 @@ class ModelDeployment(BaseModel):
     )
     model_info: ModelInfo | None = None
     deployment_id: str | None = None
+    routing_state_incarnation: str | None = None
 
 
 class RouteGroupMember(BaseModel):

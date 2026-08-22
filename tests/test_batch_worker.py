@@ -26,6 +26,7 @@ from src.batch.scheduling import (
     BatchTenantFairShareConfig,
     scheduler_config_fingerprint,
 )
+from src.batch.retry import BatchResponseShapeError
 from src.batch.service import BatchService
 from src.batch.worker import BatchArtifactValidationError, BatchExecutorWorker, BatchWorkerConfig
 from src.batch.worker_types import (
@@ -39,6 +40,7 @@ from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 from src.models.errors import ServiceUnavailableError
 from src.models.responses import UserAPIKeyAuth
+from src.router.execution import ProviderAttemptResult, attach_failover_attempt_context
 
 
 class _AllowAllCallableTargetGrantService:
@@ -634,7 +636,7 @@ async def test_batch_worker_processes_chat_item_with_chat_batch_accounting(monke
         }
     ]
     assert execute_calls == [{"model": "gpt-oss", "record_usage": False}]
-    assert passive_health.calls == [("dep-chat", True, None)]
+    assert passive_health.calls == []
     assert router_usage_calls == [
         ("dep-chat", "chat", {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10})
     ]
@@ -798,7 +800,7 @@ async def test_batch_worker_logs_chat_request_failure_with_batch_metadata(monkey
 
     assert len(repo.failed_calls) == 1
     assert repo.failed_calls[0]["item_id"] == "i-chat"
-    assert passive_health.calls == [("dep-chat", False, "chat provider down")]
+    assert passive_health.calls == []
     assert len(spend.events) == 1
     assert spend.events[0]["status"] == "error"
     assert spend.events[0]["request_id"] == "batch:b-chat:i-chat"
@@ -810,6 +812,7 @@ async def test_batch_worker_logs_chat_request_failure_with_batch_metadata(monkey
         "batch_item_id": "i-chat",
         "custom_id": "chat-1",
         "endpoint": "/v1/chat/completions",
+        "deployment_id": "dep-chat",
     }
 
 
@@ -909,11 +912,17 @@ def _build_chat_batch_worker(
             return deployment
 
     class _Failover:
+        def __init__(self) -> None:
+            self.aggregate_health_errors: list[Exception] = []
+
         async def execute_with_failover(
             self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs
         ):
             del model_group, kwargs
             data = await execute(primary_deployment)
+            if isinstance(data, ProviderAttemptResult):
+                self.aggregate_health_errors.append(data.health_error)
+                data = data.value
             if return_deployment:
                 return data, primary_deployment
             return data
@@ -1579,7 +1588,7 @@ async def test_batch_worker_sync_microbatch_primary_failure_with_unsupported_fal
         "failed_size": len(contents),
     }
     assert repo.refresh_job_progress_calls == ["b-chat"]
-    assert passive_health.calls == [("dep-chat", False, "primary unavailable")]
+    assert passive_health.calls == []
 
 
 @pytest.mark.asyncio
@@ -1726,7 +1735,7 @@ async def test_batch_worker_sync_microbatch_unsupported_fallback_respects_max_in
 
 
 @pytest.mark.asyncio
-async def test_batch_worker_sync_microbatch_response_shape_failure_uses_served_deployment_for_health():
+async def test_batch_worker_sync_microbatch_validates_response_inside_served_attempt():
     primary = SimpleNamespace(
         deployment_id="dep-chat",
         deltallm_params={
@@ -1765,6 +1774,9 @@ async def test_batch_worker_sync_microbatch_response_shape_failure_uses_served_d
             return deployment
 
     class _Failover:
+        def __init__(self) -> None:
+            self.validation_failure_deployment_id: str | None = None
+
         async def execute_with_failover(
             self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs
         ):
@@ -1773,7 +1785,11 @@ async def test_batch_worker_sync_microbatch_response_shape_failure_uses_served_d
                 data = await execute(primary_deployment)
                 served_deployment = primary_deployment
             except ServiceUnavailableError:
-                data = await execute(fallback)
+                try:
+                    data = await execute(fallback)
+                except BatchResponseShapeError:
+                    self.validation_failure_deployment_id = fallback.deployment_id
+                    raise
                 served_deployment = fallback
             if return_deployment:
                 return data, served_deployment
@@ -1809,10 +1825,11 @@ async def test_batch_worker_sync_microbatch_response_shape_failure_uses_served_d
 
     repo = _FailureRepository()
     passive_health = _PassiveHealthRecorder()
+    failover = _Failover()
     app = SimpleNamespace(
         state=SimpleNamespace(
             router=_Router(),
-            failover_manager=_Failover(),
+            failover_manager=failover,
             spend_tracking_service=None,
             passive_health_tracker=passive_health,
             router_state_backend=None,
@@ -1836,13 +1853,8 @@ async def test_batch_worker_sync_microbatch_response_shape_failure_uses_served_d
     )
 
     assert len(repo.failed_calls) == 2
-    assert passive_health.calls == [
-        (
-            "dep-chat-fallback",
-            False,
-            "chat microbatch response length mismatch expected=2 actual=1",
-        ),
-    ]
+    assert failover.validation_failure_deployment_id == "dep-chat-fallback"
+    assert passive_health.calls == []
 
 
 @pytest.mark.asyncio
@@ -1890,7 +1902,7 @@ async def test_batch_worker_sync_microbatch_retryable_failure_requeues_chunk_and
         "failed_size": 2,
     }
     assert repo.refresh_job_progress_calls == ["b-chat"]
-    assert passive_health.calls == [("dep-chat", False, "provider down")]
+    assert passive_health.calls == []
 
 
 @pytest.mark.asyncio
@@ -2124,6 +2136,9 @@ async def test_batch_worker_sync_microbatch_requires_per_item_usage():
     assert repo.failed_calls[0]["item_id"] == "chat-2"
     assert repo.failed_calls[0]["error_body"]["type"] == "BatchResponseShapeError"
     assert repo.failed_calls[0]["retryable"] is False
+    aggregate_errors = worker.app.state.failover_manager.aggregate_health_errors
+    assert len(aggregate_errors) == 1
+    assert isinstance(aggregate_errors[0], BatchResponseShapeError)
 
 
 @pytest.mark.asyncio
@@ -2196,6 +2211,7 @@ async def test_batch_worker_sync_microbatch_persists_mixed_success_and_failure_r
     assert repo.failed_calls[0]["item_id"] == "chat-2"
     assert repo.failed_calls[0]["error_body"]["type"] == "InvalidRequestError"
     assert repo.failed_calls[0]["retryable"] is False
+    assert worker.app.state.failover_manager.aggregate_health_errors == []
 
 
 @pytest.mark.asyncio
@@ -3689,7 +3705,17 @@ async def test_batch_worker_enforces_budget_before_provider_execution(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_batch_worker_logs_request_failure_and_health_on_error():
+@pytest.mark.parametrize(
+    ("attempted_deployment_ids", "expected_deployment_id"),
+    [
+        (["dep-1", "dep-fallback"], "dep-fallback"),
+        ([], None),
+    ],
+)
+async def test_batch_worker_uses_structured_last_failover_attempt_for_internal_attribution(
+    attempted_deployment_ids: list[str],
+    expected_deployment_id: str | None,
+):
     class _BudgetService:
         async def check_budgets(self, **kwargs):  # noqa: ANN003, ANN201
             return None
@@ -3712,7 +3738,16 @@ async def test_batch_worker_logs_request_failure_and_health_on_error():
 
     class _Failover:
         async def execute_with_failover(self, **kwargs):  # noqa: ANN003, ANN201
-            raise RuntimeError("provider down")
+            del kwargs
+            exc = ServiceUnavailableError(
+                "provider down",
+                affects_deployment_health=True,
+            )
+            raise attach_failover_attempt_context(
+                exc,
+                model_group="m-1",
+                attempted_deployment_ids=attempted_deployment_ids,
+            )
 
     class _FailureRepo(_FakeRepository):
         def __init__(self) -> None:
@@ -3814,11 +3849,16 @@ async def test_batch_worker_logs_request_failure_and_health_on_error():
     await worker._process_item(job, item)
 
     assert len(repo.failed_calls) == 1
-    assert passive_health.calls == [("dep-1", False, "provider down")]
+    assert passive_health.calls == []
+    assert "routing" not in repo.failed_calls[0]["error_body"]
     assert len(spend.events) == 1
     assert spend.events[0]["status"] == "error"
     assert spend.events[0]["request_id"] == "batch:b1:i1"
     assert spend.events[0]["organization_id"] == "org-1"
+    if expected_deployment_id is None:
+        assert "deployment_id" not in spend.events[0]["metadata"]
+    else:
+        assert spend.events[0]["metadata"]["deployment_id"] == expected_deployment_id
 
 
 @pytest.mark.asyncio
@@ -3963,7 +4003,7 @@ async def test_batch_worker_keeps_failed_state_when_passive_health_failure_hook_
     await worker._process_item(job, item)
 
     assert len(repo.failed_calls) == 1
-    assert passive_health.calls == [("dep-1", False, "provider down")]
+    assert passive_health.calls == []
     assert len(spend.events) == 1
     assert spend.events[0]["status"] == "error"
 
@@ -4099,7 +4139,7 @@ async def test_batch_worker_keeps_failed_state_when_failure_logging_hook_raises(
     await worker._process_item(job, item)
 
     assert len(repo.failed_calls) == 1
-    assert passive_health.calls == [("dep-1", False, "provider down")]
+    assert passive_health.calls == []
 
 
 @pytest.mark.asyncio

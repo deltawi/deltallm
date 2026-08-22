@@ -60,7 +60,7 @@ If the upstream connection pool is exhausted, DeltaLLM returns a controlled `503
 
 Background health checks cap their upstream pool wait below the health-check wrapper timeout. This keeps an oversized `upstream_http_pool_timeout_seconds` from turning local connection pressure into false provider-unhealthy state.
 
-Provider read, connect, and write timeouts still count as provider-side failures where appropriate and can affect passive health tracking.
+Provider read, connect, and write timeouts still count as provider-side failures where appropriate and can affect router health accounting.
 
 ## Operating Guidance
 

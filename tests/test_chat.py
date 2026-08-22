@@ -619,7 +619,8 @@ def _mcp_final_response(model: str) -> httpx.Response:
 
 
 def _configure_chat_fallback(test_app):  # noqa: ANN001, ANN201
-    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["gpt-4o-mini"])
     primary = registry[0]
     fallback = type(primary)(
         deployment_id="gpt-4o-mini-mcp-fallback",
@@ -631,6 +632,7 @@ def _configure_chat_fallback(test_app):  # noqa: ANN001, ANN201
         model_info=dict(primary.model_info),
     )
     registry.append(fallback)
+    registry_store.replace({**registry_store.snapshot(), "gpt-4o-mini": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del model_group, request_context
@@ -1442,6 +1444,55 @@ async def test_chat_completion_streaming_success_ignores_router_usage_write_fail
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_health_update_failure_does_not_skip_billing_or_cleanup(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+
+    def stream(method, url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del method, url, headers, json, timeout
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-health","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-health","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}',
+                "data: [DONE]",
+            ],
+        )
+
+    async def fail_health_update(*args, **kwargs):  # noqa: ANN001, ANN201
+        del args, kwargs
+        raise ServiceUnavailableError(message="router health unavailable")
+
+    test_app.state.http_client.stream = stream
+    test_app.state.cooldown_manager.record_success = fail_health_update
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "data: [DONE]" in response.text
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["usage"] == {
+        "prompt_tokens": 2,
+        "completion_tokens": 1,
+        "total_tokens": 3,
+    }
+    assert (
+        await test_app.state.router_state_backend.get_active_requests(deployment.deployment_id) == 0
+    )
+    metrics = await client.get("/metrics")
+    assert "deltallm_router_health_update_failures_total" in metrics.text
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_guardrail_blocks(client, test_app):
     test_app.state.guardrail_registry.register(
         BlockingChatGuardrail(name="block-chat", default_on=True)
@@ -1635,7 +1686,8 @@ async def test_chat_upstream_rate_limit_returns_429(client, test_app):
 
 @pytest.mark.asyncio
 async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(client, test_app):
-    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["gpt-4o-mini"])
     deployment = registry[0]
     deployment.deltallm_params["api_key"] = "provider-key"
     registry.append(
@@ -1646,6 +1698,7 @@ async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(clie
             model_info={},
         )
     )
+    registry_store.replace({**registry_store.snapshot(), "gpt-4o-mini": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del model_group, request_context
@@ -1985,7 +2038,8 @@ async def test_chat_billing_marks_partial_token_pricing_unpriced(client, test_ap
 
 @pytest.mark.asyncio
 async def test_stream_retries_before_first_token_with_failover(client, test_app):
-    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["gpt-4o-mini"])
     registry.append(
         type(registry[0])(
             deployment_id="gpt-4o-mini-fallback",
@@ -1994,6 +2048,7 @@ async def test_stream_retries_before_first_token_with_failover(client, test_app)
             model_info={},
         )
     )
+    registry_store.replace({**registry_store.snapshot(), "gpt-4o-mini": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del request_context
@@ -2081,13 +2136,17 @@ async def test_stream_cancellation_closes_upstream_and_releases_active_permit(cl
     assert (
         await test_app.state.router_state_backend.get_active_requests(deployment.deployment_id) == 0
     )
+    health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+    assert int(health.get("consecutive_failures", 0) or 0) == 0
+    assert health.get("last_error") is None
 
 
 @pytest.mark.asyncio
 async def test_stream_failure_after_failover_uses_last_attempted_deployment(client, test_app):
     test_app.state.spend_tracking_service = _SpendRecorder()
 
-    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry_store = test_app.state.router.deployment_registry
+    registry = list(registry_store["gpt-4o-mini"])
     registry[0].deltallm_params["api_base"] = "https://primary.example/v1"
     registry[0].deltallm_params["api_key"] = "provider-key"
     fallback = type(registry[0])(
@@ -2101,6 +2160,7 @@ async def test_stream_failure_after_failover_uses_last_attempted_deployment(clie
         model_info={},
     )
     registry.append(fallback)
+    registry_store.replace({**registry_store.snapshot(), "gpt-4o-mini": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
         del request_context
