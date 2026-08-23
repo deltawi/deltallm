@@ -134,10 +134,9 @@ export default function Login() {
             variant="reveal"
             className="mb-4 justify-center"
             markClassName="h-16 w-16 rounded-2xl"
-            fullClassName="h-16"
+            fullClassName="h-20"
           />
-          <h1 className="text-2xl font-bold text-gray-900">Admin Console</h1>
-          <p className="text-gray-500 mt-2">Sign in to continue</p>
+          <h1 className="text-lg font-semibold text-gray-900">Admin Console</h1>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
