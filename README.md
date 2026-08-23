@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./ui/public/brand/deltallm-delta-lockup-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./ui/public/brand/deltallm-delta-lockup-on-light.svg">
+    <img alt="DeltaLLM" src="./ui/public/brand/deltallm-delta-lockup-on-light.svg" width="236">
+  </picture>
+</p>
+
 [![CI](https://github.com/deltawi/deltallm/actions/workflows/ci.yml/badge.svg)](https://github.com/deltawi/deltallm/actions/workflows/ci.yml)
 [![Documentation](https://img.shields.io/badge/docs-readthedocs-blue.svg)](https://deltallm.readthedocs.io/en/latest)
 [![Latest Release](https://img.shields.io/github/v/release/deltawi/deltallm.svg?sort=semver)](https://github.com/deltawi/deltallm/releases)

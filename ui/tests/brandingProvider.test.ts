@@ -227,3 +227,47 @@ test('failed logos retry once and a branding revision makes the same URL eligibl
     restoreDom();
   }
 });
+
+test('expanded logo fallback hides its decorative glyph from assistive technology', async () => {
+  const restoreDom = installDom();
+  const rootNode = document.getElementById('root');
+  assert.ok(rootNode);
+  const root = createRoot(rootNode);
+  const branding: UIBranding = {
+    ...DEFAULT_BRANDING,
+    instance_name: 'Acme AI',
+    logo_mark_url: '/branding/mark.svg',
+    logo_full_url: '/branding/wordmark.svg',
+  };
+  const value: BrandingContextValue = {
+    branding,
+    assetRevision: 0,
+    refreshBranding: async () => branding,
+    setBranding: () => undefined,
+  };
+
+  try {
+    await act(async () => root.render(createElement(
+      BrandingContext.Provider,
+      { value },
+      createElement(BrandLogo, { variant: 'expanded' }),
+    )));
+
+    for (const expectedUrl of [
+      '/branding/wordmark.svg',
+      '/branding/mark.svg',
+      '/brand/deltallm-delta-on-light.svg',
+    ]) {
+      const image = document.querySelector<HTMLImageElement>('img');
+      assert.equal(image?.getAttribute('src'), expectedUrl);
+      act(() => image!.dispatchEvent(new window.Event('error', { bubbles: true })));
+    }
+
+    const fallback = document.querySelector<HTMLSpanElement>('span[aria-hidden="true"]');
+    assert.equal(fallback?.textContent, 'Δ');
+    assert.match(rootNode.textContent || '', /Acme AI/);
+  } finally {
+    await act(async () => root.unmount());
+    restoreDom();
+  }
+});

@@ -8,7 +8,6 @@ import { returnToFromSearch } from '../lib/authRedirect';
 import { Mail, KeyRound, Globe } from 'lucide-react';
 import BrandLogo from '../components/BrandLogo';
 import Button from '../components/Button';
-import { useBranding } from '../lib/brandingContext';
 
 type Tab = 'credentials' | 'master_key' | 'sso';
 
@@ -25,7 +24,6 @@ function errorMessage(err: unknown, fallback: string): string {
 
 export default function Login() {
   const { loginWithCredentials, loginWithMasterKey, isLoading } = useAuth();
-  const { branding } = useBranding();
   const location = useLocation();
   const returnTo = returnToFromSearch(location.search);
   const [tab, setTab] = useState<Tab>('credentials');
@@ -132,8 +130,13 @@ export default function Login() {
     <div className="brand-auth-background min-h-screen flex items-center justify-center px-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
-          <BrandLogo variant="mark" className="mb-4 justify-center" markClassName="h-16 w-16 rounded-2xl" />
-          <h1 className="text-2xl font-bold text-gray-900">{branding.instance_name} Admin</h1>
+          <BrandLogo
+            variant="reveal"
+            className="mb-4 justify-center"
+            markClassName="h-16 w-16 rounded-2xl"
+            fullClassName="h-16"
+          />
+          <h1 className="text-2xl font-bold text-gray-900">Admin Console</h1>
           <p className="text-gray-500 mt-2">Sign in to continue</p>
         </div>
 

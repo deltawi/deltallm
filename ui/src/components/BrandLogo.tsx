@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Zap } from 'lucide-react';
 import clsx from 'clsx';
 import {
   BUILT_IN_BRAND_ASSETS,
@@ -10,7 +9,7 @@ import {
 import { useBranding } from '../lib/brandingContext';
 
 interface BrandLogoProps {
-  variant?: 'mark' | 'expanded';
+  variant?: 'mark' | 'expanded' | 'reveal';
   className?: string;
   markClassName?: string;
   fullClassName?: string;
@@ -40,9 +39,11 @@ export default function BrandLogo({
   const retryTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const failedUrls = failures.key === failureKey ? failures.urls : [];
   const builtInExpandedAsset = branding.instance_name === DEFAULT_BRANDING.instance_name
-    ? BUILT_IN_BRAND_ASSETS.logo_full
+    ? variant === 'reveal'
+      ? '/brand/deltallm-delta-reveal-light.svg'
+      : BUILT_IN_BRAND_ASSETS.logo_full
     : BUILT_IN_BRAND_ASSETS.logo_mark;
-  const candidates = variant === 'expanded'
+  const candidates = variant !== 'mark'
     ? [branding.logo_full_url, branding.logo_mark_url, builtInExpandedAsset]
     : [branding.logo_mark_url, BUILT_IN_BRAND_ASSETS.logo_mark];
   const visibleUrl = candidates.find((candidate) => candidate && !failedUrls.includes(candidate)) || null;
@@ -83,9 +84,11 @@ export default function BrandLogo({
     retryTimers.current.set(retryKey, timer);
   };
 
-  const fullLogoUrl = variant === 'expanded'
-    && visibleUrl
-    && (visibleUrl === branding.logo_full_url || visibleUrl === BUILT_IN_BRAND_ASSETS.logo_full)
+  const fullLogoUrl = variant !== 'mark'
+    && (
+      visibleUrl === branding.logo_full_url
+      || (visibleUrl === builtInExpandedAsset && builtInExpandedAsset !== BUILT_IN_BRAND_ASSETS.logo_mark)
+    )
     ? visibleUrl
     : null;
 
@@ -115,15 +118,16 @@ export default function BrandLogo({
         <span
           role={variant === 'mark' ? 'img' : undefined}
           aria-label={variant === 'mark' ? `${branding.instance_name} logo` : undefined}
+          aria-hidden={variant === 'mark' ? undefined : true}
           className={clsx(
-            'flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border border-brand-secondary/20 bg-brand-secondary-soft shadow-sm',
+            'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-brand-secondary/20 bg-brand-secondary-soft text-brand-secondary-ink',
             markClassName,
           )}
         >
-          <Zap className="h-1/2 w-1/2 fill-brand-secondary text-brand-secondary-ink" />
+          Δ
         </span>
       )}
-      {variant === 'expanded' && (
+      {variant !== 'mark' && (
         <span className={clsx('truncate text-lg font-bold text-gray-900', nameClassName)}>
           {branding.instance_name}
         </span>
