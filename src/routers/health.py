@@ -128,6 +128,30 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
         checks["email_outbox_worker"] = bool(email_worker_health.ready)
         details["email_outbox_worker"] = _worker_health_payload(email_worker_health)
 
+    if bool(getattr(request.app.state, "organization_lifecycle_refresher_expected", False)):
+        lifecycle_task = getattr(request.app.state, "organization_lifecycle_task", None)
+        lifecycle_authorizer = getattr(
+            request.app.state,
+            "organization_lifecycle_authorizer",
+            None,
+        )
+        checks["organization_lifecycle_refresher"] = bool(
+            lifecycle_task is not None
+            and not lifecycle_task.done()
+            and lifecycle_authorizer is not None
+            and lifecycle_authorizer.is_ready()
+        )
+
+    if bool(getattr(request.app.state, "organization_deletion_worker_expected", False)):
+        deletion_task = getattr(request.app.state, "organization_deletion_task", None)
+        deletion_worker = getattr(request.app.state, "organization_deletion_worker", None)
+        checks["organization_deletion_worker"] = bool(
+            deletion_task is not None
+            and not deletion_task.done()
+            and deletion_worker is not None
+            and deletion_worker.is_ready()
+        )
+
     status = "ok" if all(checks.values()) else "degraded"
     return {"status": status, "checks": checks, "details": details}
 

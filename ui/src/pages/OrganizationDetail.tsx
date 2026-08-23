@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import {
@@ -35,6 +35,10 @@ import {
   UserPlus, Trash2, ChevronRight, Shield, CheckCircle2, AlertTriangle,
   MoreHorizontal, ExternalLink, Info, CalendarDays, LockKeyhole,
 } from 'lucide-react';
+
+const OrganizationDeletionPanel = lazy(
+  () => import('../components/admin/OrganizationDeletionPanel'),
+);
 
 /* ─────────────── helpers ─────────────── */
 
@@ -1163,6 +1167,15 @@ export default function OrganizationDetail() {
                     <p className="text-xs text-gray-400">Loading asset access…</p>
                   )}
                 </div>
+              )}
+
+              {isPlatformAdmin && orgId && (
+                <Suspense fallback={<div className="rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-500">Loading deletion controls…</div>}>
+                  <OrganizationDeletionPanel
+                    organizationId={orgId}
+                    organizationName={orgName}
+                  />
+                </Suspense>
               )}
 
               {/* Budget warning for a team */}

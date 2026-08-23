@@ -103,20 +103,42 @@ class BatchWebhookOutboxRepository:
             """
             WITH due AS (
                 SELECT event_id, status AS previous_status
-                FROM deltallm_batch_webhook_outbox
-                WHERE attempt_count < max_attempts
+                FROM deltallm_batch_webhook_outbox webhook
+                WHERE webhook.attempt_count < webhook.max_attempts
+                  AND CASE
+                        WHEN webhook.created_by_organization_id IS NOT NULL THEN EXISTS (
+                            SELECT 1
+                            FROM deltallm_organizationtable organization
+                            WHERE organization.organization_id =
+                                  webhook.created_by_organization_id
+                              AND organization.lifecycle_state = 'active'
+                        )
+                        WHEN webhook.created_by_team_id IS NOT NULL THEN EXISTS (
+                            SELECT 1
+                            FROM deltallm_teamtable team
+                            LEFT JOIN deltallm_organizationtable organization
+                              ON organization.organization_id = team.organization_id
+                            WHERE team.team_id = webhook.created_by_team_id
+                              AND (
+                                  team.organization_id IS NULL
+                                  OR organization.lifecycle_state = 'active'
+                              )
+                        )
+                        ELSE TRUE
+                      END
                   AND (
                         (
-                            status IN ('queued', 'retrying')
-                            AND next_attempt_at <= NOW()
+                            webhook.status IN ('queued', 'retrying')
+                            AND webhook.next_attempt_at <= NOW()
                         )
                         OR (
-                            status = 'processing'
-                            AND lease_expires_at IS NOT NULL
-                            AND lease_expires_at < NOW()
+                            webhook.status = 'processing'
+                            AND webhook.lease_expires_at IS NOT NULL
+                            AND webhook.lease_expires_at < NOW()
                         )
                   )
-                ORDER BY next_attempt_at ASC, created_at ASC, event_id ASC
+                ORDER BY webhook.next_attempt_at ASC, webhook.created_at ASC,
+                         webhook.event_id ASC
                 LIMIT $1
                 FOR UPDATE SKIP LOCKED
             )

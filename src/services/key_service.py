@@ -12,6 +12,8 @@ from src.models.responses import UserAPIKeyAuth
 from src.services.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 from src.services.runtime_scopes import annotate_auth_metadata
 
+from .organization_lifecycle import OrganizationLifecycleAuthorizer
+
 logger = logging.getLogger(__name__)
 _CACHE_DELETE_BATCH_SIZE = 500
 _SCOPES_REQUIRING_TOKEN_DISCOVERY = {"organization", "team", "user"}
@@ -24,11 +26,13 @@ class KeyService:
         redis_client: Any | None = None,
         salt: str = "",
         auth_cache_ttl_seconds: int = 300,
+        lifecycle_authorizer: OrganizationLifecycleAuthorizer | None = None,
     ) -> None:
         self.repository = repository
         self.redis = redis_client
         self.salt = salt
         self.auth_cache_ttl_seconds = max(1, int(auth_cache_ttl_seconds))
+        self.lifecycle_authorizer = lifecycle_authorizer
 
     def hash_key(self, raw_key: str) -> str:
         return hashlib.sha256(f"{self.salt}:{raw_key}".encode("utf-8")).hexdigest()
@@ -42,7 +46,7 @@ class KeyService:
             if cached:
                 logger.info("key validation cache hit", extra={"token_hash": token_hash})
                 payload = json.loads(cached if isinstance(cached, str) else cached.decode("utf-8"))
-                return UserAPIKeyAuth.model_validate(payload)
+                return self._mark_cache_source(UserAPIKeyAuth.model_validate(payload), "redis")
 
         record = await self.repository.get_by_token(token_hash)
         if record is None:
@@ -53,6 +57,8 @@ class KeyService:
         if record.expires and record.expires < now:
             logger.warning("expired api key", extra={"token_hash": token_hash})
             raise AuthenticationError(message="API key expired", code="invalid_api_key")
+
+        await self._validate_organization(record)
 
         auth = self._auth_from_record(record)
 
@@ -76,15 +82,21 @@ class KeyService:
             cached = await self.redis.get(cache_key)
             if cached:
                 payload = json.loads(cached if isinstance(cached, str) else cached.decode("utf-8"))
-                return UserAPIKeyAuth.model_validate(payload)
+                return self._mark_cache_source(UserAPIKeyAuth.model_validate(payload), "redis")
 
         record = await self.repository.get_by_token(normalized_hash)
         if record is None:
-            logger.warning("missing api key for stored token hash", extra={"token_hash": normalized_hash})
+            logger.warning(
+                "missing api key for stored token hash", extra={"token_hash": normalized_hash}
+            )
             raise AuthenticationError(message="Invalid API key", code="invalid_api_key")
         if record.expires and record.expires < now:
-            logger.warning("expired api key for stored token hash", extra={"token_hash": normalized_hash})
+            logger.warning(
+                "expired api key for stored token hash", extra={"token_hash": normalized_hash}
+            )
             raise AuthenticationError(message="API key expired", code="invalid_api_key")
+
+        await self._validate_organization(record)
 
         auth = self._auth_from_record(record)
         if self.redis is not None:
@@ -148,7 +160,7 @@ class KeyService:
                 scope_value,
             )
         cache_keys: list[str] = []
-        for row in (rows or []):
+        for row in rows or []:
             token_hash = row.get("token")
             if token_hash:
                 cache_keys.append(self._cache_key(token_hash))
@@ -166,9 +178,9 @@ class KeyService:
 
     @staticmethod
     def _cache_key(token_hash: str) -> str:
-        # Version the serialized auth contract so pre-owner-attribution cache
-        # entries cannot silently authenticate without the immutable owner ID.
-        return f"key:v2:{token_hash}"
+        # Version the serialized auth contract so entries without lifecycle
+        # state cannot silently authenticate an inactive organization.
+        return f"key:v4:{token_hash}"
 
     def _auth_from_record(self, record: Any) -> UserAPIKeyAuth:
         auth = UserAPIKeyAuth(
@@ -209,7 +221,13 @@ class KeyService:
             org_rpd_limit=record.org_rpd_limit,
             org_tpd_limit=record.org_tpd_limit,
             guardrails=self._extract_guardrails(record),
-            metadata=record.metadata,
+            metadata={
+                **(record.metadata or {}),
+                "auth_cache_source": "database",
+                "organization_lifecycle_state": record.organization_lifecycle_state,
+                "organization_lifecycle_version": record.organization_lifecycle_version,
+                "organization_lifecycle_generation": record.organization_lifecycle_generation,
+            },
             team_metadata=record.team_metadata,
             org_metadata=record.org_metadata,
             expires=record.expires.isoformat() if record.expires else None,
@@ -219,6 +237,34 @@ class KeyService:
             auth_source="api_key",
             api_key_scope_id=record.token,
         )
+
+    async def _validate_organization(self, record: Any) -> None:
+        organization_id = str(getattr(record, "organization_id", None) or "").strip()
+        if not organization_id:
+            return
+        lifecycle_state = (
+            str(getattr(record, "organization_lifecycle_state", "active") or "active")
+            .strip()
+            .lower()
+        )
+        if lifecycle_state != "active":
+            raise AuthenticationError(
+                message="Organization is not active",
+                code="organization_inactive",
+            )
+        if self.lifecycle_authorizer is not None:
+            await self.lifecycle_authorizer.remember_state(
+                organization_id,
+                lifecycle_state,
+                generation=int(getattr(record, "organization_lifecycle_generation", 0) or 0),
+            )
+
+    @staticmethod
+    def _mark_cache_source(auth: UserAPIKeyAuth, source: str) -> UserAPIKeyAuth:
+        metadata = dict(auth.metadata or {})
+        metadata["auth_cache_source"] = source
+        auth.metadata = metadata
+        return auth
 
     @staticmethod
     def _extract_guardrails(record: Any) -> list[str]:

@@ -92,9 +92,9 @@ def _service_by_component(docs: list[dict[str, Any]], component: str | None) -> 
 
 def test_helm_schema_allows_active_batch_scheduler_flag() -> None:
     schema = yaml.safe_load((HELM_CHART_DIR / "values.schema.json").read_text())
-    scheduler_enabled = schema["properties"]["config"]["properties"]["general_settings"]["properties"][
-        "embeddings_batch_scheduler_enabled"
-    ]
+    scheduler_enabled = schema["properties"]["config"]["properties"]["general_settings"][
+        "properties"
+    ]["embeddings_batch_scheduler_enabled"]
 
     assert scheduler_enabled == {"type": "boolean"}
 
@@ -184,9 +184,9 @@ def test_split_worker_receives_webhook_key_and_delivery_configuration() -> None:
         )
         assert webhook_env["valueFrom"]["secretKeyRef"] == secret_reference
 
-    api_general = _config_yaml(
-        _by_kind_and_name(docs, "ConfigMap", "deltallm-config")
-    )["general_settings"]
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
     worker_general = _config_yaml(
         _by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config")
     )["general_settings"]
@@ -235,7 +235,9 @@ def test_batch_webhook_key_config_overrides_cannot_leak_into_configmaps(
 
 def test_helm_schema_allows_tenant_fair_share_settings() -> None:
     schema = yaml.safe_load((HELM_CHART_DIR / "values.schema.json").read_text())
-    general_settings = schema["properties"]["config"]["properties"]["general_settings"]["properties"]
+    general_settings = schema["properties"]["config"]["properties"]["general_settings"][
+        "properties"
+    ]
 
     assert general_settings["embeddings_batch_tenant_fair_share_enabled"] == {"type": "boolean"}
     assert general_settings["embeddings_batch_scheduler_base_quantum_work_units"]["minimum"] == 1
@@ -328,7 +330,10 @@ def test_helm_rejects_fair_share_without_model_capacity() -> None:
         "templates/configmap.yaml",
     )
 
-    assert "tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true" in error
+    assert (
+        "tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true"
+        in error
+    )
 
 
 def test_helm_rejects_size_aware_without_fair_share_or_shadow() -> None:
@@ -524,7 +529,9 @@ def test_helm_allows_size_aware_shadow_with_scheduler_prerequisites() -> None:
 
 
 def test_default_service_selector_remains_upgrade_safe() -> None:
-    service = _by_kind_and_name(_render("--show-only", "templates/service.yaml"), "Service", "deltallm")
+    service = _by_kind_and_name(
+        _render("--show-only", "templates/service.yaml"), "Service", "deltallm"
+    )
 
     assert service["spec"]["selector"] == {
         "app.kubernetes.io/name": "deltallm",
@@ -542,7 +549,9 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     docs = _render("--set", "batchWorker.enabled=true", "--show-only", "templates/configmap.yaml")
 
     api_config = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))
-    worker_config = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config"))
+    worker_config = _config_yaml(
+        _by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config")
+    )
 
     api_general = api_config["general_settings"]
     assert api_general["embeddings_batch_worker_enabled"] is False
@@ -591,7 +600,10 @@ def test_split_mode_long_name_override_keeps_worker_out_of_api_service() -> None
     worker_service = _service_by_component(docs, "batch-worker")
     worker_labels = worker_deployment["spec"]["template"]["metadata"]["labels"]
 
-    assert api_deployment["spec"]["selector"]["matchLabels"] != worker_deployment["spec"]["selector"]["matchLabels"]
+    assert (
+        api_deployment["spec"]["selector"]["matchLabels"]
+        != worker_deployment["spec"]["selector"]["matchLabels"]
+    )
     assert not _selector_matches(api_service["spec"]["selector"], worker_labels)
     assert _selector_matches(worker_service["spec"]["selector"], worker_labels)
 
@@ -618,8 +630,12 @@ def test_split_mode_long_fullname_override_keeps_worker_resource_names_distinct(
     worker_deployment = _deployment_by_pod_component(docs, "batch-worker")
     api_service = _service_by_component(docs, None)
     worker_service = _service_by_component(docs, "batch-worker")
-    api_config = _by_kind_and_name(docs, "ConfigMap", f"{api_deployment['metadata']['name']}-config")
-    worker_config = _by_kind_and_name(docs, "ConfigMap", f"{worker_deployment['metadata']['name']}-config")
+    api_config = _by_kind_and_name(
+        docs, "ConfigMap", f"{api_deployment['metadata']['name']}-config"
+    )
+    worker_config = _by_kind_and_name(
+        docs, "ConfigMap", f"{worker_deployment['metadata']['name']}-config"
+    )
 
     assert api_deployment["metadata"]["name"] != worker_deployment["metadata"]["name"]
     assert api_service["metadata"]["name"] != worker_service["metadata"]["name"]
@@ -669,7 +685,9 @@ def test_shared_mode_allows_enabled_batching_with_s3_storage() -> None:
     api_config = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))
     assert api_config["general_settings"]["embeddings_batch_enabled"] is True
     assert api_config["general_settings"]["embeddings_batch_storage_backend"] == "s3"
-    assert api_config["general_settings"]["embeddings_batch_s3_bucket"] == "deltallm-batch-artifacts"
+    assert (
+        api_config["general_settings"]["embeddings_batch_s3_bucket"] == "deltallm-batch-artifacts"
+    )
 
 
 def test_split_mode_rejects_enabled_batching_with_local_storage() -> None:
@@ -699,7 +717,9 @@ def test_split_mode_allows_enabled_batching_with_s3_storage() -> None:
         "templates/configmap.yaml",
     )
 
-    worker_config = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config"))
+    worker_config = _config_yaml(
+        _by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config")
+    )
     assert worker_config["general_settings"]["embeddings_batch_enabled"] is True
     assert worker_config["general_settings"]["embeddings_batch_storage_backend"] == "s3"
 
@@ -750,7 +770,9 @@ def test_split_mode_can_explicitly_allow_unsafe_local_storage() -> None:
         "templates/configmap.yaml",
     )
 
-    worker_config = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config"))
+    worker_config = _config_yaml(
+        _by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config")
+    )
     assert worker_config["general_settings"]["embeddings_batch_storage_backend"] == "local"
 
 
@@ -806,10 +828,14 @@ def test_production_default_does_not_disable_batch_workers_without_worker_deploy
 
     api_config = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))
     assert api_config["general_settings"]["embeddings_batch_worker_enabled"] is True
-    assert api_config["general_settings"]["embeddings_batch_completion_outbox_worker_enabled"] is True
+    assert (
+        api_config["general_settings"]["embeddings_batch_completion_outbox_worker_enabled"] is True
+    )
     assert api_config["general_settings"]["embeddings_batch_gc_enabled"] is True
 
-    assert not any(doc.get("metadata", {}).get("name") == "deltallm-batch-worker-config" for doc in docs)
+    assert not any(
+        doc.get("metadata", {}).get("name") == "deltallm-batch-worker-config" for doc in docs
+    )
 
 
 def test_split_mode_renders_worker_network_policy() -> None:
@@ -873,7 +899,7 @@ def test_split_mode_renders_worker_metrics_service_monitor() -> None:
     ]
 
 
-def test_migration_job_default_uses_prisma_migrate_without_db_push_fallback() -> None:
+def test_migration_job_default_uses_coordinated_migration_runner_without_db_push() -> None:
     docs = _render(
         "--set",
         "migrationJob.enabled=true",
@@ -884,7 +910,8 @@ def test_migration_job_default_uses_prisma_migrate_without_db_push_fallback() ->
     job = _by_kind_and_name(docs, "Job", "deltallm-migrate")
     migrate_args = "\n".join(job["spec"]["template"]["spec"]["containers"][0]["args"])
 
-    assert "prisma migrate deploy --schema=./prisma/schema.prisma" in migrate_args
+    assert "python -m src.organization_deletion_migrations deploy" in migrate_args
+    assert "--schema ./prisma/schema.prisma" in migrate_args
     assert "prisma db push" not in migrate_args
     assert "--accept-data-loss" not in migrate_args
 
@@ -939,16 +966,28 @@ def test_role_specific_config_checksums_are_isolated() -> None:
     )
 
     base_api = _deployment_checksum(_by_kind_and_name(base_docs, "Deployment", "deltallm"))
-    base_worker = _deployment_checksum(_by_kind_and_name(base_docs, "Deployment", "deltallm-batch-worker"))
+    base_worker = _deployment_checksum(
+        _by_kind_and_name(base_docs, "Deployment", "deltallm-batch-worker")
+    )
 
-    assert _deployment_checksum(_by_kind_and_name(worker_override_docs, "Deployment", "deltallm")) == base_api
     assert (
-        _deployment_checksum(_by_kind_and_name(worker_override_docs, "Deployment", "deltallm-batch-worker"))
+        _deployment_checksum(_by_kind_and_name(worker_override_docs, "Deployment", "deltallm"))
+        == base_api
+    )
+    assert (
+        _deployment_checksum(
+            _by_kind_and_name(worker_override_docs, "Deployment", "deltallm-batch-worker")
+        )
         != base_worker
     )
 
-    assert _deployment_checksum(_by_kind_and_name(api_override_docs, "Deployment", "deltallm")) != base_api
     assert (
-        _deployment_checksum(_by_kind_and_name(api_override_docs, "Deployment", "deltallm-batch-worker"))
+        _deployment_checksum(_by_kind_and_name(api_override_docs, "Deployment", "deltallm"))
+        != base_api
+    )
+    assert (
+        _deployment_checksum(
+            _by_kind_and_name(api_override_docs, "Deployment", "deltallm-batch-worker")
+        )
         == base_worker
     )

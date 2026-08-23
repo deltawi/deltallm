@@ -70,6 +70,27 @@ def test_batch_webhook_defaults_are_safe() -> None:
     assert settings.batch_webhook_cleanup_max_rows_per_run == 10_000
 
 
+def test_organization_deletion_defaults_to_staged_rollout() -> None:
+    settings = GeneralSettings()
+
+    assert settings.organization_deletion_requests_enabled is False
+    assert settings.organization_deletion_worker_enabled is True
+
+
+def test_organization_deletion_rejects_unsafe_worker_timing() -> None:
+    with pytest.raises(ValueError, match="record_timeout_seconds"):
+        GeneralSettings(
+            organization_deletion_worker_lease_seconds=10,
+            organization_deletion_worker_record_timeout_seconds=9.5,
+        )
+
+    with pytest.raises(ValueError, match="retry_max_seconds"):
+        GeneralSettings(
+            organization_deletion_retry_initial_seconds=10,
+            organization_deletion_retry_max_seconds=5,
+        )
+
+
 def test_batch_webhook_enabled_requires_valid_encryption_key() -> None:
     with pytest.raises(ValueError, match="requires batch_webhook_encryption_key"):
         GeneralSettings(batch_webhook_enabled=True)

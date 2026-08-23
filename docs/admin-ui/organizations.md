@@ -20,6 +20,12 @@ Organizations are the top-level tenant and budget boundary in the admin UI.
 4. Add teams inside the organization
 5. Assign platform accounts through People & Access
 
+## Delete an organization
+
+Platform administrators see a **Danger zone** on the organization overview. **Delete organization** first shows the complete impact, requires the exact organization name and an explicit running-work acknowledgement, then schedules durable cleanup. Access is revoked immediately; permanent deletion waits for the configured recovery window.
+
+The same panel shows cleanup progress, restore while the operation remains reversible, and retry if automatic cleanup exhausts its attempts. Organization owners and organization administrators cannot use these controls. See [Organization Deletion](../features/organization-deletion.md) for retained history and operational behavior.
+
 ## Rate limit fields
 
 | Field | Description |

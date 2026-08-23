@@ -646,6 +646,38 @@ class GeneralSettings(BaseModel):
     invitation_token_ttl_hours: int = Field(default=72, ge=1, le=720)
     password_reset_token_ttl_minutes: int = Field(default=60, ge=5, le=1440)
     api_key_auth_cache_ttl_seconds: int = 300
+    organization_lifecycle_auth_max_staleness_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        le=60,
+    )
+    organization_lifecycle_auth_cache_max_entries: int = Field(
+        default=10_000,
+        ge=100,
+        le=1_000_000,
+    )
+    organization_deletion_recovery_window_hours: int = Field(
+        default=168,
+        ge=1,
+        le=720,
+    )
+    organization_deletion_max_attempts: int = Field(default=20, ge=1, le=100)
+    organization_deletion_requests_enabled: bool = False
+    organization_deletion_worker_enabled: bool = True
+    organization_deletion_worker_poll_interval_seconds: float = Field(default=5.0, gt=0)
+    organization_deletion_worker_batch_size: int = Field(default=5, ge=1, le=100)
+    organization_deletion_worker_max_concurrency: int = Field(default=2, ge=1, le=20)
+    organization_deletion_worker_lease_seconds: int = Field(default=60, ge=5)
+    organization_deletion_worker_record_timeout_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        le=300,
+    )
+    organization_deletion_worker_page_size: int = Field(default=100, ge=1, le=1_000)
+    organization_deletion_worker_max_pages_per_claim: int = Field(default=10, ge=1, le=100)
+    organization_deletion_waiting_poll_seconds: float = Field(default=10.0, gt=0)
+    organization_deletion_retry_initial_seconds: int = Field(default=5, ge=1)
+    organization_deletion_retry_max_seconds: int = Field(default=300, ge=1)
     cache_invalidation_worker_enabled: bool = True
     cache_invalidation_worker_poll_interval_seconds: float = Field(default=5.0, gt=0)
     cache_invalidation_worker_batch_size: int = Field(default=25, ge=1, le=500)
@@ -954,6 +986,22 @@ class GeneralSettings(BaseModel):
         if self.batch_webhook_lease_seconds <= self.batch_webhook_timeout_seconds:
             raise ValueError(
                 "batch_webhook_lease_seconds must be greater than batch_webhook_timeout_seconds"
+            )
+        if (
+            self.organization_deletion_worker_record_timeout_seconds
+            >= self.organization_deletion_worker_lease_seconds - 0.5
+        ):
+            raise ValueError(
+                "organization_deletion_worker_record_timeout_seconds must leave at least "
+                "0.5 seconds before organization_deletion_worker_lease_seconds"
+            )
+        if (
+            self.organization_deletion_retry_max_seconds
+            < self.organization_deletion_retry_initial_seconds
+        ):
+            raise ValueError(
+                "organization_deletion_retry_max_seconds must be greater than or equal to "
+                "organization_deletion_retry_initial_seconds"
             )
         scheduler_modes = resolve_scheduler_modes_from_settings(self)
         mode_control_explicit = (

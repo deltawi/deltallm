@@ -69,11 +69,18 @@ class InvitationService:
     def _transactional_dependencies(
         self,
         db_client: Any,
-    ) -> tuple[InvitationRepository, EmailTokenService, EmailOutboxService, PlatformIdentityService]:
+    ) -> tuple[
+        InvitationRepository, EmailTokenService, EmailOutboxService, PlatformIdentityService
+    ]:
         if self.outbox_service is None:
             raise RuntimeError("email outbox service unavailable")
         if db_client is self.db:
-            return self.repository, self.token_service, self.outbox_service, self.platform_identity_service
+            return (
+                self.repository,
+                self.token_service,
+                self.outbox_service,
+                self.platform_identity_service,
+            )
         return (
             InvitationRepository(db_client),
             self.token_service.with_repository(EmailTokenRepository(db_client)),
@@ -84,12 +91,16 @@ class InvitationService:
             self.platform_identity_service.with_db(db_client),
         )
 
-    async def list_invitations(self, *, status: str | None = None, search: str | None = None) -> list[dict[str, Any]]:
+    async def list_invitations(
+        self, *, status: str | None = None, search: str | None = None
+    ) -> list[dict[str, Any]]:
         invitations = await self.repository.list_all(status=status, search=search)
         if not invitations:
             return []
 
-        actor_ids = sorted({item.invited_by_account_id for item in invitations if item.invited_by_account_id})
+        actor_ids = sorted(
+            {item.invited_by_account_id for item in invitations if item.invited_by_account_id}
+        )
         actor_map = await self._load_account_emails(actor_ids)
         return [self._serialize_invitation(item, actor_map=actor_map) for item in invitations]
 
@@ -114,7 +125,9 @@ class InvitationService:
     ) -> dict[str, Any]:
         if self.db is not None and hasattr(self.db, "tx"):
             async with self.db.tx() as tx:
-                repository, token_service, outbox_service, identity_service = self._transactional_dependencies(tx)
+                repository, token_service, outbox_service, identity_service = (
+                    self._transactional_dependencies(tx)
+                )
                 return await self._create_invitation_with_dependencies(
                     db_client=tx,
                     repository=repository,
@@ -169,11 +182,20 @@ class InvitationService:
         if team_id:
             team_role = validate_team_role(team_role)
 
-        team_context = await self._resolve_team_context(team_id, db_client=db_client) if team_id else None
-        organization_context = await self._resolve_organization_context(organization_id, db_client=db_client) if organization_id else None
+        team_context = (
+            await self._resolve_team_context(team_id, db_client=db_client) if team_id else None
+        )
+        organization_context = (
+            await self._resolve_organization_context(organization_id, db_client=db_client)
+            if organization_id
+            else None
+        )
         if team_context and organization_context:
             team_organization_id = str(team_context.get("organization_id") or "").strip()
-            if team_organization_id != str(organization_context.get("organization_id") or "").strip():
+            if (
+                team_organization_id
+                != str(organization_context.get("organization_id") or "").strip()
+            ):
                 raise ValueError("team_id does not belong to organization_id")
 
         account = await identity_service.ensure_account(
@@ -192,7 +214,11 @@ class InvitationService:
         scope_fingerprint = self._scope_fingerprint(metadata)
         pending = await repository.list_pending_by_account_id(account_id)
         existing = next(
-            (item for item in pending if self._scope_fingerprint(item.metadata) == scope_fingerprint),
+            (
+                item
+                for item in pending
+                if self._scope_fingerprint(item.metadata) == scope_fingerprint
+            ),
             None,
         )
         expires_at = self._invitation_expiry()
@@ -229,13 +255,19 @@ class InvitationService:
             created_by_account_id=invited_by_account_id,
         )
         try:
-            inviter_email = await self._load_account_email(invited_by_account_id, db_client=db_client)
+            inviter_email = await self._load_account_email(
+                invited_by_account_id, db_client=db_client
+            )
             queued = await outbox_service.enqueue_template_email(
                 template_key="invite_user",
                 to_addresses=(normalized_email,),
                 payload_json={
-                    "accept_url": token_service.build_action_url(path="/accept-invite", raw_token=token_issue.raw_token),
-                    "instance_name": str(getattr(self._general_settings(), "instance_name", "DeltaLLM") or "DeltaLLM"),
+                    "accept_url": token_service.build_action_url(
+                        path="/accept-invite", raw_token=token_issue.raw_token
+                    ),
+                    "instance_name": str(
+                        getattr(self._general_settings(), "instance_name", "DeltaLLM") or "DeltaLLM"
+                    ),
                     "inviter_email": inviter_email or "an administrator",
                     "scope_summary": self._scope_summary(metadata),
                 },
@@ -271,7 +303,9 @@ class InvitationService:
             "message_email_id": invitation.message_email_id,
         }
 
-    async def resend_invitation(self, *, invitation_id: str, invited_by_account_id: str | None) -> dict[str, Any]:
+    async def resend_invitation(
+        self, *, invitation_id: str, invited_by_account_id: str | None
+    ) -> dict[str, Any]:
         invitation = await self._require_manageable_invitation(invitation_id)
         return await self.create_invitation(
             email=invitation.email,
@@ -292,7 +326,9 @@ class InvitationService:
         return await self.repository.mark_cancelled(invitation.invitation_id)
 
     async def describe_invitation_token(self, raw_token: str) -> InvitationContext | None:
-        token = await self.token_service.validate_token(purpose="invite_accept", raw_token=raw_token)
+        token = await self.token_service.validate_token(
+            purpose="invite_accept", raw_token=raw_token
+        )
         if token is None or token.invitation_id is None:
             return None
         invitation = await self.repository.get_by_id(token.invitation_id)
@@ -301,7 +337,9 @@ class InvitationService:
         invitation = await self._expire_if_needed(invitation)
         if invitation.status not in {"pending", "sent"}:
             return None
-        auth_state = await self.platform_identity_service.get_account_auth_state(invitation.account_id)
+        auth_state = await self.platform_identity_service.get_account_auth_state(
+            invitation.account_id
+        )
         if auth_state is None:
             return None
         return InvitationContext(
@@ -315,10 +353,14 @@ class InvitationService:
             password_required=not auth_state.has_local_password and not auth_state.has_sso_identity,
         )
 
-    async def accept_invitation(self, *, raw_token: str, password: str | None) -> InvitationAcceptResult | None:
+    async def accept_invitation(
+        self, *, raw_token: str, password: str | None
+    ) -> InvitationAcceptResult | None:
         if self.db is not None and hasattr(self.db, "tx"):
             async with self.db.tx() as tx:
-                repository, token_service, _outbox_service, identity_service = self._transactional_dependencies(tx)
+                repository, token_service, _outbox_service, identity_service = (
+                    self._transactional_dependencies(tx)
+                )
                 return await self._accept_invitation_with_dependencies(
                     raw_token=raw_token,
                     password=password,
@@ -349,7 +391,9 @@ class InvitationService:
         invitation = await repository.get_by_id(token.invitation_id)
         if invitation is None:
             return None
-        invitation = await self._expire_if_needed(invitation, repository=repository, token_service=token_service)
+        invitation = await self._expire_if_needed(
+            invitation, repository=repository, token_service=token_service
+        )
         if invitation.status not in {"pending", "sent"}:
             return None
 
@@ -370,7 +414,9 @@ class InvitationService:
             return None
 
         if password_required:
-            await identity_service.set_password(account_id=invitation.account_id, new_password=password)
+            await identity_service.set_password(
+                account_id=invitation.account_id, new_password=password
+            )
 
         await self._apply_invitation_memberships(
             account_id=invitation.account_id,
@@ -430,7 +476,9 @@ class InvitationService:
     ) -> PlatformInvitationRecord:
         repository = repository or self.repository
         token_service = token_service or self.token_service
-        if invitation.status in {"pending", "sent"} and invitation.expires_at <= datetime.now(tz=UTC):
+        if invitation.status in {"pending", "sent"} and invitation.expires_at <= datetime.now(
+            tz=UTC
+        ):
             await repository.mark_expired(invitation.invitation_id)
             await token_service.invalidate_active_tokens(
                 purpose="invite_accept",
@@ -442,7 +490,9 @@ class InvitationService:
                 return refreshed
         return invitation
 
-    async def _resolve_organization_context(self, organization_id: str | None, *, db_client: Any | None = None) -> dict[str, Any] | None:
+    async def _resolve_organization_context(
+        self, organization_id: str | None, *, db_client: Any | None = None
+    ) -> dict[str, Any] | None:
         if not organization_id:
             return None
         query_client = db_client or self.db
@@ -451,6 +501,7 @@ class InvitationService:
             SELECT organization_id, organization_name
             FROM deltallm_organizationtable
             WHERE organization_id = $1
+              AND lifecycle_state = 'active'
             LIMIT 1
             """,
             organization_id,
@@ -459,15 +510,20 @@ class InvitationService:
             raise ValueError("organization not found")
         return dict(rows[0])
 
-    async def _resolve_team_context(self, team_id: str | None, *, db_client: Any | None = None) -> dict[str, Any] | None:
+    async def _resolve_team_context(
+        self, team_id: str | None, *, db_client: Any | None = None
+    ) -> dict[str, Any] | None:
         if not team_id:
             return None
         query_client = db_client or self.db
         rows = await query_client.query_raw(
             """
-            SELECT team_id, team_alias, organization_id
-            FROM deltallm_teamtable
-            WHERE team_id = $1
+            SELECT t.team_id, t.team_alias, t.organization_id
+            FROM deltallm_teamtable AS t
+            LEFT JOIN deltallm_organizationtable AS o
+              ON o.organization_id = t.organization_id
+            WHERE t.team_id = $1
+              AND (t.organization_id IS NULL OR o.lifecycle_state = 'active')
             LIMIT 1
             """,
             team_id,
@@ -486,16 +542,29 @@ class InvitationService:
         team_role: str | None,
     ) -> dict[str, Any]:
         metadata = dict(existing or {})
-        organization_invites = [dict(item) for item in list(metadata.get("organization_invites") or []) if isinstance(item, dict)]
-        team_invites = [dict(item) for item in list(metadata.get("team_invites") or []) if isinstance(item, dict)]
+        organization_invites = [
+            dict(item)
+            for item in list(metadata.get("organization_invites") or [])
+            if isinstance(item, dict)
+        ]
+        team_invites = [
+            dict(item)
+            for item in list(metadata.get("team_invites") or [])
+            if isinstance(item, dict)
+        ]
 
         if organization_context and organization_role:
             entry = {
                 "organization_id": str(organization_context.get("organization_id") or ""),
-                "organization_name": str(organization_context.get("organization_name") or "") or None,
+                "organization_name": str(organization_context.get("organization_name") or "")
+                or None,
                 "role": organization_role,
             }
-            organization_invites = [item for item in organization_invites if item.get("organization_id") != entry["organization_id"]]
+            organization_invites = [
+                item
+                for item in organization_invites
+                if item.get("organization_id") != entry["organization_id"]
+            ]
             organization_invites.append(entry)
 
         if team_context and team_role:
@@ -505,11 +574,17 @@ class InvitationService:
                 "organization_id": str(team_context.get("organization_id") or ""),
                 "role": team_role,
             }
-            team_invites = [item for item in team_invites if item.get("team_id") != entry["team_id"]]
+            team_invites = [
+                item for item in team_invites if item.get("team_id") != entry["team_id"]
+            ]
             team_invites.append(entry)
 
-        metadata["organization_invites"] = sorted(organization_invites, key=lambda item: str(item.get("organization_id") or ""))
-        metadata["team_invites"] = sorted(team_invites, key=lambda item: str(item.get("team_id") or ""))
+        metadata["organization_invites"] = sorted(
+            organization_invites, key=lambda item: str(item.get("organization_id") or "")
+        )
+        metadata["team_invites"] = sorted(
+            team_invites, key=lambda item: str(item.get("team_id") or "")
+        )
         return metadata
 
     async def _apply_invitation_memberships(
@@ -525,7 +600,9 @@ class InvitationService:
             if not isinstance(item, dict):
                 continue
             organization_id = str(item.get("organization_id") or "").strip()
-            role = validate_organization_role(str(item.get("role") or OrganizationRole.MEMBER).strip() or OrganizationRole.MEMBER)
+            role = validate_organization_role(
+                str(item.get("role") or OrganizationRole.MEMBER).strip() or OrganizationRole.MEMBER
+            )
             if not organization_id:
                 continue
             explicit_org_roles[organization_id] = role
@@ -539,7 +616,9 @@ class InvitationService:
             if not isinstance(item, dict):
                 continue
             team_id = str(item.get("team_id") or "").strip()
-            team_role = validate_team_role(str(item.get("role") or TeamRole.VIEWER).strip() or TeamRole.VIEWER)
+            team_role = validate_team_role(
+                str(item.get("role") or TeamRole.VIEWER).strip() or TeamRole.VIEWER
+            )
             organization_id = str(item.get("organization_id") or "").strip()
             if organization_id and organization_id not in explicit_org_roles:
                 await identity_service.upsert_organization_membership(
@@ -615,7 +694,9 @@ class InvitationService:
         hours = int(getattr(self._general_settings(), "invitation_token_ttl_hours", 72) or 72)
         return datetime.now(tz=UTC).replace(microsecond=0) + timedelta(hours=hours)
 
-    async def _load_account_email(self, account_id: str | None, *, db_client: Any | None = None) -> str | None:
+    async def _load_account_email(
+        self, account_id: str | None, *, db_client: Any | None = None
+    ) -> str | None:
         if not account_id:
             return None
         query_client = db_client or self.db
@@ -651,7 +732,9 @@ class InvitationService:
             "invite_scope_type": invitation.invite_scope_type,
             "expires_at": invitation.expires_at.isoformat(),
             "accepted_at": invitation.accepted_at.isoformat() if invitation.accepted_at else None,
-            "cancelled_at": invitation.cancelled_at.isoformat() if invitation.cancelled_at else None,
+            "cancelled_at": invitation.cancelled_at.isoformat()
+            if invitation.cancelled_at
+            else None,
             "created_at": invitation.created_at.isoformat() if invitation.created_at else None,
             "updated_at": invitation.updated_at.isoformat() if invitation.updated_at else None,
             "invited_by_account_id": invitation.invited_by_account_id,
