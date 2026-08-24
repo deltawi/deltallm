@@ -188,6 +188,25 @@ class _NormalizedExecutionError:
     retry_source: Exception
 
 
+class FallbackEventJournal:
+    """Bounded event history shared by all routing-runtime generations."""
+
+    def __init__(self, max_size: int = 1000) -> None:
+        self._events: deque[FallbackEvent] = deque(maxlen=max(1, int(max_size or 1000)))
+
+    def configure(self, max_size: int) -> None:
+        resolved_size = max(1, int(max_size or 1000))
+        if self._events.maxlen == resolved_size:
+            return
+        self._events = deque(self._events, maxlen=resolved_size)
+
+    def append(self, event: FallbackEvent) -> None:
+        self._events.append(event)
+
+    def recent(self, limit: int) -> list[FallbackEvent]:
+        return list(self._events)[-max(0, int(limit)) :]
+
+
 class FailoverManager:
     def __init__(
         self,
@@ -195,17 +214,17 @@ class FailoverManager:
         candidate_planner: RouteCandidatePlanner,
         state_backend: DeploymentStateBackend,
         cooldown_manager: CooldownManager,
+        event_journal: FallbackEventJournal | None = None,
     ):
         self.config = config
         self.candidate_planner = candidate_planner
         self.state = state_backend
         self.cooldown = cooldown_manager
-        self._fallback_events: deque[FallbackEvent] = deque(
-            maxlen=max(1, int(self.config.event_history_size or 1000))
-        )
+        self.event_journal = event_journal or FallbackEventJournal(config.event_history_size)
+        self.event_journal.configure(config.event_history_size)
 
     def get_recent_fallback_events(self, limit: int = 50) -> list[dict[str, Any]]:
-        events = list(self._fallback_events)[-max(0, int(limit)) :]
+        events = self.event_journal.recent(limit)
         return [
             {
                 "timestamp": e.timestamp,
@@ -243,7 +262,7 @@ class FailoverManager:
             attempt=attempt,
             success=success,
         )
-        self._fallback_events.append(event)
+        self.event_journal.append(event)
 
         if success:
             logger.info(

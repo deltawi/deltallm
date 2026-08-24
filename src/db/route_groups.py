@@ -5,7 +5,28 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.db.route_policy_lifecycle import (
+    RoutePolicyLifecycleMixin,
+    RoutePolicyRecord,
+    RoutePolicyStateConflictError,
+    parse_policy_json,
+)
+from src.db.routing_runtime import ROUTING_RUNTIME_STATE_KEY, RoutingRuntimeRevisionRepository
+from src.router.policy_validation import merge_policy_members
+from src.router.route_group_validation import (
+    deployment_modes_by_id,
+    validate_route_group_member_modes,
+)
 from src.services.asset_ownership import owner_scope_from_metadata
+
+__all__ = [
+    "RouteGroupBindingRecord",
+    "RouteGroupMemberRecord",
+    "RouteGroupRecord",
+    "RouteGroupRepository",
+    "RouteGroupRuntimeSnapshot",
+    "RoutePolicyRecord",
+]
 
 
 def _parse_json_object(value: Any) -> dict[str, Any]:
@@ -48,55 +69,6 @@ def _extract_default_prompt(metadata: dict[str, Any] | None) -> dict[str, str] |
     return payload
 
 
-def _merge_policy_members(
-    base_members: list[dict[str, Any]],
-    policy_members: Any,
-) -> list[dict[str, Any]]:
-    if not isinstance(policy_members, list) or not policy_members:
-        return base_members
-
-    by_id: dict[str, dict[str, Any]] = {
-        str(member.get("deployment_id") or ""): dict(member)
-        for member in base_members
-        if isinstance(member, dict) and str(member.get("deployment_id") or "")
-    }
-    ordered: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    for item in policy_members:
-        if not isinstance(item, dict):
-            continue
-        deployment_id = str(item.get("deployment_id") or "").strip()
-        if not deployment_id:
-            continue
-        base = by_id.get(deployment_id)
-        if base is None:
-            continue
-        merged = dict(base)
-        if "enabled" in item:
-            merged["enabled"] = bool(item.get("enabled", True))
-        if item.get("weight") is not None:
-            try:
-                merged["weight"] = int(item["weight"])
-            except (TypeError, ValueError):
-                pass
-        if item.get("priority") is not None:
-            try:
-                merged["priority"] = int(item["priority"])
-            except (TypeError, ValueError):
-                pass
-        ordered.append(merged)
-        seen.add(deployment_id)
-
-    for member in base_members:
-        deployment_id = str(member.get("deployment_id") or "")
-        if deployment_id in seen:
-            continue
-        ordered.append(member)
-
-    return ordered
-
-
 @dataclass
 class RouteGroupRecord:
     route_group_id: str
@@ -127,19 +99,6 @@ class RouteGroupMemberRecord:
 
 
 @dataclass
-class RoutePolicyRecord:
-    route_policy_id: str
-    route_group_id: str
-    version: int
-    status: str
-    policy_json: dict[str, Any]
-    published_at: datetime | None = None
-    published_by: str | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-@dataclass
 class RouteGroupBindingRecord:
     route_group_binding_id: str
     route_group_id: str
@@ -152,11 +111,37 @@ class RouteGroupBindingRecord:
     updated_at: datetime | None = None
 
 
-class RouteGroupRepository:
-    def __init__(self, prisma_client: Any | None = None) -> None:
-        self.prisma = prisma_client
+@dataclass(frozen=True, slots=True)
+class RouteGroupRuntimeSnapshot:
+    revision: int
+    groups: list[dict[str, Any]]
+    database_initialized: bool | None = None
 
-    async def list_groups(self, *, search: str | None = None, limit: int = 100, offset: int = 0) -> tuple[list[RouteGroupRecord], int]:
+    def __post_init__(self) -> None:
+        if self.database_initialized is None:
+            object.__setattr__(self, "database_initialized", bool(self.groups))
+
+
+class RouteGroupRepository(RoutePolicyLifecycleMixin):
+    def __init__(self, prisma_client: Any | None = None, *, use_transactions: bool = True) -> None:
+        self.prisma = prisma_client
+        self._use_transactions = use_transactions
+
+    def with_db(self, prisma_client: Any) -> RouteGroupRepository:
+        return RouteGroupRepository(prisma_client, use_transactions=False)
+
+    def supports_transactions(self) -> bool:
+        return bool(
+            self._use_transactions and self.prisma is not None and hasattr(self.prisma, "tx")
+        )
+
+    def require_transactions(self, operation: str) -> None:
+        if not self.supports_transactions():
+            raise RuntimeError(f"{operation} requires transaction support")
+
+    async def list_groups(
+        self, *, search: str | None = None, limit: int = 100, offset: int = 0
+    ) -> tuple[list[RouteGroupRecord], int]:
         if self.prisma is None:
             return [], 0
 
@@ -164,7 +149,9 @@ class RouteGroupRepository:
         params: list[Any] = []
         if search:
             params.append(f"%{search}%")
-            clauses.append(f"(group_key ILIKE ${len(params)} OR COALESCE(name, '') ILIKE ${len(params)})")
+            clauses.append(
+                f"(group_key ILIKE ${len(params)} OR COALESCE(name, '') ILIKE ${len(params)})"
+            )
 
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         count_rows = await self.prisma.query_raw(
@@ -245,7 +232,11 @@ class RouteGroupRepository:
         )
         if not rows:
             return None
-        metadata = _parse_json_object(rows[0].get("metadata")) if rows[0].get("metadata") is not None else None
+        metadata = (
+            _parse_json_object(rows[0].get("metadata"))
+            if rows[0].get("metadata") is not None
+            else None
+        )
         return _extract_default_prompt(metadata)
 
     async def create_group(
@@ -268,6 +259,17 @@ class RouteGroupRepository:
                 enabled=enabled,
                 metadata=metadata,
             )
+        if self._use_transactions:
+            self.require_transactions("create_group")
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).create_group(
+                    group_key=group_key,
+                    name=name,
+                    mode=mode,
+                    routing_strategy=routing_strategy,
+                    enabled=enabled,
+                    metadata=metadata,
+                )
 
         rows = await self.prisma.query_raw(
             """
@@ -282,7 +284,9 @@ class RouteGroupRepository:
             enabled,
             json.dumps(metadata) if metadata is not None else None,
         )
-        return self._to_group_record(rows[0])
+        record = self._to_group_record(rows[0])
+        await self._bump_runtime_revision()
+        return record
 
     async def update_group(
         self,
@@ -295,6 +299,21 @@ class RouteGroupRepository:
         metadata: dict[str, Any] | None,
     ) -> RouteGroupRecord | None:
         if self.prisma is None:
+            return None
+        if self._use_transactions:
+            self.require_transactions("update_group")
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).update_group(
+                    group_key,
+                    name=name,
+                    mode=mode,
+                    routing_strategy=routing_strategy,
+                    enabled=enabled,
+                    metadata=metadata,
+                )
+
+        group_id = await self._lock_group_id(group_key)
+        if group_id is None:
             return None
 
         rows = await self.prisma.query_raw(
@@ -323,10 +342,24 @@ class RouteGroupRepository:
         )
         if not rows:
             return None
+        await self._validate_runtime_invariants_after_group_change(
+            group_id,
+            group_key=group_key,
+            group_mode=mode,
+        )
+        await self._bump_runtime_revision()
         return self._to_group_record(rows[0])
 
     async def delete_group(self, group_key: str) -> bool:
         if self.prisma is None:
+            return False
+        if self._use_transactions:
+            self.require_transactions("delete_group")
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).delete_group(group_key)
+
+        group_id = await self._lock_group_id(group_key)
+        if group_id is None:
             return False
 
         rows = await self.prisma.query_raw(
@@ -337,7 +370,10 @@ class RouteGroupRepository:
             """,
             group_key,
         )
-        return bool(rows)
+        if not rows:
+            return False
+        await self._bump_runtime_revision()
+        return True
 
     async def list_bindings(
         self,
@@ -511,8 +547,18 @@ class RouteGroupRepository:
     ) -> RouteGroupMemberRecord | None:
         if self.prisma is None:
             return None
+        if self._use_transactions:
+            self.require_transactions("upsert_member")
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).upsert_member(
+                    group_key,
+                    deployment_id=deployment_id,
+                    enabled=enabled,
+                    weight=weight,
+                    priority=priority,
+                )
 
-        group_id = await self._resolve_group_id(group_key)
+        group_id = await self._lock_group_id(group_key)
         if group_id is None:
             return None
 
@@ -538,10 +584,23 @@ class RouteGroupRepository:
         )
         if not rows:
             return None
+        await self._validate_runtime_invariants_after_group_change(
+            group_id,
+            group_key=group_key,
+        )
+        await self._bump_runtime_revision()
         return self._to_member_record(rows[0])
 
     async def remove_member(self, group_key: str, deployment_id: str) -> bool:
         if self.prisma is None:
+            return False
+        if self._use_transactions:
+            self.require_transactions("remove_member")
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).remove_member(group_key, deployment_id)
+
+        group_id = await self._lock_group_id(group_key)
+        if group_id is None:
             return False
 
         rows = await self.prisma.query_raw(
@@ -556,229 +615,30 @@ class RouteGroupRepository:
             group_key,
             deployment_id,
         )
-        return bool(rows)
-
-    async def get_published_policy(self, group_key: str) -> RoutePolicyRecord | None:
-        if self.prisma is None:
-            return None
-
-        rows = await self.prisma.query_raw(
-            """
-            SELECT p.route_policy_id, p.route_group_id, p.version, p.status, p.policy_json, p.published_at, p.published_by, p.created_at, p.updated_at
-            FROM deltallm_routepolicy p
-            JOIN deltallm_routegroup g ON g.route_group_id = p.route_group_id
-            WHERE g.group_key = $1
-              AND p.status = 'published'
-            ORDER BY p.version DESC
-            LIMIT 1
-            """,
-            group_key,
-        )
         if not rows:
-            return None
-        return self._to_policy_record(rows[0])
-
-    async def publish_policy(self, group_key: str, policy_json: dict[str, Any], *, published_by: str | None = None) -> RoutePolicyRecord | None:
-        if self.prisma is None:
-            return None
-
-        group_id = await self._resolve_group_id(group_key)
-        if group_id is None:
-            return None
-
-        version_rows = await self.prisma.query_raw(
-            """
-            SELECT COALESCE(MAX(version), 0)::int AS max_version
-            FROM deltallm_routepolicy
-            WHERE route_group_id = $1
-            """,
+            return False
+        await self._validate_runtime_invariants_after_group_change(
             group_id,
+            group_key=group_key,
         )
-        next_version = int((version_rows[0] if version_rows else {}).get("max_version") or 0) + 1
-
-        await self.prisma.execute_raw(
-            """
-            UPDATE deltallm_routepolicy
-            SET status = 'archived', updated_at = NOW()
-            WHERE route_group_id = $1
-              AND status = 'published'
-            """,
-            group_id,
-        )
-
-        rows = await self.prisma.query_raw(
-            """
-            INSERT INTO deltallm_routepolicy (
-                route_policy_id, route_group_id, version, status, policy_json, published_at, published_by, created_at, updated_at
-            )
-            VALUES (gen_random_uuid()::text, $1, $2, 'published', $3::jsonb, NOW(), $4, NOW(), NOW())
-            RETURNING route_policy_id, route_group_id, version, status, policy_json, published_at, published_by, created_at, updated_at
-            """,
-            group_id,
-            next_version,
-            json.dumps(policy_json),
-            published_by,
-        )
-        if not rows:
-            return None
-        return self._to_policy_record(rows[0])
-
-    async def save_draft_policy(self, group_key: str, policy_json: dict[str, Any]) -> RoutePolicyRecord | None:
-        if self.prisma is None:
-            return None
-
-        group_id = await self._resolve_group_id(group_key)
-        if group_id is None:
-            return None
-
-        draft_rows = await self.prisma.query_raw(
-            """
-            SELECT route_policy_id
-            FROM deltallm_routepolicy
-            WHERE route_group_id = $1
-              AND status = 'draft'
-            ORDER BY version DESC
-            LIMIT 1
-            """,
-            group_id,
-        )
-        if draft_rows:
-            draft_id = str(draft_rows[0].get("route_policy_id") or "")
-            rows = await self.prisma.query_raw(
-                """
-                UPDATE deltallm_routepolicy
-                SET policy_json = $2::jsonb,
-                    updated_at = NOW()
-                WHERE route_policy_id = $1
-                RETURNING route_policy_id, route_group_id, version, status, policy_json, published_at, published_by, created_at, updated_at
-                """,
-                draft_id,
-                json.dumps(policy_json),
-            )
-            return self._to_policy_record(rows[0]) if rows else None
-
-        version_rows = await self.prisma.query_raw(
-            """
-            SELECT COALESCE(MAX(version), 0)::int AS max_version
-            FROM deltallm_routepolicy
-            WHERE route_group_id = $1
-            """,
-            group_id,
-        )
-        next_version = int((version_rows[0] if version_rows else {}).get("max_version") or 0) + 1
-        rows = await self.prisma.query_raw(
-            """
-            INSERT INTO deltallm_routepolicy (
-                route_policy_id, route_group_id, version, status, policy_json, created_at, updated_at
-            )
-            VALUES (gen_random_uuid()::text, $1, $2, 'draft', $3::jsonb, NOW(), NOW())
-            RETURNING route_policy_id, route_group_id, version, status, policy_json, published_at, published_by, created_at, updated_at
-            """,
-            group_id,
-            next_version,
-            json.dumps(policy_json),
-        )
-        return self._to_policy_record(rows[0]) if rows else None
-
-    async def publish_latest_draft(self, group_key: str, *, published_by: str | None = None) -> RoutePolicyRecord | None:
-        if self.prisma is None:
-            return None
-
-        group_id = await self._resolve_group_id(group_key)
-        if group_id is None:
-            return None
-
-        rows = await self.prisma.query_raw(
-            """
-            SELECT route_policy_id
-            FROM deltallm_routepolicy
-            WHERE route_group_id = $1
-              AND status = 'draft'
-            ORDER BY version DESC
-            LIMIT 1
-            """,
-            group_id,
-        )
-        if not rows:
-            return None
-        draft_id = str(rows[0].get("route_policy_id") or "")
-
-        await self.prisma.execute_raw(
-            """
-            UPDATE deltallm_routepolicy
-            SET status = 'archived', updated_at = NOW()
-            WHERE route_group_id = $1
-              AND status = 'published'
-            """,
-            group_id,
-        )
-        updated_rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_routepolicy
-            SET status = 'published',
-                published_at = NOW(),
-                published_by = $2,
-                updated_at = NOW()
-            WHERE route_policy_id = $1
-            RETURNING route_policy_id, route_group_id, version, status, policy_json, published_at, published_by, created_at, updated_at
-            """,
-            draft_id,
-            published_by,
-        )
-        return self._to_policy_record(updated_rows[0]) if updated_rows else None
-
-    async def rollback_policy(
-        self,
-        group_key: str,
-        *,
-        target_version: int,
-        published_by: str | None = None,
-    ) -> RoutePolicyRecord | None:
-        if self.prisma is None:
-            return None
-
-        source_rows = await self.prisma.query_raw(
-            """
-            SELECT p.policy_json
-            FROM deltallm_routepolicy p
-            JOIN deltallm_routegroup g ON g.route_group_id = p.route_group_id
-            WHERE g.group_key = $1
-              AND p.version = $2
-            LIMIT 1
-            """,
-            group_key,
-            target_version,
-        )
-        if not source_rows:
-            return None
-        policy_json = _parse_json_object(source_rows[0].get("policy_json"))
-        if not policy_json:
-            return None
-        return await self.publish_policy(group_key, policy_json, published_by=published_by)
-
-    async def list_policies(self, group_key: str) -> list[RoutePolicyRecord]:
-        if self.prisma is None:
-            return []
-
-        rows = await self.prisma.query_raw(
-            """
-            SELECT p.route_policy_id, p.route_group_id, p.version, p.status, p.policy_json, p.published_at, p.published_by, p.created_at, p.updated_at
-            FROM deltallm_routepolicy p
-            JOIN deltallm_routegroup g ON g.route_group_id = p.route_group_id
-            WHERE g.group_key = $1
-            ORDER BY p.version DESC
-            """,
-            group_key,
-        )
-        return [self._to_policy_record(row) for row in rows]
+        await self._bump_runtime_revision()
+        return True
 
     async def list_runtime_groups(self) -> list[dict[str, Any]]:
+        return (await self.load_runtime_snapshot()).groups
+
+    async def get_runtime_revision(self) -> int:
+        return await RoutingRuntimeRevisionRepository(self.prisma).get_revision()
+
+    async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
         if self.prisma is None:
-            return []
+            return RouteGroupRuntimeSnapshot(revision=0, groups=[])
 
         groups = await self.prisma.query_raw(
             """
             SELECT
+                runtime.revision AS runtime_revision,
+                runtime.route_groups_initialized,
                 g.route_group_id,
                 g.group_key,
                 g.mode,
@@ -786,57 +646,78 @@ class RouteGroupRepository:
                 g.routing_strategy,
                 g.metadata,
                 p.version AS policy_version,
-                p.policy_json
-            FROM deltallm_routegroup g
+                p.semantics_version AS policy_semantics_version,
+                p.policy_json,
+                COALESCE(
+                    (
+                        SELECT jsonb_agg(
+                            jsonb_build_object(
+                                'deployment_id', m.deployment_id,
+                                'enabled', m.enabled,
+                                'weight', m.weight,
+                                'priority', m.priority
+                            ) ORDER BY m.created_at ASC, m.deployment_id ASC
+                        )
+                        FROM deltallm_routegroupmember m
+                        WHERE m.route_group_id = g.route_group_id
+                    ),
+                    '[]'::jsonb
+                ) AS members
+            FROM deltallm_routeruntimestate runtime
+            LEFT JOIN deltallm_routegroup g ON TRUE
             LEFT JOIN LATERAL (
-                SELECT policy_json, version
+                SELECT policy_json, version, semantics_version
                 FROM deltallm_routepolicy
                 WHERE route_group_id = g.route_group_id
                   AND status = 'published'
                 ORDER BY version DESC
                 LIMIT 1
             ) p ON TRUE
+            WHERE runtime.state_key = $1
             ORDER BY g.group_key ASC
-            """
+            """,
+            ROUTING_RUNTIME_STATE_KEY,
         )
         if not groups:
-            return []
+            return RouteGroupRuntimeSnapshot(revision=0, groups=[])
 
-        members = await self.prisma.query_raw(
-            """
-            SELECT route_group_id, deployment_id, enabled, weight, priority
-            FROM deltallm_routegroupmember
-            ORDER BY created_at ASC, deployment_id ASC
-            """
-        )
-
-        member_map: dict[str, list[dict[str, Any]]] = {}
-        for row in members:
-            group_id = str(row.get("route_group_id") or "")
-            if not group_id:
-                continue
-            member_map.setdefault(group_id, []).append(
-                {
-                    "deployment_id": str(row.get("deployment_id") or ""),
-                    "enabled": bool(row.get("enabled", True)),
-                    "weight": row.get("weight"),
-                    "priority": row.get("priority"),
-                }
-            )
-
+        revision = int(groups[0].get("runtime_revision") or 0)
+        database_initialized = bool(groups[0].get("route_groups_initialized", False))
         runtime_groups: list[dict[str, Any]] = []
         for row in groups:
             group_id = str(row.get("route_group_id") or "")
-            policy_json = _parse_json_object(row.get("policy_json"))
-            metadata = _parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None
+            if not group_id:
+                continue
+            policy_json = parse_policy_json(row.get("policy_json"))
+            metadata = (
+                _parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None
+            )
             strategy = row.get("routing_strategy")
             if isinstance(policy_json.get("strategy"), str):
                 strategy = policy_json["strategy"]
             timeouts = policy_json.get("timeouts")
             retry = policy_json.get("retry")
-            merged_members = _merge_policy_members(
-                [m for m in member_map.get(group_id, []) if m.get("deployment_id")],
+            raw_members = row.get("members")
+            if isinstance(raw_members, str):
+                try:
+                    raw_members = json.loads(raw_members)
+                except json.JSONDecodeError:
+                    raw_members = []
+            base_members = [
+                {
+                    "deployment_id": str(member.get("deployment_id") or ""),
+                    "enabled": bool(member.get("enabled", True)),
+                    "weight": member.get("weight"),
+                    "priority": member.get("priority"),
+                }
+                for member in (raw_members if isinstance(raw_members, list) else [])
+                if isinstance(member, dict) and str(member.get("deployment_id") or "")
+            ]
+            semantics_version = int(row.get("policy_semantics_version") or 1)
+            merged_members = merge_policy_members(
+                base_members,
                 policy_json.get("members"),
+                semantics_version=semantics_version,
             )
 
             runtime_groups.append(
@@ -845,18 +726,92 @@ class RouteGroupRepository:
                     "mode": str(row.get("mode") or "chat"),
                     "enabled": bool(row.get("enabled", True)),
                     "strategy": strategy if isinstance(strategy, str) and strategy else None,
-                    "policy_version": int(row["policy_version"]) if row.get("policy_version") is not None else None,
+                    "policy_version": int(row["policy_version"])
+                    if row.get("policy_version") is not None
+                    else None,
+                    "policy_semantics_version": semantics_version
+                    if row.get("policy_version") is not None
+                    else None,
                     "timeouts": timeouts if isinstance(timeouts, dict) else None,
                     "retry": retry if isinstance(retry, dict) else None,
-                    "default_prompt": _extract_default_prompt(
-                        metadata
-                    ),
-                    "access_groups": metadata.get("access_groups") if isinstance(metadata, dict) else None,
+                    "default_prompt": _extract_default_prompt(metadata),
+                    "access_groups": metadata.get("access_groups")
+                    if isinstance(metadata, dict)
+                    else None,
                     "members": merged_members,
                 }
             )
 
-        return runtime_groups
+        return RouteGroupRuntimeSnapshot(
+            revision=revision,
+            groups=runtime_groups,
+            database_initialized=database_initialized,
+        )
+
+    async def _bump_runtime_revision(self) -> int:
+        return await RoutingRuntimeRevisionRepository(self.prisma).bump_revision(
+            route_groups_initialized=True
+        )
+
+    async def _validate_group_member_modes(
+        self,
+        group_id: str,
+        *,
+        group_key: str,
+        group_mode: str | None = None,
+    ) -> None:
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                g.mode AS group_mode,
+                m.deployment_id,
+                d.model_info
+            FROM deltallm_routegroup g
+            LEFT JOIN deltallm_routegroupmember m ON m.route_group_id = g.route_group_id
+            LEFT JOIN deltallm_modeldeployment d ON d.deployment_id = m.deployment_id
+            WHERE g.route_group_id = $1
+              AND (m.enabled = TRUE OR m.membership_id IS NULL)
+            ORDER BY m.created_at ASC, m.deployment_id ASC
+            """,
+            group_id,
+        )
+        if not rows:
+            raise ValueError("route group no longer exists")
+        deployment_entries = [
+            {
+                "deployment_id": row.get("deployment_id"),
+                "model_info": row.get("model_info"),
+            }
+            for row in rows
+            if row.get("deployment_id") is not None
+        ]
+        validate_route_group_member_modes(
+            group_key=group_key,
+            group_mode=group_mode if group_mode is not None else rows[0].get("group_mode"),
+            member_ids=[str(row["deployment_id"]) for row in deployment_entries],
+            deployment_modes=deployment_modes_by_id(deployment_entries),
+        )
+
+    async def _validate_runtime_invariants_after_group_change(
+        self,
+        group_id: str,
+        *,
+        group_key: str,
+        group_mode: str | None = None,
+    ) -> None:
+        try:
+            await self._validate_group_member_modes(
+                group_id,
+                group_key=group_key,
+                group_mode=group_mode,
+            )
+            await self._validate_published_policy_after_group_change(group_id)
+        except RoutePolicyStateConflictError:
+            raise
+        except ValueError as exc:
+            raise RoutePolicyStateConflictError(
+                f"route-group change is incompatible with current deployments: {exc}"
+            ) from exc
 
     async def _resolve_group_id(self, group_key: str) -> str | None:
         rows = await self.prisma.query_raw(
@@ -906,20 +861,6 @@ class RouteGroupRepository:
         )
 
     @staticmethod
-    def _to_policy_record(row: dict[str, Any]) -> RoutePolicyRecord:
-        return RoutePolicyRecord(
-            route_policy_id=str(row.get("route_policy_id") or ""),
-            route_group_id=str(row.get("route_group_id") or ""),
-            version=int(row.get("version") or 0),
-            status=str(row.get("status") or "draft"),
-            policy_json=_parse_json_object(row.get("policy_json")),
-            published_at=_parse_datetime(row.get("published_at")),
-            published_by=row.get("published_by"),
-            created_at=_parse_datetime(row.get("created_at")),
-            updated_at=_parse_datetime(row.get("updated_at")),
-        )
-
-    @staticmethod
     def _to_binding_record(row: dict[str, Any]) -> RouteGroupBindingRecord:
         return RouteGroupBindingRecord(
             route_group_binding_id=str(row.get("route_group_binding_id") or ""),
@@ -928,7 +869,9 @@ class RouteGroupRepository:
             scope_type=str(row.get("scope_type") or ""),
             scope_id=str(row.get("scope_id") or ""),
             enabled=bool(row.get("enabled", True)),
-            metadata=_parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None,
+            metadata=_parse_json_object(row.get("metadata"))
+            if row.get("metadata") is not None
+            else None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
         )

@@ -33,6 +33,7 @@ from src.chat.stream_response import (
     ManagedStreamLifecycle,
     close_stream_resources,
 )
+from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
 from src.metrics import increment_router_health_update_failure
 from src.mcp.orchestrator import (
@@ -115,14 +116,16 @@ async def handle_chat_like_request(
         request_start=request_start,
         audit_action=audit_action,
     )
+    routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
     auth, payload, request_data, callback_manager, guardrail_middleware = await run_text_preflight(
         request=request,
         payload=payload,
         request_data=request_data,
+        routing_runtime=routing_runtime,
     )
     has_mcp_tools = chat_request_has_mcp_tools(payload)
 
-    router = request.app.state.router
+    router = routing_runtime.router
     model_group = router.resolve_model_group(payload.model)
     request_context = {
         "metadata": payload.metadata or {},
@@ -157,7 +160,7 @@ async def handle_chat_like_request(
             # so unsupported stream providers fail as a normal HTTP error.
             resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
 
-            managed_stream = await request.app.state.failover_manager.execute_managed_with_failover(
+            managed_stream = await routing_runtime.failover_manager.execute_managed_with_failover(
                 primary_deployment=primary,
                 model_group=model_group,
                 execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
@@ -296,7 +299,7 @@ async def handle_chat_like_request(
                         stream_handler.discard_stream(stream_id)
                     try:
                         await _record_stream_health_outcome(
-                            cooldown_manager=request.app.state.cooldown_manager,
+                            cooldown_manager=routing_runtime.cooldown_manager,
                             health_ref=served_deployment.health_ref,
                             health_error=health_error,
                             succeeded=failure_exc is None and resolved_usage is not None,
@@ -398,7 +401,7 @@ async def handle_chat_like_request(
                 audit_service=getattr(request.app.state, "audit_service", None),
             )
             mcp_result = await MCPChatExecutionService(
-                failover_manager=request.app.state.failover_manager,
+                failover_manager=routing_runtime.failover_manager,
                 orchestrator=orchestrator,
                 execute_chat_call=lambda phase_payload, deployment: execute_chat(
                     request,
@@ -437,7 +440,7 @@ async def handle_chat_like_request(
             (
                 (payload_data, api_latency_ms),
                 served_deployment,
-            ) = await request.app.state.failover_manager.execute_with_failover(
+            ) = await routing_runtime.failover_manager.execute_with_failover(
                 primary_deployment=primary,
                 model_group=model_group,
                 execute=lambda deployment: execute_chat(request, payload, deployment),

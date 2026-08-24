@@ -4,14 +4,31 @@ import json
 
 import pytest
 
-from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.repositories import (
+    ModelDeploymentNameConflictError,
+    ModelDeploymentRecord,
+    ModelDeploymentRepository,
+)
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 
 
 class FakePrisma:
     def __init__(self) -> None:
         self.rows: dict[str, dict[str, object]] = {}
+        self.runtime_revision = 0
 
     async def query_raw(self, query: str, *args):
+        if "UPDATE deltallm_routeruntimestate" in query:
+            self.runtime_revision += 1
+            return [{"revision": self.runtime_revision}]
+        if "FROM deltallm_modeldeployment" in query and "WHERE model_name = $1" in query:
+            model_name = str(args[0])
+            excluded = str(args[1]) if len(args) > 1 and args[1] is not None else None
+            return [
+                {"deployment_id": deployment_id}
+                for deployment_id, row in self.rows.items()
+                if row["model_name"] == model_name and deployment_id != excluded
+            ][:1]
         if (
             "SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info"
             in query
@@ -66,6 +83,63 @@ class FakePrisma:
                 "model_info": json.loads(str(args[4])) if args[4] is not None else None,
                 "routing_state_incarnation": f"created-{deployment_id}",
             }
+
+
+class _RouteAwareTransaction:
+    def __init__(self) -> None:
+        self.deleted = False
+
+    async def query_raw(self, query: str, *args):  # noqa: ANN201
+        del args
+        if "FOR UPDATE OF g" in query:
+            return [{"route_group_id": "group-1", "group_key": "support-route"}]
+        if "DELETE FROM deltallm_modeldeployment" in query:
+            self.deleted = True
+            return [{"deployment_id": "dep-1"}]
+        if "g.mode AS group_mode" in query:
+            return [{"group_mode": "chat", "deployment_id": None, "model_info": None}]
+        if "SELECT policy_json, semantics_version" in query:
+            return [
+                {
+                    "policy_json": {"members": [{"deployment_id": "dep-1"}]},
+                    "semantics_version": 2,
+                }
+            ]
+        if "COALESCE(d.model_info->>'mode'" in query:
+            return [
+                {
+                    "group_key": "support-route",
+                    "group_mode": "chat",
+                    "deployment_id": None,
+                    "enabled": None,
+                    "deployment_mode": None,
+                }
+            ]
+        return []
+
+
+class _RouteAwareTransactionContext:
+    def __init__(self, owner: "_RouteAwarePrisma") -> None:
+        self.owner = owner
+
+    async def __aenter__(self) -> _RouteAwareTransaction:
+        return self.owner.transaction
+
+    async def __aexit__(self, exc_type, exc, traceback) -> bool:  # noqa: ANN001
+        del exc, traceback
+        if exc_type is not None:
+            self.owner.transaction.deleted = False
+            self.owner.rolled_back += 1
+        return False
+
+
+class _RouteAwarePrisma:
+    def __init__(self) -> None:
+        self.transaction = _RouteAwareTransaction()
+        self.rolled_back = 0
+
+    def tx(self) -> _RouteAwareTransactionContext:
+        return _RouteAwareTransactionContext(self)
 
 
 @pytest.mark.asyncio
@@ -137,3 +211,59 @@ async def test_model_deployment_repository_bulk_insert_if_empty_only_once():
     )
     rows = await repo.list_all()
     assert [item.deployment_id for item in rows] == ["dep-a"]
+
+
+@pytest.mark.asyncio
+async def test_model_deployment_repository_rejects_duplicate_model_name() -> None:
+    repo = ModelDeploymentRepository(FakePrisma())
+    await repo.create(
+        ModelDeploymentRecord(
+            deployment_id="dep-a",
+            model_name="shared-model",
+            deltallm_params={"model": "openai/a"},
+        )
+    )
+
+    with pytest.raises(ModelDeploymentNameConflictError, match="shared-model"):
+        await repo.create(
+            ModelDeploymentRecord(
+                deployment_id="dep-b",
+                model_name="shared-model",
+                deltallm_params={"model": "openai/b"},
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_transaction_scoped_model_mutations_bump_full_routing_revision():
+    prisma = FakePrisma()
+    repo = ModelDeploymentRepository(prisma, use_transactions=False)
+    record = ModelDeploymentRecord(
+        deployment_id="dep-1",
+        model_name="m-a",
+        deltallm_params={"model": "openai/a"},
+        model_info={},
+    )
+
+    await repo.create(record)
+    await repo.update(
+        "dep-1",
+        model_name="m-b",
+        named_credential_id=None,
+        deltallm_params={"model": "openai/b"},
+        model_info={},
+    )
+    await repo.delete("dep-1")
+
+    assert prisma.runtime_revision == 3
+
+
+@pytest.mark.asyncio
+async def test_model_deployment_delete_rolls_back_invalid_policy_cascade():
+    prisma = _RouteAwarePrisma()
+
+    with pytest.raises(RoutePolicyStateConflictError, match="would invalidate route group"):
+        await ModelDeploymentRepository(prisma).delete("dep-1")
+
+    assert prisma.rolled_back == 1
+    assert prisma.transaction.deleted is False

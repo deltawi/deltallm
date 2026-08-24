@@ -99,6 +99,8 @@ Model create and update payloads also accept these metadata fields:
 
 `model_info.access_groups` must be an array of valid group keys. Keys are normalized to lowercase, must start with a letter or digit, and may contain lowercase letters, digits, `.`, `_`, or `-`. Access groups expand to the public `model_name`, not to a single deployment. When several deployments share the same `model_name`, keep their access groups identical so group expansion remains deterministic.
 
+Successful model create, update, and delete responses include a `warnings` array. A durable database mutation remains successful if its immediate local routing refresh fails; in that case the response contains a post-commit warning and background revision reconciliation repairs the replica. Re-read the deployment before retrying the mutation.
+
 Example inline model create payload:
 
 ```json
@@ -176,7 +178,7 @@ For the same OpenAI-compatible providers listed above, named-credential `connect
 - `auth_header_name`
 - `auth_header_format`
 
-Read responses always redact secret-bearing fields. Updating an in-use named credential triggers a runtime reload so linked deployments pick up the new connection settings. The raw secret value is never readable back out of the admin API.
+Read responses always redact secret-bearing fields. Updating an in-use named credential triggers a runtime reload so linked deployments pick up the new connection settings. If that post-commit refresh fails, the mutation still succeeds and returns a `warnings` entry while durable revision polling reconciles the runtime. The raw secret value is never readable back out of the admin API.
 
 For full UI and `curl` examples, see [Admin UI: Named Credentials](../admin-ui/named-credentials.md).
 
@@ -192,6 +194,10 @@ For full UI and `curl` examples, see [Admin UI: Named Credentials](../admin-ui/n
 | `GET` | `/ui/api/route-groups/{group_key}/members` | List group members |
 | `POST` | `/ui/api/route-groups/{group_key}/members` | Add a member |
 | `DELETE` | `/ui/api/route-groups/{group_key}/members/{deployment_id}` | Remove a member |
+
+An enabled route group owns a colliding callable key even when it has no enabled members. Deleting
+the group preserves callable-target bindings when a same-named model deployment exists; otherwise
+the group and its callable-target bindings are removed transactionally.
 
 ### Callable Target Governance
 

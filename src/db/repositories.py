@@ -6,6 +6,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from src.db.callable_key_locks import lock_callable_keys
+from src.db.routing_runtime import RoutingRuntimeRevisionRepository
+
 AUDIT_METADATA_RETENTION_DAYS_KEY = "audit_metadata_retention_days"
 AUDIT_PAYLOAD_RETENTION_DAYS_KEY = "audit_payload_retention_days"
 
@@ -206,9 +209,19 @@ class ModelDeploymentRecord:
     routing_state_incarnation: str | None = None
 
 
+class ModelDeploymentNameConflictError(ValueError):
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        super().__init__(f"Duplicate model_name '{model_name}' is not allowed")
+
+
 class ModelDeploymentRepository:
-    def __init__(self, prisma_client: Any | None = None) -> None:
+    def __init__(self, prisma_client: Any | None = None, *, use_transactions: bool = True) -> None:
         self.prisma = prisma_client
+        self._use_transactions = use_transactions
+
+    def with_db(self, prisma_client: Any) -> ModelDeploymentRepository:
+        return ModelDeploymentRepository(prisma_client, use_transactions=False)
 
     async def list_all(self) -> list[ModelDeploymentRecord]:
         if self.prisma is None:
@@ -268,6 +281,47 @@ class ModelDeploymentRepository:
             else None,
         )
 
+    async def has_model_name(
+        self,
+        model_name: str,
+        *,
+        exclude_deployment_id: str | None = None,
+        lock_for_share: bool = False,
+    ) -> bool:
+        if self.prisma is None:
+            return False
+
+        exclude_clause = " AND deployment_id <> $2" if exclude_deployment_id is not None else ""
+        params = (
+            (model_name, exclude_deployment_id)
+            if exclude_deployment_id is not None
+            else (model_name,)
+        )
+        if lock_for_share:
+            rows = await self.prisma.query_raw(
+                f"""
+                SELECT deployment_id
+                FROM deltallm_modeldeployment
+                WHERE model_name = $1
+                {exclude_clause}
+                LIMIT 1
+                FOR KEY SHARE
+                """,
+                *params,
+            )
+        else:
+            rows = await self.prisma.query_raw(
+                f"""
+                SELECT deployment_id
+                FROM deltallm_modeldeployment
+                WHERE model_name = $1
+                {exclude_clause}
+                LIMIT 1
+                """,
+                *params,
+            )
+        return bool(rows)
+
     async def list_by_deployment_ids(
         self, deployment_ids: list[str]
     ) -> list[ModelDeploymentRecord]:
@@ -308,7 +362,13 @@ class ModelDeploymentRepository:
     async def create(self, record: ModelDeploymentRecord) -> ModelDeploymentRecord:
         if self.prisma is None:
             return record
+        if self._use_transactions and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).create(record)
 
+        await lock_callable_keys(self.prisma, record.model_name)
+        if await self.has_model_name(record.model_name):
+            raise ModelDeploymentNameConflictError(record.model_name)
         await self.prisma.execute_raw(
             """
             INSERT INTO deltallm_modeldeployment (
@@ -328,6 +388,8 @@ class ModelDeploymentRepository:
             json.dumps(record.deltallm_params),
             json.dumps(record.model_info) if record.model_info is not None else None,
         )
+        if not self._use_transactions:
+            await self._bump_runtime_revision()
         return record
 
     async def update(
@@ -341,6 +403,27 @@ class ModelDeploymentRepository:
     ) -> ModelDeploymentRecord | None:
         if self.prisma is None:
             return None
+        if self._use_transactions and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).update(
+                    deployment_id,
+                    model_name=model_name,
+                    named_credential_id=named_credential_id,
+                    deltallm_params=deltallm_params,
+                    model_info=model_info,
+                )
+
+        await lock_callable_keys(self.prisma, model_name)
+        if await self.has_model_name(
+            model_name,
+            exclude_deployment_id=deployment_id,
+        ):
+            raise ModelDeploymentNameConflictError(model_name)
+        locked_groups = (
+            await self._lock_route_groups_for_deployment(deployment_id)
+            if not self._use_transactions
+            else []
+        )
 
         rows = await self.prisma.query_raw(
             """
@@ -362,6 +445,9 @@ class ModelDeploymentRepository:
         )
         if not rows:
             return None
+        await self._validate_locked_route_groups(locked_groups)
+        if not self._use_transactions:
+            await self._bump_runtime_revision()
         row = rows[0]
         return ModelDeploymentRecord(
             deployment_id=str(row.get("deployment_id") or ""),
@@ -379,6 +465,15 @@ class ModelDeploymentRepository:
     async def delete(self, deployment_id: str) -> bool:
         if self.prisma is None:
             return False
+        if self._use_transactions and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).delete(deployment_id)
+
+        locked_groups = (
+            await self._lock_route_groups_for_deployment(deployment_id)
+            if not self._use_transactions
+            else []
+        )
 
         rows = await self.prisma.query_raw(
             """
@@ -388,11 +483,63 @@ class ModelDeploymentRepository:
             """,
             deployment_id,
         )
+        if rows:
+            await self._validate_locked_route_groups(locked_groups)
+            if not self._use_transactions:
+                await self._bump_runtime_revision()
         return bool(rows)
+
+    async def _lock_route_groups_for_deployment(
+        self,
+        deployment_id: str,
+    ) -> list[tuple[str, str]]:
+        rows = await self.prisma.query_raw(
+            """
+            SELECT g.route_group_id, g.group_key
+            FROM deltallm_routegroup g
+            JOIN deltallm_routegroupmember m ON m.route_group_id = g.route_group_id
+            WHERE m.deployment_id = $1
+            ORDER BY g.group_key ASC
+            FOR UPDATE OF g
+            """,
+            deployment_id,
+        )
+        return [
+            (str(row.get("route_group_id") or ""), str(row.get("group_key") or ""))
+            for row in rows
+            if row.get("route_group_id") and row.get("group_key")
+        ]
+
+    async def _validate_locked_route_groups(
+        self,
+        groups: list[tuple[str, str]],
+    ) -> None:
+        if not groups:
+            return
+        from src.db.route_groups import RouteGroupRepository
+        from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
+
+        route_groups = RouteGroupRepository(self.prisma, use_transactions=False)
+        try:
+            for group_id, group_key in groups:
+                await route_groups._validate_runtime_invariants_after_group_change(
+                    group_id,
+                    group_key=group_key,
+                )
+        except ValueError as exc:
+            raise RoutePolicyStateConflictError(
+                f"model deployment change would invalidate route group '{group_key}': {exc}"
+            ) from exc
+
+    async def _bump_runtime_revision(self) -> int:
+        return await RoutingRuntimeRevisionRepository(self.prisma).bump_revision()
 
     async def bulk_insert_if_empty(self, records: list[ModelDeploymentRecord]) -> bool:
         if self.prisma is None or not records:
             return False
+        if self._use_transactions and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).bulk_insert_if_empty(records)
 
         count_rows = await self.prisma.query_raw(
             "SELECT COUNT(*)::int AS count FROM deltallm_modeldeployment"
@@ -421,6 +568,8 @@ class ModelDeploymentRepository:
                 json.dumps(record.deltallm_params),
                 json.dumps(record.model_info) if record.model_info is not None else None,
             )
+        if not self._use_transactions:
+            await self._bump_runtime_revision()
         return True
 
 

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { models } from '../lib/api';
+import { models, type ModelDeploymentDetail } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
 import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
@@ -12,23 +12,32 @@ import { ContentCard, IndexShell } from '../components/admin/shells';
 import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/modelFormShared';
 import ModelsMobileList, { type ModelFilterValue } from '../components/models/ModelsMobileList';
 import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
+import { mutationOutcome } from '../lib/mutationOutcome';
 
 export default function Models() {
   const navigate = useNavigate();
+  const { pushToast } = useToast();
   const { session, authMode } = useAuth();
   const canManageModels = resolveUiAccess(authMode, session).model_admin;
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [modeFilter, setModeFilter] = useState<ModelFilterValue>('all');
   const [pageOffset, setPageOffset] = useState(0);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const pageSize = 10;
   const { data: result, loading, refetch } = useApi(
-    () => models.list({
-      search,
-      mode: modeFilter === 'all' ? undefined : modeFilter,
-      limit: pageSize,
-      offset: pageOffset,
-    }),
+    (signal) => models.list(
+      {
+        search,
+        mode: modeFilter === 'all' ? undefined : modeFilter,
+        limit: pageSize,
+        offset: pageOffset,
+      },
+      signal,
+    ),
     [search, modeFilter, pageOffset],
   );
   const items = result?.data || [];
@@ -39,13 +48,27 @@ export default function Models() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this model?')) return;
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await models.delete(id);
+      const result = await models.delete(deleteTarget);
+      const outcome = mutationOutcome(`"${deleteTarget}" was deleted.`, result.warnings);
+      pushToast({
+        tone: outcome.tone,
+        title: outcome.tone === 'info' ? 'Model deleted with warning' : 'Model deleted',
+        message: outcome.message,
+      });
+      setDeleteTarget(null);
       refetch();
-    } catch (err: any) {
-      alert(err?.message || 'Failed to delete model');
+    } catch (err: unknown) {
+      pushToast({
+        tone: 'error',
+        title: 'Delete failed',
+        message: err instanceof Error ? err.message : 'Failed to delete model',
+      });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -59,27 +82,32 @@ export default function Models() {
     return opt ? opt.label : mode;
   };
 
+  const rowMode = (row: ModelDeploymentDetail) => {
+    const metadataMode = row.model_info.mode;
+    return row.mode || (typeof metadataMode === 'string' ? metadataMode : 'chat');
+  };
+
   const columns = [
-    { key: 'model_name', header: 'Model Name', render: (r: any) => <span className="font-medium">{r.model_name}</span> },
-    { key: 'mode', header: 'Type', render: (r: any) => {
-      const mode = r.mode || r.model_info?.mode || 'chat';
+    { key: 'model_name', header: 'Model Name', render: (r: ModelDeploymentDetail) => <span className="font-medium">{r.model_name}</span> },
+    { key: 'mode', header: 'Type', render: (r: ModelDeploymentDetail) => {
+      const mode = rowMode(r);
       return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>{modeLabel(mode)}</span>;
     }},
-    { key: 'provider', header: 'Provider', render: (r: any) => <ProviderBadge provider={r.provider} model={r.deltallm_params?.model} /> },
-    { key: 'credential_source', header: 'Credentials', render: (r: any) => (
+    { key: 'provider', header: 'Provider', render: (r: ModelDeploymentDetail) => <ProviderBadge provider={r.provider} model={r.deltallm_params.model} /> },
+    { key: 'credential_source', header: 'Credentials', render: (r: ModelDeploymentDetail) => (
       <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${r.credential_source === 'named' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-700'}`}>
         {r.credential_source === 'named' ? 'Named' : 'Inline'}
       </span>
     )},
-    { key: 'deployment_id', header: 'Deployment ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.deployment_id}</code> },
-    { key: 'healthy', header: 'Health', render: (r: any) => <StatusBadge status={r.healthy ? 'healthy' : 'unhealthy'} /> },
+    { key: 'deployment_id', header: 'Deployment ID', render: (r: ModelDeploymentDetail) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.deployment_id}</code> },
+    { key: 'healthy', header: 'Health', render: (r: ModelDeploymentDetail) => <StatusBadge status={r.healthy ? 'healthy' : 'unhealthy'} /> },
     {
-      key: 'actions', header: '', render: (r: any) => (
+      key: 'actions', header: '', render: (r: ModelDeploymentDetail) => (
         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
           {canManageModels ? (
             <>
-              <button onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
-              <button onClick={() => handleDelete(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
+              <button aria-label={`Edit ${r.model_name}`} onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
+              <button aria-label={`Delete ${r.model_name}`} onClick={() => setDeleteTarget(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
             </>
           ) : null}
         </div>
@@ -156,9 +184,19 @@ export default function Models() {
           canManage={canManageModels}
           onView={(id) => navigate(modelDetailPath(id))}
           onEdit={(id) => navigate(modelEditPath(id))}
-          onDelete={handleDelete}
+          onDelete={setDeleteTarget}
         />
       </div>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Delete model deployment"
+        description={deleteTarget ? `Delete deployment "${deleteTarget}"? This cannot be undone.` : ''}
+        confirmLabel="Delete Model"
+        destructive
+        confirming={deleting}
+        onConfirm={handleDelete}
+        onClose={() => { if (!deleting) setDeleteTarget(null); }}
+      />
     </IndexShell>
   );
 }

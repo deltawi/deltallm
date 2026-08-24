@@ -21,7 +21,7 @@ interface DataTableProps<T> {
   onNextPage?: () => void;
 }
 
-export default function DataTable<T extends Record<string, any>>({
+export default function DataTable<T extends object>({
   columns,
   data,
   loading,
@@ -86,7 +86,9 @@ export default function DataTable<T extends Record<string, any>>({
                 >
                   {columns.map((col) => (
                     <td key={col.key} className={`py-3 px-4 text-sm text-gray-700 ${col.className || ''}`}>
-                      {col.render ? col.render(row) : String(row[col.key] ?? '')}
+                      {col.render
+                        ? col.render(row)
+                        : String((row as Record<string, unknown>)[col.key] ?? '')}
                     </td>
                   ))}
                 </tr>

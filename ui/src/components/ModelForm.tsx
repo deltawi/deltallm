@@ -270,13 +270,16 @@ export default function ModelForm({
   });
   const mode = form.mode;
   const credentialProvider = canonicalNamedCredentialProvider(form.provider);
-  const { data: providerPresetResponse } = useApi(() => models.providerPresets(), []);
+  const { data: providerPresetResponse } = useApi(
+    (signal) => models.providerPresets(signal),
+    [],
+  );
   const { data: namedCredentialResponse } = useApi(
     () => (credentialProvider ? namedCredentials.list({ provider: credentialProvider }) : Promise.resolve({ data: [] as NamedCredential[] })),
     [credentialProvider],
   );
   const { data: catalogDiscoveryResponse, loading: catalogDiscoveryLoading } = useApi(
-    async () => {
+    async (signal) => {
       if (!form.provider) {
         return emptyDiscoveryResult();
       }
@@ -284,7 +287,7 @@ export default function ModelForm({
         return await models.discoverProviderModels({
           provider: form.provider,
           mode,
-        });
+        }, signal);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Failed to load provider model suggestions.';
         return { data: [], warnings: [message] };

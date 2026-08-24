@@ -174,6 +174,19 @@ class CallableTargetBindingRepository:
         )
         return bool(rows)
 
+    async def delete_by_callable_key(self, callable_key: str) -> int:
+        if self.prisma is None:
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            DELETE FROM deltallm_callabletargetbinding
+            WHERE callable_key = $1
+            RETURNING callable_target_binding_id
+            """,
+            callable_key,
+        )
+        return len(rows)
+
     @staticmethod
     def _to_binding_record(row: dict[str, Any]) -> CallableTargetBindingRecord:
         return CallableTargetBindingRecord(
@@ -182,7 +195,9 @@ class CallableTargetBindingRepository:
             scope_type=str(row.get("scope_type") or ""),
             scope_id=str(row.get("scope_id") or ""),
             enabled=bool(row.get("enabled", True)),
-            metadata=_parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None,
+            metadata=_parse_json_object(row.get("metadata"))
+            if row.get("metadata") is not None
+            else None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
         )

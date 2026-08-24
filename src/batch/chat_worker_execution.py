@@ -24,6 +24,8 @@ from src.batch.worker_types import (
     _PreparedChatItem,
     _PreparedEmbeddingItem,
     _RequestShim,
+    capture_batch_routing_runtime,
+    routing_generation_batch_key,
 )
 from src.metrics import (
     increment_batch_chat_item_executed,
@@ -66,12 +68,14 @@ class ChatWorkerExecutionMixin:
         started_at_monotonic = perf_counter()
         chat_request = ChatCompletionRequest.model_validate(item.request_body)
         self._validate_batch_chat_request(chat_request)
+        routing_generation = capture_batch_routing_runtime(self.app.state)
         preflight = await run_batch_request_preflight(
             app=self.app,
             job=job,
             payload=chat_request,
             request_data=dump_request_for_preflight(chat_request),
             call_type="completion",
+            routing_runtime=routing_generation,
         )
         chat_request = preflight.payload
         self._validate_batch_chat_request(chat_request)
@@ -81,7 +85,7 @@ class ChatWorkerExecutionMixin:
             "user_id": preflight.auth.user_id or preflight.auth.api_key or "batch-worker",
             ROUTING_MODE_CONTEXT_KEY: "chat",
         }
-        app_router = self.app.state.router
+        app_router = routing_generation.router
         model_group = app_router.resolve_model_group(chat_request.model)
         await self._raise_if_model_group_deferred(model_group)
 
@@ -99,6 +103,7 @@ class ChatWorkerExecutionMixin:
             request_context=request_context,
             failover_kwargs=route_failover_kwargs(request_context),
             request_shim=_RequestShim(app=self.app),
+            routing_generation=routing_generation,
             policy_auth=preflight.auth,
         )
 
@@ -213,7 +218,7 @@ class ChatWorkerExecutionMixin:
                 ),
                 served_deployment,
             ) = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+                prepared.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=prepared.primary_deployment,
                     model_group=prepared.model_group,
                     execute=lambda dep: self._execute_chat(
@@ -316,10 +321,13 @@ class ChatWorkerExecutionMixin:
             await self._release_prepared_policy_lease(prepared)
 
     @staticmethod
-    def _chat_deployment_key(prepared: _PreparedChatItem) -> str:
-        return str(
-            getattr(prepared.primary_deployment, "deployment_id", None)
-            or id(prepared.primary_deployment)
+    def _chat_deployment_key(prepared: _PreparedChatItem) -> tuple[str, str]:
+        return (
+            routing_generation_batch_key(prepared.routing_generation),
+            str(
+                getattr(prepared.primary_deployment, "deployment_id", None)
+                or id(prepared.primary_deployment)
+            ),
         )
 
     def _resolve_chat_microbatch_executor(
@@ -735,7 +743,7 @@ class ChatWorkerExecutionMixin:
 
             observe_batch_chat_microbatch_size(batch_size=chunk_size)
             normalized_results, served_deployment = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+                first_item.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=first_item.primary_deployment,
                     model_group=first_item.model_group,
                     execute=_execute_for_deployment,
@@ -1064,8 +1072,10 @@ class ChatWorkerExecutionMixin:
             for _ in range(prepare_runner_count):
                 task_group.create_task(_prepare_runner())
 
-        work_units: deque[tuple[str, ChatBatchingSettings, Callable[[], Awaitable[None]]]] = deque()
-        by_deployment: dict[str, list[_PreparedChatItem]] = {}
+        work_units: deque[
+            tuple[tuple[int, str], ChatBatchingSettings, Callable[[], Awaitable[None]]]
+        ] = deque()
+        by_deployment: dict[tuple[int, str], list[_PreparedChatItem]] = {}
         for prepared in prepared_items:
             by_deployment.setdefault(self._chat_deployment_key(prepared), []).append(prepared)
 

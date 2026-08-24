@@ -33,6 +33,8 @@ export const GUIDED_POLICY_DEFAULTS: PolicyGuidedValues = {
   retryableErrors: '',
 };
 
+export { mutationOutcome as routeGroupMutationOutcome } from './mutationOutcome';
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }

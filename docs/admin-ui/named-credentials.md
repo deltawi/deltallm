@@ -274,6 +274,7 @@ This removes duplicated inline connection fields from those deployments and repl
 
 - Deleting a named credential is blocked while deployments still reference it.
 - Named credentials are resolved during bootstrap and runtime reload, not by adding database lookups to the request path.
+- An update or inline conversion that commits successfully remains successful if the immediate runtime refresh fails. The UI shows the returned runtime warning while durable revision polling reconciles the replica.
 - Provider model discovery can use a selected named credential.
 - Provider validation is enforced per provider, so unsupported fields are rejected.
 - Secret-ref values continue to work when the runtime secret resolver is configured.

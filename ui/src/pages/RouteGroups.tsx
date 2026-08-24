@@ -19,7 +19,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import IndexShell from '../components/admin/shells/IndexShell';
 import { routeGroups } from '../lib/api';
 import type { RouteGroup } from '../lib/api';
-import { ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
+import { routeGroupMutationOutcome, ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { useBranding } from '../lib/brandingContext';
@@ -84,6 +84,10 @@ const ROUTING_LABELS: Record<string, string> = {
   'priority-based-routing':'Priority',
   'rate-limit-aware':     'Rate Limit',
 };
+
+function mutationErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 function RoutingBadge({ strategy }: { strategy: string | null }) {
   const label = strategy ? (ROUTING_LABELS[strategy] || strategy) : 'Shuffle';
@@ -219,7 +223,7 @@ export default function RouteGroups() {
 
   const pageSize = 20;
   const { data: result, loading, refetch } = useApi(
-    () => routeGroups.list({ search, limit: pageSize, offset: pageOffset }),
+    (signal) => routeGroups.list({ search, limit: pageSize, offset: pageOffset }, signal),
     [search, pageOffset],
   );
 
@@ -249,10 +253,14 @@ export default function RouteGroups() {
       });
       setCreateOpen(false);
       resetForm();
-      pushToast({ tone: 'success', title: 'Model group created', message: `"${created.group_key}" is ready for configuration.` });
+      const outcome = routeGroupMutationOutcome(
+        `"${created.group_key}" is ready for configuration.`,
+        created.warnings,
+      );
+      pushToast({ tone: outcome.tone, title: 'Model group created', message: outcome.message });
       navigate(`/route-groups/${created.group_key}`);
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Create failed', message: error?.message || 'Failed to create model group.' });
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Create failed', message: mutationErrorMessage(error, 'Failed to create model group.') });
     } finally {
       setCreating(false);
     }
@@ -262,12 +270,13 @@ export default function RouteGroups() {
     if (!deleteTarget) return;
     setDeletingKey(deleteTarget);
     try {
-      await routeGroups.delete(deleteTarget);
-      pushToast({ tone: 'success', title: 'Model group deleted', message: `"${deleteTarget}" was deleted.` });
+      const result = await routeGroups.delete(deleteTarget);
+      const outcome = routeGroupMutationOutcome(`"${deleteTarget}" was deleted.`, result.warnings);
+      pushToast({ tone: outcome.tone, title: 'Model group deleted', message: outcome.message });
       setDeleteTarget(null);
       refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete model group.' });
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Delete failed', message: mutationErrorMessage(error, 'Failed to delete model group.') });
     } finally {
       setDeletingKey(null);
     }

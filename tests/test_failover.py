@@ -479,6 +479,48 @@ async def test_general_fallback_group_reuses_all_router_eligibility_checks():
 
 
 @pytest.mark.asyncio
+async def test_general_fallback_cannot_cross_route_group_workload_mode():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary", mode="chat")
+    embedding_fallback = _deployment("dep-embedding", mode="embedding")
+    planner = _planner(
+        state,
+        {
+            "group-a": [primary],
+            "embedding-fallback": [embedding_fallback],
+        },
+        config=RouterConfig(
+            route_group_policies={"embedding-fallback": RouteGroupPolicy(workload_mode="embedding")}
+        ),
+    )
+    manager = FailoverManager(
+        config=FallbackConfig(
+            num_retries=0,
+            timeout=1,
+            fallbacks={"group-a": ["embedding-fallback"]},
+        ),
+        candidate_planner=planner,
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        raise TimeoutError(message="provider timed out")
+
+    with pytest.raises(TimeoutError):
+        await manager.execute_with_failover(
+            primary,
+            "group-a",
+            run,
+            routing_context={ROUTING_MODE_CONTEXT_KEY: "chat"},
+        )
+
+    assert attempts == ["dep-primary"]
+
+
+@pytest.mark.asyncio
 async def test_classified_fallback_group_reuses_request_tags_and_policy_order():
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-primary", tags=["vip"], priority=0)

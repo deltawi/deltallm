@@ -163,7 +163,10 @@ export default function Dashboard() {
     () => initialDashboardReportState<DashboardProviderAnalytics>(),
   );
 
-  const { data: providerHealthSummary } = useApi(() => modelsApi.providerHealthSummary(), []);
+  const { data: providerHealthSummary } = useApi(
+    (signal) => modelsApi.providerHealthSummary(signal),
+    [],
+  );
   const { data: keysResult } = useApi(() => keysApi.list(), []);
   const { data: healthData } = useApi(() => health.check(), []);
 

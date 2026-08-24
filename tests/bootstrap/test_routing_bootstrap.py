@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from src.bootstrap.routing import init_routing_runtime, shutdown_routing_runtime
+from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.services.route_groups import RouteGroupSnapshotLoadResult
 
 
 def _routing_config(*, bootstrap_models: bool, health_checks: bool) -> SimpleNamespace:
@@ -74,15 +76,20 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
 
     async def _load_groups(repo, cfg, route_group_cache):  # noqa: ANN001, ANN202
         calls["load_groups"] = (repo, cfg, route_group_cache)
-        return (
-            [
-                {
-                    "key": "support",
-                    "enabled": True,
-                    "members": [{"deployment_id": "dep-1"}],
-                }
-            ],
-            "db",
+        return RouteGroupSnapshotLoadResult(
+            snapshot=RouteGroupRuntimeSnapshot(
+                revision=4,
+                groups=[
+                    {
+                        "key": "support",
+                        "enabled": True,
+                        "members": [{"deployment_id": "dep-1"}],
+                    }
+                ],
+            ),
+            source="db",
+            database_available=True,
+            requires_reconciliation=False,
         )
 
     def _configure_cache_runtime(app, app_config, redis_client, salt_key):  # noqa: ANN001
@@ -90,7 +97,7 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
 
     monkeypatch.setattr("src.bootstrap.routing.bootstrap_model_deployments_from_config", _bootstrap)
     monkeypatch.setattr("src.bootstrap.routing.load_model_registry", _load_registry)
-    monkeypatch.setattr("src.bootstrap.routing.load_route_groups", _load_groups)
+    monkeypatch.setattr("src.bootstrap.routing.load_route_group_snapshot_result", _load_groups)
     monkeypatch.setattr("src.bootstrap.routing.configure_cache_runtime", _configure_cache_runtime)
     monkeypatch.setattr(
         "src.bootstrap.routing.ModelHotReloadManager",
@@ -113,6 +120,7 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
     assert "bootstrap" in calls
     assert app.state.model_registry["gpt-4o-mini"][0]["deployment_id"] == "dep-1"
     assert app.state.route_groups[0]["key"] == "support"
+    assert app.state.route_group_runtime_revision == 4
     assert app.state.router is not None
     assert app.state.router_state_backend is not None
     assert app.state.router_state_backend.degraded_mode == "fail_closed"
@@ -126,7 +134,9 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_shutdown_routing_runtime_cancels_health_task(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_shutdown_routing_runtime_cancels_health_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     created: dict[str, object] = {}
 
     async def _load_registry(repo, cfg, settings, source_mode):  # noqa: ANN001, ANN202
@@ -144,7 +154,12 @@ async def test_shutdown_routing_runtime_cancels_health_task(monkeypatch: pytest.
         )
 
     async def _load_groups(repo, cfg, route_group_cache):  # noqa: ANN001, ANN202
-        return ([], "db")
+        return RouteGroupSnapshotLoadResult(
+            snapshot=RouteGroupRuntimeSnapshot(revision=0, groups=[]),
+            source="db",
+            database_available=True,
+            requires_reconciliation=False,
+        )
 
     class FakeBackgroundHealthChecker:
         def __init__(self, **kwargs) -> None:  # noqa: ANN003
@@ -163,10 +178,14 @@ async def test_shutdown_routing_runtime_cancels_health_task(monkeypatch: pytest.
 
     monkeypatch.setattr("src.bootstrap.routing.bootstrap_model_deployments_from_config", _bootstrap)
     monkeypatch.setattr("src.bootstrap.routing.load_model_registry", _load_registry)
-    monkeypatch.setattr("src.bootstrap.routing.load_route_groups", _load_groups)
-    monkeypatch.setattr("src.bootstrap.routing.configure_cache_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.bootstrap.routing.load_route_group_snapshot_result", _load_groups)
+    monkeypatch.setattr(
+        "src.bootstrap.routing.configure_cache_runtime", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("src.bootstrap.routing.ModelHotReloadManager", lambda **kwargs: object())
-    monkeypatch.setattr("src.bootstrap.routing.BackgroundHealthChecker", FakeBackgroundHealthChecker)
+    monkeypatch.setattr(
+        "src.bootstrap.routing.BackgroundHealthChecker", FakeBackgroundHealthChecker
+    )
 
     app = SimpleNamespace(state=_base_app_state())
     cfg = _routing_config(bootstrap_models=False, health_checks=True)

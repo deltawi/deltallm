@@ -6,12 +6,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from src.governance.access_groups import access_groups_from_metadata, normalize_access_groups
+from src.router.callable_key_ownership import resolve_enabled_route_group_owners
+from src.router.route_group_validation import normalize_route_group_mode
 
 logger = logging.getLogger(__name__)
-
-
-class DuplicateCallableTargetError(ValueError):
-    """Raised when two callable assets publish the same external key."""
 
 
 @dataclass(frozen=True)
@@ -28,8 +26,6 @@ def build_callable_target_catalog(
     route_groups: list[dict[str, object]] | None = None,
 ) -> dict[str, CallableTarget]:
     catalog: dict[str, CallableTarget] = {}
-    deployment_ids = _collect_deployment_ids(model_registry)
-
     for model_name, entries in model_registry.items():
         key = str(model_name).strip()
         if not key:
@@ -46,21 +42,12 @@ def build_callable_target_catalog(
     if not route_groups:
         return catalog
 
-    for group in route_groups:
-        group_key = str(group.get("key") or "").strip()
-        if not group_key or not bool(group.get("enabled", True)):
-            continue
-        if not _route_group_has_live_members(group, deployment_ids):
-            continue
-        existing = catalog.get(group_key)
-        if existing is not None:
-            raise DuplicateCallableTargetError(
-                f"Callable target key '{group_key}' is declared by both a {existing.target_type} and a route_group"
-            )
+    for group_key, group in resolve_enabled_route_group_owners(route_groups).items():
         catalog[group_key] = CallableTarget(
             key=group_key,
             target_type="route_group",
             access_groups=_route_group_access_groups(group),
+            mode=normalize_route_group_mode(group.get("mode")),
         )
 
     return catalog
@@ -71,16 +58,6 @@ def list_callable_target_ids(
     route_groups: list[dict[str, object]] | None = None,
 ) -> list[str]:
     return list(build_callable_target_catalog(model_registry, route_groups).keys())
-
-
-def _collect_deployment_ids(model_registry: dict[str, list[dict[str, object]]]) -> set[str]:
-    deployment_ids: set[str] = set()
-    for model_name, entries in model_registry.items():
-        for index, entry in enumerate(entries):
-            deployment_id = str(entry.get("deployment_id") or f"{model_name}-{index}").strip()
-            if deployment_id:
-                deployment_ids.add(deployment_id)
-    return deployment_ids
 
 
 def _model_access_groups(model_name: str, entries: list[dict[str, object]]) -> frozenset[str]:
@@ -114,22 +91,8 @@ def _model_mode(entries: list[dict[str, object]]) -> tuple[str | None, bool]:
     return None, len(modes) > 1
 
 
-def _route_group_access_groups(group: dict[str, object]) -> frozenset[str]:
+def _route_group_access_groups(group: Mapping[str, object]) -> frozenset[str]:
     if isinstance(group, Mapping) and "access_groups" in group:
         return normalize_access_groups(group.get("access_groups"))
-    metadata = group.get("metadata") if isinstance(group, Mapping) else None
+    metadata = group.get("metadata")
     return access_groups_from_metadata(metadata)
-
-
-def _route_group_has_live_members(group: dict[str, object], deployment_ids: set[str]) -> bool:
-    members = group.get("members") or []
-    if not isinstance(members, list):
-        return False
-
-    for member in members:
-        if not isinstance(member, dict) or not bool(member.get("enabled", True)):
-            continue
-        deployment_id = str(member.get("deployment_id") or "").strip()
-        if deployment_id and deployment_id in deployment_ids:
-            return True
-    return False

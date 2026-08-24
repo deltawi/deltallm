@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from src.config import AppConfig
 from src.models.errors import (
     ModelNotFoundError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
@@ -15,8 +16,12 @@ from src.router import (
     AttemptCapacityLimit,
     AttemptRejectionReason,
     CooldownManager,
+    DeploymentRegistryStore,
+    FallbackConfig,
+    FailoverManager,
     HealthEndpointHandler,
     RedisStateBackend,
+    ROUTING_MODE_CONTEXT_KEY,
     RouterRedisKeyspace,
     Router,
     RouterConfig,
@@ -29,7 +34,12 @@ from src.router.health_state import (
     FAILURE_WINDOW_SECONDS,
     HEALTH_STATE_RETENTION_SECONDS,
 )
+from src.router.route_group_validation import resolve_route_group_modes_for_registry
 from src.router.router import Deployment
+from src.router.runtime_generation import (
+    RoutingRuntimeGeneration,
+    RoutingRuntimeGenerationStore,
+)
 from src.router.usage import normalize_router_usage
 from tests.conftest import FakeRedis
 
@@ -1311,6 +1321,64 @@ def test_build_deployment_registry_supports_explicit_route_groups():
 
 
 @pytest.mark.asyncio
+async def test_enabled_route_group_owns_colliding_model_key_when_empty():
+    route_groups = [
+        {
+            "key": "shared-route",
+            "mode": "embedding",
+            "enabled": True,
+            "members": [],
+        }
+    ]
+    registry = build_deployment_registry(
+        {
+            "shared-route": [
+                {
+                    "deployment_id": "dep-chat",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"mode": "chat"},
+                }
+            ]
+        },
+        route_groups=route_groups,
+    )
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=RedisStateBackend(redis=None),
+        config=RouterConfig(route_group_policies=build_route_group_policies(route_groups)),
+        deployment_registry=registry,
+    )
+
+    assert registry["shared-route"] == []
+    selected = await router.select_deployment(
+        "shared-route",
+        {ROUTING_MODE_CONTEXT_KEY: "chat"},
+    )
+    assert selected is None
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        router.require_deployment("shared-route", selected)
+    assert exc_info.value.code == NO_HEALTHY_DEPLOYMENTS_CODE
+
+
+@pytest.mark.parametrize("route_groups", [None, [{"key": "shared-route", "enabled": False}]])
+def test_deleted_or_disabled_route_group_exposes_colliding_model_key(route_groups):
+    registry = build_deployment_registry(
+        {
+            "shared-route": [
+                {
+                    "deployment_id": "dep-chat",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"mode": "chat"},
+                }
+            ]
+        },
+        route_groups=route_groups,
+    )
+
+    assert [deployment.deployment_id for deployment in registry["shared-route"]] == ["dep-chat"]
+
+
+@pytest.mark.asyncio
 async def test_group_policy_overrides_global_strategy():
     state = RedisStateBackend(redis=None)
     route_groups = [
@@ -1403,6 +1471,161 @@ async def test_router_records_route_decision_envelope():
     assert decision["strategy"] == "least-busy"
     assert decision["policy_version"] == 7
     assert decision["selected_deployment_id"] == "dep-a"
+
+
+@pytest.mark.asyncio
+async def test_route_group_workload_mismatch_rejects_before_state_reads(monkeypatch):
+    state = RedisStateBackend(redis=None)
+    route_groups = [
+        {
+            "key": "embedding-route",
+            "mode": "embedding",
+            "enabled": True,
+            "members": [{"deployment_id": "dep-embedding"}],
+        }
+    ]
+    registry = build_deployment_registry(
+        {
+            "text-embedding-3-small": [
+                {
+                    "deployment_id": "dep-embedding",
+                    "deltallm_params": {"model": "openai/text-embedding-3-small"},
+                    "model_info": {"mode": "embedding"},
+                }
+            ]
+        },
+        route_groups=route_groups,
+    )
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state,
+        config=RouterConfig(route_group_policies=build_route_group_policies(route_groups)),
+        deployment_registry=registry,
+    )
+
+    async def unexpected_state_read(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("workload mismatch must not read routing state")
+
+    monkeypatch.setattr(state, "get_health_batch", unexpected_state_read)
+    request_context = {ROUTING_MODE_CONTEXT_KEY: "chat"}
+
+    assert await router.select_deployment("embedding-route", request_context) is None
+    assert request_context["route_decision"]["reason"] == "workload_mode_mismatch"
+
+
+def test_route_group_generation_rejects_incompatible_member_mode():
+    with pytest.raises(ValueError, match="incompatible with members: dep-chat"):
+        build_deployment_registry(
+            {
+                "gpt-4o-mini": [
+                    {
+                        "deployment_id": "dep-chat",
+                        "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                        "model_info": {"mode": "chat"},
+                    }
+                ]
+            },
+            route_groups=[
+                {
+                    "key": "embedding-route",
+                    "mode": "embedding",
+                    "members": [{"deployment_id": "dep-chat"}],
+                }
+            ],
+        )
+
+
+def test_legacy_file_route_group_infers_non_chat_member_mode():
+    model_registry = {
+        "text-embedding-3-small": [
+            {
+                "deployment_id": "dep-embedding",
+                "deltallm_params": {"model": "openai/text-embedding-3-small"},
+                "model_info": {"mode": "embedding"},
+            }
+        ]
+    }
+
+    resolution = resolve_route_group_modes_for_registry(
+        [
+            {
+                "key": "legacy-embedding-route",
+                "mode": None,
+                "members": [{"deployment_id": "dep-embedding", "enabled": True}],
+            }
+        ],
+        model_registry,
+    )
+    registry = build_deployment_registry(model_registry, route_groups=resolution.groups)
+
+    assert resolution.groups[0]["mode"] == "embedding"
+    assert resolution.inferred_group_keys == ("legacy-embedding-route",)
+    assert registry["legacy-embedding-route"][0].deployment_id == "dep-embedding"
+
+
+def test_legacy_file_route_group_rejects_ambiguous_inferred_mode():
+    with pytest.raises(ValueError, match="multiple workload modes"):
+        resolve_route_group_modes_for_registry(
+            [
+                {
+                    "key": "mixed-route",
+                    "mode": None,
+                    "members": [
+                        {"deployment_id": "dep-chat"},
+                        {"deployment_id": "dep-embedding"},
+                    ],
+                }
+            ],
+            {
+                "chat": [{"deployment_id": "dep-chat", "model_info": {"mode": "chat"}}],
+                "embedding": [
+                    {
+                        "deployment_id": "dep-embedding",
+                        "model_info": {"mode": "embedding"},
+                    }
+                ],
+            },
+        )
+
+
+def test_invalid_route_group_generation_leaves_live_registry_unchanged():
+    initial = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {
+                    "deployment_id": "dep-chat",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"mode": "chat"},
+                }
+            ]
+        }
+    )
+    live = DeploymentRegistryStore(initial)
+    snapshot = live.snapshot()
+
+    with pytest.raises(ValueError, match="incompatible with members"):
+        replacement = build_deployment_registry(
+            {
+                "gpt-4o-mini": [
+                    {
+                        "deployment_id": "dep-chat",
+                        "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                        "model_info": {"mode": "chat"},
+                    }
+                ]
+            },
+            route_groups=[
+                {
+                    "key": "embedding-route",
+                    "mode": "embedding",
+                    "members": [{"deployment_id": "dep-chat"}],
+                }
+            ],
+        )
+        live.replace(replacement)
+
+    assert live.snapshot() is snapshot
+    assert live["gpt-4o-mini"][0].deployment_id == "dep-chat"
 
 
 @pytest.mark.asyncio
@@ -1526,3 +1749,100 @@ async def test_health_handler_surfaces_degraded_router_state():
 
     assert payload["status"] == "degraded"
     assert payload["state_backend"]["mode"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_request_pinned_generation_keeps_router_and_fallback_chain_during_reload():
+    class BlockingStateBackend(RedisStateBackend):
+        def __init__(self) -> None:
+            super().__init__(redis=None)
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.block_once = True
+
+        async def get_health_batch(self, health_refs):  # noqa: ANN001, ANN201
+            if self.block_once:
+                self.block_once = False
+                self.started.set()
+                await self.release.wait()
+            return await super().get_health_batch(health_refs)
+
+    state = BlockingStateBackend()
+    app_config = AppConfig.model_validate({})
+
+    def build_generation(revision: int, prefix: str) -> RoutingRuntimeGeneration:
+        model_registry = {
+            "primary": [
+                {
+                    "deployment_id": f"{prefix}-primary",
+                    "deltallm_params": {"model": f"openai/{prefix}-primary"},
+                }
+            ],
+            "fallback": [
+                {
+                    "deployment_id": f"{prefix}-fallback",
+                    "deltallm_params": {"model": f"openai/{prefix}-fallback"},
+                }
+            ],
+        }
+        router_config = RouterConfig()
+        router = Router(
+            strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+            state_backend=state,
+            config=router_config,
+            deployment_registry=build_deployment_registry(model_registry),
+        )
+        cooldown = CooldownManager(state_backend=state)
+        failover_config = FallbackConfig(fallbacks={"primary": ["fallback"]})
+        failover = FailoverManager(
+            config=failover_config,
+            candidate_planner=router,
+            state_backend=state,
+            cooldown_manager=cooldown,
+        )
+        return RoutingRuntimeGeneration.create(
+            revision=revision,
+            app_config=app_config,
+            model_registry=model_registry,
+            route_groups=[],
+            callable_target_catalog={},
+            deployment_registry=router.deployment_registry,
+            strategy=router.strategy,
+            router_config=router_config,
+            failover_config=failover_config,
+            salt_key="test",
+            router=router,
+            failover_manager=failover,
+            cooldown_manager=cooldown,
+        )
+
+    old_generation = build_generation(1, "old")
+    new_generation = build_generation(2, "new")
+    same_revision_generation = build_generation(1, "same-revision")
+    assert same_revision_generation.revision == old_generation.revision
+    assert same_revision_generation.generation_id != old_generation.generation_id
+    store = RoutingRuntimeGenerationStore(old_generation)
+    captured = store.require_snapshot()
+    selection = asyncio.create_task(captured.router.select_deployment("primary", {}))
+    await state.started.wait()
+
+    store.replace(new_generation)
+    state.release.set()
+    primary = captured.router.require_deployment("primary", await selection)
+
+    async def execute(deployment):  # noqa: ANN001, ANN202
+        if deployment.deployment_id.endswith("primary"):
+            raise ServiceUnavailableError(
+                message="primary unavailable",
+                affects_deployment_health=True,
+            )
+        return deployment.deployment_id
+
+    served = await captured.failover_manager.execute_with_failover(
+        primary,
+        "primary",
+        execute,
+    )
+
+    assert served == "old-fallback"
+    assert store.require_snapshot() is new_generation

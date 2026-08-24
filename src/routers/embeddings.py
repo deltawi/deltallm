@@ -16,6 +16,7 @@ from src.billing.tier_pricing import (
 )
 from src.cache.pricing import cache_pricing_snapshot_from_deployment
 from src.callbacks import build_standard_logging_payload
+from src.router.runtime_generation import pin_routing_runtime_generation
 from src.embedding_preflight import run_embedding_preflight
 from src.middleware.auth import require_api_key
 from src.metrics import (
@@ -183,13 +184,18 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         request_start=request_start,
         audit_action=AuditAction.EMBEDDING_REQUEST.value,
     )
-    preflight = await run_embedding_preflight(request=request, payload=payload)
+    routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
+    preflight = await run_embedding_preflight(
+        request=request,
+        payload=payload,
+        routing_runtime=routing_runtime,
+    )
     auth = preflight.auth
     payload = preflight.payload
     request_data = preflight.request_data
     callback_manager = preflight.callback_manager
 
-    app_router = request.app.state.router
+    app_router = routing_runtime.router
     model_group = app_router.resolve_model_group(payload.model)
     request_context = {
         "metadata": {},
@@ -212,7 +218,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         capture_attempted_deployment(request, deployment)
 
     try:
-        data, served_deployment = await request.app.state.failover_manager.execute_with_failover(
+        data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_embedding(request, payload, dep),

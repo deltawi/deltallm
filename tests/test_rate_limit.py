@@ -7,6 +7,7 @@ import pytest
 
 from src.middleware.rate_limit import _check_and_acquire_rate_limits
 from src.models.errors import InvalidRequestError
+from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.limit_counter import LimitCounter
 
 
@@ -92,7 +93,7 @@ async def test_rate_limit_org_rpm_enforced_before_key_limit(client, test_app):
             enabled=True,
         )
     )
-    await test_app.state.callable_target_grant_service.reload()
+    await reload_callable_target_grants_for_app(test_app, notify=False)
 
     ok = await client.post("/v1/chat/completions", headers=headers, json=body)
     blocked = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -213,7 +214,7 @@ async def test_multimodal_access_denial_does_not_consume_rate_quota(
     grant_repository.bindings = [
         binding for binding in grant_repository.bindings if binding.callable_key != "gpt-4o-mini"
     ]
-    await grant_service.reload()
+    await reload_callable_target_grants_for_app(test_app, notify=False)
 
     denied = await client.post(path, headers=headers, **_multimodal_request(path))
 
@@ -221,7 +222,7 @@ async def test_multimodal_access_denial_does_not_consume_rate_quota(
     assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
 
     grant_repository.bindings.extend(removed_bindings)
-    await grant_service.reload()
+    await reload_callable_target_grants_for_app(test_app, notify=False)
 
     allowed = await client.post(path, headers=headers, **_multimodal_request(path))
 
