@@ -20,6 +20,10 @@ from src.bootstrap.batch_runtime.scheduler import record_startup_scheduler_rollb
 from src.bootstrap.batch_runtime.settings import batch_runtime_setting
 from src.bootstrap.batch_runtime.state import configure_enabled_batch_state
 from src.bootstrap.batch_runtime.storage import build_batch_storage, build_batch_storage_registry
+from src.router.runtime_generation import (
+    RoutingRuntimeGenerationStore,
+    RoutingRuntimeRouterProvider,
+)
 from src.services.model_visibility import normalize_callable_target_policy_mode
 
 
@@ -48,7 +52,12 @@ async def initialize_batch_core(
     app.state.batch_storage_registry = storage_registry
     configure_enabled_batch_state(app, repository)
 
-    model_group_resolver = getattr(app.state, "router", None)
+    generation_store = getattr(app.state, "routing_runtime_generation_store", None)
+    model_group_resolver = (
+        RoutingRuntimeRouterProvider(generation_store)
+        if isinstance(generation_store, RoutingRuntimeGenerationStore)
+        else getattr(app.state, "router", None)
+    )
     set_repository_resolver = getattr(repository, "set_model_group_resolver", None)
     if callable(set_repository_resolver):
         set_repository_resolver(model_group_resolver)
@@ -76,8 +85,7 @@ async def initialize_batch_core(
         runtime.model_capacity_resolver = BatchModelCapacityResolver(
             repository=repository,
             config=model_capacity_config,
-            router=getattr(app.state, "router", None),
-            router_state_backend=getattr(app.state, "router_state_backend", None),
+            router=model_group_resolver,
             backpressure=runtime.backpressure,
         )
     app.state.batch_model_capacity_resolver = runtime.model_capacity_resolver

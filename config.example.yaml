@@ -45,6 +45,17 @@ router_settings:
   timeout: 600
   cooldown_time: 60
   allowed_fails: 0
+  # Set route-group workload mode explicitly. Older files that omit it infer one common
+  # enabled-member mode (or chat when no member mode can be resolved) and log a warning.
+  # route_groups:
+  #   - key: search-embeddings
+  #     mode: embedding
+  #     strategy: weighted
+  #     members:
+  #       - deployment_id: embeddings-primary
+  #         weight: 3
+  #       - deployment_id: embeddings-secondary
+  #         weight: 1
 
 general_settings:
   instance_name: DeltaLLM

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from time import perf_counter
 from uuid import uuid4
 from typing import Any
@@ -25,38 +26,73 @@ from src.services.named_credentials import (
 )
 
 router = APIRouter(tags=["Named Credentials"])
+logger = logging.getLogger(__name__)
+_ROUTING_REFRESH_WARNING = (
+    "The credential change was committed, but this replica could not refresh its routing "
+    "runtime immediately; automatic reconciliation will retry."
+)
 
 
 def _repository_or_503(request: Request) -> NamedCredentialRepository:
     repository = getattr(request.app.state, "named_credential_repository", None)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Named credential repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Named credential repository unavailable",
+        )
     return repository
 
 
 def _model_repository_or_503(request: Request) -> ModelDeploymentRepository:
     repository = getattr(request.app.state, "model_deployment_repository", None)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Model deployment repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Model deployment repository unavailable",
+        )
     return repository
 
 
 async def _serialize_with_usage(
     repository: NamedCredentialRepository,
     record: NamedCredentialRecord,
+    *,
+    usage_count: int | None = None,
 ) -> dict[str, Any]:
     payload = to_json_value(serialize_named_credential(record))
-    payload["usage_count"] = await repository.count_linked_deployments(record.credential_id)
+    payload["usage_count"] = (
+        await repository.count_linked_deployments(record.credential_id)
+        if usage_count is None
+        else usage_count
+    )
     return payload
 
 
-async def _reload_runtime_if_in_use(request: Request, credential_id: str, repository: NamedCredentialRepository) -> None:
-    usage_count = await repository.count_linked_deployments(credential_id)
+async def _reload_runtime_if_in_use(
+    request: Request,
+    credential_id: str,
+    *,
+    usage_count: int,
+) -> list[str]:
     if usage_count <= 0:
-        return
+        return []
     hot_reload = getattr(request.app.state, "model_hot_reload_manager", None)
-    if hot_reload is not None:
+    if hot_reload is None:
+        logger.warning(
+            "named credential routing refresh unavailable after commit credential_id=%s",
+            credential_id,
+        )
+        return [_ROUTING_REFRESH_WARNING]
+    try:
         await hot_reload.reload_runtime()
+    except Exception:
+        logger.warning(
+            "named credential routing refresh failed after commit credential_id=%s",
+            credential_id,
+            exc_info=True,
+        )
+        return [_ROUTING_REFRESH_WARNING]
+    return []
 
 
 def _inline_report_item(
@@ -76,7 +112,10 @@ def _inline_report_item(
     }
 
 
-@router.get("/ui/api/named-credentials", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/named-credentials",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def list_named_credentials(request: Request, provider: str | None = None) -> dict[str, Any]:
     repository = _repository_or_503(request)
     records = await repository.list_all(
@@ -94,7 +133,10 @@ async def list_named_credentials(request: Request, provider: str | None = None) 
     }
 
 
-@router.get("/ui/api/named-credentials/inline-report", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/named-credentials/inline-report",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def inline_named_credential_report(request: Request) -> dict[str, Any]:
     repository = _model_repository_or_503(request)
     records = await repository.list_all()
@@ -130,7 +172,9 @@ async def inline_named_credential_report(request: Request) -> dict[str, Any]:
             provider=str(item["provider"]),
             fingerprint=fingerprint,
             connection_config=item["connection_config"],
-            deployments=sorted(item["deployments"], key=lambda deployment: deployment["model_name"]),
+            deployments=sorted(
+                item["deployments"], key=lambda deployment: deployment["model_name"]
+            ),
         )
         for fingerprint, item in grouped.items()
     ]
@@ -138,19 +182,29 @@ async def inline_named_credential_report(request: Request) -> dict[str, Any]:
     return {"data": data}
 
 
-@router.get("/ui/api/named-credentials/{credential_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/named-credentials/{credential_id}",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def get_named_credential(request: Request, credential_id: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     record = await repository.get_by_id(credential_id)
     if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found"
+        )
 
     payload = await _serialize_with_usage(repository, record)
-    payload["linked_deployments"] = to_json_value(await repository.list_linked_deployments(credential_id))
+    payload["linked_deployments"] = to_json_value(
+        await repository.list_linked_deployments(credential_id)
+    )
     return payload
 
 
-@router.post("/ui/api/named-credentials", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post(
+    "/ui/api/named-credentials",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def create_named_credential(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
@@ -158,7 +212,10 @@ async def create_named_credential(request: Request, payload: dict[str, Any]) -> 
 
     existing = await repository.get_by_name(name)
     if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A named credential with this name already exists")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A named credential with this name already exists",
+        )
 
     context = get_platform_auth_context(request)
     record = await repository.create(
@@ -171,7 +228,7 @@ async def create_named_credential(request: Request, payload: dict[str, Any]) -> 
             created_by_account_id=getattr(context, "account_id", None),
         )
     )
-    response = await _serialize_with_usage(repository, record)
+    response = await _serialize_with_usage(repository, record, usage_count=0)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -186,18 +243,31 @@ async def create_named_credential(request: Request, payload: dict[str, Any]) -> 
     return response
 
 
-@router.put("/ui/api/named-credentials/{credential_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def update_named_credential(request: Request, credential_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.put(
+    "/ui/api/named-credentials/{credential_id}",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def update_named_credential(
+    request: Request, credential_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     existing = await repository.get_by_id(credential_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found"
+        )
 
-    name, provider, connection_config, metadata = normalize_named_credential_payload(payload, existing=existing)
+    name, provider, connection_config, metadata = normalize_named_credential_payload(
+        payload, existing=existing
+    )
     by_name = await repository.get_by_name(name)
     if by_name is not None and by_name.credential_id != credential_id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A named credential with this name already exists")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A named credential with this name already exists",
+        )
+    usage_count = await repository.count_linked_deployments(credential_id)
 
     updated = await repository.update(
         credential_id,
@@ -207,10 +277,17 @@ async def update_named_credential(request: Request, credential_id: str, payload:
         metadata=metadata,
     )
     if updated is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found"
+        )
 
-    await _reload_runtime_if_in_use(request, credential_id, repository)
-    response = await _serialize_with_usage(repository, updated)
+    warnings = await _reload_runtime_if_in_use(
+        request,
+        credential_id,
+        usage_count=usage_count,
+    )
+    response = await _serialize_with_usage(repository, updated, usage_count=usage_count)
+    response["warnings"] = warnings
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -225,13 +302,18 @@ async def update_named_credential(request: Request, credential_id: str, payload:
     return response
 
 
-@router.delete("/ui/api/named-credentials/{credential_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete(
+    "/ui/api/named-credentials/{credential_id}",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def delete_named_credential(request: Request, credential_id: str) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     existing = await repository.get_by_id(credential_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found"
+        )
 
     usage_count = await repository.count_linked_deployments(credential_id)
     if usage_count > 0:
@@ -242,7 +324,9 @@ async def delete_named_credential(request: Request, credential_id: str) -> dict[
 
     deleted = await repository.delete(credential_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Named credential not found"
+        )
 
     response = {"deleted": True, "credential_id": credential_id}
     await emit_admin_mutation_audit(
@@ -258,8 +342,13 @@ async def delete_named_credential(request: Request, credential_id: str) -> dict[
     return response
 
 
-@router.post("/ui/api/named-credentials/convert-inline-group", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def convert_inline_group_to_named_credential(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/ui/api/named-credentials/convert-inline-group",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def convert_inline_group_to_named_credential(
+    request: Request, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
     named_repo = _repository_or_503(request)
     model_repo = _model_repository_or_503(request)
@@ -275,35 +364,57 @@ async def convert_inline_group_to_named_credential(request: Request, payload: di
     deployment_ids = payload.get("deployment_ids")
     fingerprint = str(payload.get("fingerprint") or "").strip()
     if not isinstance(deployment_ids, list) or not deployment_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deployment_ids must be a non-empty array")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="deployment_ids must be a non-empty array",
+        )
     if not fingerprint:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fingerprint is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="fingerprint is required"
+        )
 
     if await named_repo.get_by_name(name) is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A named credential with this name already exists")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A named credential with this name already exists",
+        )
 
     records = await model_repo.list_by_deployment_ids([str(item) for item in deployment_ids])
     if len(records) != len({str(item).strip() for item in deployment_ids if str(item).strip()}):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="One or more deployment_ids are invalid")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="One or more deployment_ids are invalid"
+        )
 
     for record in records:
         if record.named_credential_id is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="One or more deployments already use a named credential")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="One or more deployments already use a named credential",
+            )
 
     expected_fingerprint = fingerprint
     baseline_config: dict[str, Any] | None = None
     for record in records:
         record_provider = named_credential_provider_for_params(record.deltallm_params)
         if record_provider != provider:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="All deployments must use the same provider")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="All deployments must use the same provider",
+            )
         record_connection_config = extract_connection_config_from_params(record.deltallm_params)
         if connection_fingerprint(provider, record_connection_config) != expected_fingerprint:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Deployments do not share the same inline connection config")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Deployments do not share the same inline connection config",
+            )
         if baseline_config is None:
             baseline_config = record_connection_config
 
     if baseline_config is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No inline connection config found for the selected deployments")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No inline connection config found for the selected deployments",
+        )
 
     name, provider, baseline_config, metadata = normalize_named_credential_payload(
         {
@@ -375,8 +486,8 @@ async def convert_inline_group_to_named_credential(request: Request, payload: di
     if hasattr(db, "tx"):
         async with db.tx() as tx:
             created = await _apply_conversion(
-                NamedCredentialRepository(tx),
-                ModelDeploymentRepository(tx),
+                named_repo.with_db(tx),
+                model_repo.with_db(tx),
                 rollback_on_error=False,
             )
     else:
@@ -386,16 +497,23 @@ async def convert_inline_group_to_named_credential(request: Request, payload: di
             rollback_on_error=True,
         )
 
-    hot_reload = getattr(request.app.state, "model_hot_reload_manager", None)
-    if hot_reload is not None:
-        await hot_reload.reload_runtime()
+    warnings = await _reload_runtime_if_in_use(
+        request,
+        created.credential_id,
+        usage_count=len(records),
+    )
 
     response = {
-        "credential": await _serialize_with_usage(named_repo, created),
+        "credential": await _serialize_with_usage(
+            named_repo,
+            created,
+            usage_count=len(records),
+        ),
         "converted_deployments": [
             {"deployment_id": record.deployment_id, "model_name": record.model_name}
             for record in records
         ],
+        "warnings": warnings,
     }
     await emit_admin_mutation_audit(
         request=request,

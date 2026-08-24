@@ -25,7 +25,13 @@ from src.batch.retry import (
     classify_batch_retry,
 )
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
-from src.batch.worker_types import BatchItemLeaseLostError, _PreparedEmbeddingItem, _RequestShim
+from src.batch.worker_types import (
+    BatchItemLeaseLostError,
+    _PreparedEmbeddingItem,
+    _RequestShim,
+    capture_batch_routing_runtime,
+    routing_generation_batch_key,
+)
 from src.metrics import (
     increment_batch_microbatch_ineligible_item,
     increment_batch_microbatch_inputs,
@@ -49,12 +55,14 @@ class EmbeddingWorkerExecutionMixin:
     async def prepare_embedding_item_for_execution(self, job, item) -> _PreparedEmbeddingItem:  # noqa: ANN001
         started_at_monotonic = perf_counter()
         embedding_request = EmbeddingRequest.model_validate(item.request_body)
+        routing_generation = capture_batch_routing_runtime(self.app.state)
         preflight = await run_batch_request_preflight(
             app=self.app,
             job=job,
             payload=embedding_request,
             request_data=embedding_request.model_dump(exclude_none=True),
             call_type="embedding",
+            routing_runtime=routing_generation,
         )
         embedding_request = preflight.payload
 
@@ -63,7 +71,7 @@ class EmbeddingWorkerExecutionMixin:
             "user_id": preflight.auth.user_id or preflight.auth.api_key,
             ROUTING_MODE_CONTEXT_KEY: "embedding",
         }
-        app_router = self.app.state.router
+        app_router = routing_generation.router
         model_group = app_router.resolve_model_group(embedding_request.model)
         await self._raise_if_model_group_deferred(model_group)
 
@@ -93,6 +101,7 @@ class EmbeddingWorkerExecutionMixin:
             request_context=request_context,
             failover_kwargs=route_failover_kwargs(request_context),
             request_shim=_RequestShim(app=self.app),
+            routing_generation=routing_generation,
             effective_upstream_max_batch_inputs=effective_upstream_max_batch_inputs,
             microbatch_eligible=microbatch_eligible,
             microbatch_ineligible_reason=microbatch_ineligible_reason,
@@ -191,8 +200,9 @@ class EmbeddingWorkerExecutionMixin:
         request_data["input"] = [prepared.payload.input for prepared in prepared_items]
         return EmbeddingRequest.model_validate(request_data)
 
-    def _microbatch_group_key(self, prepared: _PreparedEmbeddingItem) -> tuple[Any, str]:
+    def _microbatch_group_key(self, prepared: _PreparedEmbeddingItem) -> tuple[str, Any, str]:
         return (
+            routing_generation_batch_key(prepared.routing_generation),
             prepared.execution_signature,
             json.dumps(prepared.failover_kwargs, sort_keys=True, default=str),
         )
@@ -471,7 +481,7 @@ class EmbeddingWorkerExecutionMixin:
                 (response_body, api_base, deployment_model),
                 served_deployment,
             ) = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+                prepared.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=prepared.primary_deployment,
                     model_group=prepared.model_group,
                     execute=_execute_for_deployment,
@@ -665,7 +675,7 @@ class EmbeddingWorkerExecutionMixin:
                 (response_body, api_base, deployment_model, item_responses),
                 served_deployment,
             ) = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+                first_item.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=first_item.primary_deployment,
                     model_group=first_item.model_group,
                     execute=_execute_for_deployment,

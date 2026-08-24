@@ -198,7 +198,7 @@ export default function Usage() {
   const {
     data: spendFeatureStatus,
     error: spendFeatureStatusError,
-  } = useApi<SpendFeatureStatus>(spend.featureStatus, []);
+  } = useApi<SpendFeatureStatus>((signal) => spend.featureStatus({ signal }), []);
   const featureCapabilities = spendFeatureStatus?.capabilities;
   const availableViews = featureCapabilities?.available_views ?? [];
   const activeView = resolveUsageView(featureCapabilities, requestedView);

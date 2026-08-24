@@ -105,6 +105,16 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
         worker_task = getattr(request.app.state, "batch_webhook_outbox_task", None)
         checks["batch_webhook_worker"] = bool(worker_task is not None and not worker_task.done())
 
+    routing_manager = getattr(request.app.state, "model_hot_reload_manager", None)
+    routing_state_getter = getattr(routing_manager, "get_applied_routing_state", None)
+    if callable(routing_state_getter):
+        routing_state = routing_state_getter()
+        routing_ready = not bool(routing_state.requires_reconciliation)
+        checks["routing_runtime"] = routing_ready
+        details["routing_runtime"] = {
+            "state": "ready" if routing_ready else "stale",
+        }
+
     spend_service = getattr(request.app.state, "spend_tracking_service", None)
     spend_health = getattr(spend_service, "worker_health", None)
     if spend_health is not None:

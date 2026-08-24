@@ -11,6 +11,10 @@ from fastapi import FastAPI
 
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.repositories import KeyRecord
+from src.router.runtime_generation import (
+    RoutingRuntimeGeneration,
+    RoutingRuntimeGenerationStore,
+)
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
 from src.main import create_app
@@ -30,6 +34,7 @@ from src.router import (
     build_deployment_registry,
 )
 from src.services.callable_target_grants import CallableTargetGrantService
+from src.services.callable_targets import build_callable_target_catalog
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 
@@ -1411,6 +1416,24 @@ async def test_app() -> FastAPI:
     app.state.router = router
     app.state.cooldown_manager = cooldown_manager
     app.state.failover_manager = failover_manager
+    app.state.routing_runtime_generation_store = RoutingRuntimeGenerationStore(
+        RoutingRuntimeGeneration.create(
+            revision=0,
+            app_config=app.state.app_config,
+            model_registry=app.state.model_registry,
+            route_groups=[],
+            callable_target_catalog=build_callable_target_catalog(app.state.model_registry),
+            authorization_snapshot=app.state.callable_target_grant_service.snapshot(),
+            deployment_registry=router.deployment_registry,
+            strategy=router.strategy,
+            router_config=router.config,
+            failover_config=failover_manager.config,
+            salt_key="",
+            router=router,
+            failover_manager=failover_manager,
+            cooldown_manager=cooldown_manager,
+        )
+    )
     app.state.router_health_handler = HealthEndpointHandler(
         deployment_registry=deployment_registry,
         state_backend=state_backend,

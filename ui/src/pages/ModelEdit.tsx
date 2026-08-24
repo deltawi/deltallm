@@ -6,11 +6,17 @@ import { modelDetailPath } from '../lib/modelRoutes';
 import ModelForm from '../components/ModelForm';
 import { formFromModel, type ModelPayload } from '../components/modelFormShared';
 import { ArrowLeft } from 'lucide-react';
+import { useToast } from '../components/ToastProvider';
+import { mutationOutcome } from '../lib/mutationOutcome';
 
 export default function ModelEdit() {
   const { deploymentId } = useParams<{ deploymentId: string }>();
   const navigate = useNavigate();
-  const { data: model, loading } = useApi(() => models.get(deploymentId!), [deploymentId]);
+  const { pushToast } = useToast();
+  const { data: model, loading } = useApi(
+    (signal) => models.get(deploymentId!, signal),
+    [deploymentId],
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -39,7 +45,13 @@ export default function ModelEdit() {
     setError(null);
     setSaving(true);
     try {
-      await models.update(deploymentId!, payload);
+      const result = await models.update(deploymentId!, payload);
+      const outcome = mutationOutcome('Model deployment was updated.', result.warnings);
+      pushToast({
+        tone: outcome.tone,
+        title: outcome.tone === 'info' ? 'Model updated with warning' : 'Model updated',
+        message: outcome.message,
+      });
       navigate(modelDetailPath(deploymentId!));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to update model');

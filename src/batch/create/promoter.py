@@ -31,6 +31,7 @@ from src.batch.scheduling import (
     build_scheduling_dimensions,
     estimate_request_work_units,
     parse_tenant_scope_preference,
+    pin_model_group_resolver,
     resolve_model_group,
     resolve_scheduler_version,
     size_class_for_work_units,
@@ -142,6 +143,7 @@ class BatchCreateSessionPromoter:
         self.tenant_max_queued_work_units = max(0, int(tenant_max_queued_work_units or 0))
 
     async def promote_session(self, session_id: str) -> BatchCreatePromotionResult:
+        model_group_resolver = pin_model_group_resolver(self.model_group_resolver)
         session = await self.repository.create_sessions.get_session(session_id)
         if session is None:
             raise BatchCreatePromotionError(
@@ -166,7 +168,10 @@ class BatchCreateSessionPromoter:
             raise
 
         try:
-            spool, item_count, scheduling_summary = await self._spool_staged_items(session)
+            spool, item_count, scheduling_summary = await self._spool_staged_items(
+                session,
+                model_group_resolver=model_group_resolver,
+            )
         except BatchCreatePromotionError as exc:
             await self._record_failure(session=session, error=exc)
             increment_batch_create_session_action(action="promotion", status="error")
@@ -198,7 +203,9 @@ class BatchCreateSessionPromoter:
         increment_batch_create_session_action(action="promotion", status="success")
         return result
 
-    async def _build_completed_result(self, session: BatchCreateSessionRecord) -> BatchCreatePromotionResult:
+    async def _build_completed_result(
+        self, session: BatchCreateSessionRecord
+    ) -> BatchCreatePromotionResult:
         job = await self.repository.get_job(session.target_batch_id)
         if job is None:
             raise BatchCreatePromotionError(
@@ -252,6 +259,8 @@ class BatchCreateSessionPromoter:
     async def _spool_staged_items(
         self,
         session: BatchCreateSessionRecord,
+        *,
+        model_group_resolver: Any | None,
     ) -> tuple[Any, int, BatchCreatePromotionSchedulingSummary]:
         artifact = staged_artifact_from_session(session)
         spool = tempfile.SpooledTemporaryFile(
@@ -268,10 +277,14 @@ class BatchCreateSessionPromoter:
         try:
             async for record in self.staging.read_records(artifact):
                 count += 1
-                scheduling_model = record.scheduling_model or str((record.request_body or {}).get("model") or "").strip() or None
+                scheduling_model = (
+                    record.scheduling_model
+                    or str((record.request_body or {}).get("model") or "").strip()
+                    or None
+                )
                 scheduling_model_group = record.scheduling_model_group or resolve_model_group(
                     scheduling_model,
-                    self.model_group_resolver,
+                    model_group_resolver,
                 )
                 item_work_units = max(
                     1,
@@ -304,7 +317,8 @@ class BatchCreateSessionPromoter:
                         },
                         separators=(",", ":"),
                         ensure_ascii=True,
-                    ) + "\n",
+                    )
+                    + "\n",
                 )
                 estimated_work_units += item_work_units
             await asyncio.to_thread(spool.flush)
@@ -350,7 +364,8 @@ class BatchCreateSessionPromoter:
         summary_model_group = (
             MIXED_MODEL_GROUP
             if mixed_model
-            else first_model_group or resolve_model_group(session.inferred_model, self.model_group_resolver)
+            else first_model_group
+            or resolve_model_group(session.inferred_model, model_group_resolver)
         )
         return (
             spool,
@@ -550,7 +565,9 @@ class BatchCreateSessionPromoter:
         )
         self._raise_if_pending_capacity_exceeded(active_jobs)
 
-    async def _enforce_pending_capacity(self, *, session: BatchCreateSessionRecord, repository: BatchRepository) -> None:
+    async def _enforce_pending_capacity(
+        self, *, session: BatchCreateSessionRecord, repository: BatchRepository
+    ) -> None:
         if self.max_pending_batches_per_scope <= 0:
             return
         scope = self._scope_limit_target(session)
@@ -598,7 +615,10 @@ class BatchCreateSessionPromoter:
             created_by_organization_id=session.created_by_organization_id,
             created_by_user_id=session.created_by_user_id,
         )
-        if queued_work_units + max(0, int(scheduling_summary.remaining_work_units or 0)) <= self.tenant_max_queued_work_units:
+        if (
+            queued_work_units + max(0, int(scheduling_summary.remaining_work_units or 0))
+            <= self.tenant_max_queued_work_units
+        ):
             return
         raise BatchCreatePromotionError(
             (

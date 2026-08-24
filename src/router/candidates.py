@@ -70,6 +70,7 @@ class RouteCandidatePlan:
     candidate_count: int
     healthy_count: int
     filtered_count: int
+    rejection_reason: str | None = None
 
 
 class RouteCandidatePlanner(Protocol):

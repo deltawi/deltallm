@@ -8,6 +8,7 @@ import pytest
 from src.db.named_credentials import NamedCredentialRecord
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.providers.healthcheck import HealthProbeResult
 from src.router import (
     BackgroundHealthChecker,
@@ -18,6 +19,7 @@ from src.router import (
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.callable_targets import CallableTarget
 from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
+from src.config_runtime.models import ModelMutationResult
 
 
 class _FakeOrganizationMetadataDB:
@@ -259,6 +261,56 @@ async def test_get_model_redacts_named_credential_backed_params(client, test_app
 
 
 @pytest.mark.asyncio
+async def test_delete_model_maps_route_group_invariant_conflict_to_409(client, test_app):
+    class ConflictingHotReload:
+        async def remove_model(self, deployment_id: str, updated_by: str) -> bool:
+            del deployment_id, updated_by
+            raise RoutePolicyStateConflictError(
+                "model deployment change would invalidate route group 'support-route'"
+            )
+
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_hot_reload_manager = ConflictingHotReload()
+
+    response = await client.delete(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 409
+    assert "would invalidate route group" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_delete_model_returns_committed_refresh_warning(client, test_app):
+    class WarningHotReload:
+        async def remove_model(
+            self,
+            deployment_id: str,
+            updated_by: str,
+        ) -> ModelMutationResult[bool]:
+            del deployment_id, updated_by
+            return ModelMutationResult(
+                value=True,
+                warnings=("Mutation committed, but local routing runtime refresh failed",),
+            )
+
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_hot_reload_manager = WarningHotReload()
+
+    response = await client.delete(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "deleted": True,
+        "warnings": ["Mutation committed, but local routing runtime refresh failed"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_update_model_preserves_inline_api_key_when_omitted(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
@@ -392,6 +444,37 @@ async def test_create_model_response_redacts_inline_api_key(client, test_app):
     payload = response.json()
     assert payload["credential_source"] == "inline"
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+
+
+@pytest.mark.asyncio
+async def test_compat_model_create_replaces_complete_routing_generation(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    generation_store = test_app.state.routing_runtime_generation_store
+    previous = generation_store.require_snapshot()
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "deployment_id": "atomic-generation-deployment",
+            "model_name": "atomic-generation-model",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+                "api_key": "provider-key",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    replacement = generation_store.require_snapshot()
+    assert replacement is not previous
+    assert "atomic-generation-model" not in previous.deployment_registry
+    assert "atomic-generation-model" in replacement.deployment_registry
+    assert replacement.router is not previous.router
+    assert replacement.failover_manager.candidate_planner is replacement.router
 
 
 @pytest.mark.asyncio

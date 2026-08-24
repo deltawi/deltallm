@@ -23,6 +23,7 @@ from src.services.tier_model_access import (
 )
 
 if TYPE_CHECKING:
+    from src.router.runtime_authorization import CallableTargetGrantSnapshot
     from src.services.callable_target_grants import CallableTargetGrantService
     from src.services.tier_policy_service import TierPolicyService
 
@@ -56,6 +57,7 @@ def resolve_effective_model_allowlist(
     auth: UserAPIKeyAuth,
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
@@ -65,6 +67,7 @@ def resolve_effective_model_allowlist(
     resolution = resolve_model_allowlist_resolution(
         auth,
         callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
         tier_policy_service=tier_policy_service,
         policy_mode=policy_mode,
         tier_policy_mode=tier_policy_mode,
@@ -78,6 +81,7 @@ def resolve_model_allowlist_resolution(
     auth: UserAPIKeyAuth,
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
@@ -97,9 +101,7 @@ def resolve_model_allowlist_resolution(
         )
 
     hybrid_allowlist = (
-        _resolve_legacy_model_allowlist(auth)
-        if normalized_policy_mode == "shadow"
-        else None
+        _resolve_legacy_model_allowlist(auth) if normalized_policy_mode == "shadow" else None
     )
 
     if callable_target_grant_service is None:
@@ -107,18 +109,23 @@ def resolve_model_allowlist_resolution(
         policy_authoritative = True
         policy_fallback_reason = "grant_service_unavailable"
     else:
-        policy_resolution = callable_target_grant_service.resolve_policy_allowlist(auth)
+        if callable_target_grant_snapshot is None:
+            policy_resolution = callable_target_grant_service.resolve_policy_allowlist(auth)
+        else:
+            policy_resolution = callable_target_grant_service.resolve_policy_allowlist(
+                auth,
+                snapshot=callable_target_grant_snapshot,
+            )
         policy_authoritative = policy_resolution.authoritative
         policy_fallback_reason = policy_resolution.fallback_reason
         policy_allowlist = (
-            set(policy_resolution.allowlist)
-            if policy_resolution.allowlist is not None
-            else None
+            set(policy_resolution.allowlist) if policy_resolution.allowlist is not None else None
         )
 
     direct_restrict_allowlist = _resolve_direct_restrict_allowlist(
         auth,
         callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
         policy_mode=normalized_policy_mode,
         policy_fallback_reason=policy_fallback_reason,
     )
@@ -186,6 +193,7 @@ def filter_visible_models(
     auth: UserAPIKeyAuth,
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
@@ -195,6 +203,7 @@ def filter_visible_models(
     allowed_models = resolve_effective_model_allowlist(
         auth,
         callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
         tier_policy_service=tier_policy_service,
         policy_mode=policy_mode,
         tier_policy_mode=tier_policy_mode,
@@ -211,6 +220,7 @@ def ensure_model_allowed(
     model: str,
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
@@ -220,6 +230,7 @@ def ensure_model_allowed(
     resolution = resolve_model_allowlist_resolution(
         auth,
         callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
         tier_policy_service=tier_policy_service,
         policy_mode=policy_mode,
         tier_policy_mode=tier_policy_mode,
@@ -243,6 +254,7 @@ def ensure_batch_model_allowed(
     model: str,
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
@@ -252,6 +264,7 @@ def ensure_batch_model_allowed(
     resolution = resolve_model_allowlist_resolution(
         auth,
         callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
         tier_policy_service=tier_policy_service,
         policy_mode=policy_mode,
         tier_policy_mode=tier_policy_mode,
@@ -294,9 +307,7 @@ def get_tier_policy_mode_from_app(app: Any) -> TierPolicyMode:
     service = getattr(app.state, "tier_policy_service", None)
     if service is not None and hasattr(service, "mode"):
         return normalize_tier_policy_mode(getattr(service, "mode"))
-    return normalize_tier_policy_mode(
-        _app_setting(app, "tier_policy_mode", default="disabled")
-    )
+    return normalize_tier_policy_mode(_app_setting(app, "tier_policy_mode", default="disabled"))
 
 
 def get_tier_policy_missing_service_mode_from_app(app: Any) -> str:
@@ -356,6 +367,7 @@ def _resolve_direct_restrict_allowlist(
     auth: UserAPIKeyAuth,
     *,
     callable_target_grant_service: CallableTargetGrantService | None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None,
     policy_mode: CallableTargetPolicyMode,
     policy_fallback_reason: str | None,
 ) -> frozenset[str] | None:
@@ -370,7 +382,11 @@ def _resolve_direct_restrict_allowlist(
     if not callable(resolver):
         return None
 
-    direct_restrict_allowlist = resolver(auth)
+    direct_restrict_allowlist = (
+        resolver(auth)
+        if callable_target_grant_snapshot is None
+        else resolver(auth, snapshot=callable_target_grant_snapshot)
+    )
     if direct_restrict_allowlist is None:
         return None
     return frozenset(_normalize_allowlist(direct_restrict_allowlist))

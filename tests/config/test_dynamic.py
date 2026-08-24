@@ -18,6 +18,7 @@ from src.config_runtime.loader import deep_merge
 from src.config_runtime.models import ModelHotReloadManager
 from src.config_runtime.secrets import BaseSecretManager, SecretResolver
 from src.db.repositories import ModelDeploymentRecord
+from src.db.route_groups import RouteGroupRuntimeSnapshot
 from src.router import (
     CooldownManager,
     FailoverManager,
@@ -30,7 +31,10 @@ from src.router import (
     RoutingStrategy,
     build_deployment_registry,
 )
+from src.router.runtime_generation import RoutingRuntimeAppliedState
 from src.router.health import BackgroundHealthChecker
+from src.services.governance_invalidation import GovernanceInvalidationService
+from src.services.routing_authorization import RoutingAuthorizationReconciler
 
 
 class StaticSecretManager(BaseSecretManager):
@@ -192,21 +196,202 @@ class FakeRouteGroupCache:
     async def invalidate(self) -> None:
         self.invalidate_calls += 1
 
-    async def get_groups(self, repository: Any) -> tuple[list[dict[str, Any]], str]:
+    async def get_snapshot(self, repository: Any) -> tuple[RouteGroupRuntimeSnapshot, str]:
         self.get_calls += 1
         if self.invalidate_calls == 0 and self.stale_groups is not None:
-            return self.stale_groups, "l1_cache"
-        return await repository.list_runtime_groups(), "db"
+            return RouteGroupRuntimeSnapshot(0, self.stale_groups), "l1_cache"
+        return await repository.load_runtime_snapshot(), "db"
 
 
 class FakeRouteGroupRepository:
     def __init__(self, groups: list[dict[str, Any]]) -> None:
         self.groups = groups
         self.calls = 0
+        self.revision = 1
 
-    async def list_runtime_groups(self) -> list[dict[str, Any]]:
+    async def get_runtime_revision(self) -> int:
+        return self.revision
+
+    async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
         self.calls += 1
-        return self.groups
+        return RouteGroupRuntimeSnapshot(self.revision, self.groups)
+
+
+@pytest.mark.asyncio
+async def test_route_group_reload_invalidates_replica_cache_before_rebuild(monkeypatch):
+    manager = object.__new__(ModelHotReloadManager)
+    calls: list[str] = []
+    manager._requested_route_reload = 0
+    manager._applied_route_reload = 0
+    manager._applied_route_revision = 0
+    manager._applied_routing_state = RoutingRuntimeAppliedState(
+        revision=0,
+        source="database",
+    )
+    manager._route_reload_lock = asyncio.Lock()
+
+    object_marker = object()
+    manager.routing_authorization_reconciler = None
+    manager.dynamic_config = SimpleNamespace(get_app_config=lambda: AppConfig.model_validate({}))
+    manager.app = SimpleNamespace(
+        state=SimpleNamespace(
+            model_registry={},
+            router=SimpleNamespace(deployment_registry={}),
+            settings=SimpleNamespace(),
+        )
+    )
+
+    async def invalidate() -> None:
+        calls.append("invalidate")
+
+    generation = SimpleNamespace(
+        revision=1,
+        callable_target_catalog={"support": object_marker},
+        deployment_registry=SimpleNamespace(snapshot=lambda: {}),
+    )
+
+    async def build_generation(**kwargs):  # noqa: ANN003, ANN202
+        del kwargs
+        calls.append("build")
+        return generation
+
+    def publish_generation(value) -> None:  # noqa: ANN001
+        assert value is generation
+        calls.append("publish")
+
+    async def cleanup(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        del args, kwargs
+
+    monkeypatch.setattr(manager, "_invalidate_route_group_cache", invalidate)
+    monkeypatch.setattr(manager, "_load_complete_routing_generation", build_generation)
+    monkeypatch.setattr(manager, "_publish_routing_generation", publish_generation)
+    monkeypatch.setattr(manager, "_cleanup_replaced_deployment_health", cleanup)
+    await manager.reload_route_groups()
+
+    assert calls == ["invalidate", "build", "publish"]
+
+
+@pytest.mark.asyncio
+async def test_route_group_governance_reload_does_not_reenter_invalidation_lock(monkeypatch):
+    class GrantReloader:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def reload(self) -> None:
+            self.calls += 1
+
+    manager = object.__new__(ModelHotReloadManager)
+    manager._requested_route_reload = 0
+    manager._applied_route_reload = 0
+    manager._applied_route_revision = 0
+    manager._applied_routing_state = RoutingRuntimeAppliedState(
+        revision=0,
+        source="database",
+    )
+    manager._route_reload_lock = asyncio.Lock()
+    manager.dynamic_config = SimpleNamespace(get_app_config=lambda: AppConfig.model_validate({}))
+    manager.app = SimpleNamespace(
+        state=SimpleNamespace(
+            model_registry={},
+            router=SimpleNamespace(deployment_registry={}),
+            settings=SimpleNamespace(),
+        )
+    )
+    grants = GrantReloader()
+    manager.routing_authorization_reconciler = RoutingAuthorizationReconciler(
+        db=None,
+        callable_target_bindings=None,
+        route_groups=None,
+        callable_target_grants=grants,
+    )
+    generation = SimpleNamespace(
+        revision=1,
+        callable_target_catalog={},
+        deployment_registry=SimpleNamespace(snapshot=lambda: {}),
+    )
+
+    async def no_op(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        del args, kwargs
+
+    async def build_generation(**kwargs):  # noqa: ANN003, ANN202
+        del kwargs
+        return generation
+
+    monkeypatch.setattr(manager, "_invalidate_route_group_cache", no_op)
+    monkeypatch.setattr(manager, "_load_complete_routing_generation", build_generation)
+    monkeypatch.setattr(manager, "_publish_routing_generation", lambda value: None)
+    monkeypatch.setattr(manager, "_cleanup_replaced_deployment_health", no_op)
+    governance = GovernanceInvalidationService(
+        redis_client=None,
+        callable_target_grant_service=grants,
+        route_group_reload=manager.reload_route_groups,
+    )
+
+    await asyncio.wait_for(governance.invalidate_local("route_groups"), timeout=0.5)
+
+    assert grants.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_route_group_reload_discards_older_completed_generation(monkeypatch):
+    manager = object.__new__(ModelHotReloadManager)
+    manager._requested_route_reload = 0
+    manager._applied_route_reload = 0
+    manager._applied_route_revision = 0
+    manager._applied_routing_state = RoutingRuntimeAppliedState(
+        revision=0,
+        source="database",
+    )
+    manager._route_reload_lock = asyncio.Lock()
+    manager.routing_authorization_reconciler = None
+    manager.dynamic_config = SimpleNamespace(get_app_config=lambda: AppConfig.model_validate({}))
+    manager.app = SimpleNamespace(
+        state=SimpleNamespace(
+            model_registry={},
+            router=SimpleNamespace(deployment_registry={}),
+            settings=SimpleNamespace(),
+        )
+    )
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    builds = 0
+    published: list[int] = []
+
+    async def invalidate() -> None:
+        return None
+
+    async def build_generation(**kwargs):  # noqa: ANN003, ANN202
+        nonlocal builds
+        del kwargs
+        builds += 1
+        revision = builds
+        if revision == 1:
+            first_started.set()
+            await release_first.wait()
+        return SimpleNamespace(
+            revision=revision,
+            deployment_registry=SimpleNamespace(snapshot=lambda: {}),
+        )
+
+    def publish_generation(generation) -> None:  # noqa: ANN001
+        published.append(generation.revision)
+        manager._applied_route_revision = generation.revision
+
+    async def cleanup(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        del args, kwargs
+
+    monkeypatch.setattr(manager, "_invalidate_route_group_cache", invalidate)
+    monkeypatch.setattr(manager, "_load_complete_routing_generation", build_generation)
+    monkeypatch.setattr(manager, "_publish_routing_generation", publish_generation)
+    monkeypatch.setattr(manager, "_cleanup_replaced_deployment_health", cleanup)
+    older = asyncio.create_task(manager.reload_route_groups())
+    await first_started.wait()
+    newer = asyncio.create_task(manager.reload_route_groups())
+    await asyncio.sleep(0)
+    release_first.set()
+    await asyncio.gather(older, newer)
+
+    assert published == [2]
 
 
 @pytest.mark.asyncio
@@ -778,6 +963,44 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     assert app.state.platform_identity_service.totp_issuer == "Acme AI"
     assert app.state.router.deployment_registry["gpt-4.1-mini"][0].deployment_id == "new-dep"
 
+    previous_app_config = app.state.app_config
+    previous_registry = app.state.router.deployment_registry
+    previous_model_registry = app.state.model_registry
+    previous_route_groups = app.state.route_groups
+    previous_strategy = app.state.router.strategy
+    invalid_cfg = AppConfig.model_validate(
+        {
+            **updated_cfg.model_dump(mode="python"),
+            "router_settings": {
+                **updated_cfg.router_settings.model_dump(mode="python"),
+                "route_groups": [
+                    {
+                        "key": "invalid-embedding-route",
+                        "mode": "embedding",
+                        "members": [{"deployment_id": "new-dep"}],
+                    }
+                ],
+            },
+            "general_settings": {
+                **updated_cfg.general_settings.model_dump(mode="python"),
+                "instance_name": "Must Not Publish",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="incompatible with members"):
+        await manager._on_config_change(
+            invalid_cfg,
+            {"added": [], "removed": [], "modified": ["router_settings"]},
+        )
+
+    assert app.state.app_config is previous_app_config
+    assert app.state.router.deployment_registry is previous_registry
+    assert app.state.model_registry is previous_model_registry
+    assert app.state.route_groups is previous_route_groups
+    assert app.state.router.strategy is previous_strategy
+    assert app.state.platform_identity_service.totp_issuer == "Acme AI"
+
     await dynamic.close()
 
 
@@ -896,7 +1119,7 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     )
 
     await cooldown_manager.manual_cooldown("new-dep", 60, "stale deployment state")
-    new_id = await manager.add_model(
+    created = await manager.add_model(
         {
             "model_name": "gpt-4.1-mini",
             "deployment_id": "new-dep",
@@ -904,7 +1127,8 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
             "model_info": {"weight": 2},
         }
     )
-    assert new_id == "new-dep"
+    assert created.value == "new-dep"
+    assert created.warnings == ()
     assert "gpt-4.1-mini" in app.state.model_registry
     new_deployment = app.state.router.deployment_registry["gpt-4.1-mini"][0]
     assert await state_backend.get_health(new_deployment.health_ref) == {}
@@ -924,7 +1148,8 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
             "model_info": {"weight": 4},
         },
     )
-    assert updated is True
+    assert updated.value is True
+    assert updated.warnings == ()
     assert app.state.model_registry["gpt-4.1-mini"][0]["model_info"]["weight"] == 4
     updated_deployment = app.state.router.deployment_registry["gpt-4.1-mini"][0]
     assert updated_deployment.health_ref == new_deployment.health_ref
@@ -945,7 +1170,8 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
             "model_info": {"weight": 4},
         },
     )
-    assert provider_updated is True
+    assert provider_updated.value is True
+    assert provider_updated.warnings == ()
     provider_deployment = app.state.router.deployment_registry["gpt-4.1-mini"][0]
     assert provider_deployment.health_ref != updated_deployment.health_ref
     assert await state_backend.get_health(provider_deployment.health_ref) == {}
@@ -958,12 +1184,77 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
         "removed deployment state",
     )
     removed = await manager.remove_model("new-dep")
-    assert removed is True
+    assert removed.value is True
+    assert removed.warnings == ()
     assert "gpt-4.1-mini" not in app.state.model_registry
     assert await state_backend.get_health(provider_deployment.health_ref) == {}
     assert route_group_cache.invalidate_calls == 4
 
+    # Durable revision polling calls reload_route_groups without relying on the
+    # model-updated pub/sub signal. It must rebuild models from durable records.
+    repo.records[0] = ModelDeploymentRecord(
+        deployment_id="old-dep",
+        model_name="gpt-4o-mini",
+        deltallm_params={"model": "openai/gpt-4.1-mini"},
+        model_info={},
+        routing_state_incarnation=repo.records[0].routing_state_incarnation,
+    )
+    await manager.reload_route_groups()
+    assert (
+        app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]["model"]
+        == "openai/gpt-4.1-mini"
+    )
+
     await dynamic.close()
+
+
+@pytest.mark.asyncio
+async def test_model_repository_mutations_remain_successful_when_refresh_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = InMemoryModelRepository()
+    manager = object.__new__(ModelHotReloadManager)
+    manager.app = SimpleNamespace(state=SimpleNamespace(model_registry={}))
+    manager.model_repository = repository
+    manager._applied_routing_state = RoutingRuntimeAppliedState(
+        revision=7,
+        source="database",
+    )
+
+    async def fail_refresh() -> None:
+        raise RuntimeError("runtime refresh unavailable")
+
+    monkeypatch.setattr(manager, "reload_runtime", fail_refresh)
+
+    created = await manager.add_model(
+        {
+            "deployment_id": "dep-committed",
+            "model_name": "committed-model",
+            "deltallm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"mode": "chat"},
+        }
+    )
+    assert created.value == "dep-committed"
+    assert created.warnings == ("Mutation committed, but local routing runtime refresh failed",)
+    assert [record.deployment_id for record in repository.records] == ["dep-committed"]
+
+    updated = await manager.update_model(
+        "dep-committed",
+        {
+            "model_name": "committed-model",
+            "deltallm_params": {"model": "openai/gpt-4.1-mini"},
+            "model_info": {"mode": "chat"},
+        },
+    )
+    assert updated.value is True
+    assert updated.warnings == created.warnings
+    assert repository.records[0].deltallm_params["model"] == "openai/gpt-4.1-mini"
+
+    removed = await manager.remove_model("dep-committed")
+    assert removed.value is True
+    assert removed.warnings == created.warnings
+    assert repository.records == []
+    assert manager.get_applied_routing_state().requires_reconciliation is True
 
 
 @pytest.mark.asyncio
@@ -1150,7 +1441,7 @@ async def test_model_hot_reload_manager_invalidates_route_group_l1_cache_on_mode
             }
         ]
     )
-    ModelHotReloadManager(
+    manager = ModelHotReloadManager(
         app=app,
         dynamic_config=dynamic,
         model_repository=model_repo,
@@ -1171,6 +1462,14 @@ async def test_model_hot_reload_manager_invalidates_route_group_l1_cache_on_mode
     assert app.state.route_groups[0]["members"][0]["deployment_id"] == "dep-a"
     assert app.state.router.deployment_registry["support-route"][0].deployment_id == "dep-a"
     assert app.state.callable_target_catalog["support-route"].target_type == "route_group"
+    generation = app.state.routing_runtime_generation_store.require_snapshot()
+    assert generation.source == "db"
+    assert generation.requires_reconciliation is False
+    assert manager.get_applied_routing_state() == RoutingRuntimeAppliedState(
+        revision=1,
+        source="db",
+        requires_reconciliation=False,
+    )
 
     await dynamic.close()
 

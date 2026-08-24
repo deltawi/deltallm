@@ -93,6 +93,9 @@ export default function RouteGroupPolicyVersionsCard({
                   {p.status}
                 </span>
                 <span className="text-sm font-medium text-gray-700">Version {p.version}</span>
+                <span className="rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+                  Semantics v{p.semantics_version}
+                </span>
                 {p.published_by && (
                   <span className="hidden text-xs text-gray-400 sm:inline">by {p.published_by}</span>
                 )}

@@ -34,6 +34,28 @@ Tip: check the effective `allowed_fails` value in the config your deployment act
 | `model_group_alias` | `{}` | Friendly names that map to real model groups |
 | `route_groups` | `[]` | File-defined route groups and membership |
 
+Each file-defined route group should declare one workload mode. For compatibility with older files,
+an omitted mode is inferred when all enabled, resolvable members have one deployment mode; an empty
+or unresolved legacy group falls back to `chat`. Mixed member modes are rejected. Declare `mode`
+explicitly for stable, warning-free configuration:
+
+```yaml
+router_settings:
+  route_groups:
+    - key: search-embeddings
+      mode: embedding
+      strategy: weighted
+      members:
+        - deployment_id: embeddings-primary
+          weight: 3
+        - deployment_id: embeddings-secondary
+          weight: 1
+```
+
+A request whose endpoint workload does not match the route group is rejected before shared
+routing-state reads. Invalid group/member combinations fail runtime snapshot validation and do not
+replace the last valid live registry.
+
 `allowed_fails: 0` starts cooldown on the first health-affecting provider failure. After
 `cooldown_time` expires, the router admits one shared-Redis half-open request for that deployment;
 successful recovery restores normal routing and failed recovery re-enters cooldown. Request-side
@@ -115,6 +137,12 @@ Helpful shortcut modes:
 - `fallback` maps to `priority-based-routing`
 
 Do not treat `conditional` or `adaptive` as active runtime policy behaviors today.
+
+The policy `mode` field is a routing shortcut (`weighted` or `fallback`); it is separate from the
+route group's workload `mode`. When `members` is omitted, the policy inherits the group's enabled
+members. Newly saved policies treat an explicit list as authoritative. Policies created before this
+semantics version retain their legacy widening behavior, including when rolled back. A policy can
+disable an eligible member but cannot reactivate a group member disabled by an operator.
 
 ## Fallback Configuration
 

@@ -46,11 +46,16 @@ With that in place, calls to `gpt-4o-mini` can be spread across both deployments
 For each request, DeltaLLM:
 
 1. Resolves the requested model name to a model group
-2. Removes unhealthy or cooled-down deployments
-3. Applies request tag filtering when `metadata.tags` is present
-4. Optionally skips deployments already above configured RPM or TPM limits
-5. Selects one deployment with the active routing strategy
-6. Retries or falls back if the call fails in a retryable way
+2. Rejects a route group whose declared workload mode does not match the gateway endpoint
+3. Removes unhealthy or cooled-down deployments
+4. Applies request tag filtering when `metadata.tags` is present
+5. Optionally skips deployments already above configured RPM or TPM limits
+6. Selects one deployment with the active routing strategy
+7. Retries or falls back if the call fails in a retryable way
+
+Workload-mode rejection uses the in-memory route snapshot and adds no database or Redis round trip.
+The same check applies to fallback groups, so a different-workload group cannot be reached after a
+primary failure.
 
 ## Pick A Strategy Fast
 

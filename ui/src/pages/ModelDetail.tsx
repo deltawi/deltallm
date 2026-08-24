@@ -26,6 +26,9 @@ import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
 import { MODE_OPTIONS } from '../components/modelFormShared';
 import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
 import { useBranding } from '../lib/brandingContext';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
+import { mutationOutcome } from '../lib/mutationOutcome';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -487,24 +490,41 @@ function UsageTab({ modelName, mode }: { modelName: string; mode: string }) {
 export default function ModelDetail() {
   const { deploymentId } = useParams<{ deploymentId: string }>();
   const navigate = useNavigate();
+  const { pushToast } = useToast();
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const canEdit = userRole === 'platform_admin' || authMode === 'master_key';
 
-  const { data: model, loading, refetch } = useApi(() => models.get(deploymentId!), [deploymentId]);
+  const { data: model, loading, refetch } = useApi(
+    (signal) => models.get(deploymentId!, signal),
+    [deploymentId],
+  );
 
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [healthActionMessage, setHealthActionMessage] = useState<string | null>(null);
   const [healthActionError, setHealthActionError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleDelete = async () => {
-    if (!confirm('Are you sure you want to delete this model deployment? This cannot be undone.')) return;
+    setDeleting(true);
     try {
-      await models.delete(deploymentId!);
+      const result = await models.delete(deploymentId!);
+      const outcome = mutationOutcome('Model deployment was deleted.', result.warnings);
+      pushToast({
+        tone: outcome.tone,
+        title: outcome.tone === 'info' ? 'Model deleted with warning' : 'Model deleted',
+        message: outcome.message,
+      });
       navigate('/models');
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to delete model');
+      pushToast({
+        tone: 'error',
+        title: 'Delete failed',
+        message: err instanceof Error ? err.message : 'Failed to delete model',
+      });
+      setDeleting(false);
     }
   };
 
@@ -515,7 +535,7 @@ export default function ModelDetail() {
     try {
       const result = await models.checkHealth(deploymentId!);
       setHealthActionMessage(result.message);
-      await refetch();
+      refetch();
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         setHealthActionError(err.message);
@@ -568,7 +588,8 @@ export default function ModelDetail() {
   const inputCostDisplay = primaryCost(mode, mi);
 
   return (
-    <HeroTabbedDetailShell
+    <>
+      <HeroTabbedDetailShell
       backBar={(
         <button
           onClick={() => navigate('/models')}
@@ -637,7 +658,8 @@ export default function ModelDetail() {
                       <Pencil className="h-4 w-4" /> Edit
                     </button>
                     <button
-                      onClick={handleDelete}
+                      aria-label="Delete model deployment"
+                      onClick={() => setDeleteOpen(true)}
                       className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-50"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -711,6 +733,17 @@ export default function ModelDetail() {
           </PanelCard>
         </>
       )}
-    />
+      />
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Delete model deployment"
+        description={`Delete "${model.model_name}"? This cannot be undone.`}
+        confirmLabel="Delete Model"
+        destructive
+        confirming={deleting}
+        onConfirm={handleDelete}
+        onClose={() => { if (!deleting) setDeleteOpen(false); }}
+      />
+    </>
   );
 }

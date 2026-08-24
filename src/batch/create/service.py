@@ -21,7 +21,11 @@ from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.models import BatchJobRecord, normalize_batch_completion_window
 from src.batch.repository import BatchRepository
 from src.batch.request_validation import parse_batch_input_line
-from src.batch.scheduling import estimate_request_work_units, resolve_model_group
+from src.batch.scheduling import (
+    estimate_request_work_units,
+    pin_model_group_resolver,
+    resolve_model_group,
+)
 from src.batch.scopes import (
     batch_idempotency_scope_key,
     batch_pending_scope_key_for_auth,
@@ -37,6 +41,7 @@ from src.batch.webhooks import (
     parse_batch_webhook_request,
 )
 from src.models.responses import UserAPIKeyAuth
+from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
 from src.services.tier_model_access import TierPolicyMode
@@ -50,6 +55,12 @@ logger = logging.getLogger(__name__)
 class BatchCreateSessionServiceResult:
     job: BatchJobRecord
     audit_metadata: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchCreateRoutingContext:
+    model_group_resolver: Any | None
+    authorization_snapshot: CallableTargetGrantSnapshot | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,8 +104,7 @@ class BatchCreateSessionService:
         self.stager = stager
         self.promoter = promoter
         self.storage_registry = {
-            str(key).strip().lower(): value
-            for key, value in (storage_registry or {}).items()
+            str(key).strip().lower(): value for key, value in (storage_registry or {}).items()
         }
         self.max_file_bytes = max(1, int(max_file_bytes))
         self.max_items_per_batch = max(1, int(max_items_per_batch))
@@ -134,6 +144,13 @@ class BatchCreateSessionService:
         self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
         self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
 
+    def _capture_routing_context(self) -> _BatchCreateRoutingContext:
+        snapshot = getattr(self.callable_target_grant_service, "snapshot", None)
+        return _BatchCreateRoutingContext(
+            model_group_resolver=pin_model_group_resolver(self.model_group_resolver),
+            authorization_snapshot=snapshot() if callable(snapshot) else None,
+        )
+
     async def create_embeddings_batch(
         self,
         *,
@@ -166,6 +183,7 @@ class BatchCreateSessionService:
         idempotency_key: str | None = None,
         webhook: object | None = None,
     ) -> BatchCreateSessionServiceResult:
+        routing_context = self._capture_routing_context()
         endpoint = str(endpoint or "").strip()
         if endpoint not in SUPPORTED_BATCH_ENDPOINT_SET:
             raise HTTPException(
@@ -176,8 +194,12 @@ class BatchCreateSessionService:
 
         normalized_metadata = self._normalize_metadata(metadata)
         validated_webhook = self._validate_webhook(webhook)
-        webhook_fingerprint = validated_webhook.fingerprint if validated_webhook is not None else None
-        idem_scope_key, idem_key = self._idempotency_pair(auth=auth, idempotency_key=idempotency_key)
+        webhook_fingerprint = (
+            validated_webhook.fingerprint if validated_webhook is not None else None
+        )
+        idem_scope_key, idem_key = self._idempotency_pair(
+            auth=auth, idempotency_key=idempotency_key
+        )
 
         if idem_scope_key is not None and idem_key is not None:
             existing = await self.create_sessions.get_session_by_idempotency_key(
@@ -211,6 +233,7 @@ class BatchCreateSessionService:
                 webhook_config_fingerprint=webhook_fingerprint,
                 idempotency_scope_key=idem_scope_key,
                 idempotency_key=idem_key,
+                routing_context=routing_context,
             )
         except Exception:
             if idem_scope_key is not None and idem_key is not None:
@@ -248,6 +271,7 @@ class BatchCreateSessionService:
         webhook_config_fingerprint: str | None,
         idempotency_scope_key: str | None,
         idempotency_key: str | None,
+        routing_context: _BatchCreateRoutingContext,
     ) -> BatchCreateSessionRecord:
         storage = self._storage_for_backend(file_record.storage_backend)
         seen_custom_ids: set[str] = set()
@@ -257,13 +281,16 @@ class BatchCreateSessionService:
 
         async def _records() -> AsyncIterator[BatchCreateStagedRequest]:
             nonlocal expected_item_count, inferred_model, inferred_model_group
-            async for line_number, raw_line in self._iter_storage_lines(storage=storage, storage_key=file_record.storage_key):
+            async for line_number, raw_line in self._iter_storage_lines(
+                storage=storage, storage_key=file_record.storage_key
+            ):
                 item, model = self._parse_input_line(
                     raw_line,
                     line_number=line_number,
                     endpoint=endpoint,
                     auth=auth,
                     seen_custom_ids=seen_custom_ids,
+                    authorization_snapshot=routing_context.authorization_snapshot,
                 )
                 if item is None:
                     continue
@@ -273,7 +300,10 @@ class BatchCreateSessionService:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Batch exceeds embeddings_batch_max_items_per_batch ({self.max_items_per_batch})",
                     )
-                scheduling_model_group = resolve_model_group(model, self.model_group_resolver)
+                scheduling_model_group = resolve_model_group(
+                    model,
+                    routing_context.model_group_resolver,
+                )
                 if inferred_model is None:
                     inferred_model = model
                     inferred_model_group = scheduling_model_group
@@ -299,7 +329,10 @@ class BatchCreateSessionService:
 
         def _build_session(artifact) -> BatchCreateSessionCreate:  # noqa: ANN001
             if expected_item_count <= 0:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid batch items found in file")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No valid batch items found in file",
+                )
             return BatchCreateSessionCreate(
                 target_batch_id=str(uuid4()),
                 endpoint=endpoint,
@@ -411,7 +444,9 @@ class BatchCreateSessionService:
                 "create_path": "create_session",
                 "create_session_id": session.session_id,
                 "idempotency_key_present": idempotency_key_present,
-                "idempotency_resolution": resolution if idempotency_key_present else "not_requested",
+                "idempotency_resolution": resolution
+                if idempotency_key_present
+                else "not_requested",
                 "promotion_result": "promoted" if promotion.promoted else "existing_batch",
                 "webhook_configured": job.webhook_config_ciphertext is not None,
             },
@@ -425,14 +460,18 @@ class BatchCreateSessionService:
     ) -> Any:
         file_record = await self.repository.get_file(input_file_id)
         if file_record is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Input file not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Input file not found"
+            )
         if not can_access_owned_resource(
             owner_api_key=file_record.created_by_api_key,
             owner_team_id=file_record.created_by_team_id,
             owner_organization_id=file_record.created_by_organization_id,
             auth=auth,
         ):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Input file access denied")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Input file access denied"
+            )
         if file_record.bytes > self.max_file_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -515,6 +554,7 @@ class BatchCreateSessionService:
         endpoint: str,
         auth: UserAPIKeyAuth,
         seen_custom_ids: set[str],
+        authorization_snapshot: CallableTargetGrantSnapshot | None,
     ):
         parsed = parse_batch_input_line(
             raw_line,
@@ -524,6 +564,7 @@ class BatchCreateSessionService:
             seen_custom_ids=seen_custom_ids,
             callable_target_grant_service=self.callable_target_grant_service,
             callable_target_scope_policy_mode=self.callable_target_scope_policy_mode,
+            callable_target_grant_snapshot=authorization_snapshot,
             tier_policy_service=self.tier_policy_service,
             tier_policy_mode=self.tier_policy_mode,
             tier_policy_missing_service_mode=self.tier_policy_missing_service_mode,
@@ -639,8 +680,7 @@ class BatchCreateSessionService:
         webhook_config_fingerprint: str | None,
     ) -> bool:
         session_webhook_pair_is_valid = (
-            session.webhook_config_ciphertext is None
-            and session.webhook_config_fingerprint is None
+            session.webhook_config_ciphertext is None and session.webhook_config_fingerprint is None
         ) or (
             session.webhook_config_ciphertext is not None
             and session.webhook_config_fingerprint is not None

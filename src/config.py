@@ -54,6 +54,16 @@ ModelMode = Literal[
     "audio_transcription",
     "rerank",
 ]
+SUPPORTED_MODEL_MODES = frozenset(
+    {
+        "chat",
+        "embedding",
+        "image_generation",
+        "audio_speech",
+        "audio_transcription",
+        "rerank",
+    }
+)
 
 RoutingStrategyName = Literal[
     "simple-shuffle",
@@ -215,6 +225,9 @@ class RouteGroupMember(BaseModel):
 
 class RouteGroupConfig(BaseModel):
     key: str
+    # Omitted mode is retained for compatibility with pre-mode file configs and
+    # resolved from enabled deployments during complete runtime construction.
+    mode: ModelMode | None = None
     enabled: bool = True
     strategy: RoutingStrategyName | None = None
     access_groups: list[str] = Field(default_factory=list)

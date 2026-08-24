@@ -24,11 +24,16 @@ from src.router.candidates import (
     RouteCandidatePlan,
     candidate_plan_cache,
 )
+from src.router.callable_key_ownership import resolve_enabled_route_group_owners
 from src.router.health_state import (
     DeploymentHealthRef,
     build_deployment_health_ref,
 )
 from src.router.registry import DeploymentRegistryStore
+from src.router.route_group_validation import (
+    normalize_route_group_mode,
+    validate_route_group_member_modes,
+)
 from src.router.state import DeploymentStateBackend
 from src.router.strategies import (
     CostBasedStrategy,
@@ -108,6 +113,7 @@ class RouterConfig:
 
 @dataclass
 class RouteGroupPolicy:
+    workload_mode: ModelMode | None = None
     strategy: RoutingStrategy | None = None
     policy_version: int | None = None
     timeout_seconds: float | None = None
@@ -164,7 +170,9 @@ class Router:
         self._attach_route_policy_context(request_context, policy)
         plan = (await self.plan_deployments([model_group], request_context))[model_group]
         selected = plan.deployments[0] if plan.deployments else None
-        if plan.candidate_count == 0:
+        if plan.rejection_reason is not None:
+            reason = plan.rejection_reason
+        elif plan.candidate_count == 0:
             reason = "no_candidates"
         elif plan.filtered_count == 0:
             reason = "no_eligible_candidates"
@@ -202,13 +210,25 @@ class Router:
 
         pending: list[_CandidatePlanInput] = []
         for group in missing_groups:
-            strategy, strategy_impl, _ = self._resolve_strategy_for_group(group)
+            strategy, strategy_impl, policy = self._resolve_strategy_for_group(group)
+            candidates = tuple(await self._get_candidates(group))
+            if self._workload_mode_mismatch(policy, request_context):
+                cached[group] = RouteCandidatePlan(
+                    model_group=group,
+                    strategy=strategy.value,
+                    deployments=(),
+                    candidate_count=len(candidates),
+                    healthy_count=0,
+                    filtered_count=0,
+                    rejection_reason="workload_mode_mismatch",
+                )
+                continue
             pending.append(
                 _CandidatePlanInput(
                     model_group=group,
                     strategy=strategy,
                     strategy_impl=strategy_impl,
-                    candidates=tuple(await self._get_candidates(group)),
+                    candidates=candidates,
                 )
             )
 
@@ -245,6 +265,20 @@ class Router:
             )
 
         return {group: cached[group] for group in groups}
+
+    @staticmethod
+    def _workload_mode_mismatch(
+        policy: RouteGroupPolicy | None,
+        request_context: dict[str, Any],
+    ) -> bool:
+        if policy is None:
+            return False
+        request_mode = str(request_context.get(ROUTING_MODE_CONTEXT_KEY) or "").strip().lower()
+        return bool(
+            request_mode
+            and policy.workload_mode is not None
+            and request_mode != policy.workload_mode
+        )
 
     async def acquire_attempt(
         self,
@@ -486,7 +520,7 @@ class Router:
 
     def require_deployment(self, model_group: str, deployment: Deployment | None) -> Deployment:
         if deployment is None:
-            if self.deployment_registry.get(model_group):
+            if model_group in self.deployment_registry:
                 raise ServiceUnavailableError(
                     message=f"No healthy deployments available for model '{model_group}'",
                     code=NO_HEALTHY_DEPLOYMENTS_CODE,
@@ -522,12 +556,25 @@ def build_deployment_registry_with_route_groups(
     if not route_groups:
         return registry
 
-    for group in route_groups:
-        group_key = str(group.get("key") or "").strip()
-        if not group_key or not bool(group.get("enabled", True)):
-            continue
+    deployment_modes = {
+        deployment_id: normalize_route_group_mode(deployment.model_info.get("mode"))
+        for deployment_id, deployment in deployments_by_id.items()
+    }
 
+    for group_key, group in resolve_enabled_route_group_owners(route_groups).items():
+        group_mode = normalize_route_group_mode(group.get("mode"))
         members = group.get("members") or []
+        enabled_member_ids = [
+            str(member.get("deployment_id") or "").strip()
+            for member in members
+            if isinstance(member, dict) and bool(member.get("enabled", True))
+        ]
+        validate_route_group_member_modes(
+            group_key=group_key,
+            group_mode=group_mode,
+            member_ids=enabled_member_ids,
+            deployment_modes=deployment_modes,
+        )
         grouped_deployments: list[Deployment] = []
         for member in members:
             if not isinstance(member, dict) or not bool(member.get("enabled", True)):
@@ -551,8 +598,10 @@ def build_deployment_registry_with_route_groups(
                 )
             )
 
-        if grouped_deployments:
-            registry[group_key] = grouped_deployments
+        # An enabled route group owns its callable key even when it currently has
+        # no eligible members. Otherwise a same-named legacy model group would
+        # silently receive traffic with different policy semantics.
+        registry[group_key] = grouped_deployments
 
     return registry
 
@@ -578,6 +627,7 @@ def build_route_group_policies(
         timeouts = group.get("timeouts")
         retry = group.get("retry")
         policies[key] = RouteGroupPolicy(
+            workload_mode=normalize_route_group_mode(group.get("mode")),
             strategy=strategy,
             policy_version=int(policy_version) if policy_version is not None else None,
             timeout_seconds=_extract_timeout_seconds(timeouts),

@@ -41,6 +41,7 @@ from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.services.route_groups import RouteGroupRuntimeCache
 from src.services.ui_branding_assets import UIBrandingAssetService
+from src.services.route_group_mutations import RouteGroupMutationService
 from src.upstream_http import build_control_http_client, build_upstream_http_client
 
 
@@ -150,6 +151,12 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         prisma_manager.client
     )
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
+    app.state.route_group_mutation_service = RouteGroupMutationService(
+        route_groups=app.state.route_group_repository,
+        callable_bindings=app.state.callable_target_binding_repository,
+        model_deployments=app.state.model_deployment_repository,
+        model_registry_getter=lambda: getattr(app.state, "model_registry", None),
+    )
     app.state.tier_repository = TierRepository(prisma_manager.client)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
     app.state.mcp_repository = MCPRepository(prisma_manager.client)

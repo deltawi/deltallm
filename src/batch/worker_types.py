@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
+from src.router.runtime_authorization import CallableTargetGrantSnapshot
+from src.router.runtime_generation import RoutingRuntimeGenerationStore
 
 
 BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR = "artifact_validation_failed"
@@ -16,6 +18,58 @@ class BatchArtifactValidationError(ValueError):
 
 class BatchItemLeaseLostError(RuntimeError):
     """Raised when an item execution loses its DB lease before persistence."""
+
+
+class BatchRoutingRuntime(Protocol):
+    generation_id: str
+    revision: int
+    router: Any
+    failover_manager: Any
+    authorization_snapshot: CallableTargetGrantSnapshot | None
+
+
+@dataclass(frozen=True, slots=True)
+class _LegacyBatchRoutingRuntime:
+    """Compatibility snapshot for separately embedded batch workers."""
+
+    generation_id: str
+    revision: int
+    router: Any
+    failover_manager: Any
+    authorization_snapshot: CallableTargetGrantSnapshot | None
+
+
+def capture_batch_routing_runtime(app_state: Any) -> BatchRoutingRuntime:
+    store = getattr(app_state, "routing_runtime_generation_store", None)
+    if isinstance(store, RoutingRuntimeGenerationStore):
+        return store.require_snapshot()
+
+    # The main application always installs the generation store. Preserve the
+    # older standalone worker construction contract by pinning both aliases at
+    # the batch-item boundary when that bootstrap is intentionally absent.
+    router = getattr(app_state, "router", None)
+    failover_manager = getattr(app_state, "failover_manager", None)
+    if router is None or failover_manager is None:
+        raise RuntimeError("routing runtime generation store is unavailable")
+    grant_service = getattr(app_state, "callable_target_grant_service", None)
+    authorization_snapshot = (
+        grant_service.snapshot()
+        if grant_service is not None and callable(getattr(grant_service, "snapshot", None))
+        else None
+    )
+    return _LegacyBatchRoutingRuntime(
+        generation_id=f"legacy:{id(router)}:{id(failover_manager)}",
+        revision=0,
+        router=router,
+        failover_manager=failover_manager,
+        authorization_snapshot=authorization_snapshot,
+    )
+
+
+def routing_generation_batch_key(runtime: BatchRoutingRuntime) -> str:
+    """Return the immutable generation identity used to isolate microbatches."""
+
+    return runtime.generation_id
 
 
 @dataclass
@@ -30,21 +84,27 @@ class BatchWorkerConfig:
     item_buffer_multiplier: int = 2
     finalization_page_size: int = 500
     item_claim_limit: int = 20
-    scheduler_mode: Literal[
-        "fifo_v1",
-        "slice_v1",
-        "model_capacity_v1",
-        "fair_share_v1",
-        "smart_v1",
-    ] | None = None
-    scheduler_shadow_mode: Literal[
-        "none",
-        "fifo_v1",
-        "slice_v1",
-        "model_capacity_v1",
-        "fair_share_v1",
-        "smart_v1",
-    ] | None = None
+    scheduler_mode: (
+        Literal[
+            "fifo_v1",
+            "slice_v1",
+            "model_capacity_v1",
+            "fair_share_v1",
+            "smart_v1",
+        ]
+        | None
+    ) = None
+    scheduler_shadow_mode: (
+        Literal[
+            "none",
+            "fifo_v1",
+            "slice_v1",
+            "model_capacity_v1",
+            "fair_share_v1",
+            "smart_v1",
+        ]
+        | None
+    ) = None
     scheduler_claim_mode: Literal["job_fifo", "work_slice"] = "job_fifo"
     scheduler_shadow_decision_timeout_seconds: float = 0.5
     scheduler_shadow_max_pending_decisions: int = 16
@@ -99,6 +159,7 @@ class _PreparedEmbeddingItem:
     request_context: dict[str, Any]
     failover_kwargs: dict[str, Any]
     request_shim: _RequestShim
+    routing_generation: BatchRoutingRuntime
     effective_upstream_max_batch_inputs: int
     microbatch_eligible: bool
     microbatch_ineligible_reason: str | None
@@ -120,6 +181,7 @@ class _PreparedChatItem:
     request_context: dict[str, Any]
     failover_kwargs: dict[str, Any]
     request_shim: _RequestShim
+    routing_generation: BatchRoutingRuntime
     policy_auth: Any | None = None
     policy_lease: Any | None = None
     policy_lease_refresher: Any | None = None

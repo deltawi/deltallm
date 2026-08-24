@@ -33,8 +33,10 @@ def batch_scheduler_active_enabled_for_creation(general: Any) -> bool:
 
 
 def scheduler_general_settings_changed(changes: dict[str, list[str]]) -> bool:
-    touched = set(changes.get("added", ())) | set(changes.get("removed", ())) | set(
-        changes.get("modified", ())
+    touched = (
+        set(changes.get("added", ()))
+        | set(changes.get("removed", ()))
+        | set(changes.get("modified", ()))
     )
     return "general_settings" in touched
 
@@ -76,14 +78,16 @@ def _build_model_capacity_resolver(
         return BatchModelCapacityResolver(
             repository=repository,
             config=config,
-            router=getattr(app.state, "router", None),
-            router_state_backend=getattr(app.state, "router_state_backend", None),
+            router=getattr(repository, "model_group_resolver", None)
+            or getattr(app.state, "router", None),
             backpressure=runtime.backpressure,
         )
     resolver.repository = repository
     resolver.config = config
-    resolver.router = getattr(app.state, "router", None)
-    resolver.router_state_backend = getattr(app.state, "router_state_backend", None)
+    resolver.router = getattr(repository, "model_group_resolver", None) or getattr(
+        app.state, "router", None
+    )
+    resolver.router_state_backend = None
     resolver.backpressure = runtime.backpressure
     _clear_model_capacity_snapshot_cache(resolver)
     return resolver
@@ -134,7 +138,9 @@ def _apply_worker_scheduler_config(
     config.tenant_fair_share_max_deficit_multiplier = (
         tenant_fair_share_config.max_deficit_multiplier
     )
-    config.tenant_max_in_flight_work_units = tenant_fair_share_config.tenant_max_in_flight_work_units
+    config.tenant_max_in_flight_work_units = (
+        tenant_fair_share_config.tenant_max_in_flight_work_units
+    )
     config.tenant_fair_share_max_active_flows_per_decision = (
         tenant_fair_share_config.max_active_flows_per_decision
     )
@@ -213,7 +219,9 @@ def apply_live_batch_scheduler_config(
     model_capacity_config = BatchModelCapacityConfig.from_settings(general)
     tenant_fair_share_config = BatchTenantFairShareConfig.from_settings(general)
     size_aging_config = BatchSizeAgingConfig.from_settings(general)
-    set_repository_tenant_scope_preference = getattr(repository, "set_tenant_scope_preference", None)
+    set_repository_tenant_scope_preference = getattr(
+        repository, "set_tenant_scope_preference", None
+    )
     if callable(set_repository_tenant_scope_preference):
         set_repository_tenant_scope_preference(tenant_fair_share_config.tenant_scope_preference)
 

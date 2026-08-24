@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -53,6 +54,13 @@ class _CapturingFailoverManager:
         self.captured["timeout_for_deployment"] = kwargs.get("timeout_for_deployment")
         data = await execute(primary_deployment)
         return (data, primary_deployment) if return_deployment else data
+
+
+def _install_generation_failover_manager(test_app, manager) -> None:  # noqa: ANN001
+    store = test_app.state.routing_runtime_generation_store
+    current = store.require_snapshot()
+    store.replace(replace(current, failover_manager=manager))
+    test_app.state.failover_manager = manager
 
 
 class _RecordingAuditService:
@@ -474,7 +482,7 @@ async def test_audio_transcription_preserves_600_second_default_timeout(client, 
         captured["timeout"] = timeout
         return httpx.Response(200, json={"text": "hello"}, request=httpx.Request("POST", url))
 
-    test_app.state.failover_manager = _CapturingFailoverManager(captured)
+    _install_generation_failover_manager(test_app, _CapturingFailoverManager(captured))
     test_app.state.http_client.post = post
 
     response = await client.post(
@@ -530,7 +538,7 @@ async def test_audio_transcription_short_primary_timeout_uses_per_deployment_fai
         return httpx.Response(200, json={"text": "hello"}, request=httpx.Request("POST", url))
 
     test_app.state.router.select_deployment = choose_primary
-    test_app.state.failover_manager = _CapturingFailoverManager(captured)
+    _install_generation_failover_manager(test_app, _CapturingFailoverManager(captured))
     test_app.state.http_client.post = post
 
     response = await client.post(
@@ -568,7 +576,7 @@ async def test_audio_transcription_route_policy_timeout_overrides_default_failov
         captured["timeout"] = timeout
         return httpx.Response(200, json={"text": "hello"}, request=httpx.Request("POST", url))
 
-    test_app.state.failover_manager = _CapturingFailoverManager(captured)
+    _install_generation_failover_manager(test_app, _CapturingFailoverManager(captured))
     test_app.state.http_client.post = post
 
     response = await client.post(

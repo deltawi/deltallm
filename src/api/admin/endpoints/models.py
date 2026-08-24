@@ -8,11 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, field_validator, model_validator
 
 from src.api.admin.endpoints.common import build_connection_summary, model_entries, to_json_value
+from src.api.admin.model_contracts import ModelDeleteResponse, ModelMutationResponse
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated, require_master_key
 from src.upstream_auth import (
@@ -30,6 +32,10 @@ from src.providers.resolution import (
 from src.router import HealthCheckInProgressError, build_deployment_registry
 from src.router.health_state import HealthRefInput
 from src.router.registry import DeploymentRegistryStore
+from src.router.runtime_generation import (
+    RoutingRuntimeGenerationStore,
+    rebuild_routing_runtime_generation,
+)
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import (
@@ -231,6 +237,7 @@ def _serialize_model_write_response(
     deltallm_params: dict[str, Any],
     summary_params: dict[str, Any] | None,
     model_info: dict[str, Any],
+    warnings: list[str],
 ) -> dict[str, Any]:
     credential_source = "named" if named_credential_id else "inline"
     effective_summary_params = summary_params or deltallm_params
@@ -253,6 +260,7 @@ def _serialize_model_write_response(
             "named_credential_name": named_credential_name,
             "deltallm_params": redact_connection_config(deltallm_params),
             "model_info": model_info,
+            "warnings": warnings,
         }
     )
 
@@ -266,12 +274,20 @@ def _rebuild_runtime_registry(app: Any) -> None:
     )
     rebuilt = build_deployment_registry(model_registry, route_groups=route_groups)
 
-    runtime_registry = getattr(getattr(app.state, "router", None), "deployment_registry", None)
-    if isinstance(runtime_registry, DeploymentRegistryStore):
-        runtime_registry.replace(rebuilt)
-    elif runtime_registry is not None:
-        runtime_registry = DeploymentRegistryStore(rebuilt)
-        app.state.router.deployment_registry = runtime_registry
+    runtime_registry = DeploymentRegistryStore(rebuilt)
+    generation_store = getattr(app.state, "routing_runtime_generation_store", None)
+    if isinstance(generation_store, RoutingRuntimeGenerationStore):
+        replacement = rebuild_routing_runtime_generation(
+            generation_store.require_snapshot(),
+            model_registry=model_registry,
+            route_groups=route_groups,
+            callable_target_catalog=app.state.callable_target_catalog,
+            deployment_registry=runtime_registry,
+        )
+        generation_store.replace(replacement)
+        app.state.router = replacement.router
+        app.state.failover_manager = replacement.failover_manager
+        app.state.cooldown_manager = replacement.cooldown_manager
 
     for attr in ("router_health_handler", "background_health_checker"):
         holder = getattr(app.state, attr, None)
@@ -639,7 +655,11 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
     }
 
 
-@router.post("/ui/api/models", dependencies=[Depends(require_master_key)])
+@router.post(
+    "/ui/api/models",
+    dependencies=[Depends(require_master_key)],
+    response_model=ModelMutationResponse,
+)
 async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     model_name, named_credential_id, deltallm_params, model_info = _normalized_model_payload_or_400(
@@ -674,8 +694,11 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     hot_reload: ModelHotReloadManager | None = getattr(
         request.app.state, "model_hot_reload_manager", None
     )
+    warnings: list[str] = []
     if hot_reload is not None:
-        deployment_id = await hot_reload.add_model(model_config, updated_by="admin_api")
+        mutation = await hot_reload.add_model(model_config, updated_by="admin_api")
+        deployment_id = mutation.value
+        warnings = list(mutation.warnings)
     else:
         request.app.state.model_registry.setdefault(model_name, []).append(
             {
@@ -705,6 +728,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         deltallm_params=deltallm_params,
         summary_params=effective_params,
         model_info=model_info,
+        warnings=warnings,
     )
     await emit_control_audit_event(
         request=request,
@@ -720,7 +744,11 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     return response
 
 
-@router.put("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_master_key)])
+@router.put(
+    "/ui/api/models/{deployment_id:path}",
+    dependencies=[Depends(require_master_key)],
+    response_model=ModelMutationResponse,
+)
 async def update_model(
     request: Request, deployment_id: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -799,16 +827,21 @@ async def update_model(
     _validate_model_config_or_400(model_config)
 
     if hot_reload is not None:
-        updated = await hot_reload.update_model(
-            deployment_id,
-            model_config,
-            updated_by="admin_api",
-        )
-        if not updated:
+        try:
+            mutation = await hot_reload.update_model(
+                deployment_id,
+                model_config,
+                updated_by="admin_api",
+            )
+        except RoutePolicyStateConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if not mutation.value:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found"
             )
+        warnings = list(mutation.warnings)
     else:
+        warnings = []
         deployments = registry.get(found_model_name, [])
         for idx, deployment in enumerate(deployments):
             if str(deployment.get("deployment_id") or f"{found_model_name}-{idx}") == deployment_id:
@@ -844,6 +877,7 @@ async def update_model(
         deltallm_params=deltallm_params,
         summary_params=effective_params,
         model_info=model_info,
+        warnings=warnings,
     )
     await emit_control_audit_event(
         request=request,
@@ -859,20 +893,27 @@ async def update_model(
     return response
 
 
-@router.delete("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_master_key)])
-async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
+@router.delete(
+    "/ui/api/models/{deployment_id:path}",
+    dependencies=[Depends(require_master_key)],
+    response_model=ModelDeleteResponse,
+)
+async def delete_model(request: Request, deployment_id: str) -> dict[str, object]:
     request_start = perf_counter()
     hot_reload: ModelHotReloadManager | None = getattr(
         request.app.state, "model_hot_reload_manager", None
     )
 
     if hot_reload is not None:
-        removed = await hot_reload.remove_model(deployment_id, updated_by="admin_api")
-        if not removed:
+        try:
+            mutation = await hot_reload.remove_model(deployment_id, updated_by="admin_api")
+        except RoutePolicyStateConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if not mutation.value:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found"
             )
-        response = {"deleted": True}
+        response = {"deleted": True, "warnings": list(mutation.warnings)}
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
@@ -904,7 +945,7 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
             await _invalidate_route_group_runtime_cache(request.app)
             _rebuild_runtime_registry(request.app)
             await _sync_auto_follow_org_bindings(request.app)
-            response = {"deleted": True}
+            response = {"deleted": True, "warnings": []}
             await emit_control_audit_event(
                 request=request,
                 request_start=request_start,

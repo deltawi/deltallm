@@ -32,6 +32,7 @@ from src.models.requests import (
     ResponsesRequest,
 )
 from src.providers.resolution import provider_from_model, resolve_provider, resolve_upstream_model
+from src.router.runtime_generation import pin_routing_runtime_generation
 from src.routers.text_adapters import (
     completions_to_chat_request,
     responses_to_chat_request,
@@ -255,9 +256,14 @@ class CacheMiddleware(BaseHTTPMiddleware):
         request_data: dict[str, Any],
     ) -> dict[str, Any] | None:
         endpoint = request.url.path
+        routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
         if endpoint == "/v1/embeddings":
             payload = EmbeddingRequest.model_validate(request_data)
-            prepared = await run_embedding_preflight(request=request, payload=payload)
+            prepared = await run_embedding_preflight(
+                request=request,
+                payload=payload,
+                routing_runtime=routing_runtime,
+            )
             return dict(prepared.request_data)
 
         if endpoint == "/v1/chat/completions":
@@ -276,6 +282,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
             request=request,
             payload=payload,
             request_data=canonical_data,
+            routing_runtime=routing_runtime,
         )
         return dict(prepared_data)
 

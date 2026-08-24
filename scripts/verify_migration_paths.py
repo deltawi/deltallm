@@ -29,6 +29,9 @@ UPGRADE_ORGANIZATION_ID = "migration-upgrade-fixture-org"
 UPGRADE_PROMPT_RENDER_ID = "migration-upgrade-fixture-render"
 UPGRADE_EMAIL_ID = "migration-upgrade-fixture-email"
 UPGRADE_SPEND_EVENT_ID = "migration-upgrade-fixture-spend"
+UPGRADE_ROUTE_GROUP_ID = "migration-upgrade-route-group"
+UPGRADE_MODEL_DEPLOYMENT_ID = "migration-upgrade-model-deployment"
+UPGRADE_MODEL_NAME = "migration-upgrade-model"
 
 
 def database_url_for(base_url: str, database_name: str) -> str:
@@ -193,6 +196,24 @@ INSERT INTO deltallm_spendlog_events
 VALUES
   ('{UPGRADE_SPEND_EVENT_ID}', 'migration-upgrade-request', 'migration',
    'migration-upgrade-key', 'migration-upgrade-model', 12.34, NOW(), NOW());
+
+INSERT INTO deltallm_modeldeployment
+  (deployment_id, model_name, deltallm_params)
+VALUES
+  ('{UPGRADE_MODEL_DEPLOYMENT_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb);
+
+INSERT INTO deltallm_routegroup
+  (route_group_id, group_key, mode)
+VALUES
+  ('{UPGRADE_ROUTE_GROUP_ID}', 'migration-upgrade-route', 'chat');
+
+INSERT INTO deltallm_routepolicy
+  (route_policy_id, route_group_id, version, status, policy_json, published_at)
+VALUES
+  ('migration-upgrade-route-policy-1', '{UPGRADE_ROUTE_GROUP_ID}', 1, 'published',
+   '{{"strategy":"weighted","server_revision":1}}'::jsonb, NOW()),
+  ('migration-upgrade-route-policy-2', '{UPGRADE_ROUTE_GROUP_ID}', 2, 'published',
+   '{{"strategy":"least-busy","server_revision":2}}'::jsonb, NOW());
 """,
     )
 
@@ -295,6 +316,37 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'email delivery audit status constraint is stale';
   END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND indexname = 'deltallm_routepolicy_one_published_per_group'
+  ) THEN
+    RAISE EXCEPTION 'route policy publication invariant index is missing';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'deltallm_routepolicy'
+      AND column_name = 'semantics_version'
+  ) THEN
+    RAISE EXCEPTION 'route policy semantics version column is missing';
+  END IF;
+  IF (SELECT count(*) FROM deltallm_routeruntimestate
+      WHERE state_key = 'routing_runtime'
+        AND revision = 0
+        AND route_groups_initialized = FALSE) <> 1 THEN
+    RAISE EXCEPTION 'route runtime revision seed row is invalid';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND indexname = 'deltallm_modeldeployment_model_name_key'
+      AND indexdef LIKE 'CREATE UNIQUE INDEX%'
+  ) THEN
+    RAISE EXCEPTION 'model deployment name uniqueness is missing';
+  END IF;
 END
 $migration_verify$;
 """,
@@ -376,6 +428,55 @@ BEGIN
     AND spend_exact IS NULL;
   IF fixture_count <> 1 THEN
     RAISE EXCEPTION 'legacy organization spend was not preserved by exact-money expansion';
+  END IF;
+
+  SELECT count(*) INTO fixture_count
+  FROM deltallm_routepolicy
+  WHERE route_group_id = '{UPGRADE_ROUTE_GROUP_ID}'
+    AND status = 'published'
+    AND version = 2
+    AND semantics_version = 1
+    AND policy_json->>'server_revision' = '2';
+  IF fixture_count <> 1 THEN
+    RAISE EXCEPTION 'route policy publication reconciliation did not retain the latest version';
+  END IF;
+
+  SELECT count(*) INTO fixture_count
+  FROM deltallm_routepolicy
+  WHERE route_group_id = '{UPGRADE_ROUTE_GROUP_ID}'
+    AND status = 'archived'
+    AND version = 1
+    AND semantics_version = 1
+    AND policy_json->>'server_revision' = '1';
+  IF fixture_count <> 1 THEN
+    RAISE EXCEPTION 'route policy publication reconciliation did not preserve history';
+  END IF;
+
+  SELECT count(*) INTO fixture_count
+  FROM deltallm_routeruntimestate
+  WHERE state_key = 'routing_runtime'
+    AND revision = 0
+    AND route_groups_initialized = TRUE;
+  IF fixture_count <> 1 THEN
+    RAISE EXCEPTION 'route runtime state did not preserve initialized route groups';
+  END IF;
+
+  SELECT count(*) INTO fixture_count
+  FROM deltallm_modeldeployment
+  WHERE deployment_id = '{UPGRADE_MODEL_DEPLOYMENT_ID}'
+    AND model_name = '{UPGRADE_MODEL_NAME}';
+  IF fixture_count <> 1 THEN
+    RAISE EXCEPTION 'model deployment upgrade fixture was not preserved';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND indexname = 'deltallm_modeldeployment_model_name_key'
+      AND indexdef LIKE 'CREATE UNIQUE INDEX%'
+  ) THEN
+    RAISE EXCEPTION 'model deployment name uniqueness was not installed';
   END IF;
 END
 $migration_verify$;

@@ -26,6 +26,7 @@ import {
   settings,
   tiers,
   type OrganizationCreatePayload,
+  type SettingsResponse,
   type Tier,
   type TierVersionDetail,
 } from '../lib/api';
@@ -289,7 +290,7 @@ export default function OrganizationCreate() {
     [isPlatformAdmin],
   );
   const { data: appSettings, error: settingsError, loading: settingsLoading } = useApi(
-    () => isPlatformAdmin ? settings.get() : Promise.resolve({}),
+    () => isPlatformAdmin ? settings.get() : Promise.resolve<SettingsResponse>({}),
     [isPlatformAdmin],
   );
   const {

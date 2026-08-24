@@ -4,7 +4,10 @@ from typing import TYPE_CHECKING, Any
 
 from src.config import AppConfig
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
-from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.repositories import (
+    ModelDeploymentRecord,
+    ModelDeploymentRepository,
+)
 from src.services.named_credentials import (
     merge_named_credential_params,
     resolve_named_credential_record,
@@ -204,6 +207,7 @@ async def load_model_registry(
     source_mode: str = "hybrid",
     named_credential_repository: NamedCredentialRepository | None = None,
     secret_resolver: "SecretResolver | None" = None,
+    allow_db_error_fallback: bool = True,
 ) -> tuple[dict[str, list[dict[str, Any]]], str]:
     if source_mode == "config_only":
         return await build_model_registry_from_config(
@@ -221,6 +225,8 @@ async def load_model_registry(
                 raise RuntimeError(
                     "model deployment source is db_only, but loading deployments from DB failed"
                 )
+            if not allow_db_error_fallback:
+                raise RuntimeError("loading model deployments from the database failed")
             records = []
         if records:
             return await build_model_registry_from_records(

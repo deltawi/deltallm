@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.retry import classify_batch_retry
+from src.batch.worker_types import BatchRoutingRuntime
 from src.callbacks import CallbackManager
 from src.rate_limit_policy import (
     RateLimitLease,
@@ -57,7 +58,10 @@ def _looks_like_api_key_hash(value: str | None) -> bool:
 
 def _fallback_auth_for_job(job: Any) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
-        api_key=str(getattr(job, "created_by_api_key", None) or f"batch:{getattr(job, 'batch_id', 'unknown')}"),
+        api_key=str(
+            getattr(job, "created_by_api_key", None)
+            or f"batch:{getattr(job, 'batch_id', 'unknown')}"
+        ),
         user_id=getattr(job, "created_by_user_id", None),
         team_id=getattr(job, "created_by_team_id", None),
         organization_id=getattr(job, "created_by_organization_id", None),
@@ -76,7 +80,9 @@ async def resolve_batch_job_auth(app: Any, job: Any) -> UserAPIKeyAuth:
 
 def record_batch_policy_failure(*, endpoint: str, exc: Exception) -> None:
     decision = classify_batch_retry(exc)
-    reason = str(getattr(exc, "code", None) or getattr(exc, "param", None) or decision.category.value)
+    reason = str(
+        getattr(exc, "code", None) or getattr(exc, "param", None) or decision.category.value
+    )
     if decision.retryable:
         increment_batch_policy_retryable_failure(endpoint=endpoint, reason=reason)
     else:
@@ -90,12 +96,15 @@ async def run_batch_request_preflight(
     payload: TRequest,
     request_data: dict[str, Any],
     call_type: str,
+    routing_runtime: BatchRoutingRuntime,
 ) -> BatchPreflightResult:
     endpoint = batch_call_type_for_endpoint(str(getattr(job, "endpoint", "")))
     started = perf_counter()
     auth = await resolve_batch_job_auth(app, job)
     try:
-        callback_manager: CallbackManager = getattr(app.state, "callback_manager", None) or CallbackManager()
+        callback_manager: CallbackManager = (
+            getattr(app.state, "callback_manager", None) or CallbackManager()
+        )
         data = await callback_manager.execute_pre_call_hooks(
             user_api_key_dict=auth.model_dump(mode="json"),
             cache=None,
@@ -118,6 +127,7 @@ async def run_batch_request_preflight(
             auth,
             transformed_model,
             callable_target_grant_service=grant_service,
+            callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
             tier_policy_service=getattr(app.state, "tier_policy_service", None),
             policy_mode=get_callable_target_policy_mode_from_app(app),
             tier_policy_mode=get_tier_policy_mode_from_app(app),
@@ -141,15 +151,21 @@ async def run_batch_request_preflight(
             status = "retryable_failure"
         else:
             status = "rejected"
-        observe_batch_preflight_latency(endpoint=endpoint, status=status, latency_seconds=perf_counter() - started)
+        observe_batch_preflight_latency(
+            endpoint=endpoint, status=status, latency_seconds=perf_counter() - started
+        )
         raise
 
     increment_batch_policy_allowed(endpoint=endpoint)
-    observe_batch_preflight_latency(endpoint=endpoint, status="allowed", latency_seconds=perf_counter() - started)
+    observe_batch_preflight_latency(
+        endpoint=endpoint, status="allowed", latency_seconds=perf_counter() - started
+    )
     return BatchPreflightResult(payload=transformed_payload, request_data=data, auth=auth)
 
 
-async def acquire_batch_policy_lease(*, app: Any, payload: BaseModel, auth: UserAPIKeyAuth) -> BatchPolicyLease | None:
+async def acquire_batch_policy_lease(
+    *, app: Any, payload: BaseModel, auth: UserAPIKeyAuth
+) -> BatchPolicyLease | None:
     limiter = getattr(app.state, "limit_counter", None)
     if limiter is None:
         return None
@@ -163,7 +179,9 @@ async def acquire_batch_policy_lease(*, app: Any, payload: BaseModel, auth: User
         tier_policy_mode=get_tier_policy_mode_from_app(app),
         tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
         tier_capacity_fair_share_enabled=get_tier_capacity_fair_share_enabled_from_app(app),
-        tier_capacity_fair_share_active_ttl_seconds=get_tier_capacity_fair_share_active_ttl_seconds_from_app(app),
+        tier_capacity_fair_share_active_ttl_seconds=get_tier_capacity_fair_share_active_ttl_seconds_from_app(
+            app
+        ),
         mode="batch",
     )
     return BatchPolicyLease(rate_limit_lease=lease)
@@ -176,7 +194,9 @@ async def release_batch_policy_lease(*, app: Any, lease: BatchPolicyLease | None
         return True
     limiter = getattr(app.state, "limit_counter", None)
     if limiter is None:
-        logger.warning("batch policy rate-limit release skipped because limit counter is unavailable")
+        logger.warning(
+            "batch policy rate-limit release skipped because limit counter is unavailable"
+        )
         return False
     try:
         await release_rate_limit_controls(limiter=limiter, lease=lease.rate_limit_lease)

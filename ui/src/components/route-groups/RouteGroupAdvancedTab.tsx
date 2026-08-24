@@ -174,7 +174,8 @@ export default function RouteGroupAdvancedTab({
   const toggle = (id: string) =>
     setOpenSections((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
@@ -562,6 +563,9 @@ export default function RouteGroupAdvancedTab({
                       <span className="text-sm font-semibold text-slate-900">Version {policy.version}</span>
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border uppercase tracking-wider ${STATUS_BADGE[policy.status] ?? STATUS_BADGE.archived}`}>
                         {policy.status}
+                      </span>
+                      <span className="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                        Semantics v{policy.semantics_version}
                       </span>
                       {policy.published_by && (
                         <span className="text-xs text-slate-500">by {policy.published_by}</span>

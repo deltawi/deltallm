@@ -8,7 +8,13 @@ from src.router.candidates import (
     RouteCandidatePlan,
     RouteCandidatePlanner,
 )
-from src.router.failover import ErrorClassification, FallbackConfig, FailoverManager, RetryPolicy
+from src.router.failover import (
+    ErrorClassification,
+    FallbackConfig,
+    FallbackEventJournal,
+    FailoverManager,
+    RetryPolicy,
+)
 from src.router.execution import (
     FailoverAttemptContext,
     ManagedFailoverResult,
@@ -47,6 +53,7 @@ __all__ = [
     "DeploymentStateBackend",
     "DeploymentRegistryStore",
     "FallbackConfig",
+    "FallbackEventJournal",
     "FailoverAttemptContext",
     "FailoverManager",
     "HealthCheckInProgressError",

@@ -8,14 +8,19 @@ import pytest
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.resolution import provider_presets, provider_supports_mode
+from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 
 _PROVIDER_API_BASES = {
-    str(preset["provider"]): str(preset["api_base"] or f"https://{preset['provider']}.example.test/v1")
+    str(preset["provider"]): str(
+        preset["api_base"] or f"https://{preset['provider']}.example.test/v1"
+    )
     for preset in provider_presets()
 }
 
 
-def _deployment_payload(*, model_name: str, provider: str, mode: str, upstream_model: str) -> dict[str, Any]:
+def _deployment_payload(
+    *, model_name: str, provider: str, mode: str, upstream_model: str
+) -> dict[str, Any]:
     deltallm_params: dict[str, Any] = {
         "provider": provider,
         "model": upstream_model,
@@ -48,7 +53,11 @@ def _install_mock_provider_post(test_app) -> None:  # noqa: ANN001
             payload = {
                 "responseId": "resp_test",
                 "candidates": [{"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
-                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2,
+                },
             }
             return httpx.Response(200, json=payload)
 
@@ -120,7 +129,7 @@ async def _grant_smoke_model(test_app, model_name: str) -> None:  # noqa: ANN001
                 enabled=True,
             )
         )
-        await grant_service.reload()
+        await reload_callable_target_grants_for_app(test_app, notify=False)
 
 
 @pytest.mark.asyncio
@@ -144,7 +153,9 @@ async def test_provider_presets_chat_smoke(client, test_app, preset: dict[str, A
     create_response = await client.post(
         "/ui/api/models",
         headers={"Authorization": "Bearer mk-test"},
-        json=_deployment_payload(model_name=model_name, provider=provider, mode="chat", upstream_model=upstream_model),
+        json=_deployment_payload(
+            model_name=model_name, provider=provider, mode="chat", upstream_model=upstream_model
+        ),
     )
 
     if not provider_supports_mode(provider, "chat"):
@@ -158,14 +169,20 @@ async def test_provider_presets_chat_smoke(client, test_app, preset: dict[str, A
     response = await client.post(
         "/v1/chat/completions",
         headers={"Authorization": f"Bearer {test_app.state._test_key}"},
-        json={"model": model_name, "messages": [{"role": "user", "content": "hello"}], "stream": False},
+        json={
+            "model": model_name,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        },
     )
     assert response.status_code == 200, response.text
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preset", provider_presets(), ids=lambda x: str(x["provider"]))
-async def test_provider_presets_embedding_smoke_with_capability_gate(client, test_app, preset: dict[str, Any]):
+async def test_provider_presets_embedding_smoke_with_capability_gate(
+    client, test_app, preset: dict[str, Any]
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     _install_mock_provider_post(test_app)
 
@@ -179,7 +196,12 @@ async def test_provider_presets_embedding_smoke_with_capability_gate(client, tes
     create_response = await client.post(
         "/ui/api/models",
         headers={"Authorization": "Bearer mk-test"},
-        json=_deployment_payload(model_name=model_name, provider=provider, mode="embedding", upstream_model=upstream_model),
+        json=_deployment_payload(
+            model_name=model_name,
+            provider=provider,
+            mode="embedding",
+            upstream_model=upstream_model,
+        ),
     )
 
     if provider_supports_mode(provider, "embedding"):
