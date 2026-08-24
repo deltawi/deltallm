@@ -28,8 +28,11 @@ const testSources = [
   'tests/reportingRequest.test.ts',
   'tests/reportingRefresh.test.ts',
   'tests/routeGroupsApi.test.ts',
+  'tests/routeGroupsPolicy.test.ts',
+  'tests/routeGroupPolicySimulationPanel.test.ts',
   'tests/usageBreakdown.test.ts',
   'tests/useApi.test.ts',
+  'tests/useRoutePolicySimulation.test.ts',
 ];
 
 await rm(outputDir, { recursive: true, force: true });

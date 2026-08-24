@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
   BarChart2,
   Clock,
   DollarSign,
@@ -10,25 +11,30 @@ import {
   Tag,
   Zap,
 } from 'lucide-react';
-import type { PolicyGuidedValues } from '../lib/routeGroups';
+import {
+  withGuidedPolicyMode,
+  withGuidedPolicyStrategy,
+  type PolicyGuidedValues,
+  type PolicyMemberOption,
+} from '../lib/routeGroups';
 
 const STRATEGY_META: Record<string, { icon: React.ElementType; label: string }> = {
-  'simple-shuffle':         { icon: Zap,       label: 'Simple Shuffle' },
-  'weighted':               { icon: GitBranch,  label: 'Weighted Split' },
-  'least-busy':             { icon: BarChart2,  label: 'Least Busy' },
-  'latency-based-routing':  { icon: Clock,      label: 'Latency-Based' },
-  'cost-based-routing':     { icon: DollarSign, label: 'Cost-Based' },
-  'usage-based-routing':    { icon: Layers,     label: 'Usage-Based' },
-  'tag-based-routing':      { icon: Tag,        label: 'Tag-Based' },
+  'simple-shuffle': { icon: Zap, label: 'Simple Shuffle' },
+  weighted: { icon: GitBranch, label: 'Weighted Split' },
+  'least-busy': { icon: BarChart2, label: 'Least Busy' },
+  'latency-based-routing': { icon: Clock, label: 'Latency-Based' },
+  'cost-based-routing': { icon: DollarSign, label: 'Cost-Based' },
+  'usage-based-routing': { icon: Layers, label: 'Usage-Based' },
+  'tag-based-routing': { icon: Tag, label: 'Tag-Based' },
   'priority-based-routing': { icon: ListChecks, label: 'Priority-Based' },
-  'rate-limit-aware':       { icon: Shield,     label: 'Rate-Limit Aware' },
+  'rate-limit-aware': { icon: Shield, label: 'Rate-Limit Aware' },
 };
 
 interface PolicyGuidedEditorProps {
   values: PolicyGuidedValues;
   onChange: (next: PolicyGuidedValues) => void;
   strategyOptions: string[];
-  memberOptions: string[];
+  memberOptions: PolicyMemberOption[];
 }
 
 function CheckIcon() {
@@ -45,62 +51,118 @@ export default function PolicyGuidedEditor({
   strategyOptions,
   memberOptions,
 }: PolicyGuidedEditorProps) {
-  const [weights, setWeights] = useState<Record<string, number>>(() =>
-    Object.fromEntries(
-      memberOptions.map((id) => [id, Math.floor(100 / Math.max(memberOptions.length, 1))])
-    )
-  );
+  const enabledMemberIds = memberOptions
+    .filter((member) => member.enabled)
+    .map((member) => member.deployment_id);
+  const optionsById = new Map(memberOptions.map((member) => [member.deployment_id, member]));
+  const orderedOptions = [
+    ...values.memberIds.flatMap((deploymentId) => {
+      const option = optionsById.get(deploymentId);
+      return option ? [option] : [];
+    }),
+    ...memberOptions.filter((member) => !values.memberIds.includes(member.deployment_id)),
+  ];
 
-  useEffect(() => {
-    setWeights((prev) => {
-      const next = { ...prev };
-      memberOptions.forEach((id) => {
-        if (!(id in next)) next[id] = 0;
-      });
-      return next;
+  const updateValue = <K extends keyof PolicyGuidedValues>(
+    key: K,
+    value: PolicyGuidedValues[K],
+  ) => onChange({ ...values, [key]: value });
+
+  const selectExplicitMembers = () => {
+    onChange({
+      ...values,
+      memberSelection: 'explicit',
+      memberIds: values.memberSelection === 'inherit' ? enabledMemberIds : values.memberIds,
     });
-  }, [memberOptions]);
-
-  const updateValue = <K extends keyof PolicyGuidedValues>(key: K, val: PolicyGuidedValues[K]) => {
-    onChange({ ...values, [key]: val });
   };
 
-  const setStrategy = (s: string) => {
-    onChange({ ...values, strategy: s });
+  const toggleMember = (deploymentId: string) => {
+    const startingIds = values.memberSelection === 'inherit'
+      ? enabledMemberIds
+      : values.memberIds;
+    const included = startingIds.includes(deploymentId);
+    onChange({
+      ...values,
+      memberSelection: 'explicit',
+      memberIds: included
+        ? startingIds.filter((item) => item !== deploymentId)
+        : [...startingIds, deploymentId],
+    });
   };
 
-  const toggleMember = (id: string) => {
-    const has = values.memberIds.includes(id);
-    updateValue('memberIds', has ? values.memberIds.filter((m) => m !== id) : [...values.memberIds, id]);
+  const updateWeight = (deploymentId: string, weight: string) => {
+    onChange({
+      ...values,
+      memberSelection: 'explicit',
+      memberIds: values.memberSelection === 'inherit' ? enabledMemberIds : values.memberIds,
+      memberWeights: { ...values.memberWeights, [deploymentId]: weight },
+    });
   };
 
-  const showWeights = values.strategy === 'weighted';
+  const moveMember = (deploymentId: string, delta: -1 | 1) => {
+    const currentIndex = values.memberIds.indexOf(deploymentId);
+    const nextIndex = currentIndex + delta;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= values.memberIds.length) return;
+    const memberIds = [...values.memberIds];
+    [memberIds[currentIndex], memberIds[nextIndex]] = [
+      memberIds[nextIndex],
+      memberIds[currentIndex],
+    ];
+    onChange({ ...values, memberSelection: 'explicit', memberIds });
+  };
+
+  const showWeights = values.mode === 'weighted';
+  const showOrder = values.mode === 'fallback' && values.memberSelection === 'explicit';
 
   return (
     <div className="space-y-6">
-
-      {/* ── Routing Strategy ── */}
       <div>
-        <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-400 mb-3">
-          Routing Strategy
+        <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+          Policy mode
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {([
+            ['weighted', 'Weighted traffic', 'Split requests using integer deployment weights.'],
+            ['fallback', 'Ordered fallback', 'Try enabled deployments in the configured order.'],
+          ] as const).map(([mode, label, description]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => onChange(withGuidedPolicyMode(values, mode))}
+              className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+                values.mode === mode
+                  ? 'border-brand-primary bg-blue-50'
+                  : 'border-slate-200 bg-white hover:bg-slate-50'
+              }`}
+            >
+              <span className="block text-sm font-semibold text-slate-900">{label}</span>
+              <span className="mt-0.5 block text-xs text-slate-500">{description}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+          Routing strategy
         </p>
         <div className="flex flex-wrap gap-2">
-          {strategyOptions.map((s) => {
-            const meta = STRATEGY_META[s] ?? { icon: Zap, label: s };
+          {strategyOptions.map((strategy) => {
+            const meta = STRATEGY_META[strategy] ?? { icon: Zap, label: strategy };
             const Icon = meta.icon;
-            const sel = values.strategy === s;
+            const selected = values.strategy === strategy;
             return (
               <button
-                key={s}
+                key={strategy}
                 type="button"
-                onClick={() => setStrategy(s)}
+                onClick={() => onChange(withGuidedPolicyStrategy(values, strategy))}
                 className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all ${
-                  sel
+                  selected
                     ? 'border-brand-primary bg-blue-50 text-blue-700 shadow-sm'
                     : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
                 }`}
               >
-                <Icon className={`h-4 w-4 ${sel ? 'text-brand-primary-ink' : 'text-slate-400'}`} />
+                <Icon className={`h-4 w-4 ${selected ? 'text-brand-primary-ink' : 'text-slate-400'}`} />
                 {meta.label}
               </button>
             );
@@ -108,62 +170,119 @@ export default function PolicyGuidedEditor({
         </div>
       </div>
 
-      {/* ── Target Deployments ── */}
       <div>
-        <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-400 mb-3">
-          Target Deployments
-        </p>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+            Target deployments
+          </p>
+          <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-1">
+            <button
+              type="button"
+              onClick={() => onChange({
+                ...values,
+                memberSelection: 'inherit',
+                memberIds: enabledMemberIds,
+              })}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                values.memberSelection === 'inherit'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500'
+              }`}
+            >
+              Inherit enabled
+            </button>
+            <button
+              type="button"
+              onClick={selectExplicitMembers}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                values.memberSelection === 'explicit'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500'
+              }`}
+            >
+              Choose subset
+            </button>
+          </div>
+        </div>
+        {values.memberSelection === 'inherit' && (
+          <p className="mb-3 text-xs text-slate-500">
+            The policy follows the group&apos;s enabled membership. Editing a weight or checkbox creates an explicit subset.
+          </p>
+        )}
         {memberOptions.length === 0 ? (
           <p className="rounded-xl border border-dashed border-slate-200 px-4 py-5 text-center text-sm text-slate-500">
             Add group members in the Models tab first.
           </p>
         ) : (
           <div className="space-y-2">
-            {memberOptions.map((id, i) => {
-              const included = values.memberIds.includes(id);
-              const w = weights[id] ?? 0;
+            {orderedOptions.map((member) => {
+              const deploymentId = member.deployment_id;
+              const included = values.memberIds.includes(deploymentId) && member.enabled;
+              const selectedIndex = values.memberIds.indexOf(deploymentId);
               return (
                 <div
-                  key={id}
-                  className={`flex items-center gap-4 rounded-lg border bg-white p-3 shadow-sm transition-all ${
-                    included ? 'border-slate-200' : 'border-slate-100 opacity-50'
+                  key={deploymentId}
+                  className={`flex flex-col gap-3 rounded-lg border bg-white p-3 shadow-sm transition-all md:flex-row md:items-center ${
+                    included ? 'border-slate-200' : 'border-slate-100 opacity-60'
                   }`}
                 >
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-medium text-slate-600">
-                    {i + 1}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-mono text-slate-900 truncate">{id}</p>
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-medium text-slate-600">
+                      {selectedIndex >= 0 ? selectedIndex + 1 : '—'}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-mono text-sm text-slate-900">{deploymentId}</p>
+                      {!member.enabled && <p className="text-xs text-amber-700">Disabled in group membership</p>}
+                    </div>
                   </div>
                   {showWeights && included && (
-                    <div className="flex items-center gap-3 w-44 shrink-0">
+                    <label className="flex items-center gap-2 md:w-36">
+                      <span className="text-xs font-medium text-slate-500">Weight</span>
                       <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        value={w}
-                        onChange={(e) => setWeights((prev) => ({ ...prev, [id]: Number(e.target.value) }))}
-                        className="w-full accent-brand-primary"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={values.memberWeights[deploymentId] || ''}
+                        placeholder={member.weight == null ? 'inherit' : String(member.weight)}
+                        onChange={(event) => updateWeight(deploymentId, event.target.value)}
+                        className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-right text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                        aria-label={`Weight for ${deploymentId}`}
                       />
-                      <div className="relative">
-                        <input
-                          type="number"
-                          value={w}
-                          onChange={(e) => setWeights((prev) => ({ ...prev, [id]: Number(e.target.value) }))}
-                          className="w-16 rounded-md border border-slate-200 py-1 pl-2 pr-6 text-sm text-right focus:border-brand-primary focus:ring-1 focus:ring-brand-primary focus:outline-none"
-                        />
-                        <span className="absolute right-2 top-1.5 text-xs text-slate-400">%</span>
-                      </div>
+                    </label>
+                  )}
+                  {showOrder && included && (
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => moveMember(deploymentId, -1)}
+                        disabled={selectedIndex <= 0}
+                        className="rounded-md border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 disabled:opacity-30"
+                        aria-label={`Move ${deploymentId} earlier`}
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveMember(deploymentId, 1)}
+                        disabled={selectedIndex === values.memberIds.length - 1}
+                        className="rounded-md border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 disabled:opacity-30"
+                        aria-label={`Move ${deploymentId} later`}
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                   )}
                   <button
                     type="button"
                     role="checkbox"
                     aria-checked={included}
-                    onClick={() => toggleMember(id)}
-                    className={`h-5 w-5 shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
-                      included ? 'border-brand-primary bg-brand-primary' : 'border-slate-300 bg-white hover:border-blue-400'
-                    }`}
+                    disabled={!member.enabled}
+                    onClick={() => toggleMember(deploymentId)}
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center self-end rounded border-2 transition-colors md:self-auto ${
+                      included
+                        ? 'border-brand-primary bg-brand-primary'
+                        : 'border-slate-300 bg-white hover:border-blue-400'
+                    } disabled:cursor-not-allowed`}
                   >
                     {included && <CheckIcon />}
                   </button>
@@ -174,43 +293,49 @@ export default function PolicyGuidedEditor({
         )}
       </div>
 
-      {/* ── Timeouts & Retry (collapsible) ── */}
       <details className="rounded-xl border border-slate-200 px-3 py-3">
-        <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900 select-none">
+        <summary className="cursor-pointer list-none select-none text-sm font-semibold text-slate-900">
           Timeouts and retry
         </summary>
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
           <label className="space-y-1">
             <span className="text-xs font-medium text-slate-700">Global Timeout (ms)</span>
             <input
+              type="number"
+              min="1"
+              step="1"
               value={values.timeoutMs}
-              onChange={(e) => updateValue('timeoutMs', e.target.value)}
+              onChange={(event) => updateValue('timeoutMs', event.target.value)}
               placeholder="10000"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-primary focus:border-brand-primary"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
             />
           </label>
           <label className="space-y-1">
             <span className="text-xs font-medium text-slate-700">Retry Max Attempts</span>
             <input
+              type="number"
+              min="0"
+              step="1"
               value={values.retryMaxAttempts}
-              onChange={(e) => updateValue('retryMaxAttempts', e.target.value)}
+              onChange={(event) => updateValue('retryMaxAttempts', event.target.value)}
               placeholder="2"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-primary focus:border-brand-primary"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
             />
           </label>
           <label className="space-y-1 md:col-span-2">
             <span className="text-xs font-medium text-slate-700">Retryable Errors</span>
             <input
               value={values.retryableErrors}
-              onChange={(e) => updateValue('retryableErrors', e.target.value)}
-              placeholder="timeout,5xx,rate_limit"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-primary focus:border-brand-primary"
+              onChange={(event) => updateValue('retryableErrors', event.target.value)}
+              placeholder="timeout,rate_limit,generic"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
             />
-            <span className="block text-xs text-slate-500">Comma-separated error classes to retry.</span>
+            <span className="block text-xs text-slate-500">
+              Allowed: timeout, rate_limit, context_window_exceeded, content_policy_violation, generic.
+            </span>
           </label>
         </div>
       </details>
-
     </div>
   );
 }

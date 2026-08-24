@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Clock,
   Code2,
+  FlaskConical,
   GitBranch,
   ListChecks,
   RotateCcw,
@@ -13,8 +14,18 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import PolicyGuidedEditor from '../PolicyGuidedEditor';
-import { ROUTE_GROUP_STRATEGY_OPTIONS, type PolicyAction, type PolicyGuidedValues } from '../../lib/routeGroups';
-import type { PromptBinding, PromptTemplate, RoutePolicy } from '../../lib/api';
+import RouteGroupPolicySimulationPanel from './RouteGroupPolicySimulationPanel';
+import {
+  ROUTE_GROUP_STRATEGY_OPTIONS,
+  type PolicyAction,
+  type PolicyGuidedValues,
+} from '../../lib/routeGroups';
+import type {
+  PromptBinding,
+  PromptTemplate,
+  RouteGroupMemberDetail,
+  RoutePolicy,
+} from '../../lib/api';
 
 /* ─── AccordionCard shell ─────────────────────────────────────────────────── */
 
@@ -96,9 +107,14 @@ interface RouteGroupAdvancedTabProps {
   onDeleteBinding: (binding: PromptBinding) => void;
 
   /* Routing Policy */
+  groupKey: string;
   guidedPolicy: PolicyGuidedValues;
-  memberIds: string[];
+  members: RouteGroupMemberDetail[];
   guidedPreview: string;
+  simulationPolicy: Record<string, unknown> | null;
+  simulationPolicyError: string | null;
+  simulationPromptRef: Record<string, unknown> | null;
+  canSimulate: boolean;
   policyText: string;
   policyMessage: string | null;
   policyError: string | null;
@@ -146,9 +162,14 @@ export default function RouteGroupAdvancedTab({
   onBindingFormChange,
   onSaveBinding,
   onDeleteBinding,
+  groupKey,
   guidedPolicy,
-  memberIds,
+  members,
   guidedPreview,
+  simulationPolicy,
+  simulationPolicyError,
+  simulationPromptRef,
+  canSimulate,
   policyText,
   policyMessage,
   policyError,
@@ -444,7 +465,7 @@ export default function RouteGroupAdvancedTab({
               values={guidedPolicy}
               onChange={onGuidedPolicyChange}
               strategyOptions={[...ROUTE_GROUP_STRATEGY_OPTIONS]}
-              memberOptions={memberIds}
+              memberOptions={members}
             />
           )}
 
@@ -470,7 +491,36 @@ export default function RouteGroupAdvancedTab({
         </div>
       </AccordionCard>
 
-      {/* ── 3. Policy History ── */}
+      {/* ── 3. Policy Simulation ── */}
+      <AccordionCard
+        id="policy-simulation"
+        open={openSections.has('policy-simulation')}
+        onToggle={() => toggle('policy-simulation')}
+        icon={FlaskConical}
+        iconBg="bg-cyan-100"
+        iconColor="text-cyan-700"
+        title="Policy Simulation"
+        subtitle="Test eligibility, retries, and fallback outcomes without sending provider traffic."
+        borderAccent="border-cyan-200"
+        badge={(
+          <span className="inline-flex items-center rounded-full bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 ring-1 ring-inset ring-cyan-600/20">
+            dry run
+          </span>
+        )}
+      >
+        <div className="px-5 py-5">
+          <RouteGroupPolicySimulationPanel
+            groupKey={groupKey}
+            policy={simulationPolicy}
+            policyError={simulationPolicyError}
+            members={members}
+            canSimulate={canSimulate}
+            promptRef={simulationPromptRef}
+          />
+        </div>
+      </AccordionCard>
+
+      {/* ── 4. Policy History ── */}
       <AccordionCard
         id="policy-history"
         open={openSections.has('policy-history')}

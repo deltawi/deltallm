@@ -18,14 +18,18 @@ import {
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { useAuth } from '../lib/auth';
 import { models, promptRegistry, routeGroups, type PromptBinding } from '../lib/api';
+import { resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import {
   buildPolicyFromGuided,
   GUIDED_POLICY_DEFAULTS,
   parsePolicyTextLoose,
+  reconcileGuidedPolicyMembers,
   routeGroupMutationOutcome,
   toGuidedPolicy,
+  validateGuidedPolicy,
   type PolicyAction,
   type PolicyGuidedValues,
 } from '../lib/routeGroups';
@@ -97,6 +101,7 @@ export default function RouteGroupDetail() {
   const { groupKey } = useParams<{ groupKey: string }>();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const { authMode, session } = useAuth();
 
   const [activeTab, setActiveTab] = useState<TabId>('models');
   const [savingGroup, setSavingGroup] = useState(false);
@@ -148,6 +153,7 @@ export default function RouteGroupDetail() {
   const missingMembers = members.filter((m) => m.healthy == null).length;
   const memberIds = useMemo(() => members.map((m) => m.deployment_id), [members]);
   const isPolicyBusy = policyAction !== null;
+  const canSimulatePolicy = resolveUiAccess(authMode, session).route_groups;
   const publishedPolicy = useMemo(() => policies.find((p) => p.status === 'published') || null, [policies]);
   const draftPolicy = useMemo(() => policies.find((p) => p.status === 'draft') || null, [policies]);
   const winningPrompt = bindingPreview.data?.winner || null;
@@ -187,25 +193,16 @@ export default function RouteGroupDetail() {
         ? preferred.policy_json
         : {};
     setPolicyText(JSON.stringify(policyJson, null, 2));
-    setGuidedPolicy(toGuidedPolicy(policyJson, memberIds));
+    setGuidedPolicy(toGuidedPolicy(policyJson, members));
     const rollbackCandidates = policies
       .filter((p) => p.status === 'archived' || p.status === 'published')
       .sort((a, b) => b.version - a.version);
     setSelectedRollbackVersion(rollbackCandidates[0]?.version ?? null);
-  }, [draftPolicy, memberIds, policies]);
+  }, [draftPolicy, members, policies]);
 
   useEffect(() => {
-    if (memberIds.length === 0) {
-      setGuidedPolicy((cur) => (cur.memberIds.length === 0 ? cur : { ...cur, memberIds: [] }));
-      return;
-    }
-    setGuidedPolicy((cur) => {
-      const filtered = cur.memberIds.filter((id) => memberIds.includes(id));
-      const next = filtered.length > 0 ? filtered : memberIds;
-      if (next.length === cur.memberIds.length && next.every((id, i) => id === cur.memberIds[i])) return cur;
-      return { ...cur, memberIds: next };
-    });
-  }, [memberIds]);
+    setGuidedPolicy((current) => reconcileGuidedPolicyMembers(current, members));
+  }, [members]);
 
   const canRollbackVersions = useMemo(
     () => policies.filter((p) => p.status === 'archived' || p.status === 'published'),
@@ -222,6 +219,18 @@ export default function RouteGroupDetail() {
     const base = parsePolicyTextLoose(policyText) || {};
     return JSON.stringify(buildPolicyFromGuided(base, guidedPolicy), null, 2);
   }, [guidedPolicy, policyText]);
+
+  const simulationPolicy = useMemo(() => {
+    if (showAdvancedJson) return parsePolicyTextLoose(policyText);
+    if (validateGuidedPolicy(guidedPolicy, members)) return null;
+    return buildPolicyFromGuided(parsePolicyTextLoose(policyText) || {}, guidedPolicy);
+  }, [guidedPolicy, members, policyText, showAdvancedJson]);
+  const simulationPolicyError = useMemo(() => {
+    if (showAdvancedJson) {
+      return parsePolicyTextLoose(policyText) ? null : 'Enter valid policy JSON before simulating.';
+    }
+    return validateGuidedPolicy(guidedPolicy, members);
+  }, [guidedPolicy, members, policyText, showAdvancedJson]);
 
   const promptSummary = useMemo(() => {
     if (!winningPrompt || !winningPromptDetail.data) return null;
@@ -245,6 +254,11 @@ export default function RouteGroupDetail() {
   /* ── Handlers ── */
   const parsePolicy = (): Record<string, unknown> | null => {
     if (!showAdvancedJson) {
+      const guidedError = validateGuidedPolicy(guidedPolicy, members);
+      if (guidedError) {
+        setPolicyError(guidedError);
+        return null;
+      }
       const base = parsePolicyTextLoose(policyText) || {};
       const payload = buildPolicyFromGuided(base, guidedPolicy);
       setPolicyText(JSON.stringify(payload, null, 2));
@@ -376,7 +390,7 @@ export default function RouteGroupDetail() {
     try {
       const result = await routeGroups.validatePolicy(groupKey!, parsed);
       setPolicyText(JSON.stringify(result.policy, null, 2));
-      setGuidedPolicy(toGuidedPolicy(result.policy, memberIds));
+      setGuidedPolicy(toGuidedPolicy(result.policy, members));
       setPolicyMessage(result.warnings?.length ? `Valid with warnings: ${result.warnings.join(' ')}` : 'Policy is valid.');
       setPolicyError(null);
     } catch (error: unknown) {
@@ -610,6 +624,7 @@ export default function RouteGroupDetail() {
             />
           ) : activeTab === 'advanced' ? (
             <RouteGroupAdvancedTab
+              groupKey={group.group_key}
               bindings={bindings}
               templates={promptTemplates.data?.data || []}
               bindingForm={bindingForm}
@@ -620,8 +635,15 @@ export default function RouteGroupDetail() {
               onSaveBinding={handleSaveBinding}
               onDeleteBinding={handleDeleteBinding}
               guidedPolicy={guidedPolicy}
-              memberIds={memberIds}
+              members={members}
               guidedPreview={guidedPreview}
+              simulationPolicy={simulationPolicy}
+              simulationPolicyError={simulationPolicyError}
+              simulationPromptRef={promptSummary ? {
+                template_key: promptSummary.templateKey,
+                ...(promptSummary.label ? { label: promptSummary.label } : {}),
+              } : null}
+              canSimulate={canSimulatePolicy}
               policyText={policyText}
               policyMessage={policyMessage}
               policyError={policyError}

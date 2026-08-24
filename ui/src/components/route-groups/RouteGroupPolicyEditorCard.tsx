@@ -88,7 +88,12 @@ export default function RouteGroupPolicyEditorCard({
         values={guidedPolicy}
         onChange={onGuidedPolicyChange}
         strategyOptions={[...ROUTE_GROUP_STRATEGY_OPTIONS]}
-        memberOptions={memberIds}
+        memberOptions={memberIds.map((deploymentId) => ({
+          deployment_id: deploymentId,
+          enabled: true,
+          weight: null,
+          priority: null,
+        }))}
       />
 
       {/* Preview + JSON toggle */}

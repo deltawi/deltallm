@@ -76,3 +76,59 @@ test('route-group policy mutations pass AbortSignal to the shared transport', as
     globalThis.fetch = originalFetch;
   }
 });
+
+test('route-group policy simulation sends the typed scenario and AbortSignal', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedPath = '';
+  let capturedInit: RequestInit | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedPath = String(input);
+    capturedInit = init;
+    return new Response(JSON.stringify({
+      group_key: 'support / eu',
+      iterations: 2,
+      basis: 'live_state_dry_run',
+      warnings: [],
+      prompt: null,
+      effective_metadata: { tags: ['vip'] },
+      summary: {
+        selected_requests: 2,
+        no_selection_requests: 0,
+        served_requests: 2,
+        failed_requests: 0,
+        fallback_requests: 2,
+        timed_out_requests: 0,
+        total_attempts: 4,
+      },
+      reason_counts: { priority: 2 },
+      selections: [{ deployment_id: 'dep-a', count: 2, ratio: 1 }],
+      served_deployments: [{ deployment_id: 'dep-b', count: 2, ratio: 1 }],
+      terminal_outcomes: { success: 2 },
+      sample_decision: null,
+      sample_attempts: [],
+    }), { headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+
+  try {
+    const controller = new AbortController();
+    const result = await routeGroups.simulatePolicy('support / eu', {
+      iterations: 2,
+      policy: { mode: 'fallback' },
+      metadata: { tags: ['vip'] },
+      outcomes: [{ deployment_id: 'dep-a', outcome: 'timeout' }],
+    }, controller.signal);
+
+    assert.equal(capturedPath, '/ui/api/route-groups/support%20%2F%20eu/policy/simulate');
+    assert.equal(capturedInit?.method, 'POST');
+    assert.equal(capturedInit?.signal, controller.signal);
+    assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
+      iterations: 2,
+      policy: { mode: 'fallback' },
+      metadata: { tags: ['vip'] },
+      outcomes: [{ deployment_id: 'dep-a', outcome: 'timeout' }],
+    });
+    assert.equal(result.served_deployments[0].deployment_id, 'dep-b');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
