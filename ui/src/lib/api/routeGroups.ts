@@ -105,6 +105,63 @@ export interface RouteGroupListResponse {
   };
 }
 
+export type RoutePolicySimulationOutcome = 'success' | 'timeout' | 'rate_limit' | 'unavailable';
+
+export interface RoutePolicySimulationRequest {
+  iterations?: number;
+  policy?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown>;
+  user_id?: string;
+  prompt_ref?: Record<string, unknown> | null;
+  outcomes?: Array<{
+    deployment_id: string;
+    outcome: RoutePolicySimulationOutcome;
+  }>;
+}
+
+export interface RoutePolicySimulationSelection {
+  deployment_id: string;
+  count: number;
+  ratio: number;
+}
+
+export interface RoutePolicySimulationAttempt {
+  iteration: number;
+  attempt: number;
+  deployment_id: string;
+  outcome: RoutePolicySimulationOutcome;
+  transition: 'primary' | 'retry' | 'fallback';
+}
+
+export interface RoutePolicySimulationResponse {
+  group_key: string;
+  iterations: number;
+  basis: 'live_state_dry_run';
+  warnings: string[];
+  prompt: {
+    template_key: string;
+    version: number;
+    label: string | null;
+    route_preferences: Record<string, unknown>;
+  } | null;
+  effective_metadata: Record<string, unknown>;
+  summary: {
+    selected_requests: number;
+    no_selection_requests: number;
+    served_requests: number;
+    failed_requests: number;
+    fallback_requests: number;
+    timed_out_requests: number;
+    total_attempts: number;
+  };
+  reason_counts: Record<string, number>;
+  selections: RoutePolicySimulationSelection[];
+  served_deployments: RoutePolicySimulationSelection[];
+  terminal_outcomes: Record<string, number>;
+  sample_decision: Record<string, unknown> | null;
+  sample_attempts: RoutePolicySimulationAttempt[];
+}
+
 export const routeGroups = {
   list: (
     params?: { search?: string; limit?: number; offset?: number },
@@ -201,4 +258,12 @@ export const routeGroups = {
       `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/rollback`,
       { method: 'POST', json: { version }, signal },
     ),
+  simulatePolicy: (
+    groupKey: string,
+    payload: RoutePolicySimulationRequest,
+    signal?: AbortSignal,
+  ) => apiFetch<RoutePolicySimulationResponse>(
+    `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/simulate`,
+    { method: 'POST', json: payload, signal },
+  ),
 };

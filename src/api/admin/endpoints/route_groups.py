@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import ValidationError
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
@@ -24,6 +25,8 @@ from src.api.admin.route_group_contracts import (
     RouteGroupDeleteResponse,
     RouteGroupMemberMutationResponse,
     RouteGroupMutationResponse,
+    RoutePolicySimulationRequest,
+    RoutePolicySimulationResponse,
     RoutePolicyMutationResponse,
     RoutePolicyRollbackResponse,
 )
@@ -34,7 +37,6 @@ from src.governance.access_groups import InvalidAccessGroupError, normalize_acce
 from src.middleware.admin import require_admin_permission
 from src.router.policy_validation import (
     PolicyMemberInventoryItem,
-    merge_policy_members,
     validate_route_policy,
 )
 from src.router.route_group_validation import (
@@ -42,13 +44,8 @@ from src.router.route_group_validation import (
     normalize_route_group_mode,
     validate_route_group_member_modes,
 )
-from src.router import (
-    Router,
-    RouterConfig,
-    RoutingStrategy,
-    build_deployment_registry,
-    build_route_group_policies,
-)
+from src.router import RoutingStrategy
+from src.router.runtime_generation import require_routing_runtime_generation
 from src.services.asset_ownership import (
     apply_owner_scope_to_metadata,
     normalize_owner_scope_type,
@@ -59,7 +56,12 @@ from src.services.asset_scopes import normalize_scope_type
 from src.services.organization_callable_target_sync import (
     maybe_disable_organization_auto_follow_for_scope_mutation,
 )
-from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
+from src.services.route_policy_simulation import (
+    RoutePolicySimulationInvalidError,
+    RoutePolicySimulationNotFoundError,
+    RoutePolicySimulationService,
+    RoutePolicySimulationUnavailableError,
+)
 from src.services.route_group_refresh import refresh_route_group_runtime
 from src.services.route_group_mutations import RouteGroupMutationService
 from src.services.route_groups import RouteGroupRuntimeCache
@@ -184,47 +186,6 @@ def _validate_bool(value: Any, *, field_name: str) -> bool:
             detail=f"{field_name} must be a boolean",
         )
     return value
-
-
-def _validate_iterations(value: Any) -> int:
-    parsed = _validate_int_or_none(value, field_name="iterations")
-    iterations = parsed if parsed is not None else 100
-    if iterations < 1 or iterations > 5000:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="iterations must be between 1 and 5000"
-        )
-    return iterations
-
-
-def _apply_policy_simulation_override(
-    runtime_groups: list[dict[str, Any]],
-    *,
-    group_key: str,
-    policy: dict[str, Any],
-) -> list[dict[str, Any]]:
-    updated: list[dict[str, Any]] = []
-    found = False
-    for group in runtime_groups:
-        if str(group.get("key") or "") != group_key:
-            updated.append(group)
-            continue
-        found = True
-        patched = dict(group)
-        if "strategy" in policy:
-            patched["strategy"] = policy.get("strategy")
-        if "timeouts" in policy:
-            patched["timeouts"] = policy.get("timeouts")
-        if "retry" in policy:
-            patched["retry"] = policy.get("retry")
-        if "members" in policy:
-            patched["members"] = merge_policy_members(
-                list(group.get("members") or []), policy.get("members")
-            )
-        updated.append(patched)
-
-    if not found:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
-    return updated
 
 
 async def _resolve_policy_members(
@@ -1124,157 +1085,44 @@ async def rollback_route_group_policy(
 
 @router.post(
     "/ui/api/route-groups/{group_key}/policy/simulate",
+    response_model=RoutePolicySimulationResponse,
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
 )
 async def simulate_route_group_policy(
     request: Request, group_key: str, payload: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    repository = _repository_or_503(request)
-    group = await repository.get_group(group_key)
-    if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
-
-    body = payload or {}
-    iterations = _validate_iterations(body.get("iterations"))
-    metadata = body.get("metadata")
-    if metadata is not None and not isinstance(metadata, dict):
+) -> RoutePolicySimulationResponse:
+    try:
+        simulation_request = RoutePolicySimulationRequest.model_validate(payload or {})
+    except ValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object"
-        )
-    metadata = metadata or {}
-    user_id = str(body.get("user_id") or "policy-simulation")
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=exc.errors(include_url=False),
+        ) from exc
 
-    runtime_groups = await repository.list_runtime_groups()
-    available_members = await _resolve_policy_members(repository, group_key)
-
-    warnings: list[str] = []
-    prompt_summary: dict[str, Any] | None = None
-    if "prompt_ref" in body:
-        prompt_ref = parse_prompt_reference(body.get("prompt_ref"))
-        if prompt_ref is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="prompt_ref could not be parsed"
-            )
-        prompt_repository = _prompt_resolution_repository(request)
-        if prompt_repository is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Prompt registry repository unavailable",
-            )
-        resolved_prompt = await prompt_repository.resolve_prompt(
-            template_key=prompt_ref.template_key,
-            label=prompt_ref.label,
-            version=prompt_ref.version,
-        )
-        if resolved_prompt is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="prompt_ref could not be resolved"
-            )
-        try:
-            metadata, route_preferences = apply_route_preferences_to_metadata(
-                metadata, resolved_prompt.route_preferences
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        prompt_summary = {
-            "template_key": resolved_prompt.template_key,
-            "version": resolved_prompt.version,
-            "label": resolved_prompt.label or prompt_ref.label,
-            "route_preferences": route_preferences,
-        }
-        preferred_group = (
-            route_preferences.get("route_group") if isinstance(route_preferences, dict) else None
-        )
-        if isinstance(preferred_group, str) and preferred_group and preferred_group != group_key:
-            warnings.append(
-                f"prompt route_preferences.route_group={preferred_group!r} is advisory and does not override simulation group {group_key!r}"
-            )
-
-    policy_override = body.get("policy")
-    if policy_override is not None:
-        if not isinstance(policy_override, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="policy must be an object"
-            )
-        normalized, policy_warnings = _validate_policy_payload(
-            policy_override, available_members=available_members
-        )
-        warnings.extend(policy_warnings)
-        runtime_groups = _apply_policy_simulation_override(
-            runtime_groups, group_key=group_key, policy=normalized
-        )
-
-    base_router = getattr(request.app.state, "router", None)
-    if base_router is None:
+    try:
+        runtime = require_routing_runtime_generation(request.app.state)
+    except RuntimeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Router runtime unavailable"
-        )
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Router runtime unavailable",
+        ) from exc
 
-    model_registry = getattr(request.app.state, "model_registry", {})
-    state_backend = getattr(request.app.state, "router_state_backend", base_router.state)
-    deployment_registry = build_deployment_registry(model_registry, route_groups=runtime_groups)
-    simulation_router = Router(
-        strategy=base_router.strategy,
-        state_backend=state_backend,
-        config=RouterConfig(
-            num_retries=base_router.config.num_retries,
-            retry_after=base_router.config.retry_after,
-            timeout=base_router.config.timeout,
-            cooldown_time=base_router.config.cooldown_time,
-            allowed_fails=base_router.config.allowed_fails,
-            enable_pre_call_checks=base_router.config.enable_pre_call_checks,
-            model_group_alias=base_router.config.model_group_alias,
-            route_group_policies=build_route_group_policies(runtime_groups),
-        ),
-        deployment_registry=deployment_registry,
+    service = RoutePolicySimulationService(
+        route_groups=_repository_or_503(request),
+        runtime=runtime,
+        prompts=_prompt_resolution_repository(request),
     )
-
-    selection_counts: dict[str, int] = {}
-    reason_counts: dict[str, int] = {}
-    no_selection_count = 0
-    sample_decision: dict[str, Any] | None = None
-
-    for _ in range(iterations):
-        request_context: dict[str, Any] = {"metadata": dict(metadata), "user_id": user_id}
-        selected = await simulation_router.select_deployment(group_key, request_context)
-        decision = request_context.get("route_decision")
-        if isinstance(decision, dict):
-            reason = str(decision.get("reason") or "unknown")
-            reason_counts[reason] = reason_counts.get(reason, 0) + 1
-            if sample_decision is None:
-                sample_decision = to_json_value(decision)
-        if selected is None:
-            no_selection_count += 1
-            continue
-        selection_counts[selected.deployment_id] = (
-            selection_counts.get(selected.deployment_id, 0) + 1
-        )
-
-    selections = [
-        {
-            "deployment_id": deployment_id,
-            "count": count,
-            "ratio": count / iterations if iterations > 0 else 0.0,
-        }
-        for deployment_id, count in sorted(
-            selection_counts.items(), key=lambda item: (-item[1], item[0])
-        )
-    ]
-
-    return {
-        "group_key": group_key,
-        "iterations": iterations,
-        "warnings": warnings,
-        "prompt": prompt_summary,
-        "effective_metadata": metadata,
-        "summary": {
-            "selected_requests": iterations - no_selection_count,
-            "no_selection_requests": no_selection_count,
-        },
-        "reason_counts": reason_counts,
-        "selections": selections,
-        "sample_decision": sample_decision,
-    }
+    try:
+        return await service.simulate(group_key, simulation_request)
+    except RoutePolicySimulationNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RoutePolicySimulationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RoutePolicySimulationUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 @router.put(

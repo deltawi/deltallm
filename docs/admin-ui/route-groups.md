@@ -234,6 +234,40 @@ The simulation view is especially useful for:
 - checking weighted splits
 - confirming fallback order
 - confirming prompt-derived tag routing
+- testing retries and fallback under assumed timeout, rate-limit, or unavailable outcomes
+
+## Policy Simulation
+
+Open **Advanced → Policy Simulation** to dry-run the policy currently shown in the guided or JSON
+editor. The simulation can use request tags and a per-deployment assumed outcome. A successful
+outcome is the default; failure outcomes pass through the same retry classification, retry budget,
+candidate ordering, and fallback decisions used by gateway requests.
+
+The policy shown in the editor is simulated as a complete replacement, matching validation and
+publication semantics. Clearing retry or timeout controls removes those overrides, and choosing
+**Inherit enabled** uses the route group's enabled membership rather than retaining the published
+policy's prior explicit subset.
+
+The results distinguish:
+
+- the initially selected deployment
+- the deployment that ultimately served each request
+- requests that required fallback
+- terminal success, timeout, rate-limit, unavailable, or no-selection outcomes
+- a bounded sample trace of primary, retry, and fallback attempts
+- eligibility decision reasons from the router
+
+This is a control-plane dry run. It pins one routing-runtime generation, snapshots the required
+health, cooldown, active-request, usage, and latency state once, and performs all attempt accounting
+locally. It does not call a provider, wait for configured retry backoff, emit operational fallback
+events, or mutate live health, cooldown, usage, latency, or concurrency state. The result therefore
+answers “what would this policy do against this captured state and these assumed outcomes?”; it is
+not a provider availability forecast.
+
+Editing the policy, request tags, iteration count, or assumed outcomes marks the last result stale.
+Starting a new simulation cancels the prior UI request, and an older completion cannot replace a
+newer result. A failed refresh leaves the last successful result visible with its stale/error state.
+Route-group administration permission is required.
 
 ## Prompt Binding
 

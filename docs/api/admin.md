@@ -251,6 +251,36 @@ Access-group binding upserts use this payload:
 | `POST` | `/ui/api/route-groups/{group_key}/policy/simulate` | Simulate routing behavior |
 | `PUT` | `/ui/api/route-groups/{group_key}/policy` | Replace the active policy |
 
+Policy simulation accepts a bounded scenario (1–5000 iterations):
+
+```json
+{
+  "iterations": 100,
+  "policy": {
+    "mode": "fallback",
+    "members": [
+      {"deployment_id": "primary", "priority": 0},
+      {"deployment_id": "standby", "priority": 1}
+    ],
+    "retry": {"max_attempts": 1, "retryable_error_classes": ["timeout"]}
+  },
+  "metadata": {"tags": ["vip"]},
+  "outcomes": [
+    {"deployment_id": "primary", "outcome": "timeout"}
+  ]
+}
+```
+
+Supported assumed outcomes are `success`, `timeout`, `rate_limit`, and `unavailable`. Omitted
+deployments default to `success`. The response includes initial `selections`,
+`served_deployments`, `terminal_outcomes`, aggregate retry/fallback counts, eligibility
+`reason_counts`, and a bounded `sample_attempts` trace. `basis` is `live_state_dry_run`: the server
+pins one runtime generation and snapshots routing state before iterating, calls no provider, and
+does not mutate live routing state. When `policy` is present, it is the complete client-owned policy
+document rather than a patch: omitted `members` inherit the group's enabled membership, omitted
+`retry` and `timeouts` clear published overrides, and omitted `strategy` falls back to the route
+group's configured strategy.
+
 ### Prompt Registry
 
 | Method | Endpoint | Purpose |
