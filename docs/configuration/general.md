@@ -73,6 +73,22 @@ general_settings:
   invitation_token_ttl_hours: 72
   password_reset_token_ttl_minutes: 60
   api_key_auth_cache_ttl_seconds: 300
+  organization_lifecycle_auth_max_staleness_seconds: 3
+  organization_lifecycle_auth_cache_max_entries: 10000
+  organization_deletion_recovery_window_hours: 168
+  organization_deletion_max_attempts: 20
+  organization_deletion_requests_enabled: false
+  organization_deletion_worker_enabled: true
+  organization_deletion_worker_poll_interval_seconds: 5
+  organization_deletion_worker_batch_size: 5
+  organization_deletion_worker_max_concurrency: 2
+  organization_deletion_worker_lease_seconds: 60
+  organization_deletion_worker_record_timeout_seconds: 45
+  organization_deletion_worker_page_size: 100
+  organization_deletion_worker_max_pages_per_claim: 10
+  organization_deletion_waiting_poll_seconds: 10
+  organization_deletion_retry_initial_seconds: 5
+  organization_deletion_retry_max_seconds: 300
   model_deployment_source: db_only
   model_deployment_bootstrap_from_config: false
   email_enabled: false
@@ -226,6 +242,33 @@ Theme values saved in the Admin UI are persisted as dynamic database overrides a
 Recommended steady state:
 - `model_deployment_source: db_only`
 - `model_deployment_bootstrap_from_config: false`
+
+## Organization Deletion Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `organization_lifecycle_auth_max_staleness_seconds` | `3` | Maximum process-local organization-state staleness on authenticated data-plane requests |
+| `organization_lifecycle_auth_cache_max_entries` | `10000` | Maximum organization lifecycle records cached per process |
+| `organization_deletion_recovery_window_hours` | `168` | Minimum delay before irreversible cleanup begins |
+| `organization_deletion_max_attempts` | `20` | Phase claim attempts before the job requires an administrator retry |
+| `organization_deletion_requests_enabled` | `false` | Startup-only rollout gate for creating new deletion jobs; enable only after every replica is lifecycle-protocol v2 aware |
+| `organization_deletion_worker_enabled` | `true` | Enables durable organization cleanup claims in this process role |
+| `organization_deletion_worker_poll_interval_seconds` | `5` | Idle polling interval |
+| `organization_deletion_worker_batch_size` | `5` | Maximum jobs claimed per poll |
+| `organization_deletion_worker_max_concurrency` | `2` | Maximum cleanup jobs processed concurrently per process |
+| `organization_deletion_worker_lease_seconds` | `60` | Claim lease duration |
+| `organization_deletion_worker_record_timeout_seconds` | `45` | Per-phase execution timeout |
+| `organization_deletion_worker_page_size` | `100` | Maximum records changed by an individual cleanup query |
+| `organization_deletion_worker_max_pages_per_claim` | `10` | Maximum cleanup pages run before yielding the job |
+| `organization_deletion_waiting_poll_seconds` | `10` | Recheck delay during the recovery/batch-drain phase |
+| `organization_deletion_retry_initial_seconds` | `5` | Initial automatic retry delay |
+| `organization_deletion_retry_max_seconds` | `300` | Maximum automatic retry delay |
+
+Keep the lifecycle staleness bound short because it is the maximum time an already-cached active organization may remain authorized after another replica schedules deletion. Each process refreshes a singleton lifecycle generation in the background; authenticated requests use matching cached snapshots without another database round trip and fail closed if that background snapshot becomes stale. The deletion request also performs best-effort immediate invalidation, while PostgreSQL and the durable invalidation outbox provide the authoritative transition.
+
+Deploy lifecycle-aware code with `organization_deletion_requests_enabled: false` first. After every API and worker replica reports lifecycle protocol v2 and a fresh lifecycle snapshot, set it to `true` and roll the API deployment. Disable this setting before a rollback. Never roll back to lifecycle-unaware code while an organization is inactive or a deletion job is unfinished.
+
+See [Organization Deletion](../features/organization-deletion.md) for lifecycle behavior, retained data, recovery limits, and operational guidance.
 
 ## Database Settings
 

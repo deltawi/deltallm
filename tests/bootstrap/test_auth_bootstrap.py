@@ -9,6 +9,28 @@ from src.bootstrap import BootstrapStatus
 from src.bootstrap.auth import init_auth_runtime, shutdown_auth_runtime
 
 
+@pytest.fixture(autouse=True)
+def _stub_organization_lifecycle_authorizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeOrganizationLifecycleAuthorizer:
+        def __init__(self, repository, **kwargs) -> None:  # noqa: ANN001, ANN003
+            self.repository = repository
+            self.kwargs = kwargs
+
+        async def initialize(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        async def invalidate(self, organization_id: str) -> None:
+            del organization_id
+
+    monkeypatch.setattr(
+        "src.bootstrap.organization_deletion.OrganizationLifecycleAuthorizer",
+        FakeOrganizationLifecycleAuthorizer,
+    )
+
+
 def _auth_config(
     *,
     enable_sso: bool,
@@ -21,6 +43,8 @@ def _auth_config(
         general_settings=SimpleNamespace(
             instance_name="Acme AI",
             api_key_auth_cache_ttl_seconds=300,
+            organization_deletion_requests_enabled=False,
+            organization_deletion_worker_enabled=False,
             cache_invalidation_worker_enabled=cache_worker_enabled,
             cache_invalidation_worker_poll_interval_seconds=5.0,
             cache_invalidation_worker_batch_size=25,
@@ -130,6 +154,9 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
         BootstrapStatus("platform_identity", "ready"),
         BootstrapStatus("master_session_store", "ready"),
         BootstrapStatus("cache_invalidation_outbox", "ready"),
+        BootstrapStatus("organization_lifecycle_authorizer", "ready"),
+        BootstrapStatus("organization_deletion_service", "ready"),
+        BootstrapStatus("organization_deletion_worker", "disabled"),
         BootstrapStatus("cache_invalidation_worker", "disabled"),
         BootstrapStatus("sso_state_store", "ready"),
         BootstrapStatus("sso_auth", "ready"),
@@ -174,6 +201,9 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(
         BootstrapStatus("platform_identity", "ready"),
         BootstrapStatus("master_session_store", "ready"),
         BootstrapStatus("cache_invalidation_outbox", "ready"),
+        BootstrapStatus("organization_lifecycle_authorizer", "ready"),
+        BootstrapStatus("organization_deletion_service", "ready"),
+        BootstrapStatus("organization_deletion_worker", "disabled"),
         BootstrapStatus("cache_invalidation_worker", "disabled"),
         BootstrapStatus("sso_state_store", "disabled"),
         BootstrapStatus("sso_auth", "disabled"),

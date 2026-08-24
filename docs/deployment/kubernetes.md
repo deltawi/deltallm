@@ -526,7 +526,7 @@ prometheus:
 
 The current container image still bootstraps Prisma on startup by default.
 
-The chart also exposes an optional `migrationJob` for teams that want a separate Kubernetes job for explicit migration control:
+The chart also exposes an optional `migrationJob` for teams that want a separate Kubernetes job for explicit migration control. Its default command uses the checked-in organization-deletion migration coordinator, which runs strict Prisma migrations, repairs only allowlisted interrupted concurrent indexes, performs the bounded ownership backfill, and verifies readiness:
 
 ```yaml
 migrationJob:
@@ -536,6 +536,9 @@ migrationJob:
 ```
 
 Use that only if your rollout process is intentionally built around a separate migration step. If you want the application pods to stop using the image default bootstrap path, set `command` and `args` explicitly for the app container.
+Run this job successfully before rolling application binaries when organization deletion is part of
+the release. Keep `organization_deletion_requests_enabled: false` until the job reports `ready` and
+every API and worker replica runs the current lifecycle protocol.
 
 ## S3 request logging
 

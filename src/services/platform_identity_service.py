@@ -476,17 +476,24 @@ class PlatformIdentityService:
 
         org_rows = await self.db.query_raw(
             """
-            SELECT organization_id, role
-            FROM deltallm_organizationmembership
-            WHERE account_id = $1
+            SELECT m.organization_id, m.role
+            FROM deltallm_organizationmembership m
+            JOIN deltallm_organizationtable o
+              ON o.organization_id = m.organization_id
+            WHERE m.account_id = $1
+              AND o.lifecycle_state = 'active'
             """,
             row["account_id"],
         )
         team_rows = await self.db.query_raw(
             """
-            SELECT team_id, role
-            FROM deltallm_teammembership
-            WHERE account_id = $1
+            SELECT m.team_id, m.role
+            FROM deltallm_teammembership m
+            JOIN deltallm_teamtable t ON t.team_id = m.team_id
+            LEFT JOIN deltallm_organizationtable o
+              ON o.organization_id = t.organization_id
+            WHERE m.account_id = $1
+              AND (t.organization_id IS NULL OR o.lifecycle_state = 'active')
             """,
             row["account_id"],
         )

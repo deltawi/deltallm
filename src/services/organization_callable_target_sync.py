@@ -66,13 +66,16 @@ async def get_organization_auto_follow_catalog(db: Any, organization_id: str) ->
         SELECT metadata
         FROM deltallm_organizationtable
         WHERE organization_id = $1
+          AND lifecycle_state = 'active'
         LIMIT 1
         """,
         organization_id,
     )
     if not rows:
         return False
-    return organization_auto_follow_catalog(rows[0].get("metadata") if isinstance(rows[0], dict) else None)
+    return organization_auto_follow_catalog(
+        rows[0].get("metadata") if isinstance(rows[0], dict) else None
+    )
 
 
 async def set_organization_auto_follow_catalog(
@@ -103,7 +106,7 @@ async def set_organization_auto_follow_catalog(
         UPDATE deltallm_organizationtable
         SET metadata = $2::jsonb,
             updated_at = NOW()
-        WHERE organization_id = $1
+        WHERE organization_id = $1 AND lifecycle_state = 'active'
         """,
         organization_id,
         next_metadata,
@@ -138,6 +141,7 @@ async def list_organization_ids_with_auto_follow_catalog(db: Any) -> list[str]:
         """
         SELECT organization_id, metadata
         FROM deltallm_organizationtable
+        WHERE lifecycle_state = 'active'
         """
     )
     organization_ids: list[str] = []
@@ -147,7 +151,9 @@ async def list_organization_ids_with_auto_follow_catalog(db: Any) -> list[str]:
         organization_id = str(row.get("organization_id") or "").strip()
         if not organization_id:
             continue
-        if not organization_auto_follow_catalog(row.get("metadata") if isinstance(row.get("metadata"), dict) else None):
+        if not organization_auto_follow_catalog(
+            row.get("metadata") if isinstance(row.get("metadata"), dict) else None
+        ):
             continue
         organization_ids.append(organization_id)
     return organization_ids
@@ -191,7 +197,9 @@ async def sync_auto_follow_organization_bindings(
             binding = current_bindings_by_key.get(callable_key)
             if binding is None:
                 continue
-            await callable_target_binding_repository.delete_binding(binding.callable_target_binding_id)
+            await callable_target_binding_repository.delete_binding(
+                binding.callable_target_binding_id
+            )
             changed += 1
 
         for callable_key in sorted(desired_keys):

@@ -205,9 +205,9 @@ async def test_webhook_outbox_repository_bulk_repairs_bounded_cleanup_page() -> 
             assert params == (["batch-1", "batch-2"],)
             return [{"event_id": "evt-1"}, {"event_id": "evt-2"}]
 
-    repaired = await BatchWebhookOutboxRepository(
-        _Prisma()
-    ).backfill_missing_ownership_for_batches(batch_ids=["batch-1", "batch-2"])
+    repaired = await BatchWebhookOutboxRepository(_Prisma()).backfill_missing_ownership_for_batches(
+        batch_ids=["batch-1", "batch-2"]
+    )
 
     assert repaired == 2
 
@@ -222,9 +222,7 @@ async def test_webhook_outbox_repository_rejects_cleanup_ownership_conflicts() -
             return [{"conflict_count": 1}]
 
     with pytest.raises(BatchWebhookOwnershipConflictError) as exc_info:
-        await BatchWebhookOutboxRepository(
-            _Prisma()
-        ).assert_ownership_matches_jobs_for_batches(
+        await BatchWebhookOutboxRepository(_Prisma()).assert_ownership_matches_jobs_for_batches(
             batch_ids=["batch-1", "batch-2"]
         )
 
@@ -262,7 +260,10 @@ async def test_webhook_delivery_repository_claims_and_fences_every_transition() 
     assert claimed[0].attempt_count == 2
     claim_sql, claim_params = prisma.query_calls[0]
     assert "FOR UPDATE SKIP LOCKED" in claim_sql
-    assert "attempt_count < max_attempts" in claim_sql
+    assert "webhook.attempt_count < webhook.max_attempts" in claim_sql
+    assert "organization.lifecycle_state = 'active'" in claim_sql
+    assert "WHEN webhook.created_by_organization_id IS NOT NULL" in claim_sql
+    assert "WHEN webhook.created_by_team_id IS NOT NULL" in claim_sql
     assert claim_params == (10, "worker-1", 30)
 
     terminalized = await repository.fail_exhausted_expired_leases(limit=7)
@@ -505,9 +506,7 @@ class _OutboxRepository:
         if self.existing.created_by_team_id is None:
             self.existing.created_by_team_id = kwargs["created_by_team_id"]
         if self.existing.created_by_organization_id is None:
-            self.existing.created_by_organization_id = kwargs[
-                "created_by_organization_id"
-            ]
+            self.existing.created_by_organization_id = kwargs["created_by_organization_id"]
         return self.existing
 
 
@@ -653,7 +652,9 @@ async def test_atomic_finalization_reuses_current_transaction_and_defers_metric(
 
 
 @pytest.mark.asyncio
-async def test_webhook_reconciliation_repairs_terminal_job_and_enqueues_in_current_transaction() -> None:
+async def test_webhook_reconciliation_repairs_terminal_job_and_enqueues_in_current_transaction() -> (
+    None
+):
     job = _job(configured=False)
     jobs = _JobRepository(job)
     outbox = _OutboxRepository()
@@ -863,7 +864,9 @@ async def test_webhook_reconciliation_accepts_immutable_terminal_snapshot_after_
     assert reconciled is job
     assert jobs.locked == [job.batch_id]
     assert len(outbox.events) == 1
-    assert existing.payload_json["data"]["batch"][f"{terminal_status.value}_at"] == snapshot_timestamp
+    assert (
+        existing.payload_json["data"]["batch"][f"{terminal_status.value}_at"] == snapshot_timestamp
+    )
     assert snapshot_timestamp != int(job.status_last_updated_at.timestamp())
 
 

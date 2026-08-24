@@ -9,6 +9,10 @@ from src.config import AppConfig
 from src.models.platform_auth import PlatformAuthContext
 from src.models.errors import RateLimitError
 from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
+from src.services.organization_lifecycle import (
+    OrganizationInactive,
+    OrganizationLifecycleUnavailable,
+)
 from src.services.master_session_service import (
     MasterSessionStatus,
     MasterSessionStoreUnavailable,
@@ -17,7 +21,13 @@ from src.services.sso_state_store import SSOStateStore
 
 
 class _StubSSOHandler:
-    def __init__(self, *, email: str = "user@example.com", subject: str = "subject-1", email_verified: bool | None = True) -> None:
+    def __init__(
+        self,
+        *,
+        email: str = "user@example.com",
+        subject: str = "subject-1",
+        email_verified: bool | None = True,
+    ) -> None:
         self.email = email
         self.subject = subject
         self.email_verified = email_verified
@@ -52,7 +62,9 @@ class _StubIdentityService:
         self.last_logins: list[str] = []
         self.sso_login_calls: list[dict[str, str]] = []
 
-    def add_account(self, *, account_id: str, email: str, role: str = "org_user", is_active: bool = True) -> None:
+    def add_account(
+        self, *, account_id: str, email: str, role: str = "org_user", is_active: bool = True
+    ) -> None:
         self.accounts[account_id] = {
             "account_id": account_id,
             "email": self.normalize_email(email),
@@ -75,7 +87,9 @@ class _StubIdentityService:
                 return dict(account)
         return None
 
-    async def link_sso_identity(self, *, account_id: str, email: str, provider: str = "sso", subject: str | None = None):
+    async def link_sso_identity(
+        self, *, account_id: str, email: str, provider: str = "sso", subject: str | None = None
+    ):
         normalized_subject = subject or self.normalize_email(email)
         existing_account_id = self.identities.get((provider, normalized_subject))
         if existing_account_id is not None and existing_account_id != account_id:
@@ -188,7 +202,12 @@ class _StubIdentityService:
 
 
 class _StubSelfRegistrationProvisioner:
-    def __init__(self, *, identity_service: _StubIdentityService | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        identity_service: _StubIdentityService | None = None,
+        error: Exception | None = None,
+    ) -> None:
         self.identity_service = identity_service
         self.error = error
         self.calls: list[dict[str, object]] = []
@@ -206,7 +225,9 @@ class _StubSelfRegistrationProvisioner:
         if self.error is not None:
             raise self.error
         if self.identity_service is not None:
-            self.identity_service.add_account(account_id="acct-self", email=email, is_active=is_active)
+            self.identity_service.add_account(
+                account_id="acct-self", email=email, is_active=is_active
+            )
             await self.identity_service.link_sso_identity(
                 account_id="acct-self",
                 email=email,
@@ -270,7 +291,9 @@ class _StubMasterSessionService:
         self.active_tokens.add(token)
         return token
 
-    async def validate_session(self, token: str | None, *, master_key: str | None) -> MasterSessionStatus:
+    async def validate_session(
+        self, token: str | None, *, master_key: str | None
+    ) -> MasterSessionStatus:
         if self.validation_unavailable:
             return MasterSessionStatus.UNAVAILABLE
         if master_key != self.master_key or token not in self.active_tokens:
@@ -285,7 +308,9 @@ class _StubMasterSessionService:
             self.active_tokens.discard(token)
 
 
-def _configure_master_session(test_app, master_key: str = "mk-browser-session") -> _StubMasterSessionService:
+def _configure_master_session(
+    test_app, master_key: str = "mk-browser-session"
+) -> _StubMasterSessionService:
     setattr(test_app.state.settings, "master_key", master_key)
     test_app.state.salt_key = "master-session-test-salt"
     service = _StubMasterSessionService(master_key=master_key)
@@ -334,7 +359,9 @@ async def _start_sso_and_callback(
         subject=subject,
         email_verified=email_verified,
     )
-    test_app.state.sso_state_store = SSOStateStore(redis_client=test_app.state.redis, ttl_seconds=600)
+    test_app.state.sso_state_store = SSOStateStore(
+        redis_client=test_app.state.redis, ttl_seconds=600
+    )
 
     login = await client.get("/auth/login", params={"state": state})
     assert login.status_code == 200
@@ -360,16 +387,128 @@ async def test_auth_valid_key_uses_cache_then_db(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_auth_rejects_key_for_inactive_organization(client, test_app):
+    class InactiveOrganizationLifecycleAuthorizer:
+        async def remember_state(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            return None
+
+        async def require_active(self, organization_id: str | None) -> None:
+            raise OrganizationInactive(str(organization_id), "deleting")
+
+        async def remember_scope(self, **kwargs) -> None:  # noqa: ANN003
+            return None
+
+        async def require_active_scope(self, **kwargs):  # noqa: ANN003, ANN201
+            raise OrganizationInactive(str(kwargs.get("organization_id")), "deleting")
+
+    test_app.state.organization_lifecycle_authorizer = InactiveOrganizationLifecycleAuthorizer()
+
+    response = await client.get(
+        "/v1/models",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Organization is not active"
+
+
+@pytest.mark.asyncio
+async def test_inactive_api_key_does_not_fall_through_to_other_auth(client, test_app):
+    class UnexpectedJWTHandler:
+        calls = 0
+
+        async def validate_token(self, token: str):  # noqa: ANN201
+            self.calls += 1
+            return {"user_id": "fallback-user"}
+
+    handler = UnexpectedJWTHandler()
+    test_app.state.jwt_auth_handler = handler
+    record = next(iter(test_app.state._test_repo.records.values()))
+    record.organization_lifecycle_state = "deletion_pending"
+
+    response = await client.get(
+        "/v1/models",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Organization is not active"
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_fails_closed_when_lifecycle_store_is_unavailable(client, test_app):
+    class UnavailableOrganizationLifecycleAuthorizer:
+        async def remember_state(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            return None
+
+        async def require_active(self, organization_id: str | None) -> None:
+            raise OrganizationLifecycleUnavailable(str(organization_id))
+
+        async def remember_scope(self, **kwargs) -> None:  # noqa: ANN003
+            return None
+
+        async def require_active_scope(self, **kwargs):  # noqa: ANN003, ANN201
+            raise OrganizationLifecycleUnavailable(str(kwargs.get("organization_id")))
+
+    test_app.state.organization_lifecycle_authorizer = UnavailableOrganizationLifecycleAuthorizer()
+
+    response = await client.get(
+        "/v1/models",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Organization lifecycle state unavailable"
+
+
+@pytest.mark.asyncio
 async def test_auth_jwt_fallback_allows_request(client, test_app):
     class StubJWTHandler:
         async def validate_token(self, token: str):
             assert token == "jwt-token"
-            return {"user_id": "u-1", "email": "user@example.com", "team_id": "t-1", "user_role": "internal_user"}
+            return {
+                "user_id": "u-1",
+                "email": "user@example.com",
+                "team_id": "t-1",
+                "user_role": "internal_user",
+            }
 
     test_app.state.jwt_auth_handler = StubJWTHandler()
     headers = {"Authorization": "Bearer jwt-token"}
     response = await client.get("/v1/models", headers=headers)
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_team_scope_is_resolved_and_denied_when_org_inactive(
+    client,
+    test_app,
+):
+    class StubJWTHandler:
+        async def validate_token(self, token: str):  # noqa: ANN201
+            assert token == "jwt-team-token"
+            return {
+                "user_id": "u-1",
+                "team_id": "t-1",
+                "user_role": "internal_user",
+            }
+
+    class TeamLifecycleAuthorizer:
+        async def require_active_scope(self, **kwargs):  # noqa: ANN003, ANN201
+            assert kwargs == {"organization_id": "", "team_id": "t-1"}
+            raise OrganizationInactive("org-1", "deletion_pending")
+
+    test_app.state.jwt_auth_handler = StubJWTHandler()
+    test_app.state.organization_lifecycle_authorizer = TeamLifecycleAuthorizer()
+
+    response = await client.get(
+        "/v1/models",
+        headers={"Authorization": "Bearer jwt-team-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Organization is not active"
 
 
 @pytest.mark.asyncio
@@ -418,7 +557,9 @@ async def test_master_key_login_persists_as_http_only_cookie_session(client, tes
 
 
 @pytest.mark.asyncio
-async def test_master_key_login_rejects_invalid_key_and_secures_forwarded_https_cookie(client, test_app):
+async def test_master_key_login_rejects_invalid_key_and_secures_forwarded_https_cookie(
+    client, test_app
+):
     _configure_master_session(test_app)
 
     invalid = await client.post("/auth/master/login", json={"master_key": "wrong"})
@@ -476,7 +617,9 @@ async def test_master_session_store_outage_is_not_treated_as_anonymous(client, t
 
 
 @pytest.mark.asyncio
-async def test_platform_session_remains_available_during_master_session_store_outage(client, test_app):
+async def test_platform_session_remains_available_during_master_session_store_outage(
+    client, test_app
+):
     service = _configure_master_session(test_app)
     login = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
     master_token = login.cookies.get("deltallm_master_session")
@@ -496,8 +639,7 @@ async def test_platform_session_remains_available_during_master_session_store_ou
     test_app.state.platform_identity_service = _PlatformIdentityService()
     headers = {
         "Cookie": (
-            f"deltallm_master_session={master_token}; "
-            "deltallm_session=platform-session-token"
+            f"deltallm_master_session={master_token}; deltallm_session=platform-session-token"
         )
     }
 
@@ -549,7 +691,12 @@ async def test_auth_login_and_callback_routes(client, test_app):
 
         async def handle_callback(self, code: str, code_verifier: str | None = None):
             del code_verifier
-            return {"user_id": "user-1", "email": "user@example.com", "role": "internal_user", "token": "session-token"}
+            return {
+                "user_id": "user-1",
+                "email": "user@example.com",
+                "role": "internal_user",
+                "token": "session-token",
+            }
 
     class StubIdentityService:
         async def get_context_for_session(self, token: str):
@@ -562,7 +709,9 @@ async def test_auth_login_and_callback_routes(client, test_app):
 
     test_app.state.sso_auth_handler = StubSSOHandler()
     test_app.state.platform_identity_service = StubIdentityService()
-    test_app.state.sso_state_store = SSOStateStore(redis_client=test_app.state.redis, ttl_seconds=600)
+    test_app.state.sso_state_store = SSOStateStore(
+        redis_client=test_app.state.redis, ttl_seconds=600
+    )
 
     return_to = "/models/deployment-1?tab=usage#cost"
     login = await client.get("/auth/login", params={"state": "abc", "return_to": return_to})
@@ -628,7 +777,9 @@ async def test_sso_callback_self_registration_disabled_uses_legacy_sso_path(clie
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_disabled_maps_session_creation_failure(client, test_app):
+async def test_sso_callback_self_registration_disabled_maps_session_creation_failure(
+    client, test_app
+):
     class FailingSessionIdentityService(_StubIdentityService):
         async def upsert_sso_account(self, **kwargs):  # noqa: ANN003, ANN201
             self.legacy_upserts.append(dict(kwargs))
@@ -689,7 +840,9 @@ async def test_sso_callback_self_registration_provisions_allowed_domain_user(cli
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
     test_app.state.audit_service = audit
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -717,7 +870,9 @@ async def test_sso_callback_self_registration_provisions_allowed_domain_user(cli
         }
     ]
     assert identity.last_logins == ["acct-self"]
-    assert AuditAction.AUTH_SELF_REGISTRATION_ACCEPTED.value in [event.action for event in audit.events]
+    assert AuditAction.AUTH_SELF_REGISTRATION_ACCEPTED.value in [
+        event.action for event in audit.events
+    ]
 
 
 @pytest.mark.asyncio
@@ -728,7 +883,9 @@ async def test_sso_callback_self_registration_blocks_unapproved_domain(client, t
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
     test_app.state.audit_service = audit
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -741,18 +898,24 @@ async def test_sso_callback_self_registration_blocks_unapproved_domain(client, t
     assert response.json()["detail"] == "Email domain is not allowed for self-registration"
     assert provisioner.calls == []
     assert identity.identity_links == []
-    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [event.action for event in audit.events]
+    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [
+        event.action for event in audit.events
+    ]
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_blocks_unverified_email_when_required(client, test_app):
+async def test_sso_callback_self_registration_blocks_unverified_email_when_required(
+    client, test_app
+):
     identity = _StubIdentityService()
     provisioner = _StubSelfRegistrationProvisioner()
     audit = _RecordingAuditService()
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
     test_app.state.audit_service = audit
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -766,11 +929,15 @@ async def test_sso_callback_self_registration_blocks_unverified_email_when_requi
     assert response.json()["detail"] == "SSO email is not verified"
     assert provisioner.calls == []
     assert identity.identity_links == []
-    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [event.action for event in audit.events]
+    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [
+        event.action for event in audit.events
+    ]
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_fails_closed_when_admin_approval_is_required(client, test_app):
+async def test_sso_callback_self_registration_fails_closed_when_admin_approval_is_required(
+    client, test_app
+):
     identity = _StubIdentityService()
     provisioner = _StubSelfRegistrationProvisioner()
     audit = _RecordingAuditService()
@@ -794,17 +961,23 @@ async def test_sso_callback_self_registration_fails_closed_when_admin_approval_i
     assert response.json()["detail"] == "Self-registration requires admin approval"
     assert provisioner.calls == []
     assert identity.identity_links == []
-    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [event.action for event in audit.events]
+    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [
+        event.action for event in audit.events
+    ]
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_existing_account_skips_provisioning_and_domain_gate(client, test_app):
+async def test_sso_callback_self_registration_existing_account_skips_provisioning_and_domain_gate(
+    client, test_app
+):
     identity = _StubIdentityService()
     identity.add_account(account_id="acct-existing", email="developer@blocked.example")
     provisioner = _StubSelfRegistrationProvisioner()
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -838,14 +1011,18 @@ async def test_sso_callback_self_registration_existing_account_skips_provisionin
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_existing_identity_reconciles_changed_email(client, test_app):
+async def test_sso_callback_self_registration_existing_identity_reconciles_changed_email(
+    client, test_app
+):
     identity = _StubIdentityService()
     identity.add_account(account_id="acct-existing", email="old@example.com")
     identity.identities[("oidc", "existing-subject")] = "acct-existing"
     provisioner = _StubSelfRegistrationProvisioner()
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -879,7 +1056,9 @@ async def test_sso_callback_self_registration_existing_identity_reconciles_chang
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_existing_account_requires_atomic_login_capability(client, test_app):
+async def test_sso_callback_self_registration_existing_account_requires_atomic_login_capability(
+    client, test_app
+):
     class MissingAtomicSSOLoginIdentityService:
         def __init__(self) -> None:
             self.accounts = {
@@ -910,7 +1089,9 @@ async def test_sso_callback_self_registration_existing_account_requires_atomic_l
     provisioner = _StubSelfRegistrationProvisioner()
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -927,7 +1108,9 @@ async def test_sso_callback_self_registration_existing_account_requires_atomic_l
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_rejects_existing_identity_email_owned_by_other_account(client, test_app):
+async def test_sso_callback_self_registration_rejects_existing_identity_email_owned_by_other_account(
+    client, test_app
+):
     identity = _StubIdentityService()
     identity.add_account(account_id="acct-existing", email="old@example.com")
     identity.add_account(account_id="acct-other", email="developer@example.com")
@@ -935,7 +1118,9 @@ async def test_sso_callback_self_registration_rejects_existing_identity_email_ow
     provisioner = _StubSelfRegistrationProvisioner()
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -954,7 +1139,9 @@ async def test_sso_callback_self_registration_rejects_existing_identity_email_ow
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_existing_account_inactive_service_error_returns_401(client, test_app):
+async def test_sso_callback_self_registration_existing_account_inactive_service_error_returns_401(
+    client, test_app
+):
     class InactiveDuringLoginIdentityService(_StubIdentityService):
         async def create_sso_login_for_existing_account(self, **kwargs):  # noqa: ANN003, ANN201
             self.sso_login_calls.append(
@@ -972,7 +1159,9 @@ async def test_sso_callback_self_registration_existing_account_inactive_service_
     provisioner = _StubSelfRegistrationProvisioner()
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -999,7 +1188,9 @@ async def test_sso_callback_self_registration_existing_account_inactive_service_
 
 
 @pytest.mark.asyncio
-async def test_sso_callback_self_registration_blocks_unverified_email_before_linking_existing_account(client, test_app):
+async def test_sso_callback_self_registration_blocks_unverified_email_before_linking_existing_account(
+    client, test_app
+):
     identity = _StubIdentityService()
     identity.add_account(account_id="acct-existing", email="developer@example.com")
     provisioner = _StubSelfRegistrationProvisioner()
@@ -1007,7 +1198,9 @@ async def test_sso_callback_self_registration_blocks_unverified_email_before_lin
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
     test_app.state.audit_service = audit
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -1023,7 +1216,9 @@ async def test_sso_callback_self_registration_blocks_unverified_email_before_lin
     assert provisioner.calls == []
     assert identity.identity_links == []
     assert identity.login_results == []
-    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [event.action for event in audit.events]
+    assert AuditAction.AUTH_SELF_REGISTRATION_BLOCKED.value in [
+        event.action for event in audit.events
+    ]
 
 
 @pytest.mark.asyncio
@@ -1034,7 +1229,9 @@ async def test_sso_callback_self_registration_provisioning_failure_is_audited(cl
     test_app.state.platform_identity_service = identity
     test_app.state.self_registration_provisioning_service = provisioner
     test_app.state.audit_service = audit
-    test_app.state.app_config = _self_registration_app_config(enabled=True, allowed_domains=["example.com"])
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True, allowed_domains=["example.com"]
+    )
 
     response = await _start_sso_and_callback(
         client=client,
@@ -1046,7 +1243,9 @@ async def test_sso_callback_self_registration_provisioning_failure_is_audited(cl
     assert response.status_code == 500
     assert response.json()["detail"] == "Failed to provision self-registration account"
     assert provisioner.calls
-    assert AuditAction.AUTH_SELF_REGISTRATION_PROVISIONING_FAILED.value in [event.action for event in audit.events]
+    assert AuditAction.AUTH_SELF_REGISTRATION_PROVISIONING_FAILED.value in [
+        event.action for event in audit.events
+    ]
 
 
 @pytest.mark.asyncio
@@ -1085,7 +1284,9 @@ async def test_internal_login_is_rate_limited(client, test_app):
     test_app.state.limit_counter = StubLimitCounter()
     test_app.state.platform_identity_service = object()
 
-    response = await client.post("/auth/internal/login", json={"email": "user@example.com", "password": "bad-password"})
+    response = await client.post(
+        "/auth/internal/login", json={"email": "user@example.com", "password": "bad-password"}
+    )
     assert response.status_code == 429
     assert response.json()["detail"] == "Too many login attempts; please try again later"
     assert response.headers.get("retry-after") == "17"
@@ -1109,16 +1310,25 @@ async def test_auth_callback_is_rate_limited(client, test_app):
         async def handle_callback(self, code: str, code_verifier: str | None = None):
             del code
             del code_verifier
-            return {"user_id": "user-1", "email": "user@example.com", "role": "internal_user", "token": "session-token"}
+            return {
+                "user_id": "user-1",
+                "email": "user@example.com",
+                "role": "internal_user",
+                "token": "session-token",
+            }
 
     test_app.state.limit_counter = StubLimitCounter()
     test_app.state.sso_auth_handler = StubSSOHandler()
-    test_app.state.sso_state_store = SSOStateStore(redis_client=test_app.state.redis, ttl_seconds=600)
+    test_app.state.sso_state_store = SSOStateStore(
+        redis_client=test_app.state.redis, ttl_seconds=600
+    )
 
     login = await client.get("/auth/login", params={"state": "rl-state"})
     assert login.status_code == 200
 
-    callback = await client.get("/auth/callback", params={"code": "oauth-code", "state": "rl-state"})
+    callback = await client.get(
+        "/auth/callback", params={"code": "oauth-code", "state": "rl-state"}
+    )
     assert callback.status_code == 429
     assert callback.json()["detail"] == "Too many SSO callback attempts; please try again later"
     assert callback.headers.get("retry-after") == "9"
@@ -1230,7 +1440,9 @@ async def test_unverified_mfa_session_is_blocked_until_mfa_verify(client, test_a
     assert me.json()["mfa_enabled"] is True
     assert me.json()["mfa_verified"] is False
 
-    blocked = await client.get("/ui/api/email/outbox/summary", cookies={"deltallm_session": "session-token"})
+    blocked = await client.get(
+        "/ui/api/email/outbox/summary", cookies={"deltallm_session": "session-token"}
+    )
     assert blocked.status_code == 403
     assert blocked.json()["detail"] == "MFA verification required"
 
@@ -1242,7 +1454,9 @@ async def test_unverified_mfa_session_is_blocked_until_mfa_verify(client, test_a
     assert verified.status_code == 200
     assert verified.json() == {"mfa_verified": True}
 
-    allowed = await client.get("/ui/api/email/outbox/summary", cookies={"deltallm_session": "session-token"})
+    allowed = await client.get(
+        "/ui/api/email/outbox/summary", cookies={"deltallm_session": "session-token"}
+    )
     assert allowed.status_code == 200
 
 
@@ -1267,7 +1481,9 @@ async def test_unverified_mfa_session_is_blocked_for_scope_endpoints(client, tes
     test_app.state.platform_identity_service = StubIdentityService()
     test_app.state.invitation_service = SimpleNamespace()
 
-    response = await client.get("/ui/api/invitations", cookies={"deltallm_session": "session-token"})
+    response = await client.get(
+        "/ui/api/invitations", cookies={"deltallm_session": "session-token"}
+    )
 
     assert response.status_code == 403
     assert response.json()["detail"] == "MFA verification required"

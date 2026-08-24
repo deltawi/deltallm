@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.db.repositories import KeyRecord
+from src.db.repositories import KeyRecord, KeyRepository
 from src.services.key_service import KeyService
 
 
@@ -49,6 +49,50 @@ class RecordingRedis:
             self.ttls.pop(key, None)
 
 
+class LifecycleRowPrisma:
+    def __init__(self, row: dict[str, object]) -> None:
+        self.row = row
+        self.sql = ""
+
+    async def query_raw(self, sql: str, *params: object) -> list[dict[str, object]]:
+        del params
+        self.sql = sql
+        return [self.row]
+
+
+@pytest.mark.asyncio
+async def test_key_repository_marks_broken_organization_reference_missing() -> None:
+    prisma = LifecycleRowPrisma(
+        {
+            "token": "token-hash",
+            "organization_id": "missing-org",
+            "organization_lifecycle_state": None,
+        }
+    )
+
+    record = await KeyRepository(prisma).get_by_token("token-hash")
+
+    assert record is not None
+    assert record.organization_lifecycle_state == "missing"
+    assert "WHEN o.organization_id IS NULL THEN 'missing'" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_key_repository_keeps_explicitly_unowned_scope_active() -> None:
+    prisma = LifecycleRowPrisma(
+        {
+            "token": "token-hash",
+            "organization_id": None,
+            "organization_lifecycle_state": None,
+        }
+    )
+
+    record = await KeyRepository(prisma).get_by_token("token-hash")
+
+    assert record is not None
+    assert record.organization_lifecycle_state == "active"
+
+
 @pytest.mark.asyncio
 async def test_key_cache_invalidation_by_hash() -> None:
     salt = "test-salt"
@@ -87,8 +131,8 @@ async def test_key_scope_invalidation_batches_redis_deletes() -> None:
 
     assert invalidated == 501
     assert [len(call) for call in redis.delete_calls] == [500, 1]
-    assert redis.delete_calls[0][0] == "key:v2:token-0"
-    assert redis.delete_calls[1][0] == "key:v2:token-500"
+    assert redis.delete_calls[0][0] == "key:v4:token-0"
+    assert redis.delete_calls[1][0] == "key:v4:token-500"
 
 
 @pytest.mark.asyncio
@@ -108,7 +152,7 @@ async def test_key_cache_ttl_respects_configured_limit() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v2:{token_hash}"
+    cache_key = f"key:v4:{token_hash}"
     assert redis.ttls[cache_key] == 300
 
 
@@ -129,7 +173,7 @@ async def test_key_cache_ttl_capped_by_key_expiry() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v2:{token_hash}"
+    cache_key = f"key:v4:{token_hash}"
     assert 1 <= redis.ttls[cache_key] <= 20
 
 
@@ -161,13 +205,15 @@ async def test_validate_key_preserves_platform_account_owner_in_auth_cache() -> 
     salt = "test-salt"
     raw_key = "sk-owned-key"
     token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
-    repo = InMemoryRepo({
-        token_hash: KeyRecord(
-            token=token_hash,
-            owner_account_id="acct-owner",
-            expires=datetime.now(tz=UTC) + timedelta(hours=1),
-        )
-    })
+    repo = InMemoryRepo(
+        {
+            token_hash: KeyRecord(
+                token=token_hash,
+                owner_account_id="acct-owner",
+                expires=datetime.now(tz=UTC) + timedelta(hours=1),
+            )
+        }
+    )
     redis = RecordingRedis()
     service = KeyService(repository=repo, redis_client=redis, salt=salt)
 
@@ -184,13 +230,15 @@ async def test_validate_key_ignores_pre_owner_contract_cache_entries() -> None:
     salt = "test-salt"
     raw_key = "sk-rotated-cache-contract"
     token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
-    repo = InMemoryRepo({
-        token_hash: KeyRecord(
-            token=token_hash,
-            owner_account_id="acct-current",
-            expires=datetime.now(tz=UTC) + timedelta(hours=1),
-        )
-    })
+    repo = InMemoryRepo(
+        {
+            token_hash: KeyRecord(
+                token=token_hash,
+                owner_account_id="acct-current",
+                expires=datetime.now(tz=UTC) + timedelta(hours=1),
+            )
+        }
+    )
     redis = RecordingRedis()
     redis.store[f"key:{token_hash}"] = '{"api_key":"stale-token"}'
     service = KeyService(repository=repo, redis_client=redis, salt=salt)
@@ -199,7 +247,30 @@ async def test_validate_key_ignores_pre_owner_contract_cache_entries() -> None:
 
     assert auth.owner_account_id == "acct-current"
     assert repo.calls == 1
-    assert f"key:v2:{token_hash}" in redis.store
+    assert f"key:v4:{token_hash}" in redis.store
+
+
+@pytest.mark.asyncio
+async def test_validate_key_rejects_inactive_organization_before_caching() -> None:
+    salt = "test-salt"
+    raw_key = "sk-inactive-org"
+    token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
+    repo = InMemoryRepo(
+        {
+            token_hash: KeyRecord(
+                token=token_hash,
+                organization_id="org-deleting",
+                organization_lifecycle_state="deletion_pending",
+            )
+        }
+    )
+    redis = RecordingRedis()
+    service = KeyService(repository=repo, redis_client=redis, salt=salt)
+
+    with pytest.raises(Exception, match="Organization is not active"):
+        await service.validate_key(raw_key)
+
+    assert redis.store == {}
 
 
 @pytest.mark.asyncio

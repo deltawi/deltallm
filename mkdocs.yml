@@ -69,6 +69,7 @@ nav:
       - Budgets & Spend: features/budgets.md
       - Batch API & Production Setup: features/batching.md
       - Audit Log: features/audit-log.md
+      - Organization Deletion: features/organization-deletion.md
       - Observability: features/observability.md
   - Admin UI:
       - Overview: admin-ui/index.md
