@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import logging
@@ -69,6 +70,31 @@ BATCH_JOB_STATUS_RECONCILIATION_MIGRATION_PATH = (
     / "20260424120000_batch_job_status_contract_reconciliation"
     / "migration.sql"
 )
+
+_BATCH_TEST_TEAM_ORGANIZATIONS = (
+    ("team-0", "org-1"),
+    ("team-1", "org-1"),
+    ("team-2", "org-1"),
+    ("team-3", "org-1"),
+    ("team-a", "org-1"),
+    ("team-b", "org-1"),
+    ("team-stale-scope", "org-a"),
+    ("team-webhook-retention", "org-webhook-retention"),
+    ("team-mixed-version", "org-mixed-version"),
+    ("team-cleanup-owner", "org-cleanup-owner"),
+    ("team-wrong-owner", "org-cleanup-owner"),
+    ("team-cleanup-safe", "org-cleanup-safe"),
+    ("team-cleanup-race", "org-cleanup-race"),
+)
+_BATCH_TEST_ORGANIZATION_IDS = tuple(
+    dict.fromkeys(organization_id for _team_id, organization_id in _BATCH_TEST_TEAM_ORGANIZATIONS)
+)
+
+
+@dataclass(frozen=True)
+class _BatchTenantFixtureRows:
+    organization_ids: tuple[str, ...]
+    team_ids: tuple[str, ...]
 
 
 async def _drain_expired_terminal_jobs(
@@ -185,6 +211,92 @@ async def _reset_batch_tables(db: Any) -> None:
     await db.execute_raw("DELETE FROM deltallm_batch_file")
 
 
+async def _seed_batch_tenant_scopes(db: Any) -> _BatchTenantFixtureRows:
+    team_ids = [team_id for team_id, _organization_id in _BATCH_TEST_TEAM_ORGANIZATIONS]
+    team_organization_ids = [
+        organization_id for _team_id, organization_id in _BATCH_TEST_TEAM_ORGANIZATIONS
+    ]
+    async with db.tx() as tx:
+        inserted_organization_rows = await tx.query_raw(
+            """
+            INSERT INTO deltallm_organizationtable (
+                organization_id, organization_name, created_at, updated_at
+            )
+            SELECT organization_id, 'Batch integration fixture', NOW(), NOW()
+            FROM unnest($1::text[]) AS fixture(organization_id)
+            ON CONFLICT (organization_id) DO NOTHING
+            RETURNING organization_id
+            """,
+            list(_BATCH_TEST_ORGANIZATION_IDS),
+        )
+        inserted_team_rows = await tx.query_raw(
+            """
+            INSERT INTO deltallm_teamtable (
+                team_id, organization_id, models, created_at, updated_at
+            )
+            SELECT team_id, organization_id, ARRAY[]::text[], NOW(), NOW()
+            FROM unnest($1::text[], $2::text[]) AS fixture(team_id, organization_id)
+            ON CONFLICT (team_id) DO NOTHING
+            RETURNING team_id
+            """,
+            team_ids,
+            team_organization_ids,
+        )
+        active_organization_rows = await tx.query_raw(
+            """
+            SELECT organization_id
+            FROM deltallm_organizationtable
+            WHERE organization_id = ANY($1::text[])
+              AND lifecycle_state = 'active'
+            ORDER BY organization_id
+            """,
+            list(_BATCH_TEST_ORGANIZATION_IDS),
+        )
+        resolved_team_rows = await tx.query_raw(
+            """
+            SELECT team_id, organization_id
+            FROM deltallm_teamtable
+            WHERE team_id = ANY($1::text[])
+            ORDER BY team_id
+            """,
+            team_ids,
+        )
+
+        assert [str(row["organization_id"]) for row in active_organization_rows] == sorted(
+            _BATCH_TEST_ORGANIZATION_IDS
+        )
+        assert {
+            str(row["team_id"]): str(row["organization_id"])
+            for row in resolved_team_rows
+        } == dict(_BATCH_TEST_TEAM_ORGANIZATIONS)
+
+    return _BatchTenantFixtureRows(
+        organization_ids=tuple(str(row["organization_id"]) for row in inserted_organization_rows),
+        team_ids=tuple(str(row["team_id"]) for row in inserted_team_rows),
+    )
+
+
+async def _cleanup_batch_tenant_scopes(db: Any, fixture_rows: _BatchTenantFixtureRows) -> None:
+    if fixture_rows.team_ids:
+        await db.execute_raw(
+            "DELETE FROM deltallm_teamtable WHERE team_id = ANY($1::text[])",
+            list(fixture_rows.team_ids),
+        )
+    if fixture_rows.organization_ids:
+        await db.execute_raw(
+            """
+            DELETE FROM deltallm_organizationtable organization
+            WHERE organization.organization_id = ANY($1::text[])
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM deltallm_teamtable team
+                  WHERE team.organization_id = organization.organization_id
+              )
+            """,
+            list(fixture_rows.organization_ids),
+        )
+
+
 def _batch_job_status_reconciliation_sql() -> str:
     return BATCH_JOB_STATUS_RECONCILIATION_MIGRATION_PATH.read_text()
 
@@ -267,6 +379,7 @@ async def _assert_final_batch_job_status_contract(db: Any) -> None:
 @pytest.fixture
 async def batch_db():
     db = await _connect_prisma()
+    tenant_fixture_rows = _BatchTenantFixtureRows(organization_ids=(), team_ids=())
     try:
         rows = await db.query_raw(
             """
@@ -284,9 +397,11 @@ async def batch_db():
         ):
             pytest.skip("Batch tables are missing; run prisma migrate deploy before DB-backed batch tests")
         await _reset_batch_tables(db)
+        tenant_fixture_rows = await _seed_batch_tenant_scopes(db)
         yield db
     finally:
         await _reset_batch_tables(db)
+        await _cleanup_batch_tenant_scopes(db, tenant_fixture_rows)
         await db.disconnect()
 
 
@@ -960,7 +1075,7 @@ async def test_db_backed_backfill_repairs_stale_tenant_scope_with_current_debug(
         metadata=None,
         created_by_api_key=raw_api_key,
         created_by_user_id="user-a",
-        created_by_team_id="team-a",
+        created_by_team_id="team-stale-scope",
         created_by_organization_id="org-a",
         expires_at=None,
         status="queued",
@@ -970,7 +1085,7 @@ async def test_db_backed_backfill_repairs_stale_tenant_scope_with_current_debug(
         scheduling_model_group="m1",
         scheduling_endpoint="/v1/embeddings",
         tenant_scope_type="team",
-        tenant_scope_id="team-a",
+        tenant_scope_id="team-stale-scope",
         service_tier="standard",
         estimated_work_units=1,
         remaining_work_units=1,
