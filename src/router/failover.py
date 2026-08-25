@@ -5,15 +5,18 @@ import logging
 import math
 import random
 import time
+from collections.abc import Mapping, Sequence
 from collections import deque
 from dataclasses import dataclass, field
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Awaitable, Callable
 
 import httpx
 
 from src.metrics import increment_router_health_update_failure
 from src.models.errors import (
+    FailureClassification,
     GatewayCapacityError,
     InvalidRequestError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
@@ -46,88 +49,64 @@ _ATTEMPT_PERMIT_CLEANUP_MARGIN_SECONDS = 30
 TimeoutForDeployment = Callable[[Deployment], float | int | None]
 
 
-@dataclass
+def _freeze_fallback_map(
+    fallback_map: Mapping[str, Sequence[str]],
+) -> Mapping[str, tuple[str, ...]]:
+    return MappingProxyType({key: tuple(chain) for key, chain in fallback_map.items()})
+
+
+@dataclass(frozen=True, slots=True)
 class FallbackConfig:
     num_retries: int = 0
     retry_after: float = 0.0
     timeout: float = 600.0
-    fallbacks: dict[str, list[str]] = field(default_factory=dict)
-    context_window_fallbacks: dict[str, list[str]] = field(default_factory=dict)
-    content_policy_fallbacks: dict[str, list[str]] = field(default_factory=dict)
+    fallbacks: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    context_window_fallbacks: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    content_policy_fallbacks: Mapping[str, Sequence[str]] = field(default_factory=dict)
     backoff_multiplier: float = 2.0
     backoff_max: float = 30.0
     backoff_jitter: bool = True
     event_history_size: int = 1000
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fallbacks", _freeze_fallback_map(self.fallbacks))
+        object.__setattr__(
+            self,
+            "context_window_fallbacks",
+            _freeze_fallback_map(self.context_window_fallbacks),
+        )
+        object.__setattr__(
+            self,
+            "content_policy_fallbacks",
+            _freeze_fallback_map(self.content_policy_fallbacks),
+        )
+
+
+def _classify_failure(error: Exception) -> FailureClassification:
+    classification = getattr(error, "failure_classification", None)
+    if isinstance(classification, FailureClassification):
+        return classification
+    if isinstance(error, (httpx.TimeoutException, TimeoutError)):
+        return FailureClassification.TIMEOUT
+
+    status_code = getattr(error, "status_code", None)
+    if status_code == 429 or getattr(error, "error_type", None) == "rate_limit_error":
+        return FailureClassification.RATE_LIMIT
+    return FailureClassification.GENERIC
+
 
 class ErrorClassification:
-    CONTEXT_WINDOW = "context_window_exceeded"
-    CONTENT_POLICY = "content_policy_violation"
-    RATE_LIMIT = "rate_limit"
-    TIMEOUT = "timeout"
-    GENERIC = "generic"
+    """Compatibility facade for the former router-owned classifier."""
 
-    _CONTEXT_WINDOW_PATTERNS = [
-        "context_length_exceeded",
-        "context window",
-        "maximum context length",
-        "max_tokens",
-        "token limit",
-        "too many tokens",
-        "input is too long",
-        "maximum allowed length",
-        "request too large",
-    ]
+    CONTEXT_WINDOW = FailureClassification.CONTEXT_WINDOW
+    CONTENT_POLICY = FailureClassification.CONTENT_POLICY
+    RATE_LIMIT = FailureClassification.RATE_LIMIT
+    TIMEOUT = FailureClassification.TIMEOUT
+    GENERIC = FailureClassification.GENERIC
 
-    _CONTENT_POLICY_PATTERNS = [
-        "content_policy_violation",
-        "content_filter",
-        "content management policy",
-        "safety system",
-        "harmful content",
-        "violates our usage policies",
-        "flagged by our content filter",
-        "responsible ai policy",
-    ]
-
-    @classmethod
-    def classify(cls, error: Exception) -> str:
-        if isinstance(error, (httpx.TimeoutException, TimeoutError)):
-            return cls.TIMEOUT
-
-        status_code = getattr(error, "status_code", None)
-        if status_code == 429 or getattr(error, "error_type", None) == "rate_limit_error":
-            return cls.RATE_LIMIT
-
-        error_body = cls._extract_error_body(error)
-        error_text = error_body.lower() if error_body else str(error).lower()
-
-        for pattern in cls._CONTEXT_WINDOW_PATTERNS:
-            if pattern in error_text:
-                return cls.CONTEXT_WINDOW
-
-        for pattern in cls._CONTENT_POLICY_PATTERNS:
-            if pattern in error_text:
-                return cls.CONTENT_POLICY
-
-        return cls.GENERIC
-
-    @classmethod
-    def _extract_error_body(cls, error: Exception) -> str | None:
-        response = getattr(error, "response", None)
-        if response is None:
-            return None
-        if hasattr(response, "text"):
-            try:
-                return str(response.text)
-            except Exception:
-                pass
-        if hasattr(response, "content"):
-            try:
-                return response.content.decode("utf-8", errors="replace")
-            except Exception:
-                pass
-        return None
+    @staticmethod
+    def classify(error: Exception) -> FailureClassification:
+        return _classify_failure(error)
 
 
 class RetryPolicy:
@@ -183,7 +162,7 @@ class _AttemptExecutionError(Exception):
 @dataclass(frozen=True, slots=True)
 class _NormalizedExecutionError:
     error: Exception
-    classification: str
+    classification: FailureClassification
     allow_classified_fallbacks: bool
     retry_source: Exception
 
@@ -245,8 +224,8 @@ class FailoverManager:
         model_group: str,
         from_id: str,
         to_id: str | None,
-        reason: str,
-        classification: str,
+        reason: str | FailureClassification,
+        classification: str | FailureClassification,
         error_msg: str,
         attempt: int,
         success: bool,
@@ -256,8 +235,8 @@ class FailoverManager:
             model_group=model_group,
             from_deployment_id=from_id,
             to_deployment_id=to_id,
-            reason=reason,
-            error_classification=classification,
+            reason=str(reason),
+            error_classification=str(classification),
             error_message=error_msg,
             attempt=attempt,
             success=success,
@@ -306,66 +285,30 @@ class FailoverManager:
         except Exception:
             logger.warning("failover attempt callback failed", exc_info=True)
 
-    @staticmethod
-    def _http_error_message(error: httpx.HTTPError) -> str:
-        response = getattr(error, "response", None)
-        if response is None:
-            return str(error)
-
-        try:
-            payload = response.json()
-        except Exception:
-            payload = None
-
-        if isinstance(payload, dict):
-            nested_error = payload.get("error")
-            if isinstance(nested_error, dict):
-                for key in ("message", "detail"):
-                    message = nested_error.get(key)
-                    if isinstance(message, str) and message.strip():
-                        return message.strip()
-            if isinstance(nested_error, str) and nested_error.strip():
-                return nested_error.strip()
-            for key in ("message", "detail"):
-                message = payload.get(key)
-                if isinstance(message, str) and message.strip():
-                    return message.strip()
-
-        body = str(getattr(response, "text", "") or "").strip()
-        if body:
-            return body
-
-        content = getattr(response, "content", None)
-        if isinstance(content, bytes):
-            decoded = content.decode("utf-8", errors="replace").strip()
-            if decoded:
-                return decoded
-
-        return str(error)
-
     def _normalize_http_error(self, error: httpx.HTTPError) -> ProxyError:
         if isinstance(error, httpx.PoolTimeout):
             return GatewayCapacityError()
         if isinstance(error, httpx.TimeoutException):
             return TimeoutError(
-                message=str(error) or None,
                 affects_deployment_health=True,
+                failure_classification=FailureClassification.TIMEOUT,
             )
         response = getattr(error, "response", None)
         status_code = getattr(response, "status_code", None)
         if status_code == 429:
             return RateLimitError(
-                message=self._http_error_message(error),
+                message="Provider rate limited request",
                 retry_after=parse_retry_after_header(response.headers.get("retry-after")),
                 affects_deployment_health=True,
+                failure_classification=FailureClassification.RATE_LIMIT,
             )
         if affects_deployment_health(error):
             return ServiceUnavailableError(
-                message=str(error),
+                message="Provider unavailable",
                 affects_deployment_health=True,
             )
         return InvalidRequestError(
-            message=self._http_error_message(error),
+            message="Provider rejected request",
             affects_deployment_health=False,
         )
 
@@ -386,7 +329,7 @@ class FailoverManager:
         if isinstance(error, ProxyError):
             return _NormalizedExecutionError(
                 error=error,
-                classification=ErrorClassification.classify(error),
+                classification=_classify_failure(error),
                 allow_classified_fallbacks=True,
                 retry_source=error,
             )
@@ -395,21 +338,22 @@ class FailoverManager:
             normalized = self._normalize_http_error(error)
             return _NormalizedExecutionError(
                 error=normalized,
-                classification=ErrorClassification.classify(normalized),
+                classification=_classify_failure(normalized),
                 allow_classified_fallbacks=True,
                 retry_source=normalized,
             )
 
         normalized = attach_failover_original_error(
             ServiceUnavailableError(
-                message=str(error),
+                message="Service unavailable",
                 affects_deployment_health=bool(getattr(error, "affects_deployment_health", False)),
+                failure_classification=FailureClassification.GENERIC,
             ),
             error,
         )
         return _NormalizedExecutionError(
             error=normalized,
-            classification=ErrorClassification.classify(normalized),
+            classification=_classify_failure(normalized),
             allow_classified_fallbacks=False,
             retry_source=error,
         )
@@ -718,7 +662,7 @@ class FailoverManager:
 
     async def _get_classified_fallbacks(
         self,
-        classification: str,
+        classification: FailureClassification,
         model_group: str,
         routing_context: dict[str, Any],
         *,
@@ -757,7 +701,7 @@ class FailoverManager:
         model_group: str,
         execute: Callable[[Deployment], Awaitable[Any]],
         from_deployment_id: str,
-        classification: str,
+        classification: FailureClassification,
         routing_context: dict[str, Any],
         visited_ids: set[str],
         attempted_ids: set[str],
@@ -1054,7 +998,7 @@ class FailoverManager:
 
     @staticmethod
     def _should_retry(
-        classification: str,
+        classification: FailureClassification,
         error: Exception,
         retryable_error_classes: set[str] | None,
     ) -> bool:

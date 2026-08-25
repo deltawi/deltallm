@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -27,6 +28,7 @@ from src.metrics import (
 )
 from src.models.errors import InvalidRequestError
 from src.models.requests import ImageGenerationRequest
+from src.providers.base import parse_provider_json_response, validate_provider_success_payload
 from src.providers.resolution import (
     normalize_openai_image_generation_payload,
     resolve_provider,
@@ -60,6 +62,23 @@ from src.services.model_visibility import (
 from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
 
 router = APIRouter(prefix="/v1", tags=["images"])
+
+
+def _is_valid_image_success_payload(data: Mapping[str, Any]) -> bool:
+    images = data.get("data")
+    if not isinstance(images, list) or not images:
+        return False
+    for item in images:
+        if not isinstance(item, Mapping):
+            return False
+        url = item.get("url")
+        encoded_image = item.get("b64_json")
+        if not (
+            (isinstance(url, str) and bool(url))
+            or (isinstance(encoded_image, str) and bool(encoded_image))
+        ):
+            return False
+    return True
 
 
 async def _execute_image_generation(
@@ -105,12 +124,14 @@ async def _execute_image_generation(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
+        status_error = httpx.HTTPStatusError(
             f"Upstream image generation failed with status {response.status_code}",
             request=httpx.Request("POST", f"{api_base}/images/generations"),
             response=response,
         )
-    data = response.json()
+        raise request.app.state.provider_error_mapper_registry.map_error(provider, status_error)
+    data = parse_provider_json_response(response)
+    validate_provider_success_payload(data, _is_valid_image_success_payload)
     data["_api_latency_ms"] = (perf_counter() - upstream_start) * 1000
     data["_api_base"] = api_base
     data["_deployment_model"] = params.get("model")

@@ -32,8 +32,10 @@ from src.metrics import (
     observe_api_latency,
     observe_request_latency,
 )
-from src.models.errors import InvalidRequestError
+from src.models.errors import InvalidRequestError, ProxyError
 from src.models.requests import AudioSpeechRequest
+from src.providers.base import invalid_provider_response_error, parse_provider_json_response
+from src.providers.gemini import reject_gemini_failure_response
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
@@ -160,25 +162,18 @@ async def _execute_tts(
         ),
     )
     if response.status_code >= 400:
-        try:
-            upstream_body = response.json()
-            upstream_msg = upstream_body.get("error", {}).get("message", response.text)
-        except Exception:
-            upstream_msg = response.text
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "upstream TTS %s returned %d: %s", api_base, response.status_code, upstream_msg
-        )
-        raise httpx.HTTPStatusError(
-            f"Upstream TTS call failed with status {response.status_code}: {upstream_msg}",
+        status_error = httpx.HTTPStatusError(
+            f"Upstream TTS call failed with status {response.status_code}",
             request=httpx.Request("POST", f"{api_base}/audio/speech"),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error(provider, status_error)
     audio_bytes = response.content
     billing_payload: dict[str, Any] | None = None
     if upstream_payload.get("stream_format") == "sse":
         audio_bytes, billing_payload = _extract_sse_audio_and_usage(response.content)
+    if not audio_bytes:
+        raise invalid_provider_response_error()
     return {
         "_audio_bytes": audio_bytes,
         "_billing_payload": billing_payload,
@@ -590,17 +585,25 @@ async def _execute_gemini_tts(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
+        status_error = httpx.HTTPStatusError(
             f"Upstream Gemini TTS call failed with status {response.status_code}",
             request=httpx.Request("POST", endpoint),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error("gemini", status_error)
 
-    data = response.json()
-    audio_bytes = _extract_gemini_audio_bytes(data, response_format=effective_format)
+    data = parse_provider_json_response(response)
+    reject_gemini_failure_response(data)
+    try:
+        audio_bytes = _extract_gemini_audio_bytes(data, response_format=effective_format)
+        billing_payload = _extract_gemini_billing_payload(data)
+    except ProxyError:
+        raise
+    except Exception as exc:
+        raise invalid_provider_response_error() from exc
     return {
         "_audio_bytes": audio_bytes,
-        "_billing_payload": _extract_gemini_billing_payload(data),
+        "_billing_payload": billing_payload,
         "_api_latency_ms": (perf_counter() - upstream_start) * 1000,
         "_api_base": api_base,
         "_deployment_model": deployment.deltallm_params.get("model"),
@@ -646,14 +649,18 @@ async def _execute_elevenlabs_tts(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
-            _format_elevenlabs_tts_error(response),
+        status_error = httpx.HTTPStatusError(
+            f"Upstream ElevenLabs TTS call failed with status {response.status_code}",
             request=httpx.Request("POST", endpoint),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error("elevenlabs", status_error)
 
+    audio_bytes = response.content
+    if not audio_bytes:
+        raise invalid_provider_response_error()
     return {
-        "_audio_bytes": response.content,
+        "_audio_bytes": audio_bytes,
         "_billing_payload": _extract_elevenlabs_billing_payload(response),
         "_api_latency_ms": (perf_counter() - upstream_start) * 1000,
         "_api_base": api_base,
@@ -804,25 +811,6 @@ def _extract_elevenlabs_billing_payload(response: httpx.Response) -> dict[str, A
     return {"input_characters": character_count}
 
 
-def _format_elevenlabs_tts_error(response: httpx.Response) -> str:
-    upstream_msg = response.text
-    try:
-        upstream_body = response.json()
-    except Exception:
-        upstream_body = None
-
-    if isinstance(upstream_body, Mapping):
-        detail = upstream_body.get("detail")
-        if isinstance(detail, Mapping):
-            upstream_msg = str(detail.get("message") or detail.get("detail") or upstream_msg)
-        elif detail:
-            upstream_msg = str(detail)
-        else:
-            upstream_msg = str(upstream_body.get("message") or upstream_msg)
-
-    return f"Upstream ElevenLabs TTS call failed with status {response.status_code}: {upstream_msg}"
-
-
 def _resolve_gemini_response_format(payload: AudioSpeechRequest) -> str:
     requested_format = (payload.response_format or "mp3").strip().lower()
     if requested_format in GEMINI_SUPPORTED_RESPONSE_FORMATS:
@@ -874,13 +862,18 @@ def _extract_gemini_audio_bytes(response_payload: dict[str, Any], *, response_fo
         encoded_audio = inline_data.get("data")
         if not isinstance(encoded_audio, str) or not encoded_audio:
             continue
-        pcm_bytes = base64.b64decode(encoded_audio)
+        try:
+            pcm_bytes = base64.b64decode(encoded_audio, validate=True)
+        except ValueError as exc:
+            raise invalid_provider_response_error() from exc
+        if not pcm_bytes:
+            raise invalid_provider_response_error()
         if response_format == "pcm":
             return pcm_bytes
         mime_type = str(inline_data.get("mimeType") or inline_data.get("mime_type") or "")
         sample_rate_hz = _extract_pcm_sample_rate(mime_type) or 24000
         return _wrap_pcm_as_wav(pcm_bytes, sample_rate_hz=sample_rate_hz)
-    raise InvalidRequestError(message="Gemini TTS response did not include audio data")
+    raise invalid_provider_response_error()
 
 
 def _extract_gemini_billing_payload(response_payload: dict[str, Any]) -> dict[str, Any] | None:

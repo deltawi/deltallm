@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, Self, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ChatMessage(BaseModel):
@@ -121,6 +121,12 @@ class EmbeddingRequest(BaseModel):
     dimensions: int | None = Field(default=None, ge=1)
     user: str | None = None
 
+    @model_validator(mode="after")
+    def validate_input_is_not_empty(self) -> Self:
+        if isinstance(self.input, list) and not self.input:
+            raise ValueError("embedding input must not be empty")
+        return self
+
 
 class ImageGenerationRequest(BaseModel):
     model: str
@@ -153,5 +159,11 @@ class RerankRequest(BaseModel):
     model: str
     query: str
     documents: list[str] | list[dict[str, Any]]
-    top_n: int | None = None
+    top_n: int | None = Field(default=None, ge=1)
     return_documents: bool | None = True
+
+    @model_validator(mode="after")
+    def validate_documents_are_not_empty(self) -> Self:
+        if not self.documents:
+            raise ValueError("rerank documents must not be empty")
+        return self

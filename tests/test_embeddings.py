@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import httpx
 import pytest
 
 from src.callbacks import CallbackManager, CustomLogger
+from src.router.router import Deployment
 
 
 class RecordingCallback(CustomLogger):
@@ -122,10 +124,11 @@ async def test_embeddings_upstream_rate_limit_returns_429(client, test_app):
     assert response.status_code == 429
     assert response.headers.get("Retry-After") == "11"
     assert response.json()["error"]["type"] == "rate_limit_error"
+    assert response.json()["error"]["message"] == "Provider rate limited request"
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 1
-    assert health.get("last_error") == "provider quota exhausted"
+    assert health.get("last_error") == "Provider rate limited request"
     assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
 
 
@@ -151,8 +154,242 @@ async def test_embeddings_upstream_service_unavailable_updates_health_once(clien
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 1
-    assert health.get("last_error") == "Upstream embedding call failed with status 503"
+    assert health.get("last_error") == "Provider unavailable"
     assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
+
+
+@pytest.mark.asyncio
+async def test_embeddings_provider_classification_selects_content_policy_fallback(client, test_app):
+    registry = test_app.state.router.deployment_registry
+    primary = registry["text-embedding-3-small"][0]
+    primary.deltallm_params["api_key"] = "primary-key"
+    fallback = Deployment(
+        deployment_id="embedding-content-fallback",
+        model_name="embedding-content-fallback",
+        deltallm_params={
+            "provider": "openai",
+            "model": "openai/text-embedding-3-small",
+            "api_key": "fallback-key",
+        },
+        model_info={"mode": "embedding"},
+    )
+    registry.replace(
+        {
+            **registry.snapshot(),
+            "embedding-content-fallback": [fallback],
+        }
+    )
+    manager = test_app.state.failover_manager
+    manager.config = replace(
+        manager.config,
+        content_policy_fallbacks={"text-embedding-3-small": ["embedding-content-fallback"]},
+    )
+    attempts: list[str] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del json, timeout
+        attempts.append(headers["Authorization"])
+        if headers["Authorization"] == "Bearer primary-key":
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "type": "content_policy_violation",
+                        "message": "provider-owned sensitive detail",
+                    }
+                },
+                request=httpx.Request("POST", url),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "text-embedding-3-small", "input": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    assert attempts == ["Bearer primary-key", "Bearer fallback-key"]
+
+
+@pytest.mark.asyncio
+async def test_embeddings_custom_provider_does_not_inherit_openai_classification(client, test_app):
+    registry = test_app.state.router.deployment_registry
+    primary = registry["text-embedding-3-small"][0]
+    primary.deltallm_params.update(
+        {
+            "provider": "custom-gateway",
+            "model": "custom-model",
+            "api_key": "primary-key",
+        }
+    )
+    fallback = Deployment(
+        deployment_id="embedding-context-fallback",
+        model_name="embedding-context-fallback",
+        deltallm_params={
+            "provider": "openai",
+            "model": "openai/text-embedding-3-small",
+            "api_key": "fallback-key",
+        },
+        model_info={"mode": "embedding"},
+    )
+    registry.replace(
+        {
+            **registry.snapshot(),
+            "embedding-context-fallback": [fallback],
+        }
+    )
+    manager = test_app.state.failover_manager
+    manager.config = replace(
+        manager.config,
+        context_window_fallbacks={"text-embedding-3-small": ["embedding-context-fallback"]},
+    )
+    attempts: list[str] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del json, timeout
+        attempts.append(headers["Authorization"])
+        if headers["Authorization"] == "Bearer primary-key":
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "context_length_exceeded",
+                        "message": "maximum context length sk-upstream",
+                    }
+                },
+                request=httpx.Request("POST", url),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "text-embedding-3-small", "input": "hello"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "Provider rejected request"
+    assert "sk-upstream" not in response.text
+    assert attempts == ["Bearer primary-key"]
+    health = await test_app.state.router_state_backend.get_health(primary.deployment_id)
+    assert int(health.get("consecutive_failures", 0) or 0) == 0
+    assert health.get("last_error") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformed_payload",
+    [
+        {"secret": "sk-upstream"},
+        {"data": [], "usage": {"prompt_tokens": 1, "total_tokens": 1}},
+        {
+            "data": [{"object": "embedding", "index": 0, "embedding": []}],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+        {
+            "data": [{"object": "embedding", "index": 1, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+    ],
+)
+async def test_embeddings_malformed_success_uses_general_fallback(
+    client,
+    test_app,
+    malformed_payload: dict,
+):
+    registry = test_app.state.router.deployment_registry
+    primary = registry["text-embedding-3-small"][0]
+    primary.deltallm_params["api_key"] = "primary-key"
+    fallback = Deployment(
+        deployment_id="embedding-malformed-fallback",
+        model_name="text-embedding-3-small",
+        deltallm_params={
+            "provider": "openai",
+            "model": "openai/text-embedding-3-small",
+            "api_key": "fallback-key",
+        },
+        model_info={"mode": "embedding"},
+    )
+    registry.replace(
+        {
+            **registry.snapshot(),
+            "text-embedding-3-small": [primary, fallback],
+        }
+    )
+
+    async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
+        del model_group, request_context
+        return primary
+
+    attempts: list[str] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del json, timeout
+        attempts.append(headers["Authorization"])
+        request = httpx.Request("POST", url)
+        if headers["Authorization"] == "Bearer primary-key":
+            return httpx.Response(200, json=malformed_payload, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            request=request,
+        )
+
+    test_app.state.router.select_deployment = choose_primary
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "text-embedding-3-small", "input": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    assert attempts == ["Bearer primary-key", "Bearer fallback-key"]
+    assert "sk-upstream" not in response.text
+    health = await test_app.state.router_state_backend.get_health(primary.deployment_id)
+    assert health["last_error"] == "Provider returned an invalid response"
+
+
+@pytest.mark.asyncio
+async def test_embeddings_rejects_empty_input_before_provider_call(client, test_app):
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "text-embedding-3-small", "input": []},
+    )
+
+    assert response.status_code == 422
+    assert test_app.state.http_client.post_calls == 0
 
 
 @pytest.mark.asyncio

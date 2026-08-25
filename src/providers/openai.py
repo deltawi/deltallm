@@ -5,11 +5,57 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from src.models.errors import FailureClassification, ProxyError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
-from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.base import (
+    ProviderAdapter,
+    ProviderErrorDetails,
+    classify_provider_failure,
+    map_standard_provider_error,
+    provider_error_details,
+    reject_openai_compatible_failure_response,
+)
 from src.providers.healthcheck import is_provider_healthy
-from src.providers.resolution import normalize_openai_chat_payload, resolve_provider, resolve_upstream_model
+from src.providers.openai_compatible import (
+    translate_openai_compatible_stream,
+    validate_openai_compatible_chat_success,
+)
+from src.providers.resolution import (
+    normalize_openai_chat_payload,
+    resolve_provider,
+    resolve_upstream_model,
+)
+
+_CONTEXT_IDENTIFIERS = frozenset(
+    {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "input_too_long",
+        "max_context_length_exceeded",
+    }
+)
+_CONTENT_IDENTIFIERS = frozenset(
+    {
+        "content_blocked",
+        "content_filter",
+        "content_policy_violation",
+        "prohibited_content",
+        "safety",
+    }
+)
+_CONTEXT_MESSAGE_MARKERS = (
+    "context window",
+    "input is too long",
+    "maximum context length",
+    "too many tokens",
+)
+_CONTENT_MESSAGE_MARKERS = (
+    "content management policy",
+    "flagged by our content filter",
+    "responsible ai policy",
+    "violates our usage policies",
+)
 
 
 class OpenAIAdapter(ProviderAdapter):
@@ -30,11 +76,23 @@ class OpenAIAdapter(ProviderAdapter):
         upstream_model = resolve_upstream_model(provider_config)
         if upstream_model:
             payload["model"] = upstream_model
-        normalize_openai_chat_payload(payload, provider=provider, upstream_model=upstream_model or str(payload.get("model") or ""))
+        normalize_openai_chat_payload(
+            payload,
+            provider=provider,
+            upstream_model=upstream_model or str(payload.get("model") or ""),
+        )
         return payload
 
-    async def translate_response(self, provider_response: Any, model_name: str) -> ChatCompletionResponse:
-        data = provider_response if isinstance(provider_response, dict) else json.loads(provider_response)
+    async def translate_response(
+        self, provider_response: Any, model_name: str
+    ) -> ChatCompletionResponse:
+        data = (
+            provider_response
+            if isinstance(provider_response, dict)
+            else json.loads(provider_response)
+        )
+        reject_openai_compatible_failure_response(data)
+        validate_openai_compatible_chat_success(data)
         if "model" not in data:
             data["model"] = model_name
         choices = data.get("choices")
@@ -55,39 +113,32 @@ class OpenAIAdapter(ProviderAdapter):
         *,
         model_name: str | None = None,
     ) -> AsyncIterator[str]:
-        async for chunk in provider_stream:
+        async for chunk in translate_openai_compatible_stream(
+            provider_stream,
+            classify_failure=self._classify_failure,
+        ):
             yield chunk
 
     @staticmethod
-    def _http_error_message(provider_error: httpx.HTTPStatusError) -> str:
-        response = provider_error.response
-        try:
-            payload = response.json()
-        except (AttributeError, ValueError):
-            payload = None
-        if isinstance(payload, dict):
-            error = payload.get("error")
-            if isinstance(error, dict):
-                message = str(error.get("message") or "").strip()
-                if message:
-                    return message
-        body = str(getattr(response, "text", "") or "").strip()
-        if body:
-            return body
-        return f"Provider rejected request: {response.status_code}"
-
-    def map_error(self, provider_error: Exception) -> Exception:
-        status = provider_error.response.status_code if isinstance(provider_error, httpx.HTTPStatusError) else None
-        message = (
-            self._http_error_message(provider_error)
-            if isinstance(provider_error, httpx.HTTPStatusError) and status is not None and status < 500
-            else "Provider unavailable"
+    def _classify_failure(details: ProviderErrorDetails) -> FailureClassification | None:
+        return classify_provider_failure(
+            details,
+            context_identifiers=_CONTEXT_IDENTIFIERS,
+            content_identifiers=_CONTENT_IDENTIFIERS,
+            context_message_markers=_CONTEXT_MESSAGE_MARKERS,
+            content_message_markers=_CONTENT_MESSAGE_MARKERS,
         )
+
+    def map_error(
+        self,
+        provider_error: Exception,
+        *,
+        details: ProviderErrorDetails | None = None,
+    ) -> ProxyError:
+        classification = self._classify_failure(details or provider_error_details(provider_error))
         return map_standard_provider_error(
             provider_error,
-            invalid_request_message=message,
-            unavailable_message="Provider unavailable",
-            rate_limit_message=message if status == 429 else None,
+            failure_classification=classification,
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:

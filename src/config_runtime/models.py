@@ -118,7 +118,7 @@ class ModelHotReloadManager:
             RoutingRuntimeGenerationStore,
         ):
             app.state.routing_runtime_generation_store = RoutingRuntimeGenerationStore()
-        self.dynamic_config.subscribe(self._on_config_change)
+        self.dynamic_config.subscribe_finalizer(self._on_config_change)
 
     def set_routing_authorization_reconciler(
         self,
@@ -263,21 +263,18 @@ class ModelHotReloadManager:
     async def _apply_runtime_config(self, app_config: AppConfig) -> None:
         app = self.app
         settings = app.state.settings
+        generation_store = app.state.routing_runtime_generation_store
 
         async with self._route_reload_lock:
+            publication_base = generation_store.snapshot()
+            publication_base_id = (
+                publication_base.generation_id if publication_base is not None else None
+            )
             await self._invalidate_route_group_cache()
             generation = await self._load_complete_routing_generation(
                 app_config=app_config,
                 settings=settings,
             )
-            current_registry = getattr(app.state.router, "deployment_registry", None)
-            current_deployments = (
-                current_registry.snapshot()
-                if isinstance(current_registry, DeploymentRegistryStore)
-                else current_registry or {}
-            )
-            self._publish_routing_generation(generation)
-        new_deployments = generation.deployment_registry.snapshot()
         salt_key = generation.salt_key
 
         if app_config.deltallm_settings.guardrails:
@@ -384,11 +381,67 @@ class ModelHotReloadManager:
             redis_client=getattr(app.state, "redis", None),
             salt_key=salt_key,
         )
+
+        async with self._route_reload_lock:
+            generation, current_deployments = await self._publish_stable_config_generation(
+                app_config=app_config,
+                settings=settings,
+                candidate=generation,
+                candidate_base_id=publication_base_id,
+            )
+        new_deployments = generation.deployment_registry.snapshot()
         await self._cleanup_replaced_deployment_health(
             current=current_deployments,
             replacement=new_deployments,
         )
-        app.state.app_config = app_config
+
+    async def _publish_stable_config_generation(
+        self,
+        *,
+        app_config: AppConfig,
+        settings: Any,
+        candidate: RoutingRuntimeGeneration,
+        candidate_base_id: str | None,
+    ) -> tuple[RoutingRuntimeGeneration, Mapping[str, Sequence[Any]]]:
+        """Publish only a candidate built from the still-current generation identity."""
+
+        generation_store = self.app.state.routing_runtime_generation_store
+        expected_generation_id = candidate_base_id
+        for attempt in range(_ROUTING_SNAPSHOT_BUILD_ATTEMPTS + 1):
+            current_generation = generation_store.snapshot()
+            current_generation_id = (
+                current_generation.generation_id if current_generation is not None else None
+            )
+            if (
+                current_generation_id == expected_generation_id
+                and candidate.revision >= self._applied_route_revision
+            ):
+                current_registry = (
+                    current_generation.deployment_registry
+                    if current_generation is not None
+                    else getattr(self.app.state.router, "deployment_registry", None)
+                )
+                current_deployments = (
+                    current_registry.snapshot()
+                    if isinstance(current_registry, DeploymentRegistryStore)
+                    else current_registry or {}
+                )
+                # No await is allowed between this identity check and publication.
+                self._publish_routing_generation(candidate)
+                return candidate, current_deployments
+            if attempt == _ROUTING_SNAPSHOT_BUILD_ATTEMPTS:
+                break
+            expected_generation_id = current_generation_id
+            await self._invalidate_route_group_cache()
+            candidate = await self._load_complete_routing_generation(
+                app_config=app_config,
+                settings=settings,
+            )
+
+        self._mark_reconciliation_required()
+        raise StaleRouteGroupSnapshotError(
+            "routing generation changed while config publication was being prepared"
+        )
 
     async def _build_routing_generation(
         self,
@@ -512,9 +565,8 @@ class ModelHotReloadManager:
         """Publish one validated generation without yielding to request tasks."""
 
         app = self.app
-        # Data-plane callers consume this store. The aliases below remain for
-        # control-plane compatibility and are never mixed by a pinned request.
-        app.state.routing_runtime_generation_store.replace(generation)
+        # Data-plane callers consume the store replaced at the end. Prepare the
+        # compatibility aliases first so a failed assignment cannot expose the candidate.
         grant_service = getattr(app.state, "callable_target_grant_service", None)
         if grant_service is not None:
             grant_service.replace_snapshot(generation.authorization_snapshot)
@@ -540,6 +592,7 @@ class ModelHotReloadManager:
             source=generation.source,
             requires_reconciliation=generation.requires_reconciliation,
         )
+        app.state.routing_runtime_generation_store.replace(generation)
 
     async def _cleanup_replaced_deployment_health(
         self,

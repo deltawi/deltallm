@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -30,6 +31,7 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.models.errors import InvalidRequestError
+from src.providers.base import parse_provider_json_response, validate_provider_success_payload
 from src.rate_limit_policy import estimate_tokens
 from src.providers.resolution import (
     is_openai_compatible_provider,
@@ -66,6 +68,10 @@ from src.services.preflight_capacity import acquire_preflight_capacity, release_
 DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS = 600.0
 
 router = APIRouter(prefix="/v1", tags=["audio"])
+
+
+def _is_valid_transcription_success_payload(data: Mapping[str, Any]) -> bool:
+    return "text" in data and isinstance(data.get("text"), str)
 
 
 def _transcription_timeout_seconds(params: dict[str, Any]) -> float:
@@ -151,24 +157,18 @@ async def _execute_stt(
         timeout=build_upstream_request_timeout_for_request(request, timeout_seconds),
     )
     if response.status_code >= 400:
-        try:
-            upstream_body = response.json()
-            upstream_msg = upstream_body.get("error", {}).get("message", response.text)
-        except Exception:
-            upstream_msg = response.text
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "upstream STT %s returned %d: %s", api_base, response.status_code, upstream_msg
-        )
-        raise httpx.HTTPStatusError(
-            f"Upstream transcription failed with status {response.status_code}: {upstream_msg}",
+        status_error = httpx.HTTPStatusError(
+            f"Upstream transcription failed with status {response.status_code}",
             request=httpx.Request("POST", f"{api_base}/audio/transcriptions"),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error(api_provider, status_error)
     parsed_response = (
-        response.json() if "json" in upstream_response_format else {"text": response.text}
+        parse_provider_json_response(response)
+        if "json" in upstream_response_format
+        else {"text": response.text}
     )
+    validate_provider_success_payload(parsed_response, _is_valid_transcription_success_payload)
     data = _reshape_transcription_response(
         requested_response_format=response_format,
         upstream_response_format=upstream_response_format,

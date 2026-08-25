@@ -5,11 +5,48 @@ from typing import Any
 
 from fastapi import Request
 
-from src.models.errors import InvalidRequestError
-from src.providers.base import ProviderAdapter
-from src.providers.resolution import is_openai_compatible_provider, resolve_provider, resolve_upstream_model
+from src.models.errors import InvalidRequestError, ProxyError
+from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.resolution import (
+    is_openai_compatible_provider,
+    resolve_provider,
+    resolve_upstream_model,
+)
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import configured_timeout_seconds
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderErrorMapperRegistry:
+    """Resolve provider-owned error classifiers for every routed endpoint."""
+
+    openai: ProviderAdapter
+    azure_openai: ProviderAdapter
+    anthropic: ProviderAdapter
+    gemini: ProviderAdapter
+    bedrock: ProviderAdapter
+
+    def resolve(self, provider: str) -> ProviderAdapter | None:
+        normalized = (provider or "").strip().lower()
+        if normalized in {"azure", "azure_openai"}:
+            return self.azure_openai
+        if normalized == "anthropic":
+            return self.anthropic
+        if normalized == "gemini":
+            return self.gemini
+        if normalized == "bedrock":
+            return self.bedrock
+        if normalized == "elevenlabs":
+            return None
+        if normalized in {"", "unknown"} or is_openai_compatible_provider(normalized):
+            return self.openai
+        return None
+
+    def map_error(self, provider: str, error: Exception) -> ProxyError:
+        adapter = self.resolve(provider)
+        if adapter is None:
+            return map_standard_provider_error(error)
+        return adapter.map_error(error)
 
 
 @dataclass
@@ -51,7 +88,9 @@ def resolve_chat_upstream(
             raise InvalidRequestError(message="Provider API key is missing for selected model")
         return ChatUpstream(
             adapter=request.app.state.azure_openai_adapter,
-            api_base=str(params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/"),
+            api_base=str(params.get("api_base", request.app.state.settings.openai_base_url)).rstrip(
+                "/"
+            ),
             endpoint="/chat/completions",
             headers={"api-key": str(api_key), "Content-Type": "application/json"},
             timeout=timeout,
@@ -66,7 +105,9 @@ def resolve_chat_upstream(
         upstream_model = resolve_upstream_model(params)
         return ChatUpstream(
             adapter=request.app.state.gemini_adapter,
-            api_base=str(params.get("api_base") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/"),
+            api_base=str(
+                params.get("api_base") or "https://generativelanguage.googleapis.com/v1beta"
+            ).rstrip("/"),
             endpoint=f"/models/{upstream_model}:generateContent?key={api_key}",
             headers={"Content-Type": "application/json"},
             timeout=timeout,
@@ -78,7 +119,9 @@ def resolve_chat_upstream(
         endpoint_action = "converse-stream" if is_stream else "converse"
         return ChatUpstream(
             adapter=request.app.state.bedrock_adapter,
-            api_base=str(params.get("api_base") or f"https://bedrock-runtime.{region}.amazonaws.com").rstrip("/"),
+            api_base=str(
+                params.get("api_base") or f"https://bedrock-runtime.{region}.amazonaws.com"
+            ).rstrip("/"),
             endpoint=f"/model/{upstream_model}/{endpoint_action}",
             headers={"Content-Type": "application/json"},
             timeout=timeout,
@@ -92,7 +135,9 @@ def resolve_chat_upstream(
         raise InvalidRequestError(message="Provider API key is missing for selected model")
     return ChatUpstream(
         adapter=request.app.state.openai_adapter,
-        api_base=str(params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/"),
+        api_base=str(params.get("api_base", request.app.state.settings.openai_base_url)).rstrip(
+            "/"
+        ),
         endpoint="/chat/completions",
         headers=build_openai_compatible_auth_headers(
             provider=provider,

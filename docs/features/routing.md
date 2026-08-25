@@ -453,6 +453,45 @@ deltallm_settings:
 - `context_window_fallbacks`: used when the input is too large for the first model
 - `content_policy_fallbacks`: used when a provider rejects the content for policy reasons
 
+The provider adapter classifies context-window and content-policy failures from documented provider
+error fields before the error reaches the router. The same adapter classifiers are used by chat,
+embeddings, images, rerank, speech, and transcription. OpenAI-compatible and Azure OpenAI response
+envelopes and stream events with `finish_reason: content_filter` are treated as content-policy
+failures rather than successful empty responses. The router does not infer either condition from
+arbitrary exception text or an unstructured response body. Explicit custom providers use generic
+status mapping unless they are in the supported OpenAI-compatible provider set; the existing
+provider-omitted default remains OpenAI-compatible. HTTP status owns the public error type and
+deployment-health impact, while a trusted adapter classification owns specialized fallback
+selection. A recognized context or policy failure returned with a 5xx status therefore remains
+health-affecting and may try its specialized chain before the general chain. Unclassified 5xx
+responses use the general chain, and 429 remains rate-limit classified regardless of envelope text.
+Malformed JSON or response schemas behind a nominally successful provider status are also
+health-affecting general failures, and the upstream payload is never returned to the client. Empty
+chat choices, missing or mismatched embedding and rerank results, and empty speech audio are
+malformed successes. Unknown or malformed provider 4xx responses stop immediately and return a
+sanitized, stable gateway error. Anthropic `refusal` and `model_context_window_exceeded` success
+stop reasons select the content-policy and context-window chains respectively. Gemini policy
+terminal reasons select the content-policy chain; unsupported, malformed, and unknown terminal
+reasons fail closed through the general chain instead of becoming successful empty responses.
+Bedrock stream exception types retain their documented meaning even when their message contains a
+context or policy marker; only validation-like exceptions use those message allowlists.
+
+Streaming fallback is allowed only before the first downstream response frame. Provider role and
+metadata events are held in a bounded pre-commit buffer until output or a valid terminal event
+establishes a real response. OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock classified
+terminal events can therefore select a specialized fallback before output. Empty, terminal-only,
+and truncated pre-output streams are malformed successes and may use the general fallback chain.
+If a classified stop follows partial output, DeltaLLM completes that committed stream with
+`content_filter` or `length` instead of starting another provider attempt. Any other malformed
+committed stream is aborted, marked unhealthy, and never cached as a complete response.
+
+All three maps are immutable members of one routing-runtime generation. Each replica serializes the
+durable config load, subscriber application, generation publication, and rollback. Publication is
+fenced by the complete generation identity, so a slower reload cannot overwrite a newer grant or
+route snapshot even when both use the same route revision. A validation or subscriber failure leaves
+requests on the previous complete generation. A request that has already started remains pinned to
+the generation it acquired, including all of its fallback maps.
+
 ## Advanced Routing Controls
 
 Use these settings when routing needs a little more control:

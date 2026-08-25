@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from src.cache import (
@@ -600,9 +601,7 @@ async def test_streaming_cache_handler_skips_store_when_buffer_limit_exceeded():
 
 
 @pytest.mark.asyncio
-async def test_streaming_cache_skips_store_after_invalid_chunk_without_breaking_stream(
-    client, test_app
-):
+async def test_streaming_cache_discards_committed_stream_after_invalid_chunk(test_app):
     _enable_stream_cache(test_app)
     calls = {"count": 0}
 
@@ -625,17 +624,26 @@ async def test_streaming_cache_skips_store_after_invalid_chunk_without_breaking_
         "stream": True,
     }
 
-    first = await client.post("/v1/chat/completions", headers=headers, json=body)
-    second = await client.post("/v1/chat/completions", headers=headers, json=body)
+    transport = httpx.ASGITransport(app=test_app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.post("/v1/chat/completions", headers=headers, json=body)
+        second = await client.post("/v1/chat/completions", headers=headers, json=body)
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert "data: [DONE]" in first.text
-    assert "data: [DONE]" in second.text
+    assert '"content":"hi"' in first.text
+    assert '"content":"hi"' in second.text
+    assert "data: [DONE]" not in first.text
+    assert "data: [DONE]" not in second.text
     assert calls["count"] == 2
     assert len(test_app.state.cache_backend._cache) == 0
-    assert test_app.state.streaming_cache_handler.disabled_streams_total == 2
+    # The provider validator rejects the malformed frame before it reaches the
+    # cache accumulator, while the stream lifecycle still discards its state.
+    assert test_app.state.streaming_cache_handler.disabled_streams_total == 0
     assert test_app.state.streaming_cache_handler.active_stream_count == 0
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+    assert health["last_error"] == "Provider returned an invalid response"
 
 
 @pytest.mark.asyncio
