@@ -2,10 +2,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from math import ceil
 
 
 NO_HEALTHY_DEPLOYMENTS_CODE = "no_healthy_deployments"
+
+
+class FailureClassification(StrEnum):
+    """Stable internal routing classification for a failed upstream attempt."""
+
+    CONTEXT_WINDOW = "context_window_exceeded"
+    CONTENT_POLICY = "content_policy_violation"
+    RATE_LIMIT = "rate_limit"
+    TIMEOUT = "timeout"
+    GENERIC = "generic"
 
 
 def parse_retry_after_header(value: str | None) -> int | None:
@@ -45,11 +56,13 @@ class ProxyError(Exception):
         code: str | None = None,
         *,
         affects_deployment_health: bool | None = None,
+        failure_classification: FailureClassification | None = None,
     ):
         self.message = message or self.message
         self.param = param
         self.code = code
         self.affects_deployment_health = affects_deployment_health
+        self.failure_classification = failure_classification
         super().__init__(self.message)
 
 
@@ -104,7 +117,9 @@ class ApprovalRequiredError(ProxyError):
     error_type = "approval_required"
     message = "Approval required"
 
-    def __init__(self, message: str | None = None, approval_request_id: str | None = None, **kwargs):
+    def __init__(
+        self, message: str | None = None, approval_request_id: str | None = None, **kwargs
+    ):
         super().__init__(message=message, **kwargs)
         self.approval_request_id = approval_request_id
 

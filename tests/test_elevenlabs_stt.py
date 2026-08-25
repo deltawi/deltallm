@@ -326,7 +326,7 @@ async def test_audio_transcription_elevenlabs_multichannel_uses_billable_channel
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_elevenlabs_surfaces_upstream_errors(client, test_app):
+async def test_audio_transcription_elevenlabs_sanitizes_upstream_errors(client, test_app):
     test_app.state.spend_tracking_service = _SpendRecorder()
     _configure_elevenlabs_stt_deployment(test_app)
 
@@ -350,7 +350,8 @@ async def test_audio_transcription_elevenlabs_surfaces_upstream_errors(client, t
     )
 
     assert response.status_code == 400
-    assert "bad audio" in response.text
+    assert response.json()["error"]["message"] == "Provider rejected request"
+    assert "bad audio" not in response.text
 
     await asyncio.sleep(0.05)
     last_event = test_app.state.spend_tracking_service.events[-1]
@@ -359,7 +360,7 @@ async def test_audio_transcription_elevenlabs_surfaces_upstream_errors(client, t
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_elevenlabs_invalid_json_logs_upstream_502(
+async def test_audio_transcription_elevenlabs_invalid_schema_returns_sanitized_error(
     client,
     test_app,
 ):
@@ -372,7 +373,7 @@ async def test_audio_transcription_elevenlabs_invalid_json_logs_upstream_502(
         del headers, files, data, timeout
         return httpx.Response(
             200,
-            content=b"not-json",
+            json={"secret": "sk-upstream"},
             request=httpx.Request("POST", url),
         )
 
@@ -386,7 +387,8 @@ async def test_audio_transcription_elevenlabs_invalid_json_logs_upstream_502(
     )
 
     assert response.status_code == 503
-    assert "invalid JSON" in response.text
+    assert response.json()["error"]["message"] == "Provider returned an invalid response"
+    assert "sk-upstream" not in response.text
 
     await asyncio.sleep(0.05)
     last_event = test_app.state.spend_tracking_service.events[-1]

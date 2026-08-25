@@ -161,6 +161,41 @@ deltallm_settings:
         - claude-3-sonnet
 ```
 
+Provider adapters select the specialized context-window and content-policy maps from known error
+envelope fields for chat, embeddings, images, rerank, speech, and transcription. OpenAI-compatible
+and Azure OpenAI responses or stream events that end with `finish_reason: content_filter` are also
+content-policy failures. Raw exception text and malformed provider bodies never activate a
+specialized chain. Explicit custom providers use generic status mapping unless they are declared as
+one of the supported OpenAI-compatible providers; an omitted provider retains the existing implicit
+OpenAI-compatible behavior. HTTP status still owns the public error type and health impact. A
+recognized context or policy classification on a 5xx response remains health-affecting but may try
+its specialized chain first; an unclassified 5xx uses the general chain, and 429 remains a rate-limit
+failure regardless of envelope text. A malformed JSON or response schema behind a nominally
+successful provider status is a health-affecting provider failure and may use the general
+`fallbacks` map; its upstream payload is never returned to the client. This includes empty chat
+choices, missing or mismatched embedding and rerank results, and empty speech audio. Unknown or
+malformed 4xx responses stop with a sanitized gateway error. Anthropic Messages responses classify
+`refusal` as content policy and `model_context_window_exceeded` as context window before returning a
+nominal success. Gemini accepts only documented success terminal reasons; policy terminals use the
+content-policy chain and unsupported, malformed, or unknown terminal reasons fail closed through
+the general chain. For Bedrock streams, the documented exception type is authoritative: throttling
+and service exceptions cannot be reclassified by message text, while validation exceptions may use
+the bounded provider-specific context/content markers.
+
+No fallback starts after a streaming response frame has been sent. Provider role and metadata
+events are held in a bounded pre-commit buffer until output or a valid terminal event establishes a
+real response. This lets OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock classified terminal
+events select a specialized fallback when they arrive before output. Empty, terminal-only, and
+truncated pre-output streams are malformed successes and may use the general fallback chain. After
+partial output has committed a response, a classified stop terminates that stream with the compatible
+`content_filter` or `length` finish reason instead of starting another provider attempt. Any other
+malformed committed stream is aborted, marked unhealthy, and never cached as a complete response.
+
+Each replica serializes durable config loads, subscriber application, publication, and rollback.
+Runtime reloads publish all three immutable maps as one generation, and publication is fenced by
+the complete generation identity rather than only the route revision. A failed or superseded reload
+therefore cannot expose mixed fallback configuration or overwrite a newer authorization snapshot.
+
 ## Model Aliases
 
 Aliases let clients request a stable name while you map it to the real group:

@@ -275,7 +275,7 @@ async def test_audio_speech_elevenlabs_rejects_unsupported_openai_formats(
 
 
 @pytest.mark.asyncio
-async def test_audio_speech_elevenlabs_surfaces_upstream_errors(client, test_app):
+async def test_audio_speech_elevenlabs_sanitizes_upstream_errors(client, test_app):
     test_app.state.spend_tracking_service = _SpendRecorder()
     _configure_elevenlabs_deployment(test_app, default_params={"voice_id": "voice-default"})
 
@@ -296,9 +296,37 @@ async def test_audio_speech_elevenlabs_surfaces_upstream_errors(client, test_app
     )
 
     assert response.status_code == 400
-    assert "bad voice" in response.text
+    assert response.json()["error"]["message"] == "Provider rejected request"
+    assert "bad voice" not in response.text
 
     await asyncio.sleep(0.05)
     last_event = test_app.state.spend_tracking_service.events[-1]
     assert last_event["status"] == "error"
     assert last_event["call_type"] == "audio_speech"
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_elevenlabs_rejects_empty_success_audio(client, test_app):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+    _configure_elevenlabs_deployment(test_app, default_params={"voice_id": "voice-default"})
+
+    async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
+        del headers, json, timeout
+        return httpx.Response(200, content=b"", request=httpx.Request("POST", url))
+
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/audio/speech",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "gpt-4o-mini", "input": "hello world"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["message"] == "Provider returned an invalid response"
+    await asyncio.sleep(0.05)
+    assert not [
+        event
+        for event in test_app.state.spend_tracking_service.events
+        if event["status"] == "success"
+    ]

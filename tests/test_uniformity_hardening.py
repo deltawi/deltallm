@@ -356,8 +356,8 @@ async def test_embedding_failover_failure_uses_last_attempted_deployment_metadat
 
     primary_health = await test_app.state.router_state_backend.get_health(registry[0].deployment_id)
     fallback_health = await test_app.state.router_state_backend.get_health(fallback.deployment_id)
-    assert primary_health.get("last_error") == "Upstream embedding call failed with status 503"
-    assert fallback_health.get("last_error") == "Upstream embedding call failed with status 502"
+    assert primary_health.get("last_error") == "Provider unavailable"
+    assert fallback_health.get("last_error") == "Provider unavailable"
 
 
 @pytest.mark.asyncio
@@ -810,6 +810,98 @@ async def test_audio_speech_uses_gemini_native_endpoint_and_bills_from_usage_met
     assert billing["cost"] == 12.0
     assert billing["usage_snapshot"]["prompt_tokens"] == 10
     assert billing["usage_snapshot"]["output_audio_tokens"] == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_payload", "expected_status", "expected_message", "expected_failures"),
+    [
+        (
+            {"promptFeedback": {"blockReason": "SAFETY"}},
+            400,
+            "Provider rejected request",
+            0,
+        ),
+        (
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": []},
+                        "finishReason": "IMAGE_RECITATION",
+                    }
+                ]
+            },
+            400,
+            "Provider rejected request",
+            0,
+        ),
+        (
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": []},
+                        "finishReason": "MALFORMED_RESPONSE",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 4,
+                    "candidatesTokenCount": 0,
+                    "totalTokenCount": 4,
+                },
+            },
+            503,
+            "Provider returned an invalid response",
+            1,
+        ),
+    ],
+)
+async def test_audio_speech_gemini_nominal_failure_is_classified_before_audio_extraction(
+    client,
+    test_app,
+    provider_payload: dict,
+    expected_status: int,
+    expected_message: str,
+    expected_failures: int,
+):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.update(
+        {
+            "provider": "gemini",
+            "model": "gemini/gemini-2.5-flash-preview-tts",
+            "api_base": "https://generativelanguage.googleapis.com/v1beta",
+            "api_key": "gemini-key",
+        }
+    )
+    deployment.model_info = {"mode": "audio_speech"}
+
+    async def post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
+        del headers, json, timeout
+        return httpx.Response(
+            200,
+            json=provider_payload,
+            request=httpx.Request("POST", url),
+        )
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/audio/speech",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "input": "hello world",
+            "voice": "Kore",
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == expected_status
+    assert response.json()["error"]["message"] == expected_message
+    health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+    assert int(health.get("consecutive_failures", 0) or 0) == expected_failures
+    if expected_failures:
+        assert health.get("last_error") == expected_message
+    else:
+        assert health.get("last_error") is None
 
 
 @pytest.mark.asyncio

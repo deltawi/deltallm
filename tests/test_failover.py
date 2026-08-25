@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 
@@ -10,6 +11,7 @@ import pytest
 from src.batch.retry import BatchResponseShapeError
 from src.chat.stream_response import DeadlineStreamingResponse
 from src.models.errors import (
+    FailureClassification,
     GatewayCapacityError,
     InvalidRequestError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
@@ -18,11 +20,18 @@ from src.models.errors import (
     TimeoutError,
     parse_retry_after_header,
 )
+from src.providers.anthropic import AnthropicAdapter
+from src.providers.azure import AzureOpenAIAdapter
+from src.providers.bedrock import BedrockAdapter
+from src.providers.gemini import GeminiAdapter
 from src.providers.healthcheck import HealthProbeResult, probe_provider_health
+from src.providers.openai import OpenAIAdapter
+from src.providers.base import invalid_provider_response_error
 from src.router import (
     AttemptCapacity,
     BackgroundHealthChecker,
     CooldownManager,
+    ErrorClassification,
     FallbackConfig,
     FailoverManager,
     HealthCheckInProgressError,
@@ -42,6 +51,40 @@ from src.router import (
 from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
 from tests.conftest import FakeRedis
+
+
+def test_fallback_config_freezes_all_fallback_maps() -> None:
+    general = {"group-a": ["general"]}
+    context = {"group-a": ["context"]}
+    content = {"group-a": ["content"]}
+
+    config = FallbackConfig(
+        fallbacks=general,
+        context_window_fallbacks=context,
+        content_policy_fallbacks=content,
+    )
+    general["group-a"].append("mutated")
+    context["group-a"].append("mutated")
+    content["group-a"].append("mutated")
+
+    assert config.fallbacks["group-a"] == ("general",)
+    assert config.context_window_fallbacks["group-a"] == ("context",)
+    assert config.content_policy_fallbacks["group-a"] == ("content",)
+    with pytest.raises(TypeError):
+        config.fallbacks["group-a"] = ("replacement",)  # type: ignore[index]
+    with pytest.raises(FrozenInstanceError):
+        config.num_retries = 1  # type: ignore[misc]
+
+
+def test_error_classification_compatibility_facade_uses_typed_metadata_only() -> None:
+    typed = InvalidRequestError(
+        message="Provider rejected request",
+        failure_classification=FailureClassification.CONTEXT_WINDOW,
+    )
+    untyped = InvalidRequestError(message="maximum context length reached")
+
+    assert ErrorClassification.classify(typed) is FailureClassification.CONTEXT_WINDOW
+    assert ErrorClassification.classify(untyped) is FailureClassification.GENERIC
 
 
 def _deployment(
@@ -552,7 +595,10 @@ async def test_classified_fallback_group_reuses_request_tags_and_policy_order():
     async def run(deployment: Deployment) -> str:
         attempts.append(deployment.deployment_id)
         if deployment is primary:
-            raise InvalidRequestError(message="maximum context length reached")
+            raise InvalidRequestError(
+                message="Provider rejected request",
+                failure_classification=FailureClassification.CONTEXT_WINDOW,
+            )
         return "fallback-ok"
 
     data, served = await manager.execute_with_failover(
@@ -566,6 +612,325 @@ async def test_classified_fallback_group_reuses_request_tags_and_policy_order():
     assert data == "fallback-ok"
     assert served is eligible
     assert attempts == ["dep-primary", "dep-eligible"]
+
+
+@pytest.mark.asyncio
+async def test_content_policy_classification_selects_content_fallback_map() -> None:
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    fallback = _deployment("dep-content-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            content_policy_fallbacks={"group-a": ["content-group"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary], "content-group": [fallback]},
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            raise InvalidRequestError(
+                message="Provider rejected request",
+                failure_classification=FailureClassification.CONTENT_POLICY,
+            )
+        return "content-fallback-ok"
+
+    result, served = await manager.execute_with_failover(
+        primary,
+        "group-a",
+        run,
+        return_deployment=True,
+        routing_context={ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}},
+    )
+
+    assert result == "content-fallback-ok"
+    assert served is fallback
+    assert attempts == ["dep-primary", "dep-content-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_health_affecting_classification_uses_specialized_then_general_fallback() -> None:
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    context_fallback = _deployment("dep-context-fallback")
+    general_fallback = _deployment("dep-general-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            fallbacks={"group-a": ["general-group"]},
+            context_window_fallbacks={"group-a": ["context-group"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {
+                "group-a": [primary],
+                "context-group": [context_fallback],
+                "general-group": [general_fallback],
+            },
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            raise ServiceUnavailableError(
+                message="Provider unavailable",
+                affects_deployment_health=True,
+                failure_classification=FailureClassification.CONTEXT_WINDOW,
+            )
+        if deployment is context_fallback:
+            raise ServiceUnavailableError(
+                message="Provider unavailable",
+                affects_deployment_health=True,
+                failure_classification=FailureClassification.GENERIC,
+            )
+        return "general-fallback-ok"
+
+    result, served = await manager.execute_with_failover(
+        primary,
+        "group-a",
+        run,
+        return_deployment=True,
+        routing_context={ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}},
+    )
+
+    assert result == "general-fallback-ok"
+    assert served is general_fallback
+    assert attempts == ["dep-primary", "dep-context-fallback", "dep-general-fallback"]
+    assert await state.is_cooled_down(primary.deployment_id)
+    assert await state.is_cooled_down(context_fallback.deployment_id)
+    assert not await state.is_cooled_down(general_fallback.deployment_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("adapter_type", "provider_response", "expected_fallback"),
+    [
+        (
+            GeminiAdapter,
+            {"promptFeedback": {"blockReason": "SAFETY"}},
+            "dep-content-fallback",
+        ),
+        (
+            AnthropicAdapter,
+            {
+                "content": [],
+                "stop_reason": "refusal",
+                "usage": {"input_tokens": 4, "output_tokens": 0},
+            },
+            "dep-content-fallback",
+        ),
+        (
+            AnthropicAdapter,
+            {
+                "content": [],
+                "stop_reason": "model_context_window_exceeded",
+                "usage": {"input_tokens": 4, "output_tokens": 0},
+            },
+            "dep-context-fallback",
+        ),
+        (
+            BedrockAdapter,
+            {
+                "output": {"message": {"content": []}},
+                "stopReason": "model_context_window_exceeded",
+                "usage": {"inputTokens": 4, "outputTokens": 0, "totalTokens": 4},
+            },
+            "dep-context-fallback",
+        ),
+        (
+            AzureOpenAIAdapter,
+            {
+                "id": "chatcmpl-filtered",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": None},
+                        "finish_reason": "content_filter",
+                    }
+                ],
+            },
+            "dep-content-fallback",
+        ),
+        (
+            OpenAIAdapter,
+            {
+                "id": "chatcmpl-filtered",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": None},
+                        "finish_reason": "content_filter",
+                    }
+                ],
+            },
+            "dep-content-fallback",
+        ),
+    ],
+)
+async def test_documented_provider_response_failure_selects_specialized_fallback(
+    adapter_type,
+    provider_response: dict,
+    expected_fallback: str,
+) -> None:
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    content_fallback = _deployment("dep-content-fallback")
+    context_fallback = _deployment("dep-context-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            content_policy_fallbacks={"group-a": ["content-group"]},
+            context_window_fallbacks={"group-a": ["context-group"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {
+                "group-a": [primary],
+                "content-group": [content_fallback],
+                "context-group": [context_fallback],
+            },
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    adapter = adapter_type(httpx.AsyncClient())
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            await adapter.translate_response(provider_response, model_name="provider-model")
+            raise AssertionError("provider rejection must not translate as success")
+        return "fallback-ok"
+
+    try:
+        result, served = await manager.execute_with_failover(
+            primary,
+            "group-a",
+            run,
+            return_deployment=True,
+            routing_context={ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}},
+        )
+    finally:
+        await adapter.http_client.aclose()
+
+    assert result == "fallback-ok"
+    assert served.deployment_id == expected_fallback
+    assert attempts == ["dep-primary", expected_fallback]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_policy_stop_before_first_chunk_selects_specialized_fallback():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    fallback = _deployment("dep-content-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            content_policy_fallbacks={"group-a": ["content-group"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary], "content-group": [fallback]},
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    attempts: list[str] = []
+
+    async def provider_lines():
+        yield 'data: {"type":"message_start","message":{"id":"msg_1","model":"claude"}}'
+        yield 'data: {"type":"message_delta","delta":{"stop_reason":"refusal"}}'
+        yield 'data: {"type":"message_stop"}'
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            translated = adapter.translate_stream(provider_lines()).__aiter__()
+            return await anext(translated)
+        return "fallback-first-chunk"
+
+    try:
+        result, served = await manager.execute_with_failover(
+            primary,
+            "group-a",
+            run,
+            return_deployment=True,
+            routing_context={ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}},
+        )
+
+        assert result == "fallback-first-chunk"
+        assert served is fallback
+        assert attempts == [primary.deployment_id, fallback.deployment_id]
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_http_error", [False, True])
+async def test_untyped_error_text_cannot_trigger_classified_fallback(
+    raw_http_error: bool,
+) -> None:
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    fallback = _deployment("dep-context-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            context_window_fallbacks={"group-a": ["context-group"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary], "context-group": [fallback]},
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if raw_http_error:
+            response = httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "context_length_exceeded",
+                        "message": "maximum context length sk-upstream",
+                    }
+                },
+                request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+            )
+            raise httpx.HTTPStatusError(
+                "maximum context length",
+                request=response.request,
+                response=response,
+            )
+        raise InvalidRequestError(message="maximum context length reached")
+
+    with pytest.raises(
+        InvalidRequestError,
+        match="Provider rejected request" if raw_http_error else "maximum context length",
+    ):
+        await manager.execute_with_failover(
+            primary,
+            "group-a",
+            run,
+            routing_context={ROUTING_MODE_CONTEXT_KEY: "chat", "metadata": {}},
+        )
+
+    assert attempts == ["dep-primary"]
 
 
 @pytest.mark.asyncio
@@ -828,7 +1193,10 @@ async def test_classified_fallback_excludes_deployments_already_visited_by_reque
     async def run(deployment: Deployment) -> str:
         attempts.append(deployment.deployment_id)
         if deployment is primary:
-            raise InvalidRequestError(message="maximum context length reached")
+            raise InvalidRequestError(
+                message="Provider rejected request",
+                failure_classification=FailureClassification.CONTEXT_WINDOW,
+            )
         return "ok"
 
     result, served = await manager.execute_with_failover(
@@ -1037,12 +1405,12 @@ async def test_failover_records_explicit_health_affecting_execution_failure_once
         exc.affects_deployment_health = True  # type: ignore[attr-defined]
         raise exc
 
-    with pytest.raises(ServiceUnavailableError, match="malformed upstream response") as exc_info:
+    with pytest.raises(ServiceUnavailableError, match="Service unavailable") as exc_info:
         await manager.execute_with_failover(primary, "group-a", run)
 
     health = await state.get_health(primary.deployment_id)
     assert health["consecutive_failures"] == "1"
-    assert health["last_error"] == "malformed upstream response"
+    assert health["last_error"] == "Service unavailable"
     original = get_failover_original_error(exc_info.value)
     assert isinstance(original, RuntimeError)
     assert str(original) == "malformed upstream response"
@@ -1292,7 +1660,7 @@ async def test_failover_http_timeout_maps_to_timeout_error():
     async def run(_deployment: Deployment) -> str:
         raise httpx.ReadTimeout("upstream timed out")
 
-    with pytest.raises(TimeoutError, match="upstream timed out") as exc_info:
+    with pytest.raises(TimeoutError, match="Request timeout") as exc_info:
         await manager.execute_with_failover(
             primary_deployment=primary,
             model_group="group-a",
@@ -1327,7 +1695,7 @@ async def test_failover_local_execution_error_does_not_affect_deployment_health_
             execute=run,
         )
 
-    assert str(exc_info.value) == "local bug"
+    assert str(exc_info.value) == "Service unavailable"
     assert affects_deployment_health(exc_info.value) is False
     assert attempts == ["dep-a"]
     assert not await state.is_cooled_down(primary.deployment_id)
@@ -1361,10 +1729,13 @@ async def test_failover_classified_fallback_local_error_does_not_cool_down_or_tr
     async def run(deployment: Deployment) -> str:
         attempts.append(deployment.deployment_id)
         if deployment.deployment_id == "dep-a":
-            raise InvalidRequestError(message="maximum context length reached")
+            raise InvalidRequestError(
+                message="Provider rejected request",
+                failure_classification=FailureClassification.CONTEXT_WINDOW,
+            )
         raise RuntimeError("local fallback bug")
 
-    with pytest.raises(ServiceUnavailableError, match="local fallback bug"):
+    with pytest.raises(ServiceUnavailableError, match="Service unavailable"):
         await manager.execute_with_failover(
             primary_deployment=primary,
             model_group="group-a",
@@ -1375,6 +1746,40 @@ async def test_failover_classified_fallback_local_error_does_not_cool_down_or_tr
     assert not await state.is_cooled_down(primary.deployment_id)
     assert not await state.is_cooled_down(fallback_a.deployment_id)
     assert not await state.is_cooled_down(fallback_b.deployment_id)
+
+
+@pytest.mark.asyncio
+async def test_malformed_provider_success_uses_general_fallback_chain():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    fallback = _deployment("dep-b")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            num_retries=0,
+            timeout=1.0,
+            fallbacks={"group-a": ["general-fallbacks"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary], "general-fallbacks": [fallback]},
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment.deployment_id == primary.deployment_id:
+            raise invalid_provider_response_error()
+        return "ok"
+
+    result = await manager.execute_with_failover(primary, "group-a", run)
+
+    assert result == "ok"
+    assert attempts == [primary.deployment_id, fallback.deployment_id]
+    primary_health = await state.get_health(primary.deployment_id)
+    assert primary_health["last_error"] == "Provider returned an invalid response"
 
 
 @pytest.mark.asyncio
@@ -1401,7 +1806,10 @@ async def test_failover_classified_fallback_continues_after_upstream_service_una
     async def run(deployment: Deployment) -> str:
         attempts.append(deployment.deployment_id)
         if deployment.deployment_id == "dep-a":
-            raise InvalidRequestError(message="maximum context length reached")
+            raise InvalidRequestError(
+                message="Provider rejected request",
+                failure_classification=FailureClassification.CONTEXT_WINDOW,
+            )
         if deployment.deployment_id == "dep-b":
             raise httpx.HTTPStatusError(
                 "upstream unavailable",
@@ -1449,7 +1857,10 @@ async def test_failover_applies_timeout_resolver_to_classified_fallbacks():
     async def run(deployment: Deployment) -> str:
         attempts.append(deployment.deployment_id)
         if deployment.deployment_id == "dep-a":
-            raise InvalidRequestError(message="maximum context length reached")
+            raise InvalidRequestError(
+                message="Provider rejected request",
+                failure_classification=FailureClassification.CONTEXT_WINDOW,
+            )
         if deployment.deployment_id == "dep-b":
             await asyncio.sleep(0.05)
             return "late-fallback"

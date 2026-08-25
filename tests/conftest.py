@@ -20,8 +20,10 @@ from src.guardrails.registry import GuardrailRegistry
 from src.main import create_app
 from src.providers.bedrock import BedrockAdapter
 from src.providers.azure import AzureOpenAIAdapter
+from src.providers.anthropic import AnthropicAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
+from src.providers.registry import ProviderErrorMapperRegistry
 from src.router import (
     CooldownManager,
     FallbackConfig,
@@ -1269,6 +1271,7 @@ class MockHTTPStreamResponse:
 
     async def aiter_lines(self):
         yield 'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}'
+        yield 'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'
         yield "data: [DONE]"
 
 
@@ -1378,8 +1381,16 @@ async def test_app() -> FastAPI:
     app.state.http_client = mock_http
     app.state.openai_adapter = OpenAIAdapter(mock_http)  # type: ignore[arg-type]
     app.state.azure_openai_adapter = AzureOpenAIAdapter(mock_http)  # type: ignore[arg-type]
+    app.state.anthropic_adapter = AnthropicAdapter(mock_http)  # type: ignore[arg-type]
     app.state.gemini_adapter = GeminiAdapter(mock_http)  # type: ignore[arg-type]
     app.state.bedrock_adapter = BedrockAdapter(mock_http)  # type: ignore[arg-type]
+    app.state.provider_error_mapper_registry = ProviderErrorMapperRegistry(
+        openai=app.state.openai_adapter,
+        azure_openai=app.state.azure_openai_adapter,
+        anthropic=app.state.anthropic_adapter,
+        gemini=app.state.gemini_adapter,
+        bedrock=app.state.bedrock_adapter,
+    )
     app.state.app_config = type(
         "Cfg",
         (),

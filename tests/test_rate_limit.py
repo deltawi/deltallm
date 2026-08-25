@@ -23,7 +23,10 @@ async def _multimodal_success_response(url: str, *args, **kwargs):  # noqa: ANN0
     if url.endswith("/rerank"):
         return httpx.Response(
             200,
-            json={"results": [], "usage": {"prompt_tokens": 1, "total_tokens": 1}},
+            json={
+                "results": [{"index": 0, "relevance_score": 0.9}],
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
             request=request,
         )
     if url.endswith("/audio/speech"):

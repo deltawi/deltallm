@@ -1,10 +1,33 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from src.middleware.errors import register_exception_handlers
+from src.middleware.errors import proxy_error_response, register_exception_handlers
+from src.models.errors import FailureClassification, InvalidRequestError
+
+
+def test_provider_failure_classification_is_not_serialized() -> None:
+    response = proxy_error_response(
+        InvalidRequestError(
+            message="Provider rejected request",
+            failure_classification=FailureClassification.CONTEXT_WINDOW,
+        )
+    )
+
+    payload = json.loads(response.body)
+
+    assert payload == {
+        "error": {
+            "message": "Provider rejected request",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": None,
+        }
+    }
 
 
 @pytest.mark.asyncio

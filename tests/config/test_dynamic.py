@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from src.billing.spend_ingestion import SpendIngestionConfig
 from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import (
     DynamicConfigManager,
@@ -31,10 +32,14 @@ from src.router import (
     RoutingStrategy,
     build_deployment_registry,
 )
-from src.router.runtime_generation import RoutingRuntimeAppliedState
+from src.router.runtime_generation import (
+    RoutingRuntimeAppliedState,
+    RoutingRuntimeGenerationStore,
+)
 from src.router.health import BackgroundHealthChecker
 from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.routing_authorization import RoutingAuthorizationReconciler
+from src.services.route_groups import StaleRouteGroupSnapshotError
 
 
 class StaticSecretManager(BaseSecretManager):
@@ -456,6 +461,140 @@ async def test_dynamic_config_merges_db_and_notifies_subscribers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dynamic_config_candidate_reaches_final_subscriber_only_after_acceptance() -> None:
+    manager = DynamicConfigManager(db_client=FakeDB(), redis_client=None, file_config={})
+    await manager.initialize()
+    candidate_started = asyncio.Event()
+    release_candidate = asyncio.Event()
+    reject_candidate = True
+    observed: list[tuple[str, str]] = []
+
+    async def subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        strategy = config.router_settings.routing_strategy
+        observed.append(("subscriber", strategy))
+        if strategy == "weighted" and reject_candidate:
+            candidate_started.set()
+            await release_candidate.wait()
+            raise RuntimeError("candidate rejected")
+
+    async def final_subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        observed.append(("final", config.router_settings.routing_strategy))
+
+    manager.subscribe(subscriber)
+    manager.subscribe_finalizer(final_subscriber)
+    update = asyncio.create_task(
+        manager.update_config(
+            {"router_settings": {"routing_strategy": "weighted"}},
+            updated_by="test",
+        )
+    )
+    await candidate_started.wait()
+
+    assert ("final", "weighted") not in observed
+
+    release_candidate.set()
+    with pytest.raises(RuntimeError, match="candidate rejected"):
+        await update
+    assert ("final", "weighted") not in observed
+
+    reject_candidate = False
+    await manager.update_config(
+        {"router_settings": {"routing_strategy": "weighted"}},
+        updated_by="test",
+    )
+    assert observed[-2:] == [("subscriber", "weighted"), ("final", "weighted")]
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_serializes_failed_poll_before_later_update() -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    rejected_candidate_started = asyncio.Event()
+    release_rejected_candidate = asyncio.Event()
+    later_update_started = asyncio.Event()
+    runtime_strategy = manager.get_app_config().router_settings.routing_strategy
+
+    async def subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        if config.router_settings.routing_strategy == "weighted":
+            rejected_candidate_started.set()
+            await release_rejected_candidate.wait()
+            raise RuntimeError("poll candidate rejected")
+
+    async def final_subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        nonlocal runtime_strategy
+        runtime_strategy = config.router_settings.routing_strategy
+
+    async def apply_later_update() -> None:
+        later_update_started.set()
+        await manager.update_config(
+            {"router_settings": {"routing_strategy": "least-busy"}},
+            updated_by="later-update",
+        )
+
+    manager.subscribe(subscriber)
+    manager.subscribe_finalizer(final_subscriber)
+    db.config_value = {"router_settings": {"routing_strategy": "weighted"}}
+    rejected_poll = asyncio.create_task(manager._reload_config_from_source(source="poll"))
+    await rejected_candidate_started.wait()
+    later_update = asyncio.create_task(apply_later_update())
+    await later_update_started.wait()
+
+    assert db.updated_by is None
+    assert runtime_strategy == "simple-shuffle"
+
+    release_rejected_candidate.set()
+    assert await rejected_poll is False
+    await later_update
+
+    assert manager.get_app_config().router_settings.routing_strategy == "least-busy"
+    assert db.config_value["router_settings"]["routing_strategy"] == "least-busy"
+    assert runtime_strategy == "least-busy"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_poll_loads_durable_state_after_waiting_for_update() -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    update_candidate_started = asyncio.Event()
+    release_update_candidate = asyncio.Event()
+    poll_started = asyncio.Event()
+
+    async def subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        if config.router_settings.routing_strategy == "weighted":
+            update_candidate_started.set()
+            await release_update_candidate.wait()
+
+    async def run_poll() -> bool:
+        poll_started.set()
+        return await manager._reload_config_from_source(source="poll")
+
+    manager.subscribe(subscriber)
+    update = asyncio.create_task(
+        manager.update_config(
+            {"router_settings": {"routing_strategy": "weighted"}},
+            updated_by="direct-update",
+        )
+    )
+    await update_candidate_started.wait()
+    queries_before_poll = len(db.queries)
+    poll = asyncio.create_task(run_poll())
+    await poll_started.wait()
+
+    assert len(db.queries) == queries_before_poll
+
+    release_update_candidate.set()
+    await update
+    assert await poll is False
+    assert manager.get_app_config().router_settings.routing_strategy == "weighted"
+    assert db.config_value["router_settings"]["routing_strategy"] == "weighted"
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_dynamic_config_model_updated_notifies_subscribers_without_config_diff():
     redis = FakeRedis()
     manager = DynamicConfigManager(db_client=FakeDB(), redis_client=redis, file_config={})
@@ -764,11 +903,16 @@ async def test_dynamic_config_subscriber_failure_restores_last_known_good_config
     db = FakeDB()
     manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
     await manager.initialize()
-    observed: list[str] = []
+    observed: list[tuple[str, tuple[list[dict[str, list[str]]], ...]]] = []
 
     async def subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
         strategy = config.router_settings.routing_strategy
-        observed.append(strategy)
+        fallback_maps = (
+            config.deltallm_settings.fallbacks,
+            config.deltallm_settings.context_window_fallbacks,
+            config.deltallm_settings.content_policy_fallbacks,
+        )
+        observed.append((strategy, fallback_maps))
         if strategy == "weighted":
             raise RuntimeError("runtime rejected candidate")
 
@@ -776,13 +920,33 @@ async def test_dynamic_config_subscriber_failure_restores_last_known_good_config
 
     with pytest.raises(RuntimeError, match="runtime rejected candidate"):
         await manager.update_config(
-            {"router_settings": {"routing_strategy": "weighted"}},
+            {
+                "router_settings": {"routing_strategy": "weighted"},
+                "deltallm_settings": {
+                    "fallbacks": [{"primary": ["general"]}],
+                    "context_window_fallbacks": [{"primary": ["context"]}],
+                    "content_policy_fallbacks": [{"primary": ["content"]}],
+                },
+            },
             updated_by="test",
         )
 
     assert manager.get_app_config().router_settings.routing_strategy == "simple-shuffle"
+    assert manager.get_app_config().deltallm_settings.fallbacks == []
+    assert manager.get_app_config().deltallm_settings.context_window_fallbacks == []
+    assert manager.get_app_config().deltallm_settings.content_policy_fallbacks == []
     assert db.config_value == {}
-    assert observed == ["weighted", "simple-shuffle"]
+    assert observed == [
+        (
+            "weighted",
+            (
+                [{"primary": ["general"]}],
+                [{"primary": ["context"]}],
+                [{"primary": ["content"]}],
+            ),
+        ),
+        ("simple-shuffle", ([], [], [])),
+    ]
     await manager.close()
 
 
@@ -945,6 +1109,11 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
                 }
             ],
             "router_settings": {"routing_strategy": "weighted", "num_retries": 2},
+            "deltallm_settings": {
+                "fallbacks": [{"gpt-4.1-mini": ["general-fallback"]}],
+                "context_window_fallbacks": [{"gpt-4.1-mini": ["context-fallback"]}],
+                "content_policy_fallbacks": [{"gpt-4.1-mini": ["content-fallback"]}],
+            },
             "general_settings": {
                 **dynamic.get_app_config().general_settings.model_dump(mode="python"),
                 "instance_name": "Acme AI",
@@ -953,13 +1122,25 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     )
 
     await manager._on_config_change(
-        updated_cfg, {"added": [], "removed": [], "modified": ["model_list", "router_settings"]}
+        updated_cfg,
+        {
+            "added": [],
+            "removed": [],
+            "modified": ["model_list", "router_settings", "deltallm_settings"],
+        },
     )
 
     assert "gpt-4.1-mini" in app.state.model_registry
     assert app.state.router.strategy == RoutingStrategy.WEIGHTED
     assert app.state.router.config.num_retries == 2
     assert app.state.failover_manager.config.num_retries == 2
+    assert app.state.failover_manager.config.fallbacks == {"gpt-4.1-mini": ("general-fallback",)}
+    assert app.state.failover_manager.config.context_window_fallbacks == {
+        "gpt-4.1-mini": ("context-fallback",)
+    }
+    assert app.state.failover_manager.config.content_policy_fallbacks == {
+        "gpt-4.1-mini": ("content-fallback",)
+    }
     assert app.state.platform_identity_service.totp_issuer == "Acme AI"
     assert app.state.router.deployment_registry["gpt-4.1-mini"][0].deployment_id == "new-dep"
 
@@ -968,6 +1149,8 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     previous_model_registry = app.state.model_registry
     previous_route_groups = app.state.route_groups
     previous_strategy = app.state.router.strategy
+    previous_generation = app.state.routing_runtime_generation_store.require_snapshot()
+    previous_failover_config = app.state.failover_manager.config
     invalid_cfg = AppConfig.model_validate(
         {
             **updated_cfg.model_dump(mode="python"),
@@ -985,13 +1168,22 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
                 **updated_cfg.general_settings.model_dump(mode="python"),
                 "instance_name": "Must Not Publish",
             },
+            "deltallm_settings": {
+                "fallbacks": [{"gpt-4.1-mini": ["rejected-general"]}],
+                "context_window_fallbacks": [{"gpt-4.1-mini": ["rejected-context"]}],
+                "content_policy_fallbacks": [{"gpt-4.1-mini": ["rejected-content"]}],
+            },
         }
     )
 
     with pytest.raises(ValueError, match="incompatible with members"):
         await manager._on_config_change(
             invalid_cfg,
-            {"added": [], "removed": [], "modified": ["router_settings"]},
+            {
+                "added": [],
+                "removed": [],
+                "modified": ["router_settings", "deltallm_settings"],
+            },
         )
 
     assert app.state.app_config is previous_app_config
@@ -999,9 +1191,224 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     assert app.state.model_registry is previous_model_registry
     assert app.state.route_groups is previous_route_groups
     assert app.state.router.strategy is previous_strategy
+    assert app.state.failover_manager.config is previous_failover_config
+    assert app.state.routing_runtime_generation_store.require_snapshot() is previous_generation
     assert app.state.platform_identity_service.totp_issuer == "Acme AI"
 
+    def reject_callbacks(**_kwargs) -> None:  # noqa: ANN003
+        raise RuntimeError("callback runtime rejected candidate")
+
+    app.state.callback_manager = SimpleNamespace(load_from_settings=reject_callbacks)
+    valid_but_rejected_cfg = AppConfig.model_validate(
+        {
+            **updated_cfg.model_dump(mode="python"),
+            "deltallm_settings": {
+                "fallbacks": [{"gpt-4.1-mini": ["must-not-publish-general"]}],
+                "context_window_fallbacks": [{"gpt-4.1-mini": ["must-not-publish-context"]}],
+                "content_policy_fallbacks": [{"gpt-4.1-mini": ["must-not-publish-content"]}],
+            },
+        }
+    )
+    with pytest.raises(RuntimeError, match="callback runtime rejected candidate"):
+        await manager._on_config_change(
+            valid_but_rejected_cfg,
+            {
+                "added": [],
+                "removed": [],
+                "modified": ["deltallm_settings"],
+            },
+        )
+
+    assert app.state.app_config is previous_app_config
+    assert app.state.failover_manager.config is previous_failover_config
+    assert app.state.routing_runtime_generation_store.require_snapshot() is previous_generation
+
     await dynamic.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_config_rebuilds_after_same_revision_generation_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = object.__new__(ModelHotReloadManager)
+    manager._route_reload_lock = asyncio.Lock()
+    manager._applied_route_revision = 7
+    store = RoutingRuntimeGenerationStore()
+    empty_registry = SimpleNamespace(snapshot=lambda: {})
+    base_generation = SimpleNamespace(
+        generation_id="base",
+        revision=7,
+        deployment_registry=empty_registry,
+    )
+    store.replace(base_generation)  # type: ignore[arg-type]
+    reconfigure_started = asyncio.Event()
+    release_reconfigure = asyncio.Event()
+    rebuild_started = asyncio.Event()
+    release_rebuild = asyncio.Event()
+
+    class PausedSpendService:
+        config = SpendIngestionConfig()
+
+        async def reconfigure(self, _config: SpendIngestionConfig) -> None:
+            reconfigure_started.set()
+            await release_reconfigure.wait()
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=SimpleNamespace(),
+            routing_runtime_generation_store=store,
+            router=SimpleNamespace(deployment_registry={}),
+            guardrail_registry=SimpleNamespace(load_from_config=lambda _: None),
+            callback_manager=SimpleNamespace(load_from_settings=lambda **_: None),
+            spend_tracking_service=PausedSpendService(),
+            turn_off_message_logging=False,
+        )
+    )
+    manager.app = app
+    stale_candidate = SimpleNamespace(
+        generation_id="stale-candidate",
+        revision=7,
+        salt_key="salt",
+        authorization_snapshot="old-grants",
+        deployment_registry=empty_registry,
+    )
+    concurrent_generation = SimpleNamespace(
+        generation_id="same-revision-governance",
+        revision=7,
+        authorization_snapshot="revoked-grants",
+        deployment_registry=empty_registry,
+    )
+    superseded_candidate = SimpleNamespace(
+        generation_id="superseded-candidate",
+        revision=7,
+        salt_key="salt",
+        authorization_snapshot="revoked-grants",
+        deployment_registry=empty_registry,
+    )
+    concurrent_during_rebuild = SimpleNamespace(
+        generation_id="same-revision-governance-v2",
+        revision=7,
+        authorization_snapshot="revoked-grants-v2",
+        deployment_registry=empty_registry,
+    )
+    rebuilt_candidate = SimpleNamespace(
+        generation_id="rebuilt-candidate",
+        revision=7,
+        salt_key="salt",
+        authorization_snapshot="revoked-grants-v2",
+        deployment_registry=empty_registry,
+    )
+    load_count = 0
+    published: list[SimpleNamespace] = []
+
+    async def load_generation(**_kwargs) -> SimpleNamespace:  # noqa: ANN003
+        nonlocal load_count
+        load_count += 1
+        if load_count == 1:
+            return stale_candidate
+        if load_count == 2:
+            rebuild_started.set()
+            await release_rebuild.wait()
+            return superseded_candidate
+        return rebuilt_candidate
+
+    async def no_op(*_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+        return None
+
+    def publish_generation(generation: SimpleNamespace) -> None:
+        published.append(generation)
+        store.replace(generation)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(manager, "_invalidate_route_group_cache", no_op)
+    monkeypatch.setattr(manager, "_load_complete_routing_generation", load_generation)
+    monkeypatch.setattr(manager, "_publish_routing_generation", publish_generation)
+    monkeypatch.setattr(manager, "_cleanup_replaced_deployment_health", no_op)
+    monkeypatch.setattr("src.config_runtime.models.configure_cache_runtime", lambda *_a, **_k: None)
+
+    apply_candidate = asyncio.create_task(
+        manager._apply_runtime_config(AppConfig.model_validate({}))
+    )
+    await reconfigure_started.wait()
+    async with manager._route_reload_lock:
+        store.replace(concurrent_generation)  # type: ignore[arg-type]
+    release_reconfigure.set()
+    await rebuild_started.wait()
+    store.replace(concurrent_during_rebuild)  # type: ignore[arg-type]
+    release_rebuild.set()
+    await apply_candidate
+
+    assert published == [rebuilt_candidate]
+    assert load_count == 3
+    assert store.require_snapshot() is rebuilt_candidate
+    assert store.require_snapshot().authorization_snapshot == "revoked-grants-v2"
+
+
+@pytest.mark.asyncio
+async def test_runtime_config_publication_contention_is_bounded_and_preserves_latest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = object.__new__(ModelHotReloadManager)
+    manager._applied_route_revision = 7
+    empty_registry = SimpleNamespace(snapshot=lambda: {})
+    store = RoutingRuntimeGenerationStore()
+    latest_generation = SimpleNamespace(
+        generation_id="external-0",
+        revision=7,
+        deployment_registry=empty_registry,
+    )
+    store.replace(latest_generation)  # type: ignore[arg-type]
+    manager.app = SimpleNamespace(
+        state=SimpleNamespace(
+            routing_runtime_generation_store=store,
+            router=SimpleNamespace(deployment_registry={}),
+        )
+    )
+    initial_candidate = SimpleNamespace(
+        generation_id="candidate-0",
+        revision=7,
+        deployment_registry=empty_registry,
+    )
+    load_count = 0
+    published: list[SimpleNamespace] = []
+    reconciliation_marks: list[bool] = []
+
+    async def load_generation(**_kwargs) -> SimpleNamespace:  # noqa: ANN003
+        nonlocal latest_generation, load_count
+        load_count += 1
+        latest_generation = SimpleNamespace(
+            generation_id=f"external-{load_count}",
+            revision=7,
+            deployment_registry=empty_registry,
+        )
+        store.replace(latest_generation)  # type: ignore[arg-type]
+        return SimpleNamespace(
+            generation_id=f"candidate-{load_count}",
+            revision=7,
+            deployment_registry=empty_registry,
+        )
+
+    async def no_op(*_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+        return None
+
+    monkeypatch.setattr(manager, "_invalidate_route_group_cache", no_op)
+    monkeypatch.setattr(manager, "_load_complete_routing_generation", load_generation)
+    monkeypatch.setattr(manager, "_publish_routing_generation", published.append)
+    monkeypatch.setattr(
+        manager, "_mark_reconciliation_required", lambda: reconciliation_marks.append(True)
+    )
+
+    with pytest.raises(StaleRouteGroupSnapshotError):
+        await manager._publish_stable_config_generation(
+            app_config=AppConfig.model_validate({}),
+            settings=SimpleNamespace(),
+            candidate=initial_candidate,  # type: ignore[arg-type]
+            candidate_base_id="base",
+        )
+
+    assert load_count == 3
+    assert published == []
+    assert reconciliation_marks == [True]
+    assert store.require_snapshot() is latest_generation
 
 
 @pytest.mark.asyncio
