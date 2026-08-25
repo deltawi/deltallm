@@ -6,16 +6,20 @@ repo_name: deltallm
 
 theme:
   name: material
+  # Reuse the UI's built-in assets so the product and docs have one brand source.
+  custom_dir: ui/public
+  logo: brand/deltallm-delta.svg
+  favicon: favicon.svg
   palette:
     - scheme: default
-      primary: blue
-      accent: blue
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
-      primary: blue
-      accent: blue
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -44,6 +48,9 @@ markdown_extensions:
       permalink: true
   - attr_list
   - def_list
+
+extra_css:
+  - stylesheets/brand.css
 
 nav:
   - Home: index.md
