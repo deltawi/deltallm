@@ -43,6 +43,14 @@ class DynamicConfigRestartRequiredError(RuntimeError):
     """Raised when an update changes fields that are bound during process startup."""
 
 
+class DynamicConfigPostCommitApplyError(RuntimeError):
+    """Raised when durable config committed but the local runtime rejected it."""
+
+    def __init__(self, committed_app_config: AppConfig) -> None:
+        super().__init__("dynamic config committed but failed to apply locally")
+        self.committed_app_config = committed_app_config.model_copy(deep=True)
+
+
 _STARTUP_ONLY_GENERAL_SETTINGS = frozenset(
     {
         "database_url",
@@ -153,14 +161,26 @@ class DynamicConfigManager:
             )
             try:
                 await self._apply_db_config(next_db_config, app_config=next_app_config)
-            except Exception:
+            except Exception as exc:
                 if transaction_mutation is None:
                     await self._restore_db_config_if_current(
                         expected_config=next_db_config,
                         previous_config=previous_db_config,
                         updated_by=f"rollback:{updated_by}",
                     )
-                raise
+                    raise
+                increment_config_reload(
+                    source="admin_update",
+                    result="post_commit_apply_failed",
+                )
+                logger.warning(
+                    "dynamic config committed but local apply failed error_type=%s",
+                    type(exc).__name__,
+                )
+                # PostgreSQL is already authoritative. Wake peers even though this
+                # process kept its last-known-good runtime snapshot.
+                await self._publish_reload_event(event_type="config_updated")
+                raise DynamicConfigPostCommitApplyError(next_app_config) from exc
             await self._publish_reload_event(event_type="config_updated")
 
     async def _persist_merged_config(

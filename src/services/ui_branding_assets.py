@@ -7,16 +7,20 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Literal, cast
+from typing import cast
 from xml.etree import ElementTree
 
 from src.config import AppConfig
+from src.db.ui_branding_assets import (
+    BrandingAssetDatabase,
+    UIBrandingAssetKind,
+    UIBrandingAssetRepository,
+    UI_BRANDING_ASSET_KEYS,
+)
 
 logger = logging.getLogger(__name__)
 
-UIBrandingAssetKind = Literal["logo_mark", "logo_full", "favicon"]
-
-BRANDING_ASSET_KINDS = frozenset({"logo_mark", "logo_full", "favicon"})
+BRANDING_ASSET_KINDS = frozenset(UI_BRANDING_ASSET_KEYS)
 BRANDING_ASSET_MAX_BYTES = 2 * 1024 * 1024
 BRANDING_ASSET_URL_PREFIX = "/ui/api/branding/assets"
 
@@ -145,8 +149,8 @@ def validate_branding_asset(
 class UIBrandingAssetService:
     """Database-backed branding assets cached in each application replica."""
 
-    def __init__(self, db_client: Any) -> None:
-        self.db = db_client
+    def __init__(self, db_client: BrandingAssetDatabase) -> None:
+        self.repository = UIBrandingAssetRepository(db_client)
         self._assets: dict[UIBrandingAssetKind, UIBrandingAsset] = {}
         self._tracked_urls: tuple[str | None, str | None, str | None] | None = None
         self._refresh_lock = asyncio.Lock()
@@ -164,24 +168,13 @@ class UIBrandingAssetService:
 
     async def refresh(self) -> None:
         async with self._refresh_lock:
-            rows = await self.db.query_raw(
-                """
-                SELECT asset_key,
-                       content_type,
-                       encode(content, 'base64') AS content_base64,
-                       content_sha256,
-                       size_bytes,
-                       original_filename
-                FROM deltallm_ui_branding_asset
-                WHERE asset_key IN ('logo_mark', 'logo_full', 'favicon')
-                """
-            )
+            rows = await self.repository.list_known()
             assets: dict[UIBrandingAssetKind, UIBrandingAsset] = {}
             for row in rows:
-                raw_asset_key = str(row.get("asset_key") or "")
+                raw_asset_key = str(row.asset_key or "")
                 try:
                     asset_key = normalize_asset_kind(raw_asset_key)
-                    encoded = row.get("content_base64")
+                    encoded = row.content_base64
                     if isinstance(encoded, bytes):
                         encoded = encoded.decode("ascii")
                     # PostgreSQL's encode(..., 'base64') inserts RFC 2045 line
@@ -192,15 +185,15 @@ class UIBrandingAssetService:
                         asset_key,
                         content,
                         original_filename=(
-                            str(row["original_filename"])
-                            if row.get("original_filename") is not None
+                            str(row.original_filename)
+                            if row.original_filename is not None
                             else None
                         ),
                     )
                     if (
-                        asset.content_type != str(row.get("content_type") or "")
-                        or asset.content_sha256 != str(row.get("content_sha256") or "")
-                        or asset.size_bytes != int(row.get("size_bytes") or 0)
+                        asset.content_type != str(row.content_type or "")
+                        or asset.content_sha256 != str(row.content_sha256 or "")
+                        or asset.size_bytes != int(row.size_bytes or 0)
                     ):
                         raise ValueError("branding asset metadata does not match its content")
                 except (TypeError, ValueError) as exc:
@@ -232,40 +225,3 @@ class UIBrandingAssetService:
         ):
             return None
         return asset
-
-    @staticmethod
-    async def upsert_in_transaction(
-        db_client: Any, asset: UIBrandingAsset, *, updated_by: str
-    ) -> None:
-        encoded = base64.b64encode(asset.content).decode("ascii")
-        await db_client.execute_raw(
-            """
-            INSERT INTO deltallm_ui_branding_asset (
-                asset_key, content_type, content, content_sha256, size_bytes,
-                original_filename, updated_by, created_at, updated_at
-            )
-            VALUES ($1, $2, decode($3, 'base64'), $4, $5, $6, $7, NOW(), NOW())
-            ON CONFLICT (asset_key) DO UPDATE
-            SET content_type = EXCLUDED.content_type,
-                content = EXCLUDED.content,
-                content_sha256 = EXCLUDED.content_sha256,
-                size_bytes = EXCLUDED.size_bytes,
-                original_filename = EXCLUDED.original_filename,
-                updated_by = EXCLUDED.updated_by,
-                updated_at = NOW()
-            """,
-            asset.asset_key,
-            asset.content_type,
-            encoded,
-            asset.content_sha256,
-            asset.size_bytes,
-            asset.original_filename,
-            updated_by,
-        )
-
-    @staticmethod
-    async def delete_in_transaction(db_client: Any, asset_key: UIBrandingAssetKind) -> None:
-        await db_client.execute_raw(
-            "DELETE FROM deltallm_ui_branding_asset WHERE asset_key = $1",
-            asset_key,
-        )
