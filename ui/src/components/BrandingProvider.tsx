@@ -5,6 +5,7 @@ import {
   brandingCssVariables,
   DEFAULT_BRANDING,
   normalizeBranding,
+  sameBranding,
   type UIBranding,
 } from '../lib/branding';
 import { BrandingContext } from '../lib/brandingContext';
@@ -13,16 +14,6 @@ const BRANDING_BOOTSTRAP_TIMEOUT_MS = 3_000;
 
 function defaultFaviconUrl(): string {
   return new URL('/favicon.svg', document.baseURI).toString();
-}
-
-function sameBranding(first: UIBranding, second: UIBranding): boolean {
-  return first.instance_name === second.instance_name
-    && first.logo_mark_url === second.logo_mark_url
-    && first.logo_full_url === second.logo_full_url
-    && first.favicon_url === second.favicon_url
-    && first.primary_color === second.primary_color
-    && first.secondary_color === second.secondary_color
-    && first.menu_hover_color === second.menu_hover_color;
 }
 
 export default function BrandingProvider({ children }: { children: ReactNode }) {

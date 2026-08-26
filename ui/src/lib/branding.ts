@@ -90,6 +90,16 @@ export function normalizeBranding(value: Partial<UIBranding> | null | undefined)
   };
 }
 
+export function sameBranding(first: UIBranding, second: UIBranding): boolean {
+  return first.instance_name === second.instance_name
+    && first.logo_mark_url === second.logo_mark_url
+    && first.logo_full_url === second.logo_full_url
+    && first.favicon_url === second.favicon_url
+    && first.primary_color === second.primary_color
+    && first.secondary_color === second.secondary_color
+    && first.menu_hover_color === second.menu_hover_color;
+}
+
 export function hexToRgb(value: string): [number, number, number] {
   const normalized = normalizedColor(value, '#000000');
   return [

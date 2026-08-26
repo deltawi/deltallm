@@ -10,9 +10,12 @@ const outputDir = path.join(uiRoot, 'node_modules', '.tmp', 'ui-unit-tests');
 const testSources = [
   'tests/authorization.test.ts',
   'tests/branding.test.ts',
-  'tests/brandingApi.test.ts',
+  'tests/brandingResetApi.test.ts',
   'tests/brandingComponents.test.ts',
   'tests/brandingProvider.test.ts',
+  'tests/settingsTheme.test.ts',
+  'tests/themeSettingsController.test.tsx',
+  'tests/themeSettingsPanel.test.tsx',
   'tests/authRedirect.test.ts',
   'tests/authSession.test.ts',
   'tests/modelFormShared.test.ts',
@@ -45,7 +48,7 @@ await build({
 
 const compiledTests = testSources.map((source) => path.join(
   outputDir,
-  `${path.basename(source, '.ts')}.js`,
+  `${path.basename(source, path.extname(source))}.js`,
 ));
 
 const child = spawn(process.execPath, ['--test', ...compiledTests], {

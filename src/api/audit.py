@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from time import perf_counter
 from typing import Any
 
@@ -15,8 +16,10 @@ from src.services.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
     AuditService,
+    RequiredAuditPersistenceError,
     enqueue_audit_event,
 )
+from src.metrics import increment_audit_write_failure
 
 _SENSITIVE_KEYS = {
     "password",
@@ -132,6 +135,8 @@ async def emit_control_audit_event(
     metadata: dict[str, Any] | None = None,
     error: Exception | None = None,
     critical: bool = True,
+    force_sync: bool = False,
+    event_id: str | None = None,
     transactional_repository: AuditRepository | None = None,
 ) -> None:
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
@@ -174,6 +179,7 @@ async def emit_control_audit_event(
         error_type=error.__class__.__name__ if error is not None else None,
         error_code=derive_audit_error_code(error),
         metadata=event_metadata,
+        event_id=event_id,
     )
     if transactional_repository is not None:
         await audit_service.record_event_sync(
@@ -181,6 +187,16 @@ async def emit_control_audit_event(
             payloads=payloads,
             repository=transactional_repository,
         )
+    elif force_sync:
+        try:
+            await audit_service.record_event_sync(event, payloads=payloads)
+        except asyncio.CancelledError:
+            raise
+        except RequiredAuditPersistenceError:
+            raise
+        except Exception as exc:
+            increment_audit_write_failure(path="forced_sync_control")
+            raise RequiredAuditPersistenceError() from exc
     elif _should_sync_control_audit(request, action, critical=critical):
         await audit_service.record_event_sync(event, payloads=payloads)
     else:

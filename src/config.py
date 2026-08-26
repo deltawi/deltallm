@@ -71,6 +71,11 @@ RoutingStrategyName = Literal[
 ChatBatchingMode = Literal["disabled", "concurrent", "sync_microbatch"]
 SelfRegistrationMode = Literal["sso_allowed_domain", "request_access"]
 
+DEFAULT_UI_INSTANCE_NAME = "DeltaLLM"
+DEFAULT_UI_PRIMARY_COLOR = "#5B50D6"
+DEFAULT_UI_SECONDARY_COLOR = "#8B7CFF"
+DEFAULT_UI_MENU_HOVER_COLOR = "#F7F5FF"
+
 
 class BatchModelCapacityInfo(BaseModel):
     max_in_flight: int | None = Field(default=None, ge=1, strict=True)
@@ -491,9 +496,9 @@ class UIBrandingSettings(BaseModel):
     logo_mark_url: str | None = None
     logo_full_url: str | None = None
     favicon_url: str | None = None
-    primary_color: str = Field(default="#5B50D6", pattern=r"^#[0-9A-Fa-f]{6}$")
-    secondary_color: str = Field(default="#8B7CFF", pattern=r"^#[0-9A-Fa-f]{6}$")
-    menu_hover_color: str = Field(default="#F7F5FF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    primary_color: str = Field(default=DEFAULT_UI_PRIMARY_COLOR, pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default=DEFAULT_UI_SECONDARY_COLOR, pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default=DEFAULT_UI_MENU_HOVER_COLOR, pattern=r"^#[0-9A-Fa-f]{6}$")
 
     @field_validator("logo_mark_url", "logo_full_url", "favicon_url", mode="before")
     @classmethod
@@ -509,7 +514,7 @@ class UIBrandingSettings(BaseModel):
 
 
 class UIBrandingPayload(UIBrandingSettings):
-    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+    instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
 
     @field_validator("instance_name")
     @classmethod
@@ -517,13 +522,17 @@ class UIBrandingPayload(UIBrandingSettings):
         return _normalize_ui_instance_name(value)
 
 
+class UIBrandingResetPayload(UIBrandingPayload):
+    reconciliation_pending: bool = False
+
+
 class UIBrandingUpdatePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
-    primary_color: str = Field(default="#5B50D6", pattern=r"^#[0-9A-Fa-f]{6}$")
-    secondary_color: str = Field(default="#8B7CFF", pattern=r"^#[0-9A-Fa-f]{6}$")
-    menu_hover_color: str = Field(default="#F7F5FF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
+    primary_color: str = Field(default=DEFAULT_UI_PRIMARY_COLOR, pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default=DEFAULT_UI_SECONDARY_COLOR, pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default=DEFAULT_UI_MENU_HOVER_COLOR, pattern=r"^#[0-9A-Fa-f]{6}$")
 
     @field_validator("instance_name")
     @classmethod
@@ -539,7 +548,7 @@ class UIBrandingUpdatePayload(BaseModel):
 class GeneralSettings(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
-    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+    instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
     ui_branding: UIBrandingSettings = Field(default_factory=UIBrandingSettings)
 
     @field_validator("instance_name")
