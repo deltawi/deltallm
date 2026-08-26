@@ -47,6 +47,7 @@ _CONNECTION_SUMMARY_FIELDS = (
     "region",
 )
 
+
 @dataclass
 class AuthScope:
     is_platform_admin: bool = False
@@ -100,6 +101,7 @@ def get_auth_scope(
         provided = x_master_key
 
     import hmac as _hmac
+
     if configured and provided and _hmac.compare_digest(provided, configured):
         return AuthScope(is_platform_admin=True)
     if has_master_key_session(request):
@@ -107,7 +109,12 @@ def get_auth_scope(
 
     from src.middleware.platform_auth import get_platform_auth_context
     from src.middleware.platform_auth import requires_mfa_verification
-    from src.auth.roles import has_platform_permission, Permission as Perm, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
+    from src.auth.roles import (
+        has_platform_permission,
+        Permission as Perm,
+        ORG_ROLE_PERMISSIONS,
+        TEAM_ROLE_PERMISSIONS,
+    )
 
     context = get_platform_auth_context(request)
     if context is None:
@@ -117,9 +124,13 @@ def get_auth_scope(
                 detail="Authentication service unavailable",
                 headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
             )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+        )
     if requires_mfa_verification(context):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required"
+        )
 
     account_id = str(context.account_id) if context.account_id else None
 
@@ -192,7 +203,9 @@ def get_auth_scope(
 def db_or_503(request: Request) -> Any:
     db = getattr(getattr(request.app.state, "prisma_manager", None), "client", None)
     if db is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable"
+        )
     return db
 
 
@@ -238,9 +251,14 @@ async def validate_runtime_user_scope(
     user_team_id = str(row.get("team_id") or "").strip() or None
     user_organization_id = str(row.get("organization_id") or "").strip() or None
     if team_id and user_team_id != team_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to team_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to team_id"
+        )
     if organization_id and user_organization_id != organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to organization_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_id does not belong to organization_id",
+        )
     return row
 
 
@@ -253,7 +271,9 @@ async def resolve_runtime_scope_target(
     normalized_scope_type = str(scope_type or "").strip()
     normalized_scope_id = str(scope_id or "").strip()
     if not normalized_scope_type or not normalized_scope_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type and scope_id are required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type and scope_id are required"
+        )
 
     if normalized_scope_type == "organization":
         rows = await db.query_raw(
@@ -266,7 +286,9 @@ async def resolve_runtime_scope_target(
             normalized_scope_id,
         )
         if not rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+            )
         return ResolvedScopeTarget(
             scope_type="organization",
             scope_id=normalized_scope_id,
@@ -309,7 +331,9 @@ async def resolve_runtime_scope_target(
         row = rows[0]
         team_id = str(row.get("team_id") or "").strip() or None
         if team_id is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key must belong to a team")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="API key must belong to a team"
+            )
         return ResolvedScopeTarget(
             scope_type="api_key",
             scope_id=normalized_scope_id,
@@ -346,7 +370,9 @@ def log_admin_query_timing(name: str, started_at: float, **context: Any) -> None
     if not logger.isEnabledFor(logging.DEBUG) and elapsed_ms < 500:
         return
 
-    details = " ".join(f"{key}={value}" for key, value in context.items() if value not in (None, "", []))
+    details = " ".join(
+        f"{key}={value}" for key, value in context.items() if value not in (None, "", [])
+    )
     message = f"Admin query completed: name={name} latency_ms={elapsed_ms}"
     if details:
         message = f"{message} {details}"
@@ -361,11 +387,15 @@ def optional_int(value: Any, field_name: str) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer"
+        )
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer"
+        ) from exc
 
 
 def normalize_user_profile_type(value: Any, default: str = "internal_user") -> str:
@@ -373,7 +403,9 @@ def normalize_user_profile_type(value: Any, default: str = "internal_user") -> s
     normalized = USER_PROFILE_TYPE_ALIASES.get(raw, raw)
     if normalized not in ALLOWED_USER_PROFILE_TYPES:
         allowed = ", ".join(sorted(ALLOWED_USER_PROFILE_TYPES))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"user_role must be one of: {allowed}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"user_role must be one of: {allowed}"
+        )
     return normalized
 
 
@@ -399,7 +431,9 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
                     "provider": provider,
                     "mode": model_info.get("mode", "chat"),
                     "credential_source": credential_source,
-                    "inline_credentials_present": _inline_credentials_present(params) if credential_source == "inline" else False,
+                    "inline_credentials_present": _inline_credentials_present(params)
+                    if credential_source == "inline"
+                    else False,
                     "connection_summary": build_connection_summary(params, provider=provider),
                     "named_credential_id": named_credential_id or None,
                     "named_credential_name": (
@@ -418,11 +452,10 @@ def _inline_credentials_present(params: dict[str, Any]) -> bool:
     return any(str(params.get(field) or "").strip() for field in _INLINE_SECRET_FIELDS)
 
 
-def build_connection_summary(params: dict[str, Any], *, provider: str | None = None) -> dict[str, Any]:
-    summary = {
-        field: params.get(field) or None
-        for field in _CONNECTION_SUMMARY_FIELDS
-    }
+def build_connection_summary(
+    params: dict[str, Any], *, provider: str | None = None
+) -> dict[str, Any]:
+    summary = {field: params.get(field) or None for field in _CONNECTION_SUMMARY_FIELDS}
     summary_auth_header_name, custom_auth_label = _custom_auth_summary(params, provider=provider)
     if summary_auth_header_name:
         summary["auth_header_name"] = summary_auth_header_name
@@ -431,7 +464,9 @@ def build_connection_summary(params: dict[str, Any], *, provider: str | None = N
     return summary
 
 
-def _custom_auth_summary(params: dict[str, Any], *, provider: str | None = None) -> tuple[str | None, str | None]:
+def _custom_auth_summary(
+    params: dict[str, Any], *, provider: str | None = None
+) -> tuple[str | None, str | None]:
     resolved_provider = provider or resolve_provider(params)
     if not supports_custom_openai_compatible_auth(resolved_provider):
         return None, None
@@ -517,6 +552,9 @@ async def emit_admin_mutation_audit(
     status: str = "success",
     error: Exception | None = None,
     request_start: float | None = None,
+    critical: bool = True,
+    force_sync: bool = False,
+    event_id: str | None = None,
     transactional_audit_repository: AuditRepository | None = None,
 ) -> None:
     audit_metadata = dict(metadata or {})
@@ -535,6 +573,8 @@ async def emit_admin_mutation_audit(
         scope=scope,
         metadata=audit_metadata,
         error=error,
-        critical=True,
+        critical=critical,
+        force_sync=force_sync,
+        event_id=event_id,
         transactional_repository=transactional_audit_repository,
     )

@@ -12,6 +12,7 @@ from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import (
     DynamicConfigManager,
     DynamicConfigPersistenceError,
+    DynamicConfigPostCommitApplyError,
     DynamicConfigRestartRequiredError,
     DynamicConfigValidationError,
 )
@@ -101,6 +102,12 @@ class FailingPubSub:
 class FailingRedis(FakeRedis):
     def pubsub(self) -> FailingPubSub:
         return FailingPubSub()
+
+
+class FailingPublishRedis(FakeRedis):
+    async def publish(self, channel: str, payload: str) -> None:
+        del channel, payload
+        raise RuntimeError("redis publish unavailable")
 
 
 class FakeTransaction:
@@ -947,6 +954,76 @@ async def test_dynamic_config_subscriber_failure_restores_last_known_good_config
         ),
         ("simple-shuffle", ([], [], [])),
     ]
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_transaction_coupled_apply_failure_reports_committed_state_and_recovers(
+    monkeypatch,
+) -> None:
+    events: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "src.config_runtime.dynamic.increment_config_reload",
+        lambda *, source, result: events.append({"source": source, "result": result}),
+    )
+    db = FakeDB()
+    redis = FakeRedis()
+    manager = DynamicConfigManager(db_client=db, redis_client=redis, file_config={})
+    await manager.initialize()
+    reject_candidate = True
+
+    async def subscriber(config: AppConfig, _changes: dict[str, list[str]]) -> None:
+        if reject_candidate and config.router_settings.routing_strategy == "weighted":
+            raise RuntimeError("runtime rejected committed candidate")
+
+    async def related_mutation(_transaction) -> None:  # noqa: ANN001
+        return None
+
+    manager.subscribe(subscriber)
+
+    with pytest.raises(DynamicConfigPostCommitApplyError) as raised:
+        await manager.update_config(
+            {"router_settings": {"routing_strategy": "weighted"}},
+            updated_by="test",
+            transaction_mutation=related_mutation,
+        )
+
+    assert raised.value.committed_app_config.router_settings.routing_strategy == "weighted"
+    assert manager.get_app_config().router_settings.routing_strategy == "simple-shuffle"
+    assert db.config_value["router_settings"]["routing_strategy"] == "weighted"
+    assert len(redis.messages) == 1
+    assert json.loads(redis.messages[0][1])["type"] == "config_updated"
+    assert {
+        "source": "admin_update",
+        "result": "post_commit_apply_failed",
+    } in events
+
+    reject_candidate = False
+    changed = await manager._reload_config_from_source(source="poll")
+
+    assert changed is True
+    assert manager.get_app_config().router_settings.routing_strategy == "weighted"
+    assert {"source": "poll", "result": "applied"} in events
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_publish_failure_does_not_mask_committed_config() -> None:
+    db = FakeDB()
+    manager = DynamicConfigManager(
+        db_client=db,
+        redis_client=FailingPublishRedis(),
+        file_config={},
+    )
+    await manager.initialize()
+
+    await manager.update_config(
+        {"router_settings": {"routing_strategy": "weighted"}},
+        updated_by="test",
+    )
+
+    assert db.config_value["router_settings"]["routing_strategy"] == "weighted"
+    assert manager.get_app_config().router_settings.routing_strategy == "weighted"
     await manager.close()
 
 

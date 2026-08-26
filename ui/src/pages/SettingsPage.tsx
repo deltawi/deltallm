@@ -1,21 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useApi } from '../lib/hooks';
-import { branding as brandingApi, settings, type UIBrandingAssetKind } from '../lib/api';
+import { settings } from '../lib/api';
 import {
   Settings, Route, Database, Shield, HeartPulse,
   Save, Check, ChevronRight, Plus, X, AlertTriangle,
-  RefreshCw, Info, Clock, RotateCcw, Paintbrush, Undo2, Upload, Trash2, Image,
+  RefreshCw, Info, Clock, RotateCcw, Paintbrush,
 } from 'lucide-react';
-import BrandLogo from '../components/BrandLogo';
 import Button from '../components/Button';
-import {
-  contrastForeground,
-  normalizeBranding,
-  readableBrandInk,
-  type UIBranding,
-  visibleBrandSurface,
-  visibleMenuHoverSurface,
-} from '../lib/branding';
+import ThemeSettingsPanel from '../components/settings/ThemeSettingsPanel';
+import { SettingsField, SettingsSection } from '../components/settings/SettingsSection';
+import { useThemeSettingsController } from '../components/settings/useThemeSettingsController';
+import { useToast } from '../components/ToastProvider';
+import { normalizeBranding } from '../lib/branding';
 import { useBranding } from '../lib/brandingContext';
 
 interface FallbackEntry {
@@ -25,16 +21,16 @@ interface FallbackEntry {
 
 interface SettingsForm {
   routing_strategy: string;
-  num_retries: string | number;
-  timeout: string | number;
-  cooldown_time: string | number;
-  retry_after: string | number;
-  allowed_fails: string | number;
+  num_retries: number | string;
+  timeout: number | string;
+  cooldown_time: number | string;
+  retry_after: number | string;
+  allowed_fails: number | string;
   cache_enabled: boolean;
   cache_backend: string;
-  cache_ttl: string | number;
+  cache_ttl: number | string;
   background_health_checks: boolean;
-  health_check_interval: string | number;
+  health_check_interval: number | string;
   log_level: string;
 }
 
@@ -47,11 +43,30 @@ interface FallbackEvent {
   success: boolean;
 }
 
+const DEFAULT_SETTINGS_FORM: SettingsForm = {
+  routing_strategy: 'simple-shuffle',
+  num_retries: 0,
+  timeout: 600,
+  cooldown_time: 60,
+  retry_after: 0,
+  allowed_fails: 3,
+  cache_enabled: false,
+  cache_backend: 'memory',
+  cache_ttl: 3600,
+  background_health_checks: false,
+  health_check_interval: 300,
+  log_level: 'INFO',
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 function parseFallbacks(raw: unknown): FallbackEntry[] {
   if (!Array.isArray(raw)) return [];
   const entries: FallbackEntry[] = [];
   for (const item of raw) {
-    if (typeof item === 'object' && item !== null) {
+    if (isRecord(item)) {
       for (const [key, targets] of Object.entries(item)) {
         if (Array.isArray(targets)) {
           for (const t of targets) {
@@ -75,28 +90,27 @@ function serializeFallbacks(entries: FallbackEntry[]): Array<Record<string, stri
   return Object.entries(map).map(([k, v]) => ({ [k]: v }));
 }
 
-function parseFallbackEvents(value: unknown): FallbackEvent[] {
-  if (!value || typeof value !== 'object' || !('events' in value)) return [];
-  const events = value.events;
-  if (!Array.isArray(events)) return [];
-  return events.flatMap((event) => {
-    if (!event || typeof event !== 'object') return [];
-    const candidate = event as Record<string, unknown>;
+function parseFallbackEvents(payload: unknown): FallbackEvent[] {
+  if (!isRecord(payload) || !Array.isArray(payload.events)) return [];
+
+  return payload.events.flatMap((event) => {
     if (
-      typeof candidate.timestamp !== 'number'
-      || typeof candidate.model_group !== 'string'
-      || typeof candidate.from_deployment !== 'string'
-      || (candidate.to_deployment !== null && typeof candidate.to_deployment !== 'string')
-      || typeof candidate.error_classification !== 'string'
-      || typeof candidate.success !== 'boolean'
+      !isRecord(event)
+      || typeof event.timestamp !== 'number'
+      || typeof event.model_group !== 'string'
+      || typeof event.from_deployment !== 'string'
+      || (event.to_deployment !== null && typeof event.to_deployment !== 'string')
+      || typeof event.error_classification !== 'string'
+      || typeof event.success !== 'boolean'
     ) return [];
+
     return [{
-      timestamp: candidate.timestamp,
-      model_group: candidate.model_group,
-      from_deployment: candidate.from_deployment,
-      to_deployment: candidate.to_deployment,
-      error_classification: candidate.error_classification,
-      success: candidate.success,
+      timestamp: event.timestamp,
+      model_group: event.model_group,
+      from_deployment: event.from_deployment,
+      to_deployment: event.to_deployment,
+      error_classification: event.error_classification,
+      success: event.success,
     }];
   });
 }
@@ -129,126 +143,6 @@ const LEGACY_TAG_STRATEGY = {
   desc: 'Deprecated alias for weighted routing after tag filtering',
 };
 
-const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
-
-function validateBranding(value: UIBranding): string | null {
-  if (!value.instance_name.trim()) return 'Instance name is required.';
-  if (value.instance_name.trim().length > 80) return 'Instance name must be 80 characters or fewer.';
-  if ([...value.instance_name].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
-    return 'Instance name cannot contain control characters.';
-  }
-  if (!HEX_COLOR.test(value.primary_color)) return 'Primary colour must use the #RRGGBB format.';
-  if (!HEX_COLOR.test(value.secondary_color)) return 'Secondary colour must use the #RRGGBB format.';
-  if (!HEX_COLOR.test(value.menu_hover_color)) return 'Menu hover colour must use the #RRGGBB format.';
-  return null;
-}
-
-const BRANDING_IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
-const BRANDING_FAVICON_ACCEPT = `${BRANDING_IMAGE_ACCEPT},image/x-icon,image/vnd.microsoft.icon`;
-const BRANDING_ASSET_MAX_BYTES = 2 * 1024 * 1024;
-
-function BrandingAssetField({
-  assetKey,
-  label,
-  hint,
-  url,
-  busy,
-  disabled,
-  onUpload,
-  onRemove,
-}: {
-  assetKey: UIBrandingAssetKind;
-  label: string;
-  hint: string;
-  url: string | null;
-  busy: boolean;
-  disabled: boolean;
-  onUpload: (file: File) => Promise<void>;
-  onRemove: () => Promise<void>;
-}) {
-  const previewClass = assetKey === 'logo_full'
-    ? 'h-12 max-w-full object-contain'
-    : 'h-12 w-12 object-contain';
-
-  return (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-      <div className="mb-3 flex h-16 items-center justify-center rounded-lg border border-gray-200 bg-white px-3">
-        {url ? (
-          <img src={url} alt={`${label} preview`} className={previewClass} />
-        ) : (
-          <Image className="h-7 w-7 text-gray-300" aria-hidden="true" />
-        )}
-      </div>
-      <p className="text-sm font-medium text-gray-800">{label}</p>
-      <p className="mt-0.5 min-h-8 text-xs text-gray-500">{hint}</p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <label
-          className={`inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover ${disabled ? 'pointer-events-none opacity-50' : 'cursor-pointer'}`}
-        >
-          <Upload className="h-3.5 w-3.5" />
-          {busy ? 'Working…' : url ? 'Replace' : 'Upload'}
-          <input
-            type="file"
-            accept={assetKey === 'favicon' ? BRANDING_FAVICON_ACCEPT : BRANDING_IMAGE_ACCEPT}
-            className="sr-only"
-            disabled={disabled}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = '';
-              if (file) void onUpload(file);
-            }}
-          />
-        </label>
-        {url && (
-          <button
-            type="button"
-            onClick={() => { void onRemove(); }}
-            disabled={disabled}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:border-red-200 hover:text-red-600 disabled:opacity-50"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Remove
-          </button>
-        )}
-      </div>
-      <p className="mt-2 text-[11px] text-gray-400">PNG, JPEG, WebP, SVG{assetKey === 'favicon' ? ', or ICO' : ''}; maximum 2 MB.</p>
-    </div>
-  );
-}
-
-function ColorField({
-  label,
-  value,
-  onChange,
-  hint,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  hint: string;
-}) {
-  const pickerValue = HEX_COLOR.test(value) ? value : '#000000';
-  return (
-    <FieldGroup label={label} hint={hint}>
-      <div className="flex items-center gap-2">
-        <input
-          type="color"
-          value={pickerValue}
-          onChange={(event) => onChange(event.target.value.toUpperCase())}
-          className="h-10 w-12 cursor-pointer rounded-lg border border-gray-200 bg-white p-1"
-          aria-label={`${label} picker`}
-        />
-        <input
-          value={value}
-          onChange={(event) => onChange(event.target.value.toUpperCase())}
-          className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-sm uppercase transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
-          maxLength={7}
-          spellCheck={false}
-        />
-      </div>
-    </FieldGroup>
-  );
-}
-
 function Toggle({ checked, onChange, id }: { checked: boolean; onChange: (v: boolean) => void; id: string }) {
   return (
     <button
@@ -261,35 +155,6 @@ function Toggle({ checked, onChange, id }: { checked: boolean; onChange: (v: boo
     >
       <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-0 transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
     </button>
-  );
-}
-
-function FieldGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      {children}
-      {hint && <p className="mt-1 text-xs text-gray-400">{hint}</p>}
-    </div>
-  );
-}
-
-function SectionCard({ title, description, icon: Icon, children }: { title: string; description?: string; icon?: React.ElementType; children: React.ReactNode }) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3">
-        {Icon && (
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-secondary-soft">
-            <Icon className="h-4 w-4 text-brand-secondary-ink" />
-          </div>
-        )}
-        <div>
-          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-          {description && <p className="text-xs text-gray-500 mt-0.5">{description}</p>}
-        </div>
-      </div>
-      <div className="p-5">{children}</div>
-    </div>
   );
 }
 
@@ -337,32 +202,27 @@ function FallbackEditor({ label, description, entries, onChange }: {
 export default function SettingsPage() {
   const { data, loading, refetch } = useApi(() => settings.get(), []);
   const { branding, setBranding } = useBranding();
+  const { pushToast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>('general');
-  const [form, setForm] = useState<SettingsForm>({
-    routing_strategy: 'simple-shuffle',
-    num_retries: 0,
-    timeout: 600,
-    cooldown_time: 60,
-    retry_after: 0,
-    allowed_fails: 3,
-    cache_enabled: false,
-    cache_backend: 'memory',
-    cache_ttl: 3600,
-    background_health_checks: false,
-    health_check_interval: 300,
-    log_level: 'INFO',
-  });
-  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<SettingsForm>(DEFAULT_SETTINGS_FORM);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [saved, setSaved] = useState(false);
   const [fallbacks, setFallbacks] = useState<FallbackEntry[]>([]);
   const [ctxFallbacks, setCtxFallbacks] = useState<FallbackEntry[]>([]);
   const [contentFallbacks, setContentFallbacks] = useState<FallbackEntry[]>([]);
   const [fallbackEvents, setFallbackEvents] = useState<FallbackEvent[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
-  const [brandingForm, setBrandingForm] = useState<UIBranding>(branding);
-  const [persistedBranding, setPersistedBranding] = useState<UIBranding>(branding);
-  const [brandingError, setBrandingError] = useState<string | null>(null);
-  const [busyBrandingAsset, setBusyBrandingAsset] = useState<UIBrandingAssetKind | null>(null);
+  const showSaved = useCallback(() => {
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2000);
+  }, []);
+  const theme = useThemeSettingsController({
+    initialBranding: branding,
+    setGlobalBranding: setBranding,
+    pushToast,
+    onSaved: showSaved,
+  });
+  const loadThemeBranding = theme.loadBranding;
 
   useEffect(() => {
     if (data) {
@@ -384,20 +244,19 @@ export default function SettingsPage() {
         instance_name: data.general_settings?.instance_name,
         ...data.general_settings?.ui_branding,
       });
-      setBrandingForm(loadedBranding);
-      setPersistedBranding(loadedBranding);
+      loadThemeBranding(loadedBranding);
       setFallbacks(parseFallbacks(data.deltallm_settings?.fallbacks || []));
       setCtxFallbacks(parseFallbacks(data.deltallm_settings?.context_window_fallbacks || []));
       setContentFallbacks(parseFallbacks(data.deltallm_settings?.content_policy_fallbacks || []));
     }
-  }, [data]);
+  }, [data, loadThemeBranding]);
 
   const loadFallbackEvents = async () => {
     setLoadingEvents(true);
     try {
       const resp = await fetch('/health/fallback-events?limit=50');
-      const json: unknown = await resp.json();
-      setFallbackEvents(parseFallbackEvents(json));
+      const payload: unknown = await resp.json();
+      setFallbackEvents(parseFallbackEvents(payload));
     } catch {
       setFallbackEvents([]);
     } finally {
@@ -406,7 +265,7 @@ export default function SettingsPage() {
   };
 
   const handleSave = async () => {
-    setSaving(true);
+    setSavingSettings(true);
     try {
       await settings.update({
         router_settings: {
@@ -435,76 +294,7 @@ export default function SettingsPage() {
       setTimeout(() => setSaved(false), 2000);
       refetch();
     } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleBrandingSave = async () => {
-    const validationError = validateBranding(brandingForm);
-    if (validationError) {
-      setBrandingError(validationError);
-      return;
-    }
-
-    setSaving(true);
-    setBrandingError(null);
-    try {
-      const savedBranding = normalizeBranding(await brandingApi.update({
-        instance_name: brandingForm.instance_name.trim(),
-        primary_color: brandingForm.primary_color,
-        secondary_color: brandingForm.secondary_color,
-        menu_hover_color: brandingForm.menu_hover_color,
-      }));
-      setBrandingForm(savedBranding);
-      setPersistedBranding(savedBranding);
-      setBranding(savedBranding);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (error) {
-      setBrandingError(error instanceof Error ? error.message : 'Could not save theme.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const applySavedAsset = (assetKey: UIBrandingAssetKind, saved: UIBranding) => {
-    const field = assetKey === 'logo_mark'
-      ? 'logo_mark_url'
-      : assetKey === 'logo_full'
-        ? 'logo_full_url'
-        : 'favicon_url';
-    setBrandingForm((current) => ({ ...current, [field]: saved[field] }));
-    setPersistedBranding((current) => ({ ...current, [field]: saved[field] }));
-    setBranding(saved);
-  };
-
-  const handleBrandingAssetUpload = async (assetKey: UIBrandingAssetKind, file: File) => {
-    if (file.size > BRANDING_ASSET_MAX_BYTES) {
-      setBrandingError('Branding assets must be 2 MB or smaller.');
-      return;
-    }
-    setBusyBrandingAsset(assetKey);
-    setBrandingError(null);
-    try {
-      const saved = normalizeBranding(await brandingApi.uploadAsset(assetKey, file));
-      applySavedAsset(assetKey, saved);
-    } catch (error) {
-      setBrandingError(error instanceof Error ? error.message : 'Could not upload branding asset.');
-    } finally {
-      setBusyBrandingAsset(null);
-    }
-  };
-
-  const handleBrandingAssetRemove = async (assetKey: UIBrandingAssetKind) => {
-    setBusyBrandingAsset(assetKey);
-    setBrandingError(null);
-    try {
-      const saved = normalizeBranding(await brandingApi.deleteAsset(assetKey));
-      applySavedAsset(assetKey, saved);
-    } catch (error) {
-      setBrandingError(error instanceof Error ? error.message : 'Could not remove branding asset.');
-    } finally {
-      setBusyBrandingAsset(null);
+      setSavingSettings(false);
     }
   };
 
@@ -518,11 +308,8 @@ export default function SettingsPage() {
 
   const inputClass = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent transition-all';
   const selectClass = inputClass;
-  const themePreview = normalizeBranding(brandingForm);
-  const primaryPreview = visibleBrandSurface(themePreview.primary_color);
-  const secondaryPreview = visibleBrandSurface(themePreview.secondary_color);
-  const menuHoverPreview = visibleMenuHoverSurface(themePreview.menu_hover_color);
-  const themeDirty = JSON.stringify(brandingForm) !== JSON.stringify(persistedBranding);
+  const themeSaving = theme.mutation === 'save';
+  const headerSaving = activeTab === 'theme' ? themeSaving : savingSettings;
 
   return (
     <div className="p-4 sm:p-6">
@@ -534,12 +321,12 @@ export default function SettingsPage() {
           </div>
           <Button
             variant={saved ? 'success' : 'primary'}
-            onClick={activeTab === 'theme' ? handleBrandingSave : handleSave}
-            loading={saving}
-            disabled={activeTab === 'theme' && (!themeDirty || busyBrandingAsset !== null)}
+            onClick={activeTab === 'theme' ? () => { void theme.save(); } : handleSave}
+            loading={headerSaving}
+            disabled={activeTab === 'theme' && (!theme.dirty || theme.mutation !== null)}
           >
             {saved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-            {saved ? 'Saved' : saving ? 'Saving...' : 'Save Changes'}
+            {saved ? 'Saved' : headerSaving ? 'Saving...' : 'Save Changes'}
           </Button>
         </div>
 
@@ -585,168 +372,50 @@ export default function SettingsPage() {
           <div className="flex-1 min-w-0 space-y-5">
             {activeTab === 'general' && (
               <>
-                <SectionCard title="Runtime" description="Basic proxy logging configuration" icon={Settings}>
+                <SettingsSection title="Runtime" description="Basic proxy logging configuration" icon={Settings}>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                    <FieldGroup label="Log Level" hint="Controls verbosity of system logs">
+                    <SettingsField label="Log Level" hint="Controls verbosity of system logs">
                       <select value={form.log_level || 'INFO'} onChange={(e) => setForm({ ...form, log_level: e.target.value })} className={selectClass}>
                         <option value="DEBUG">DEBUG</option>
                         <option value="INFO">INFO</option>
                         <option value="WARNING">WARNING</option>
                         <option value="ERROR">ERROR</option>
                       </select>
-                    </FieldGroup>
+                    </SettingsField>
                   </div>
-                </SectionCard>
+                </SettingsSection>
 
                 <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
                   <Info className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
                   <div>
                     <p className="text-sm font-medium text-blue-800">Configuration persistence</p>
-                    <p className="text-xs text-blue-600 mt-0.5">Settings are persisted to the database and broadcast to all replicas via Redis pub/sub. Changes take effect immediately without restart.</p>
+                    <p className="text-xs text-blue-600 mt-0.5">Settings are persisted to PostgreSQL. Redis wakes replicas promptly, with normal database refresh providing recovery when a broadcast is missed.</p>
                   </div>
                 </div>
               </>
             )}
 
             {activeTab === 'theme' && (
-              <>
-                <SectionCard title="Theme identity" description="Customize the product shell for this installation" icon={Paintbrush}>
-                  <div className="space-y-5">
-                    {brandingError && (
-                      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                        {brandingError}
-                      </div>
-                    )}
-                    <FieldGroup label="Instance Name" hint="Shown in the sidebar, authentication screens, browser title, and emails">
-                      <input
-                        value={brandingForm.instance_name}
-                        onChange={(event) => setBrandingForm({ ...brandingForm, instance_name: event.target.value })}
-                        className={inputClass}
-                        maxLength={80}
-                      />
-                    </FieldGroup>
-                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                      <BrandingAssetField
-                        assetKey="logo_mark"
-                        label="Simple logo"
-                        hint="Square mark used in collapsed and compact placements."
-                        url={brandingForm.logo_mark_url}
-                        busy={busyBrandingAsset === 'logo_mark'}
-                        disabled={busyBrandingAsset !== null}
-                        onUpload={(file) => handleBrandingAssetUpload('logo_mark', file)}
-                        onRemove={() => handleBrandingAssetRemove('logo_mark')}
-                      />
-                      <BrandingAssetField
-                        assetKey="logo_full"
-                        label="Expanded logo"
-                        hint="Horizontal wordmark used when enough space is available."
-                        url={brandingForm.logo_full_url}
-                        busy={busyBrandingAsset === 'logo_full'}
-                        disabled={busyBrandingAsset !== null}
-                        onUpload={(file) => handleBrandingAssetUpload('logo_full', file)}
-                        onRemove={() => handleBrandingAssetRemove('logo_full')}
-                      />
-                      <BrandingAssetField
-                        assetKey="favicon"
-                        label="Favicon"
-                        hint="Browser icon; the built-in mark is used when empty."
-                        url={brandingForm.favicon_url}
-                        busy={busyBrandingAsset === 'favicon'}
-                        disabled={busyBrandingAsset !== null}
-                        onUpload={(file) => handleBrandingAssetUpload('favicon', file)}
-                        onRemove={() => handleBrandingAssetRemove('favicon')}
-                      />
-                    </div>
-                  </div>
-                </SectionCard>
-
-                <SectionCard title="Theme colours" description="Semantic colours are applied without changing warning, success, or danger states" icon={Paintbrush}>
-                  <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
-                    <ColorField
-                      label="Primary"
-                      value={brandingForm.primary_color}
-                      onChange={(value) => setBrandingForm({ ...brandingForm, primary_color: value })}
-                      hint="Primary actions and focus rings"
-                    />
-                    <ColorField
-                      label="Secondary"
-                      value={brandingForm.secondary_color}
-                      onChange={(value) => setBrandingForm({ ...brandingForm, secondary_color: value })}
-                      hint="Secondary actions and navigation accents"
-                    />
-                    <ColorField
-                      label="Menu Hover"
-                      value={brandingForm.menu_hover_color}
-                      onChange={(value) => setBrandingForm({ ...brandingForm, menu_hover_color: value })}
-                      hint="Navigation hover background"
-                    />
-                  </div>
-                </SectionCard>
-
-                <SectionCard title="Preview" description="Review logo and control treatments before saving">
-                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-                    <div className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Logo treatments</p>
-                      <div className="rounded-lg border border-gray-200 bg-white p-3">
-                        <BrandLogo variant="expanded" brandingOverride={themePreview} />
-                      </div>
-                      <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-3">
-                        <BrandLogo variant="mark" brandingOverride={themePreview} />
-                        <span className="text-xs text-gray-500">Collapsed mark</span>
-                      </div>
-                    </div>
-                    <div className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Interactive treatments</p>
-                      <div className="flex flex-wrap gap-2">
-                        <span
-                          className="rounded-lg px-4 py-2 text-sm font-medium"
-                          style={{
-                            backgroundColor: primaryPreview,
-                            color: contrastForeground(primaryPreview),
-                          }}
-                        >
-                          Primary action
-                        </span>
-                        <span
-                          className="rounded-lg border bg-white px-4 py-2 text-sm font-medium"
-                          style={{
-                            borderColor: secondaryPreview,
-                            color: readableBrandInk(themePreview.secondary_color),
-                          }}
-                        >
-                          Secondary action
-                        </span>
-                      </div>
-                      <div
-                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium"
-                        style={{
-                          backgroundColor: menuHoverPreview,
-                          color: contrastForeground(menuHoverPreview),
-                        }}
-                      >
-                        <Settings className="h-4 w-4" /> Menu hover
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-5 flex justify-end">
-                    <Button
-                      variant="secondary"
-                      onClick={() => {
-                        setBrandingForm(persistedBranding);
-                        setBrandingError(null);
-                      }}
-                      disabled={!themeDirty}
-                    >
-                      <Undo2 className="h-4 w-4" /> Discard changes
-                    </Button>
-                  </div>
-                </SectionCard>
-              </>
+              <ThemeSettingsPanel
+                value={theme.value}
+                error={theme.error}
+                dirty={theme.dirty}
+                resetDisabled={theme.resetDisabled}
+                resetConfirmationOpen={theme.resetConfirmationOpen}
+                mutation={theme.mutation}
+                onChange={theme.setValue}
+                onUpload={theme.upload}
+                onRemove={theme.remove}
+                onDiscard={theme.discard}
+                onOpenReset={theme.openResetConfirmation}
+                onCloseReset={theme.closeResetConfirmation}
+                onConfirmReset={() => { void theme.reset(); }}
+              />
             )}
 
             {activeTab === 'routing' && (
               <>
-                <SectionCard title="Routing Strategy" description="How requests are distributed across model deployments" icon={Route}>
+                <SettingsSection title="Routing Strategy" description="How requests are distributed across model deployments" icon={Route}>
                   <div className="grid grid-cols-1 gap-2">
                     {(form.routing_strategy === LEGACY_TAG_STRATEGY.value
                       ? [LEGACY_TAG_STRATEGY, ...STRATEGIES]
@@ -770,42 +439,42 @@ export default function SettingsPage() {
                       </label>
                     ))}
                   </div>
-                </SectionCard>
+                </SettingsSection>
 
-                <SectionCard title="Reliability" description="Retry behavior and failure thresholds" icon={RotateCcw}>
+                <SettingsSection title="Reliability" description="Retry behavior and failure thresholds" icon={RotateCcw}>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                    <FieldGroup label="Max Retries" hint="Number of retry attempts per failed request">
+                    <SettingsField label="Max Retries" hint="Number of retry attempts per failed request">
                       <input type="number" value={form.num_retries ?? ''} onChange={(e) => setForm({ ...form, num_retries: e.target.value })} className={inputClass} />
-                    </FieldGroup>
-                    <FieldGroup label="Request Timeout" hint="Maximum seconds before a request is cancelled">
+                    </SettingsField>
+                    <SettingsField label="Request Timeout" hint="Maximum seconds before a request is cancelled">
                       <div className="relative">
                         <input type="number" value={form.timeout ?? ''} onChange={(e) => setForm({ ...form, timeout: e.target.value })} className={inputClass + ' pr-10'} />
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">sec</span>
                       </div>
-                    </FieldGroup>
-                    <FieldGroup label="Cooldown Time" hint="Seconds a deployment is sidelined after failing">
+                    </SettingsField>
+                    <SettingsField label="Cooldown Time" hint="Seconds a deployment is sidelined after failing">
                       <div className="relative">
                         <input type="number" value={form.cooldown_time ?? ''} onChange={(e) => setForm({ ...form, cooldown_time: e.target.value })} className={inputClass + ' pr-10'} />
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">sec</span>
                       </div>
-                    </FieldGroup>
-                    <FieldGroup label="Retry Base Delay" hint="Base delay for exponential backoff between retries">
+                    </SettingsField>
+                    <SettingsField label="Retry Base Delay" hint="Base delay for exponential backoff between retries">
                       <div className="relative">
                         <input type="number" step="0.1" value={form.retry_after ?? ''} onChange={(e) => setForm({ ...form, retry_after: e.target.value })} className={inputClass + ' pr-10'} />
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">sec</span>
                       </div>
-                    </FieldGroup>
-                    <FieldGroup label="Allowed Fails" hint="Failures before a deployment enters cooldown">
+                    </SettingsField>
+                    <SettingsField label="Allowed Fails" hint="Failures before a deployment enters cooldown">
                       <input type="number" value={form.allowed_fails ?? ''} onChange={(e) => setForm({ ...form, allowed_fails: e.target.value })} className={inputClass} />
-                    </FieldGroup>
+                    </SettingsField>
                   </div>
-                </SectionCard>
+                </SettingsSection>
               </>
             )}
 
             {activeTab === 'caching' && (
               <>
-                <SectionCard title="Response Caching" description="Cache LLM responses to reduce latency and cost" icon={Database}>
+                <SettingsSection title="Response Caching" description="Cache LLM responses to reduce latency and cost" icon={Database}>
                   <div className="space-y-5">
                     <div className="flex items-center justify-between py-2">
                       <div>
@@ -817,23 +486,23 @@ export default function SettingsPage() {
 
                     {form.cache_enabled && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-2 border-t border-gray-100">
-                        <FieldGroup label="Backend" hint="Where cached responses are stored">
+                        <SettingsField label="Backend" hint="Where cached responses are stored">
                           <select value={form.cache_backend || 'memory'} onChange={(e) => setForm({ ...form, cache_backend: e.target.value })} className={selectClass}>
                             <option value="memory">Memory (in-process LRU)</option>
                             <option value="redis">Redis (distributed)</option>
                             <option value="s3">S3 (persistent)</option>
                           </select>
-                        </FieldGroup>
-                        <FieldGroup label="TTL" hint="How long cached responses remain valid">
+                        </SettingsField>
+                        <SettingsField label="TTL" hint="How long cached responses remain valid">
                           <div className="relative">
                             <input type="number" value={form.cache_ttl ?? ''} onChange={(e) => setForm({ ...form, cache_ttl: e.target.value })} className={inputClass + ' pr-10'} />
                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">sec</span>
                           </div>
-                        </FieldGroup>
+                        </SettingsField>
                       </div>
                     )}
                   </div>
-                </SectionCard>
+                </SettingsSection>
 
                 {form.cache_enabled && (
                   <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-4 flex items-start gap-3">
@@ -852,7 +521,7 @@ export default function SettingsPage() {
             )}
 
             {activeTab === 'fallbacks' && (
-              <SectionCard title="Fallback Chains" description="Define automatic failover paths between model groups" icon={Shield}>
+              <SettingsSection title="Fallback Chains" description="Define automatic failover paths between model groups" icon={Shield}>
                 <FallbackEditor
                   label="General Fallbacks"
                   description="When a model group fails, route to the fallback group"
@@ -873,12 +542,12 @@ export default function SettingsPage() {
                   entries={contentFallbacks}
                   onChange={setContentFallbacks}
                 />
-              </SectionCard>
+              </SettingsSection>
             )}
 
             {activeTab === 'health' && (
               <>
-                <SectionCard title="Background Health Checks" description="Automated monitoring of model deployments" icon={HeartPulse}>
+                <SettingsSection title="Background Health Checks" description="Automated monitoring of model deployments" icon={HeartPulse}>
                   <div className="space-y-5">
                     <div className="flex items-center justify-between py-2">
                       <div>
@@ -889,18 +558,18 @@ export default function SettingsPage() {
                     </div>
                     {form.background_health_checks && (
                       <div className="pt-2 border-t border-gray-100">
-                        <FieldGroup label="Check Interval" hint="How often each deployment is health-checked">
+                        <SettingsField label="Check Interval" hint="How often each deployment is health-checked">
                           <div className="relative w-48">
                             <input type="number" value={form.health_check_interval ?? ''} onChange={(e) => setForm({ ...form, health_check_interval: e.target.value })} className={inputClass + ' pr-10'} />
                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">sec</span>
                           </div>
-                        </FieldGroup>
+                        </SettingsField>
                       </div>
                     )}
                   </div>
-                </SectionCard>
+                </SettingsSection>
 
-                <SectionCard title="Recent Fallback Events" description="Live feed of automatic failover activity" icon={AlertTriangle}>
+                <SettingsSection title="Recent Fallback Events" description="Live feed of automatic failover activity" icon={AlertTriangle}>
                   <div className="flex items-center gap-3 mb-4">
                     <button onClick={loadFallbackEvents} disabled={loadingEvents} className="flex items-center gap-2 text-sm font-medium text-brand-secondary-ink hover:text-brand-secondary-ink-hover px-3 py-1.5 rounded-lg hover:bg-violet-50 transition-colors disabled:opacity-50">
                       <RefreshCw className={`w-4 h-4 ${loadingEvents ? 'animate-spin' : ''}`} />
@@ -975,7 +644,7 @@ export default function SettingsPage() {
                       <p className="text-xs text-gray-400">No fallback events loaded. Click "Load Events" to see recent activity.</p>
                     </div>
                   )}
-                </SectionCard>
+                </SettingsSection>
               </>
             )}
           </div>

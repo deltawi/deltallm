@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from time import perf_counter
 from typing import Any
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import (
     APIRouter,
@@ -25,10 +27,22 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     get_auth_scope,
 )
-from src.config import UIBrandingPayload, UIBrandingSettings, UIBrandingUpdatePayload
-from src.config_runtime.dynamic import DynamicConfigRestartRequiredError
+from src.config import (
+    AppConfig,
+    DEFAULT_UI_INSTANCE_NAME,
+    UIBrandingPayload,
+    UIBrandingResetPayload,
+    UIBrandingSettings,
+    UIBrandingUpdatePayload,
+)
+from src.config_runtime.dynamic import (
+    DynamicConfigPostCommitApplyError,
+    DynamicConfigRestartRequiredError,
+)
+from src.db.ui_branding_assets import BrandingAssetDatabase, UIBrandingAssetRepository
 from src.middleware.admin import require_admin_permission
 from src.providers.resolution import resolve_provider
+from src.services.audit_service import require_audit_service
 from src.services.ui_branding_assets import (
     BRANDING_ASSET_MAX_BYTES,
     UIBrandingAssetService,
@@ -38,17 +52,76 @@ from src.services.ui_branding_assets import (
     validate_branding_asset,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Admin Config"])
 
 
-def _effective_ui_branding(request: Request) -> UIBrandingPayload:
-    app_config = getattr(request.app.state, "app_config", None)
-    general_settings = getattr(app_config, "general_settings", None)
-    instance_name = str(getattr(general_settings, "instance_name", "DeltaLLM") or "DeltaLLM")
+def _ui_branding_from_app_config(app_config: AppConfig | None) -> UIBrandingPayload:
+    general_settings = app_config.general_settings if app_config is not None else None
+    instance_name = str(
+        getattr(general_settings, "instance_name", DEFAULT_UI_INSTANCE_NAME)
+        or DEFAULT_UI_INSTANCE_NAME
+    )
     ui_branding = getattr(general_settings, "ui_branding", None)
     if not isinstance(ui_branding, UIBrandingSettings):
         ui_branding = UIBrandingSettings()
     return UIBrandingPayload(instance_name=instance_name, **ui_branding.model_dump())
+
+
+def _effective_ui_branding(request: Request) -> UIBrandingPayload:
+    app_config = getattr(request.app.state, "app_config", None)
+    return _ui_branding_from_app_config(app_config if isinstance(app_config, AppConfig) else None)
+
+
+def _reset_audit_event_id(operation_id: str, phase: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"deltallm:ui-branding-reset:{operation_id}:{phase}"))
+
+
+def _audit_enabled(request: Request) -> bool:
+    app_config = getattr(request.app.state, "app_config", None)
+    if not isinstance(app_config, AppConfig):
+        return True
+    return app_config.general_settings.audit_enabled
+
+
+async def _emit_branding_reset_outcome_audit(
+    *,
+    request: Request,
+    request_start: float,
+    operation_id: str,
+    before: UIBrandingPayload,
+    after: UIBrandingPayload | None,
+    reconciliation_pending: bool,
+    error: Exception | None = None,
+) -> None:
+    try:
+        await emit_admin_mutation_audit(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.ADMIN_UI_BRANDING_RESET,
+            resource_type="ui_branding",
+            request_payload={"target": "factory_defaults"},
+            response_payload=after.model_dump() if after is not None else None,
+            before=before.model_dump(),
+            after=after.model_dump() if after is not None else None,
+            metadata={
+                "operation_id": operation_id,
+                "phase": "outcome",
+                "reconciliation_pending": reconciliation_pending,
+            },
+            status="error" if error is not None else "success",
+            error=error,
+            critical=False,
+            event_id=_reset_audit_event_id(operation_id, "outcome"),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as audit_error:
+        logger.warning(
+            "branding reset outcome audit failed operation_id=%s error_type=%s",
+            operation_id,
+            type(audit_error).__name__,
+        )
 
 
 @router.get("/ui/api/branding", response_model=UIBrandingPayload)
@@ -162,6 +235,87 @@ async def update_ui_branding(
     return after
 
 
+@router.post(
+    "/ui/api/branding/reset",
+    response_model=UIBrandingResetPayload,
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def reset_ui_branding(request: Request) -> UIBrandingResetPayload:
+    request_start = perf_counter()
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    if dynamic_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
+        )
+    _branding_asset_service(request)
+    before = _effective_ui_branding(request)
+    factory = UIBrandingPayload()
+    operation_id = str(uuid4())
+    audit_enabled = _audit_enabled(request)
+
+    if audit_enabled:
+        require_audit_service(getattr(request.app.state, "audit_service", None))
+        await emit_admin_mutation_audit(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.ADMIN_UI_BRANDING_RESET,
+            resource_type="ui_branding",
+            request_payload={"target": "factory_defaults"},
+            before=before.model_dump(),
+            metadata={"operation_id": operation_id, "phase": "attempt"},
+            status="attempted",
+            critical=True,
+            force_sync=True,
+            event_id=_reset_audit_event_id(operation_id, "attempt"),
+        )
+
+    async def delete_assets(db_client: BrandingAssetDatabase) -> None:
+        await UIBrandingAssetRepository(db_client).delete_all_known()
+
+    try:
+        await dynamic_config.update_config(
+            {
+                "general_settings": {
+                    "instance_name": factory.instance_name,
+                    "ui_branding": factory.model_dump(exclude={"instance_name"}),
+                }
+            },
+            updated_by="admin_api",
+            transaction_mutation=delete_assets,
+        )
+        after = _effective_ui_branding(request)
+        reconciliation_pending = False
+    except DynamicConfigPostCommitApplyError as exc:
+        after = _ui_branding_from_app_config(exc.committed_app_config)
+        reconciliation_pending = True
+    except Exception as exc:
+        if audit_enabled:
+            await _emit_branding_reset_outcome_audit(
+                request=request,
+                request_start=request_start,
+                operation_id=operation_id,
+                before=before,
+                after=None,
+                reconciliation_pending=False,
+                error=exc,
+            )
+        raise
+
+    if audit_enabled:
+        await _emit_branding_reset_outcome_audit(
+            request=request,
+            request_start=request_start,
+            operation_id=operation_id,
+            before=before,
+            after=after,
+            reconciliation_pending=reconciliation_pending,
+        )
+    return UIBrandingResetPayload(
+        **after.model_dump(),
+        reconciliation_pending=reconciliation_pending,
+    )
+
+
 @router.put(
     "/ui/api/branding/assets/{asset_key}",
     response_model=UIBrandingPayload,
@@ -196,12 +350,20 @@ async def upload_ui_branding_asset(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
         )
-    asset_service = _branding_asset_service(request)
+    _branding_asset_service(request)
     before = _effective_ui_branding(request)
     asset_url = branding_asset_url(normalized_key, asset.content_sha256)
 
-    async def persist_asset(db_client: Any) -> None:
-        await asset_service.upsert_in_transaction(db_client, asset, updated_by="admin_api")
+    async def persist_asset(db_client: BrandingAssetDatabase) -> None:
+        await UIBrandingAssetRepository(db_client).upsert(
+            asset_key=asset.asset_key,
+            content_type=asset.content_type,
+            content=asset.content,
+            content_sha256=asset.content_sha256,
+            size_bytes=asset.size_bytes,
+            original_filename=asset.original_filename,
+            updated_by="admin_api",
+        )
 
     await dynamic_config.update_config(
         {
@@ -252,11 +414,11 @@ async def delete_ui_branding_asset(request: Request, asset_key: str) -> UIBrandi
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
         )
-    asset_service = _branding_asset_service(request)
+    _branding_asset_service(request)
     before = _effective_ui_branding(request)
 
-    async def delete_asset(db_client: Any) -> None:
-        await asset_service.delete_in_transaction(db_client, normalized_key)
+    async def delete_asset(db_client: BrandingAssetDatabase) -> None:
+        await UIBrandingAssetRepository(db_client).delete(normalized_key)
 
     await dynamic_config.update_config(
         {
