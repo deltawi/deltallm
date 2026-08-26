@@ -4,8 +4,9 @@ from dataclasses import asdict
 import logging
 from time import perf_counter
 from typing import Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import ValidationError
 
 from src.auth.roles import Permission
@@ -61,6 +62,10 @@ from src.services.route_policy_simulation import (
     RoutePolicySimulationNotFoundError,
     RoutePolicySimulationService,
     RoutePolicySimulationUnavailableError,
+)
+from src.services.route_policy_publication import (
+    RoutePolicyPublicationNotFoundError,
+    RoutePolicyPublicationService,
 )
 from src.services.route_group_refresh import refresh_route_group_runtime
 from src.services.route_group_mutations import RouteGroupMutationService
@@ -432,6 +437,58 @@ def _validate_policy_payload(
     if "strategy" in normalized:
         _validate_strategy(normalized.get("strategy"))
     return normalized, warnings
+
+
+def _policy_publication_service(request: Request) -> RoutePolicyPublicationService:
+    async def refresh_runtime() -> tuple[str, ...]:
+        return await _refresh_route_group_runtime(request)
+
+    return RoutePolicyPublicationService(
+        route_groups=_repository_or_503(request),
+        refresh_runtime=refresh_runtime,
+    )
+
+
+async def _publish_route_group_policy_response(
+    request: Request,
+    group_key: str,
+    payload: dict[str, Any],
+    *,
+    latest_draft: bool,
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    service = _policy_publication_service(request)
+    try:
+        if latest_draft:
+            result = await service.publish_latest_draft(group_key, published_by="admin_api")
+        else:
+            result = await service.publish_document(
+                group_key,
+                payload,
+                published_by="admin_api",
+            )
+    except RoutePolicyPublicationNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RoutePolicyStateConflictError as exc:
+        _raise_route_policy_conflict(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    response = {
+        "group_key": group_key,
+        "policy": _policy_response_payload(result.policy),
+        "warnings": list(result.warnings),
+    }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_ROUTING_UPDATE,
+        resource_type="route_policy",
+        resource_id=group_key,
+        request_payload=None if latest_draft else payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.get(
@@ -990,49 +1047,13 @@ async def save_route_group_policy_draft(
 async def publish_route_group_policy_v2(
     request: Request, group_key: str, payload: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    request_start = perf_counter()
-    repository = _repository_or_503(request)
-    group = await repository.get_group(group_key)
-    if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
     body = payload or {}
-
-    try:
-        if body:
-            normalized, warnings = _validate_policy_payload(
-                body,
-                available_members=await _resolve_policy_members(repository, group_key),
-            )
-            policy = await repository.publish_policy(
-                group_key, normalized, published_by="admin_api"
-            )
-        else:
-            warnings = []
-            policy = await repository.publish_latest_draft(group_key, published_by="admin_api")
-    except RoutePolicyStateConflictError as exc:
-        _raise_route_policy_conflict(exc)
-
-    if policy is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Route group or draft policy not found"
-        )
-
-    warnings.extend(await _refresh_route_group_runtime(request))
-    response = {
-        "group_key": group_key,
-        "policy": _policy_response_payload(policy),
-        "warnings": warnings,
-    }
-    await emit_admin_mutation_audit(
-        request=request,
-        request_start=request_start,
-        action=AuditAction.ADMIN_ROUTING_UPDATE,
-        resource_type="route_policy",
-        resource_id=group_key,
-        request_payload=body or None,
-        response_payload=response,
+    return await _publish_route_group_policy_response(
+        request,
+        group_key,
+        body,
+        latest_draft=not body,
     )
-    return response
 
 
 @router.post(
@@ -1128,40 +1149,22 @@ async def simulate_route_group_policy(
 @router.put(
     "/ui/api/route-groups/{group_key}/policy",
     response_model=RoutePolicyMutationResponse,
+    deprecated=True,
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
 )
 async def publish_route_group_policy(
-    request: Request, group_key: str, payload: dict[str, Any]
+    request: Request,
+    response: Response,
+    group_key: str,
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
-    request_start = perf_counter()
-    repository = _repository_or_503(request)
-    group = await repository.get_group(group_key)
-    if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
-    normalized, warnings = _validate_policy_payload(
+    encoded_group_key = quote(group_key, safe="")
+    response.headers["Link"] = (
+        f'</ui/api/route-groups/{encoded_group_key}/policy/publish>; rel="successor-version"'
+    )
+    return await _publish_route_group_policy_response(
+        request,
+        group_key,
         payload,
-        available_members=await _resolve_policy_members(repository, group_key),
+        latest_draft=False,
     )
-    try:
-        policy = await repository.publish_policy(group_key, normalized, published_by="admin_api")
-    except RoutePolicyStateConflictError as exc:
-        _raise_route_policy_conflict(exc)
-    if policy is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
-
-    warnings.extend(await _refresh_route_group_runtime(request))
-    response = {
-        "group_key": group_key,
-        "policy": _policy_response_payload(policy),
-        "warnings": warnings,
-    }
-    await emit_admin_mutation_audit(
-        request=request,
-        request_start=request_start,
-        action=AuditAction.ADMIN_ROUTING_UPDATE,
-        resource_type="route_policy",
-        resource_id=group_key,
-        request_payload=payload,
-        response_payload=response,
-    )
-    return response

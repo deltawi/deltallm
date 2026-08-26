@@ -145,9 +145,18 @@ async def test_tag_based_strategy_applies_tag_filtering():
     assert selected.deployment_id == "dep-tagged"
 
 
-def test_tag_based_strategy_is_weighted_selection_on_prefiltered_pool():
-    strategy = strategies_module.TagBasedStrategy()
-    assert isinstance(strategy.fallback, strategies_module.WeightedStrategy)
+def test_tag_based_strategy_is_weighted_alias():
+    state = RedisStateBackend(redis=None)
+    router = Router(
+        strategy=RoutingStrategy.TAG_BASED,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry={},
+    )
+
+    assert router._load_strategy(RoutingStrategy.TAG_BASED) is router._load_strategy(
+        RoutingStrategy.WEIGHTED
+    )
 
 
 @pytest.mark.asyncio

@@ -43,7 +43,6 @@ from src.router.strategies import (
     RateLimitAwareStrategy,
     SimpleShuffleStrategy,
     StrategyStateSnapshot,
-    TagBasedStrategy,
     UsageBasedStrategy,
     WeightedStrategy,
     usage_limits_for_deployment,
@@ -101,11 +100,6 @@ class Deployment:
 
 @dataclass
 class RouterConfig:
-    num_retries: int = 0
-    retry_after: float = 0.0
-    timeout: float = 600.0
-    cooldown_time: int = 60
-    allowed_fails: int = 2
     enable_pre_call_checks: bool = False
     model_group_alias: dict[str, str] = field(default_factory=dict)
     route_group_policies: dict[str, "RouteGroupPolicy"] = field(default_factory=dict)
@@ -156,7 +150,6 @@ class Router:
             else DeploymentRegistryStore(deployment_registry)
         )
         self._strategies = self._build_strategy_map()
-        self._strategy_impl = self._load_strategy(strategy)
 
     def resolve_model_group(self, model_name: str) -> str:
         return self.config.model_group_alias.get(model_name, model_name)
@@ -442,15 +435,18 @@ class Router:
         )
 
     def _build_strategy_map(self):
+        weighted = WeightedStrategy()
         return {
             RoutingStrategy.SIMPLE_SHUFFLE: SimpleShuffleStrategy(),
             RoutingStrategy.LEAST_BUSY: LeastBusyStrategy(self.state),
             RoutingStrategy.LATENCY_BASED: LatencyBasedStrategy(self.state),
             RoutingStrategy.COST_BASED: CostBasedStrategy(),
             RoutingStrategy.USAGE_BASED: UsageBasedStrategy(self.state),
-            RoutingStrategy.TAG_BASED: TagBasedStrategy(),
+            # Tags are an eligibility filter for every strategy. Keep the public
+            # value as a compatibility alias without maintaining a second policy.
+            RoutingStrategy.TAG_BASED: weighted,
             RoutingStrategy.PRIORITY_BASED: PriorityBasedStrategy(),
-            RoutingStrategy.WEIGHTED: WeightedStrategy(),
+            RoutingStrategy.WEIGHTED: weighted,
             RoutingStrategy.RATE_LIMIT_AWARE: RateLimitAwareStrategy(self.state),
         }
 

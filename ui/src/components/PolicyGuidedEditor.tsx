@@ -12,7 +12,6 @@ import {
   Zap,
 } from 'lucide-react';
 import {
-  withGuidedPolicyMode,
   withGuidedPolicyStrategy,
   type PolicyGuidedValues,
   type PolicyMemberOption,
@@ -25,7 +24,7 @@ const STRATEGY_META: Record<string, { icon: React.ElementType; label: string }> 
   'latency-based-routing': { icon: Clock, label: 'Latency-Based' },
   'cost-based-routing': { icon: DollarSign, label: 'Cost-Based' },
   'usage-based-routing': { icon: Layers, label: 'Usage-Based' },
-  'tag-based-routing': { icon: Tag, label: 'Tag-Based' },
+  'tag-based-routing': { icon: Tag, label: 'Tag-Based (Legacy)' },
   'priority-based-routing': { icon: ListChecks, label: 'Priority-Based' },
   'rate-limit-aware': { icon: Shield, label: 'Rate-Limit Aware' },
 };
@@ -111,37 +110,12 @@ export default function PolicyGuidedEditor({
     onChange({ ...values, memberSelection: 'explicit', memberIds });
   };
 
-  const showWeights = values.mode === 'weighted';
-  const showOrder = values.mode === 'fallback' && values.memberSelection === 'explicit';
+  const showWeights = values.strategy === 'weighted';
+  const showOrder = values.strategy === 'priority-based-routing'
+    && values.memberSelection === 'explicit';
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-          Policy mode
-        </p>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {([
-            ['weighted', 'Weighted traffic', 'Split requests using integer deployment weights.'],
-            ['fallback', 'Ordered fallback', 'Try enabled deployments in the configured order.'],
-          ] as const).map(([mode, label, description]) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => onChange(withGuidedPolicyMode(values, mode))}
-              className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                values.mode === mode
-                  ? 'border-brand-primary bg-blue-50'
-                  : 'border-slate-200 bg-white hover:bg-slate-50'
-              }`}
-            >
-              <span className="block text-sm font-semibold text-slate-900">{label}</span>
-              <span className="mt-0.5 block text-xs text-slate-500">{description}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div>
         <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
           Routing strategy

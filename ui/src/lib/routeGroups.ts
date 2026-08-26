@@ -6,11 +6,19 @@ export const ROUTE_GROUP_STRATEGY_OPTIONS = [
   'latency-based-routing',
   'cost-based-routing',
   'usage-based-routing',
-  'tag-based-routing',
   'priority-based-routing',
   'weighted',
   'rate-limit-aware',
 ] as const;
+
+export const LEGACY_TAG_ROUTING_STRATEGY = 'tag-based-routing';
+
+export function routeGroupStrategyOptions(currentStrategy: string): string[] {
+  const options = [...ROUTE_GROUP_STRATEGY_OPTIONS];
+  return currentStrategy === LEGACY_TAG_ROUTING_STRATEGY
+    ? [LEGACY_TAG_ROUTING_STRATEGY, ...options]
+    : options;
+}
 
 export const RETRYABLE_ERROR_OPTIONS = [
   'timeout',
@@ -22,7 +30,6 @@ export const RETRYABLE_ERROR_OPTIONS = [
 
 export type PolicyEditorMode = 'guided' | 'json';
 export type PolicyAction = 'validate' | 'save-draft' | 'publish-json' | 'publish-draft' | 'rollback' | null;
-export type GuidedPolicyMode = 'fallback' | 'weighted';
 export type GuidedMemberSelection = 'inherit' | 'explicit';
 
 export interface PolicyMemberOption {
@@ -34,7 +41,6 @@ export interface PolicyMemberOption {
 
 export interface PolicyGuidedValues {
   strategy: string;
-  mode: GuidedPolicyMode | null;
   memberSelection: GuidedMemberSelection;
   memberIds: string[];
   memberWeights: Record<string, string>;
@@ -45,7 +51,6 @@ export interface PolicyGuidedValues {
 
 export const GUIDED_POLICY_DEFAULTS: PolicyGuidedValues = {
   strategy: 'weighted',
-  mode: 'weighted',
   memberSelection: 'inherit',
   memberIds: [],
   memberWeights: {},
@@ -90,12 +95,6 @@ function memberReferenceFromEntry(entry: unknown): string | null {
   return null;
 }
 
-function modeForStrategy(strategy: string): GuidedPolicyMode | null {
-  if (strategy === 'weighted') return 'weighted';
-  if (strategy === 'priority-based-routing') return 'fallback';
-  return null;
-}
-
 function memberWeight(entry: unknown): string {
   if (!isObjectRecord(entry)) return '';
   return toIntegerString(entry.weight, 1);
@@ -131,11 +130,6 @@ export function toGuidedPolicy(
     : rawMode === 'fallback'
       ? 'priority-based-routing'
       : GUIDED_POLICY_DEFAULTS.strategy;
-  const strategyMode = modeForStrategy(strategy);
-  const declaredMode = rawMode === 'fallback' || rawMode === 'weighted' ? rawMode : null;
-  const mode = strategyMode === null ? null : declaredMode === strategyMode
-    ? declaredMode
-    : strategyMode;
   const timeoutBlock = isObjectRecord(policy.timeouts) ? policy.timeouts : {};
   const retryBlock = isObjectRecord(policy.retry) ? policy.retry : {};
   const hasExplicitMembers = Array.isArray(policy.members);
@@ -165,7 +159,6 @@ export function toGuidedPolicy(
 
   return {
     strategy,
-    mode,
     memberSelection: hasExplicitMembers ? 'explicit' : 'inherit',
     memberIds: selectedMembers,
     memberWeights,
@@ -204,18 +197,7 @@ export function withGuidedPolicyStrategy(
   guided: PolicyGuidedValues,
   strategy: string,
 ): PolicyGuidedValues {
-  return { ...guided, strategy, mode: modeForStrategy(strategy) };
-}
-
-export function withGuidedPolicyMode(
-  guided: PolicyGuidedValues,
-  mode: GuidedPolicyMode,
-): PolicyGuidedValues {
-  return {
-    ...guided,
-    mode,
-    strategy: mode === 'weighted' ? 'weighted' : 'priority-based-routing',
-  };
+  return { ...guided, strategy };
 }
 
 export function validateGuidedPolicy(
@@ -261,8 +243,7 @@ export function buildPolicyFromGuided(
   guided: PolicyGuidedValues,
 ): Record<string, unknown> {
   const policy: Record<string, unknown> = { ...basePolicy, strategy: guided.strategy };
-  if (guided.mode) policy.mode = guided.mode;
-  else delete policy.mode;
+  delete policy.mode;
 
   if (guided.memberSelection === 'explicit') {
     const baseMembers = Array.isArray(basePolicy.members) ? basePolicy.members : [];
@@ -282,7 +263,7 @@ export function buildPolicyFromGuided(
       member.enabled = true;
       const weight = parseIntegerString(guided.memberWeights[deploymentId] || '', 1);
       if (weight !== null) member.weight = weight;
-      if (guided.mode === 'fallback') member.priority = index;
+      if (guided.strategy === 'priority-based-routing') member.priority = index;
       return member;
     });
   } else {

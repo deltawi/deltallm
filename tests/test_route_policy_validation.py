@@ -27,11 +27,12 @@ def test_validate_route_policy_normalizes_members():
         }
     )
 
-    assert normalized["mode"] == "weighted"
+    assert "mode" not in normalized
     assert normalized["members"][0]["weight"] == 3
     assert normalized["members"][0]["priority"] == 1
     assert warnings == [
-        "Weighted mode is advisory when strategy is set explicitly; strategy takes precedence."
+        "Policy mode 'weighted' is deprecated; use strategy 'weighted'.",
+        "Weighted mode is advisory when strategy is set explicitly; strategy takes precedence.",
     ]
 
 
@@ -71,8 +72,11 @@ def test_validate_route_policy_maps_fallback_mode_to_priority_strategy():
         available_members=_inventory(("dep-a", True), ("dep-b", True)),
     )
 
-    assert warnings == []
+    assert warnings == [
+        "Policy mode 'fallback' is deprecated; use strategy 'priority-based-routing'."
+    ]
     assert normalized["strategy"] == "priority-based-routing"
+    assert "mode" not in normalized
     assert normalized["members"][0]["priority"] == 0
     assert normalized["members"][1]["priority"] == 1
 

@@ -83,7 +83,7 @@ Set the global default in `router_settings.routing_strategy`, or override it wit
 | `cost-based-routing` | Prefers the lowest estimated unit cost for the request mode | You want the cheapest acceptable path |
 | `usage-based-routing` | Prefers the deployment with the lowest current RPM/TPM utilization | You share quota across providers or keys |
 | `rate-limit-aware` | Avoids deployments near configured RPM/TPM limits | You need to stay away from provider caps |
-| `tag-based-routing` | Uses the same tag-filtered eligible pool as other strategies, then applies weighted choice | You want a route group that is explicitly tag-driven |
+| `tag-based-routing` | Deprecated compatibility alias for weighted choice after the common tag filter | Existing configuration still uses the legacy value; migrate it to `weighted` |
 
 ### Strategy Details
 
@@ -298,13 +298,15 @@ router_settings:
 
 #### `tag-based-routing`
 
-What it does:
-- Uses the same request-tag eligibility filtering that DeltaLLM already applies before strategy selection
-- Then uses weighted choice across the remaining tag-matched pool
+Compatibility behavior:
+- Existing configuration remains valid
+- It uses the same weighted implementation as `weighted`
+- Request-tag eligibility filtering still runs first, as it does for every strategy
 
 Important:
 - DeltaLLM already respects `metadata.tags` as a general eligibility filter before strategy selection
-- Choose `tag-based-routing` when you want the route-group policy itself to communicate that tags are the main routing signal
+- Do not select `tag-based-routing` for new configuration; use `weighted` and attach request tags
+- The Admin UI shows the legacy value only while editing a configuration that already uses it
 
 Use it when:
 - You route by region, tenant tier, compliance boundary, or capability tag
@@ -313,9 +315,12 @@ Use it when:
 Required deployment metadata:
 - `model_info.tags`
 
-Setup:
+Migration setup:
 
 ```yaml
+router_settings:
+  routing_strategy: weighted
+
 model_list:
   - model_name: gpt-4o-mini
     deployment_id: eu
@@ -343,7 +348,7 @@ Use these deployment fields when you need more control:
 
 - `model_info.weight` for `weighted`
 - `model_info.priority` for `priority-based-routing`
-- `model_info.tags` for tag-aware routing
+- `model_info.tags` for the common request-tag eligibility filter
 - `model_info.rpm_limit` and `model_info.tpm_limit` for usage-aware and rate-limit-aware routing
 - `model_info.image_pm_limit` for image-generation quota-aware routing
 - `model_info.audio_seconds_pm_limit` and `model_info.char_pm_limit` for audio quota-aware routing

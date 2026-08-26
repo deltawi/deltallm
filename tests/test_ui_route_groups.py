@@ -497,6 +497,18 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     assert policy_response.json()["policy"]["status"] == "published"
     assert policy_response.json()["policy"]["semantics_version"] == 2
     assert policy_response.json()["warnings"] == []
+    assert policy_response.headers["link"] == (
+        '</ui/api/route-groups/support-route/policy/publish>; rel="successor-version"'
+    )
+
+    canonical_publish = await client.post(
+        "/ui/api/route-groups/support-route/policy/publish",
+        headers=headers,
+        json={"strategy": "weighted"},
+    )
+    assert canonical_publish.status_code == 200
+    assert canonical_publish.json()["policy"]["policy_json"]["strategy"] == "weighted"
+    assert canonical_publish.json()["warnings"] == []
 
     detail_response = await client.get("/ui/api/route-groups/support-route", headers=headers)
     assert detail_response.status_code == 200
@@ -504,9 +516,9 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     assert payload["group"]["group_key"] == "support-route"
     assert payload["group"]["owner_scope_type"] == "global"
     assert len(payload["members"]) == 1
-    assert payload["policy"]["policy_json"]["strategy"] == "least-busy"
+    assert payload["policy"]["policy_json"]["strategy"] == "weighted"
 
-    assert test_app.state.model_hot_reload_manager.calls == 3
+    assert test_app.state.model_hot_reload_manager.calls == 4
     # The reload manager owns cache fencing; endpoints must not invalidate it again.
     assert runtime_cache.invalidate_calls == 0
 
@@ -684,7 +696,14 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
         },
     )
     assert validate_response.status_code == 200
-    assert validate_response.json()["valid"] is True
+    validate_payload = validate_response.json()
+    assert validate_payload["valid"] is True
+    assert "mode" not in validate_payload["policy"]
+    assert validate_payload["warnings"] == [
+        "Policy mode 'weighted' is deprecated; use strategy 'weighted'.",
+        "Weighted mode is advisory when strategy is set explicitly; strategy takes precedence.",
+        "Weighted mode without explicit member weights will use deployment defaults.",
+    ]
 
     draft_response = await client.post(
         "/ui/api/route-groups/ops-route/policy/draft",
@@ -719,6 +738,12 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     assert rollback_response.json()["policy"]["semantics_version"] == 2
     assert rollback_response.json()["warnings"] == []
     assert runtime_cache.invalidate_calls == 0
+
+
+def test_legacy_policy_publish_is_deprecated_in_openapi(test_app):  # noqa: ANN001
+    operation = test_app.openapi()["paths"]["/ui/api/route-groups/{group_key}/policy"]["put"]
+
+    assert operation["deprecated"] is True
 
 
 @pytest.mark.asyncio

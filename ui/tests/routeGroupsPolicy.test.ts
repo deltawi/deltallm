@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import {
   buildPolicyFromGuided,
+  LEGACY_TAG_ROUTING_STRATEGY,
   reconcileGuidedPolicyMembers,
+  ROUTE_GROUP_STRATEGY_OPTIONS,
+  routeGroupStrategyOptions,
   toGuidedPolicy,
   validateGuidedPolicy,
-  withGuidedPolicyMode,
   withGuidedPolicyStrategy,
   type PolicyMemberOption,
 } from '../src/lib/routeGroups';
@@ -16,6 +18,15 @@ const MEMBERS: PolicyMemberOption[] = [
   { deployment_id: 'dep-b', enabled: true, weight: 3, priority: 1 },
   { deployment_id: 'dep-off', enabled: false, weight: 4, priority: 2 },
 ];
+
+test('deprecated tag routing is visible only for an existing legacy selection', () => {
+  assert.equal(
+    (ROUTE_GROUP_STRATEGY_OPTIONS as readonly string[]).includes(LEGACY_TAG_ROUTING_STRATEGY),
+    false,
+  );
+  assert.equal(routeGroupStrategyOptions('weighted').includes(LEGACY_TAG_ROUTING_STRATEGY), false);
+  assert.equal(routeGroupStrategyOptions(LEGACY_TAG_ROUTING_STRATEGY)[0], LEGACY_TAG_ROUTING_STRATEGY);
+});
 
 test('guided policy round-trips weights, fallback order, zero retries, and opaque fields', () => {
   const base = {
@@ -30,7 +41,6 @@ test('guided policy round-trips weights, fallback order, zero retries, and opaqu
   };
 
   const guided = toGuidedPolicy(base, MEMBERS);
-  assert.equal(guided.mode, 'fallback');
   assert.equal(guided.strategy, 'priority-based-routing');
   assert.equal(guided.memberSelection, 'explicit');
   assert.deepEqual(guided.memberIds, ['dep-b', 'dep-a']);
@@ -54,6 +64,7 @@ test('guided policy round-trips weights, fallback order, zero retries, and opaqu
   assert.deepEqual(rebuilt.retry, { max_attempts: 0, server_retry_hint: true });
   assert.deepEqual(rebuilt.timeouts, { global_ms: 9000, provider_budget_ms: 8000 });
   assert.equal(rebuilt.server_policy_hint, 'preserved');
+  assert.equal('mode' in rebuilt, false);
 });
 
 test('explicit empty membership stays empty and is rejected locally', () => {
@@ -74,7 +85,6 @@ test('inherited membership follows enabled group members without serializing a s
   const guided = toGuidedPolicy({ strategy: 'least-busy' }, MEMBERS);
   assert.equal(guided.memberSelection, 'inherit');
   assert.deepEqual(guided.memberIds, ['dep-a', 'dep-b']);
-  assert.equal(guided.mode, null);
 
   const changedMembers = [
     { ...MEMBERS[0], enabled: false },
@@ -86,22 +96,22 @@ test('inherited membership follows enabled group members without serializing a s
   assert.equal('members' in buildPolicyFromGuided({}, reconciled), false);
 });
 
-test('guided mode and concrete strategy remain synchronized', () => {
+test('legacy policy mode is read as a canonical strategy and omitted on write', () => {
   const guided = toGuidedPolicy({}, MEMBERS);
-  const fallback = withGuidedPolicyMode(guided, 'fallback');
+  const fallback = toGuidedPolicy({ mode: 'fallback' }, MEMBERS);
   assert.equal(fallback.strategy, 'priority-based-routing');
-  assert.equal(fallback.mode, 'fallback');
+  assert.equal('mode' in buildPolicyFromGuided({ mode: 'fallback' }, fallback), false);
 
-  const weighted = withGuidedPolicyStrategy(fallback, 'weighted');
-  assert.equal(weighted.mode, 'weighted');
+  const weighted = withGuidedPolicyStrategy(guided, 'weighted');
+  assert.equal(weighted.strategy, 'weighted');
   const leastBusy = withGuidedPolicyStrategy(weighted, 'least-busy');
-  assert.equal(leastBusy.mode, null);
+  assert.equal(leastBusy.strategy, 'least-busy');
 
   const conflicting = toGuidedPolicy({
     mode: 'weighted',
     strategy: 'priority-based-routing',
   }, MEMBERS);
-  assert.equal(conflicting.mode, 'fallback');
+  assert.equal(conflicting.strategy, 'priority-based-routing');
 });
 
 test('guided validation matches backend integer and retry-class constraints', () => {

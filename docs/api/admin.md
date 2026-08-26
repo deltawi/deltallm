@@ -249,7 +249,16 @@ Access-group binding upserts use this payload:
 | `POST` | `/ui/api/route-groups/{group_key}/policy/publish` | Publish a policy |
 | `POST` | `/ui/api/route-groups/{group_key}/policy/rollback` | Roll back to an earlier policy |
 | `POST` | `/ui/api/route-groups/{group_key}/policy/simulate` | Simulate routing behavior |
-| `PUT` | `/ui/api/route-groups/{group_key}/policy` | Replace the active policy |
+| `PUT` | `/ui/api/route-groups/{group_key}/policy` | Deprecated compatibility endpoint for direct publication |
+
+Use `POST /ui/api/route-groups/{group_key}/policy/publish` for new integrations. A non-empty body
+publishes that document; an omitted or empty body publishes the latest draft. The legacy `PUT`
+endpoint always treats its body as an explicit document and returns a `Link` header identifying the
+POST successor.
+
+`strategy` is the canonical policy routing field. Legacy `mode: "weighted"` and
+`mode: "fallback"` inputs remain accepted with deprecation warnings and normalize to `weighted` and
+`priority-based-routing`, respectively.
 
 Policy simulation accepts a bounded scenario (1–5000 iterations):
 
@@ -257,7 +266,7 @@ Policy simulation accepts a bounded scenario (1–5000 iterations):
 {
   "iterations": 100,
   "policy": {
-    "mode": "fallback",
+    "strategy": "priority-based-routing",
     "members": [
       {"deployment_id": "primary", "priority": 0},
       {"deployment_id": "standby", "priority": 1}

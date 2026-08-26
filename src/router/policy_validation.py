@@ -8,6 +8,10 @@ from typing import Any
 from src.router.router import RoutingStrategy
 
 ALLOWED_POLICY_MODES = {"fallback", "weighted", "conditional", "adaptive"}
+POLICY_MODE_STRATEGY_ALIASES = {
+    "fallback": RoutingStrategy.PRIORITY_BASED.value,
+    "weighted": RoutingStrategy.WEIGHTED.value,
+}
 ALLOWED_POLICY_KEYS = {"mode", "strategy", "members", "timeouts", "retry"}
 ALLOWED_TIMEOUT_KEYS = {"global_ms", "global_seconds"}
 ALLOWED_RETRY_KEYS = {"max_attempts", "retryable_error_classes"}
@@ -163,9 +167,9 @@ def merge_policy_document_for_write(
     return merged
 
 
-def _validate_policy_mode(normalized: dict[str, Any]) -> None:
+def _validate_policy_mode(normalized: dict[str, Any]) -> str | None:
     if "mode" not in normalized:
-        return
+        return None
     mode = str(normalized.get("mode") or "").strip().lower()
     if mode not in ALLOWED_POLICY_MODES:
         allowed = ", ".join(sorted(ALLOWED_POLICY_MODES))
@@ -175,6 +179,7 @@ def _validate_policy_mode(normalized: dict[str, Any]) -> None:
             f"mode '{mode}' is not supported by the runtime; use a concrete strategy instead"
         )
     normalized["mode"] = mode
+    return mode
 
 
 def _validate_policy_strategy(normalized: dict[str, Any]) -> None:
@@ -320,14 +325,12 @@ def _apply_policy_mode(
     normalized: dict[str, Any],
     active_members: list[dict[str, Any]],
     warnings: list[str],
+    *,
+    mode: str | None,
 ) -> None:
-    mode = normalized.get("mode")
-    expected_strategies = {
-        "fallback": RoutingStrategy.PRIORITY_BASED.value,
-        "weighted": RoutingStrategy.WEIGHTED.value,
-    }
-    expected_strategy = expected_strategies.get(mode)
+    expected_strategy = POLICY_MODE_STRATEGY_ALIASES.get(mode or "")
     if expected_strategy:
+        warnings.append(f"Policy mode '{mode}' is deprecated; use strategy '{expected_strategy}'.")
         strategy = normalized.get("strategy")
         if strategy in (None, ""):
             normalized["strategy"] = expected_strategy
@@ -363,7 +366,7 @@ def validate_route_policy(
         warnings.append(_ignored_fields_warning("policy", unknown))
 
     normalized = {key: value for key, value in payload.items() if key in ALLOWED_POLICY_KEYS}
-    _validate_policy_mode(normalized)
+    mode = _validate_policy_mode(normalized)
     _validate_policy_strategy(normalized)
     _validate_policy_members(normalized, warnings)
     _validate_policy_timeouts(normalized, warnings)
@@ -373,5 +376,6 @@ def validate_route_policy(
         available_members,
         semantics_version=semantics_version,
     )
-    _apply_policy_mode(normalized, active_members, warnings)
+    _apply_policy_mode(normalized, active_members, warnings, mode=mode)
+    normalized.pop("mode", None)
     return normalized, warnings

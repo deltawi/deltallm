@@ -490,8 +490,8 @@ class ModelHotReloadManager:
         state_backend = self.router_state_backend or self.app.state.router.state
         cooldown_manager = CooldownManager(
             state_backend=state_backend,
-            cooldown_time=router_config.cooldown_time,
-            allowed_fails=router_config.allowed_fails,
+            cooldown_time=router_settings.cooldown_time,
+            allowed_fails=router_settings.allowed_fails,
         )
         router = Router(
             strategy=RoutingStrategy(router_settings.routing_strategy),
@@ -767,11 +767,6 @@ class ModelHotReloadManager:
     ) -> RouterConfig:
         data = router_settings.model_dump()
         allowed = {
-            "num_retries",
-            "retry_after",
-            "timeout",
-            "cooldown_time",
-            "allowed_fails",
             "enable_pre_call_checks",
             "model_group_alias",
         }

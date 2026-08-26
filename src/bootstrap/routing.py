@@ -146,11 +146,6 @@ async def init_routing_runtime(
         app.state.model_registry, route_groups=route_groups
     )
     router_config = RouterConfig(
-        num_retries=cfg.router_settings.num_retries,
-        retry_after=cfg.router_settings.retry_after,
-        timeout=cfg.router_settings.timeout,
-        cooldown_time=cfg.router_settings.cooldown_time,
-        allowed_fails=cfg.router_settings.allowed_fails,
         enable_pre_call_checks=cfg.router_settings.enable_pre_call_checks,
         model_group_alias=cfg.router_settings.model_group_alias,
         route_group_policies=build_route_group_policies(route_groups),

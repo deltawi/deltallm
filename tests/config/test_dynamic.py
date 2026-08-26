@@ -1132,7 +1132,6 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
 
     assert "gpt-4.1-mini" in app.state.model_registry
     assert app.state.router.strategy == RoutingStrategy.WEIGHTED
-    assert app.state.router.config.num_retries == 2
     assert app.state.failover_manager.config.num_retries == 2
     assert app.state.failover_manager.config.fallbacks == {"gpt-4.1-mini": ("general-fallback",)}
     assert app.state.failover_manager.config.context_window_fallbacks == {
