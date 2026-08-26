@@ -284,6 +284,22 @@ config:
     health_check_model: gpt-3.5-turbo
     model_deployment_source: hybrid
     model_deployment_bootstrap_from_config: true
+    organization_lifecycle_auth_max_staleness_seconds: 3
+    organization_lifecycle_auth_cache_max_entries: 10000
+    organization_deletion_recovery_window_hours: 168
+    organization_deletion_max_attempts: 20
+    organization_deletion_requests_enabled: false
+    organization_deletion_worker_enabled: true
+    organization_deletion_worker_poll_interval_seconds: 5
+    organization_deletion_worker_batch_size: 5
+    organization_deletion_worker_max_concurrency: 2
+    organization_deletion_worker_lease_seconds: 60
+    organization_deletion_worker_record_timeout_seconds: 45
+    organization_deletion_worker_page_size: 100
+    organization_deletion_worker_max_pages_per_claim: 10
+    organization_deletion_waiting_poll_seconds: 10
+    organization_deletion_retry_initial_seconds: 5
+    organization_deletion_retry_max_seconds: 300
     cache_invalidation_worker_enabled: true
     cache_invalidation_worker_poll_interval_seconds: 5
     cache_invalidation_worker_batch_size: 25
@@ -415,7 +431,7 @@ migrationJob:
     - -c
   args:
     - |
-      prisma migrate deploy --schema=./prisma/schema.prisma
+      python -m src.organization_deletion_migrations deploy --schema ./prisma/schema.prisma
 
 postgresql:
   enabled: false

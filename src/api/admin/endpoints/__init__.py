@@ -15,6 +15,7 @@ from src.api.admin.endpoints.named_credentials import router as named_credential
 from src.api.admin.endpoints.organization_tier_assignments import (
     router as organization_tier_assignments_router,
 )
+from src.api.admin.endpoints.organization_deletion import router as organization_deletion_router
 from src.api.admin.endpoints.organizations import router as organizations_router
 from src.api.admin.endpoints.prompt_registry import router as prompt_registry_router
 from src.api.admin.endpoints.rbac import router as rbac_router
@@ -46,6 +47,7 @@ __all__ = [
     "models_router",
     "named_credentials_router",
     "organization_tier_assignments_router",
+    "organization_deletion_router",
     "organizations_router",
     "prompt_registry_router",
     "rbac_router",

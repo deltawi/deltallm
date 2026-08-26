@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 224 64" role="img" aria-labelledby="title">
+  <title id="title">Animated DeltaLLM logo reveal</title>
+  <style>
+    .delta-base { animation: delta-out 2.2s ease forwards; }
+    .delta-corner {
+      transform-box: view-box;
+      transform-origin: 44px 52px;
+      transform-style: preserve-3d;
+      animation: corner-flip 2.2s ease forwards, corner-blink 0.75s 2.2s ease-in-out 3;
+    }
+    .resolved-d { opacity: 0; animation: d-in 2.2s ease forwards; }
+    .word-rest { animation: word-close 2.2s ease forwards; }
+    @keyframes corner-flip {
+      0% { transform: perspective(80px) translateX(0) rotateY(0deg) scale(1); fill: #8B7CFF; stroke: transparent; stroke-width: 0; opacity: 1; }
+      54% { transform: perspective(80px) translateX(0) rotateY(360deg) scale(1); fill: #8B7CFF; stroke: transparent; stroke-width: 0; opacity: 1; }
+      60% { transform: perspective(80px) translateX(0) translateY(-2px) rotateY(360deg) scale(0.62); fill: #8B7CFF; stroke: #8B7CFF; stroke-width: 2.5; opacity: 1; }
+      68%, 100% { transform: perspective(80px) translateX(145px) translateY(-2px) rotateY(360deg) scale(0.62); fill: #F2F0FF; stroke: #F2F0FF; stroke-width: 2.5; opacity: 1; }
+    }
+    @keyframes corner-blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    @keyframes delta-out {
+      0%, 57% { opacity: 1; }
+      68%, 100% { opacity: 0; }
+    }
+    @keyframes d-in {
+      0%, 57% { opacity: 0; }
+      68%, 100% { opacity: 1; }
+    }
+    @keyframes word-close {
+      0%, 57% { transform: translateX(0); }
+      68%, 100% { transform: translateX(-25px); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .delta-corner { animation: none; }
+      .delta-base { animation: none; opacity: 1; }
+      .resolved-d { animation: none; opacity: 0; }
+      .word-rest { animation: none; transform: none; }
+    }
+  </style>
+  <defs>
+    <linearGradient id="wordmark-gradient" gradientUnits="userSpaceOnUse" x1="10" y1="0" x2="210" y2="0">
+      <stop offset="0%" stop-color="#F2F0FF"/>
+      <stop offset="52%" stop-color="#D9D4FF"/>
+      <stop offset="100%" stop-color="#8B7CFF"/>
+    </linearGradient>
+  </defs>
+  <g class="delta-base">
+    <path fill="#F2F0FF" fill-rule="evenodd" d="M10 52 28 12h8l18 40H10Zm13-8h20L32 23 23 44Z"/>
+  </g>
+  <path class="delta-corner" fill="#8B7CFF" d="M36 12h7l12 20-12 20h-7l12-20-12-20Z"/>
+  <text class="resolved-d" x="10" y="50" fill="url(#wordmark-gradient)" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="36" font-weight="700">D</text>
+  <text class="word-rest" x="60" y="50" fill="url(#wordmark-gradient)" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="36" font-weight="700" letter-spacing="-1.5">eltaLLM</text>
+</svg>

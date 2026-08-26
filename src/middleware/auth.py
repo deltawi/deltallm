@@ -6,6 +6,11 @@ from src.models.errors import AuthenticationError
 from src.models.responses import UserAPIKeyAuth
 from src.services.key_service import KeyService
 from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
+from src.services.organization_lifecycle import (
+    OrganizationInactive,
+    OrganizationLifecycleAuthorizer,
+    OrganizationLifecycleUnavailable,
+)
 from src.telemetry.event_identity import get_or_create_billing_event_id
 
 
@@ -15,6 +20,7 @@ async def authenticate_request(
 ) -> UserAPIKeyAuth:
     existing = getattr(request.state, "user_api_key", None)
     if isinstance(existing, UserAPIKeyAuth):
+        await _require_active_organization(request, existing)
         return existing
 
     if authorization is None:
@@ -47,11 +53,19 @@ async def authenticate_request(
 
     try:
         auth = await key_service.validate_key(raw_key)
+    except OrganizationLifecycleUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization lifecycle state unavailable",
+        ) from exc
     except AuthenticationError as exc:
+        if exc.code == "organization_inactive":
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         auth = await _try_fallback_auth(request, raw_key)
         if auth is None:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
+    await _require_active_organization(request, auth)
     _attach_request_auth_context(request, auth)
     return auth
 
@@ -116,3 +130,52 @@ def _attach_request_auth_context(request: Request, auth: UserAPIKeyAuth) -> None
     request.state.user_api_key = auth
     request.state.auth_context = auth
     request.state.runtime_scope_context = resolve_runtime_scope_context(auth)
+
+
+async def _require_active_organization(request: Request, auth: UserAPIKeyAuth) -> None:
+    organization_id = str(auth.organization_id or "").strip()
+    team_id = str(auth.team_id or "").strip()
+    if not organization_id and not team_id:
+        return
+    service: OrganizationLifecycleAuthorizer | None = getattr(
+        request.app.state,
+        "organization_lifecycle_authorizer",
+        None,
+    )
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization lifecycle service not configured",
+        )
+    try:
+        metadata = auth.metadata if isinstance(auth.metadata, dict) else {}
+        lifecycle_state = str(metadata.get("organization_lifecycle_state") or "").strip()
+        lifecycle_generation = metadata.get("organization_lifecycle_generation")
+        if (
+            metadata.get("auth_source") == "api_key"
+            and lifecycle_state
+            and isinstance(lifecycle_generation, int)
+            and not isinstance(lifecycle_generation, bool)
+        ):
+            await service.remember_scope(
+                organization_id=organization_id,
+                team_id=team_id,
+                state=lifecycle_state,
+                generation=lifecycle_generation,
+            )
+        resolved_organization_id = await service.require_active_scope(
+            organization_id=organization_id,
+            team_id=team_id,
+        )
+        if not organization_id and resolved_organization_id:
+            auth.organization_id = resolved_organization_id
+    except OrganizationInactive as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Organization is not active",
+        ) from exc
+    except OrganizationLifecycleUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization lifecycle state unavailable",
+        ) from exc

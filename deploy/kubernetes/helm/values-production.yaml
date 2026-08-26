@@ -75,6 +75,14 @@ config:
     audit_ingestion_mode: outbox
     model_deployment_source: db_only
     model_deployment_bootstrap_from_config: false
+    organization_lifecycle_auth_max_staleness_seconds: 3
+    organization_lifecycle_auth_cache_max_entries: 10000
+    organization_deletion_recovery_window_hours: 168
+    organization_deletion_max_attempts: 20
+    # Stage B only: enable after all replicas report the backend's current
+    # lifecycle protocol version (v2 for this rollout).
+    organization_deletion_requests_enabled: false
+    organization_deletion_worker_enabled: true
     # Phase 6 scheduler rollout controls. Leave commented to preserve legacy
     # boolean flag behavior; set explicitly for staged rollout or rollback.
     # embeddings_batch_scheduler_mode: fifo_v1

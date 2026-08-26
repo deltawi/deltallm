@@ -34,9 +34,9 @@ general_settings:
 general_settings:
   instance_name: DeltaLLM
   ui_branding:
-    primary_color: "#2563EB"
-    secondary_color: "#7C3AED"
-    menu_hover_color: "#F9FAFB"
+    primary_color: "#5B50D6"
+    secondary_color: "#8B7CFF"
+    menu_hover_color: "#F7F5FF"
   master_key: os.environ/DELTALLM_MASTER_KEY
   deltallm_key_header_name: Authorization
   salt_key: os.environ/DELTALLM_SALT_KEY
@@ -73,6 +73,22 @@ general_settings:
   invitation_token_ttl_hours: 72
   password_reset_token_ttl_minutes: 60
   api_key_auth_cache_ttl_seconds: 300
+  organization_lifecycle_auth_max_staleness_seconds: 3
+  organization_lifecycle_auth_cache_max_entries: 10000
+  organization_deletion_recovery_window_hours: 168
+  organization_deletion_max_attempts: 20
+  organization_deletion_requests_enabled: false
+  organization_deletion_worker_enabled: true
+  organization_deletion_worker_poll_interval_seconds: 5
+  organization_deletion_worker_batch_size: 5
+  organization_deletion_worker_max_concurrency: 2
+  organization_deletion_worker_lease_seconds: 60
+  organization_deletion_worker_record_timeout_seconds: 45
+  organization_deletion_worker_page_size: 100
+  organization_deletion_worker_max_pages_per_claim: 10
+  organization_deletion_waiting_poll_seconds: 10
+  organization_deletion_retry_initial_seconds: 5
+  organization_deletion_retry_max_seconds: 300
   model_deployment_source: db_only
   model_deployment_bootstrap_from_config: false
   email_enabled: false
@@ -197,13 +213,13 @@ Platform administrators can update the installation-wide appearance from the **T
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `instance_name` | `DeltaLLM` | Product name shown in the shell, authentication flows, browser title, examples, and notification copy. |
-| `ui_branding.primary_color` | `#2563EB` | Primary actions, links, and focus treatments. |
-| `ui_branding.secondary_color` | `#7C3AED` | Secondary actions and navigation accents. |
-| `ui_branding.menu_hover_color` | `#F9FAFB` | Navigation hover background. |
+| `ui_branding.primary_color` | `#5B50D6` | Primary actions, links, and focus treatments. |
+| `ui_branding.secondary_color` | `#8B7CFF` | Secondary actions and navigation accents. |
+| `ui_branding.menu_hover_color` | `#F7F5FF` | Navigation hover background. |
 
 Logo and favicon files are managed from **Settings > Theme**, not from file configuration. The service accepts PNG, JPEG, WebP, and SVG files, plus ICO for favicons, with a 2 MB limit per asset. SVG files containing scripts, executable attributes, document type/entity declarations, embedded documents, or external resource references are rejected. Asset bytes are stored in PostgreSQL `BYTEA` columns; the dynamic configuration contains only the versioned internal asset reference.
 
-The supplied colours are base colours, not a request to use one fixed text colour. DeltaLLM derives normal, hover, foreground, and soft-surface tokens at runtime so button labels and branded text retain WCAG AA contrast. Very light primary or secondary colours are adjusted for visible control boundaries, and a menu hover colour that would disappear against the white navigation background is adjusted slightly. A full wordmark falls back to the configured mark and instance name when it cannot load. Failed logo assets receive one delayed retry and become eligible again after branding is saved or refreshed; a failed custom favicon falls back to the built-in favicon.
+The supplied colours are base colours, not a request to use one fixed text colour. DeltaLLM derives normal, hover, foreground, and soft-surface tokens at runtime so button labels and branded text retain WCAG AA contrast. Very light primary or secondary colours are adjusted for visible control boundaries, and a menu hover colour that would disappear against the white navigation background is adjusted slightly. A full wordmark falls back to the configured mark and instance name when it cannot load. When no custom logo assets are configured, the built-in Delta mark and wordmark are used. Failed logo assets receive one delayed retry and become eligible again after branding is saved or refreshed; a failed custom favicon falls back to the built-in favicon.
 
 Theme values saved in the Admin UI are persisted as dynamic database overrides and take precedence over file configuration until changed again. Asset BLOB changes and their versioned theme references commit in the same serialized database transaction. Redis broadcasts the small configuration change; each replica then refreshes its in-memory asset cache from PostgreSQL once, while the existing database poll remains the fallback when pub/sub is unavailable. Public asset reads are served from replica memory with ETags and immutable caching, so normal page rendering does not query PostgreSQL. Theme-only updates refresh application identity without rebuilding model and routing runtime state. Clients load only the public branding projection, never the broader settings payload, and an already-open browser refreshes it when the page regains focus or visibility. During the initial request, the UI shows a neutral loading state and does not render default DeltaLLM branding before the configured branding is known; if that request fails or exceeds three seconds, the built-in defaults are used.
 
@@ -226,6 +242,33 @@ Theme values saved in the Admin UI are persisted as dynamic database overrides a
 Recommended steady state:
 - `model_deployment_source: db_only`
 - `model_deployment_bootstrap_from_config: false`
+
+## Organization Deletion Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `organization_lifecycle_auth_max_staleness_seconds` | `3` | Maximum process-local organization-state staleness on authenticated data-plane requests |
+| `organization_lifecycle_auth_cache_max_entries` | `10000` | Maximum organization lifecycle records cached per process |
+| `organization_deletion_recovery_window_hours` | `168` | Minimum delay before irreversible cleanup begins |
+| `organization_deletion_max_attempts` | `20` | Phase claim attempts before the job requires an administrator retry |
+| `organization_deletion_requests_enabled` | `false` | Startup-only rollout gate for creating new deletion jobs; enable only after every replica is lifecycle-protocol v2 aware |
+| `organization_deletion_worker_enabled` | `true` | Enables durable organization cleanup claims in this process role |
+| `organization_deletion_worker_poll_interval_seconds` | `5` | Idle polling interval |
+| `organization_deletion_worker_batch_size` | `5` | Maximum jobs claimed per poll |
+| `organization_deletion_worker_max_concurrency` | `2` | Maximum cleanup jobs processed concurrently per process |
+| `organization_deletion_worker_lease_seconds` | `60` | Claim lease duration |
+| `organization_deletion_worker_record_timeout_seconds` | `45` | Per-phase execution timeout |
+| `organization_deletion_worker_page_size` | `100` | Maximum records changed by an individual cleanup query |
+| `organization_deletion_worker_max_pages_per_claim` | `10` | Maximum cleanup pages run before yielding the job |
+| `organization_deletion_waiting_poll_seconds` | `10` | Recheck delay during the recovery/batch-drain phase |
+| `organization_deletion_retry_initial_seconds` | `5` | Initial automatic retry delay |
+| `organization_deletion_retry_max_seconds` | `300` | Maximum automatic retry delay |
+
+Keep the lifecycle staleness bound short because it is the maximum time an already-cached active organization may remain authorized after another replica schedules deletion. Each process refreshes a singleton lifecycle generation in the background; authenticated requests use matching cached snapshots without another database round trip and fail closed if that background snapshot becomes stale. The deletion request also performs best-effort immediate invalidation, while PostgreSQL and the durable invalidation outbox provide the authoritative transition.
+
+Deploy lifecycle-aware code with `organization_deletion_requests_enabled: false` first. After every API and worker replica reports lifecycle protocol v2 and a fresh lifecycle snapshot, set it to `true` and roll the API deployment. Disable this setting before a rollback. Never roll back to lifecycle-unaware code while an organization is inactive or a deletion job is unfinished.
+
+See [Organization Deletion](../features/organization-deletion.md) for lifecycle behavior, retained data, recovery limits, and operational guidance.
 
 ## Database Settings
 

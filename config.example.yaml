@@ -61,9 +61,9 @@ general_settings:
   instance_name: DeltaLLM
   # Installation-wide UI branding. Logo and favicon BLOBs are managed from Settings > Theme.
   ui_branding:
-    primary_color: "#2563EB"
-    secondary_color: "#7C3AED"
-    menu_hover_color: "#F9FAFB"
+    primary_color: "#5B50D6"
+    secondary_color: "#8B7CFF"
+    menu_hover_color: "#F7F5FF"
 
   # Required secrets
   master_key: os.environ/DELTALLM_MASTER_KEY
@@ -158,6 +158,26 @@ general_settings:
 
   # Optional performance and auth-cache tuning
   api_key_auth_cache_ttl_seconds: 300
+  # Organization deletion immediately revokes tenant access, cancels pending
+  # work, waits through a recovery window, then purges bounded pages.
+  organization_lifecycle_auth_max_staleness_seconds: 3
+  organization_lifecycle_auth_cache_max_entries: 10000
+  organization_deletion_recovery_window_hours: 168
+  organization_deletion_max_attempts: 20
+  # Enable only after every API and worker replica reports the backend's current
+  # lifecycle protocol version (v2 for this rollout).
+  organization_deletion_requests_enabled: false
+  organization_deletion_worker_enabled: true
+  organization_deletion_worker_poll_interval_seconds: 5
+  organization_deletion_worker_batch_size: 5
+  organization_deletion_worker_max_concurrency: 2
+  organization_deletion_worker_lease_seconds: 60
+  organization_deletion_worker_record_timeout_seconds: 45
+  organization_deletion_worker_page_size: 100
+  organization_deletion_worker_max_pages_per_claim: 10
+  organization_deletion_waiting_poll_seconds: 10
+  organization_deletion_retry_initial_seconds: 5
+  organization_deletion_retry_max_seconds: 300
   cache_enabled: false
   cache_backend: memory
   cache_ttl: 3600

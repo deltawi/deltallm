@@ -54,6 +54,26 @@ class NoopSpendTrackingService:
         return None
 
 
+class ActiveOrganizationLifecycleAuthorizer:
+    async def remember_state(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        return None
+
+    async def require_active(self, organization_id: str | None) -> None:
+        return None
+
+    async def remember_scope(self, **kwargs) -> None:  # noqa: ANN003
+        return None
+
+    async def require_active_scope(
+        self,
+        *,
+        organization_id: str | None,
+        team_id: str | None,
+    ) -> str | None:
+        del team_id
+        return organization_id
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, int | str] = {}
@@ -1341,6 +1361,7 @@ async def test_app() -> FastAPI:
     app.state.redis = redis
     app.state.settings = type("Settings", (), {"openai_base_url": "https://api.openai.com/v1"})()
     app.state.key_service = KeyService(repository=repo, redis_client=redis, salt=salt)
+    app.state.organization_lifecycle_authorizer = ActiveOrganizationLifecycleAuthorizer()
     app.state.limit_counter = LimitCounter(redis_client=redis)
     app.state.callable_target_grant_service = CallableTargetGrantService(
         repository=InMemoryCallableTargetBindingRepository(

@@ -31,6 +31,12 @@ from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 from src.services.master_session_service import MasterSessionService
+from src.bootstrap.organization_deletion import (
+    initialize_organization_deletion_runtime,
+    initialize_organization_lifecycle,
+    require_organization_deletion_readiness,
+    start_organization_deletion_tasks,
+)
 from src.services.platform_identity_service import PlatformIdentityService
 from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
 from src.services.sso_state_store import SSOStateStore
@@ -42,8 +48,11 @@ _AUTH_BOOT_ID = uuid4().hex[:12]
 @dataclass
 class AuthRuntime:
     initialized: bool = True
+    organization_lifecycle_task: Task[None] | None = None
     cache_invalidation_worker: CacheInvalidationWorker | None = None
     cache_invalidation_task: Task[None] | None = None
+    organization_deletion_worker: Any | None = None
+    organization_deletion_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -122,11 +131,24 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     ]
     runtime = AuthRuntime()
 
+    organization_deletion_repository = initialize_organization_lifecycle(app, cfg)
+    await app.state.organization_lifecycle_authorizer.initialize()
+    await require_organization_deletion_readiness(
+        app.state.prisma_manager.client,
+        requests_enabled=bool(
+            getattr(
+                cfg.general_settings,
+                "organization_deletion_requests_enabled",
+                False,
+            )
+        ),
+    )
     app.state.key_service = KeyService(
         repository=KeyRepository(app.state.prisma_manager.client),
         redis_client=app.state.redis,
         salt=app.state.salt_key,
         auth_cache_ttl_seconds=cfg.general_settings.api_key_auth_cache_ttl_seconds,
+        lifecycle_authorizer=app.state.organization_lifecycle_authorizer,
     )
     cache_invalidation_repository = getattr(
         app.state,
@@ -146,6 +168,13 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         ),
     )
     statuses.append(BootstrapStatus("cache_invalidation_outbox", "ready"))
+    initialize_organization_deletion_runtime(
+        app,
+        cfg,
+        runtime,
+        organization_deletion_repository,
+        statuses,
+    )
 
     cache_invalidation_worker_enabled = bool(
         getattr(cfg.general_settings, "cache_invalidation_worker_enabled", True)
@@ -293,6 +322,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     else:
         statuses.append(BootstrapStatus("custom_auth", "disabled"))
 
+    start_organization_deletion_tasks(app, runtime)
     if runtime.cache_invalidation_worker is not None:
         runtime.cache_invalidation_task = create_task(runtime.cache_invalidation_worker.run())
 
@@ -301,6 +331,13 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
 
 
 async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
+    lifecycle_task = getattr(runtime, "organization_lifecycle_task", None)
+    if lifecycle_task is not None:
+        lifecycle_task.cancel()
+        try:
+            await lifecycle_task
+        except CancelledError:
+            pass
     worker = getattr(runtime, "cache_invalidation_worker", None)
     task = getattr(runtime, "cache_invalidation_task", None)
     if worker is not None:
@@ -309,5 +346,15 @@ async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
         task.cancel()
         try:
             await task
+        except CancelledError:
+            pass
+    deletion_worker = getattr(runtime, "organization_deletion_worker", None)
+    deletion_task = getattr(runtime, "organization_deletion_task", None)
+    if deletion_worker is not None:
+        deletion_worker.stop()
+    if deletion_task is not None:
+        deletion_task.cancel()
+        try:
+            await deletion_task
         except CancelledError:
             pass

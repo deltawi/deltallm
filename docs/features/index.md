@@ -15,6 +15,7 @@ Use this section when DeltaLLM is already running and you want to turn on a capa
 | Track or cap spend | [Budgets & Spend](budgets.md) |
 | Use the Batch API for async embeddings and non-streaming chat completions | [Batch API & Production Setup](batching.md) |
 | Export evidence for compliance or investigations | [Audit Log](audit-log.md) |
+| Safely remove an organization and its tenant configuration | [Organization Deletion](organization-deletion.md) |
 | Monitor health, latency, and request volume | [Observability](observability.md) |
 
 ## Quick Success Pattern

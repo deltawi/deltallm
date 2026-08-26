@@ -366,7 +366,10 @@ async def test_real_bulk_audit_and_prompt_writes_are_idempotent() -> None:
 @pytest.mark.asyncio
 async def test_real_prompt_render_write_uses_current_database_policy() -> None:
     db = await _connect_prisma()
-    organization_id = f"integration-org-{uuid4()}"
+    scope_suffix = uuid4().hex
+    organization_id = f"integration-org-{scope_suffix}"
+    team_id = f"integration-team-{scope_suffix}"
+    api_key = f"integration-key-{scope_suffix}"
     render_ids = [str(uuid4()), str(uuid4())]
     service = AuditService(
         AuditRepository(db),
@@ -379,7 +382,7 @@ async def test_real_prompt_render_write_uses_current_database_policy() -> None:
         return PromptRenderEvent(
             prompt_render_log_id=event_id,
             request_id="same-client-request-id",
-            api_key="integration-key",
+            api_key=api_key,
             organization_id=organization_id,
             model="integration-model",
             prompt_key="integration.prompt",
@@ -399,6 +402,24 @@ async def test_real_prompt_render_write_uses_current_database_policy() -> None:
             ) VALUES ($1, FALSE, 1)
             """,
             organization_id,
+        )
+        await db.execute_raw(
+            """
+            INSERT INTO deltallm_teamtable (
+                team_id, organization_id, models, created_at, updated_at
+            ) VALUES ($1, $2, ARRAY[]::text[], NOW(), NOW())
+            """,
+            team_id,
+            organization_id,
+        )
+        await db.execute_raw(
+            """
+            INSERT INTO deltallm_verificationtoken (
+                token, team_id, models, created_at, updated_at
+            ) VALUES ($1, $2, ARRAY[]::text[], NOW(), NOW())
+            """,
+            api_key,
+            team_id,
         )
         # A stale local cache must never override the policy checked in the
         # transaction that persists content-bearing prompt render metadata.
@@ -438,6 +459,14 @@ async def test_real_prompt_render_write_uses_current_database_policy() -> None:
         await db.execute_raw(
             "DELETE FROM deltallm_promptrenderlog WHERE prompt_render_log_id = ANY($1::text[])",
             render_ids,
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_verificationtoken WHERE token = $1",
+            api_key,
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_teamtable WHERE team_id = $1",
+            team_id,
         )
         await db.execute_raw(
             "DELETE FROM deltallm_organizationtable WHERE organization_id = $1",

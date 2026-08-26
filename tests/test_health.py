@@ -130,3 +130,45 @@ async def test_readiness_checks_dedicated_telemetry_database(client, test_app) -
     recovered = await client.get("/health/readiness")
     assert recovered.status_code == 200
     assert recovered.json()["checks"]["telemetry_database"] is True
+
+
+@pytest.mark.asyncio
+async def test_readiness_tracks_organization_lifecycle_tasks(client, test_app) -> None:
+    class _Task:
+        def __init__(self, done: bool) -> None:
+            self._done = done
+
+        def done(self) -> bool:
+            return self._done
+
+    class _RuntimeHealth:
+        def __init__(self, ready: bool) -> None:
+            self.ready = ready
+
+        def is_ready(self) -> bool:
+            return self.ready
+
+    test_app.state.organization_lifecycle_refresher_expected = True
+    test_app.state.organization_lifecycle_task = _Task(done=False)
+    test_app.state.organization_lifecycle_authorizer = _RuntimeHealth(ready=True)
+    test_app.state.organization_deletion_worker_expected = True
+    test_app.state.organization_deletion_task = _Task(done=True)
+    test_app.state.organization_deletion_worker = _RuntimeHealth(ready=True)
+
+    stopped = await client.get("/health/readiness")
+
+    assert stopped.status_code == 503
+    assert stopped.json()["checks"]["organization_lifecycle_refresher"] is True
+    assert stopped.json()["checks"]["organization_deletion_worker"] is False
+
+    test_app.state.organization_deletion_task = _Task(done=False)
+    running = await client.get("/health/readiness")
+
+    assert running.status_code == 200
+    assert running.json()["checks"]["organization_deletion_worker"] is True
+
+    test_app.state.organization_lifecycle_authorizer.ready = False
+    stale = await client.get("/health/readiness")
+
+    assert stale.status_code == 503
+    assert stale.json()["checks"]["organization_lifecycle_refresher"] is False

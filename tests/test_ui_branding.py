@@ -163,9 +163,9 @@ async def test_public_ui_branding_returns_safe_defaults_without_authentication(c
         "logo_mark_url": None,
         "logo_full_url": None,
         "favicon_url": None,
-        "primary_color": "#2563EB",
-        "secondary_color": "#7C3AED",
-        "menu_hover_color": "#F9FAFB",
+        "primary_color": "#5B50D6",
+        "secondary_color": "#8B7CFF",
+        "menu_hover_color": "#F7F5FF",
     }
     assert "master_key" not in response.json()
 

@@ -226,12 +226,92 @@ model DeltaLLM_OrganizationTable {
   budget_duration   String?
   budget_reset_at   DateTime?
   metadata          Json?
+  lifecycle_state               String   @default("active")
+  lifecycle_version             BigInt   @default(0)
+  deletion_requested_at         DateTime?
+  deletion_not_before_at        DateTime?
+  deletion_job_id               String?
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
 
   tier_assignments DeltaLLM_OrganizationTierAssignment[]
 
+  @@index([lifecycle_state, updated_at], map: "deltallm_organizationtable_lifecycle_state_idx")
   @@map("deltallm_organizationtable")
+}
+
+model DeltaLLM_OrganizationDeletionJob {
+  deletion_job_id         String    @id @default(uuid())
+  organization_id         String
+  status                  String    @default("pending")
+  phase                   String    @default("cancel_pending")
+  requested_by_account_id String?
+  idempotency_key         String
+  request_hash            String
+  plan_token              String
+  plan_snapshot           Json
+  options                 Json      @default("{}")
+  progress                Json      @default("{}")
+  not_before_at           DateTime
+  attempt_count           Int       @default(0)
+  max_attempts            Int       @default(20)
+  next_attempt_at         DateTime  @default(now())
+  locked_by               String?
+  lease_expires_at        DateTime?
+  claim_epoch             BigInt    @default(0)
+  last_error_code         String?
+  last_error_detail       String?   @db.VarChar(512)
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+  completed_at            DateTime?
+  restored_at             DateTime?
+
+  @@unique([organization_id, idempotency_key], map: "deltallm_orgdeletionjob_org_idempotency_key")
+  @@index([status, next_attempt_at], map: "deltallm_orgdeletionjob_due_idx")
+  @@index([lease_expires_at], map: "deltallm_orgdeletionjob_lease_idx")
+  @@index([organization_id, created_at], map: "deltallm_orgdeletionjob_org_created_idx")
+  @@map("deltallm_organizationdeletionjob")
+}
+
+model DeltaLLM_OrganizationTombstone {
+  organization_id String   @id
+  deletion_job_id String   @unique
+  deleted_at      DateTime @default(now())
+
+  @@index([deleted_at], map: "deltallm_organizationtombstone_deleted_idx")
+  @@map("deltallm_organizationtombstone")
+}
+
+model DeltaLLM_TeamTombstone {
+  team_id         String   @id
+  organization_id String
+  deletion_job_id String
+  deleted_at      DateTime @default(now())
+
+  @@index([organization_id], map: "deltallm_teamtombstone_org_idx")
+  @@index([deletion_job_id], map: "deltallm_teamtombstone_job_idx")
+  @@index([deleted_at], map: "deltallm_teamtombstone_deleted_idx")
+  @@map("deltallm_teamtombstone")
+}
+
+model DeltaLLM_OrganizationPrincipalTombstone {
+  principal_id   String
+  organization_id String
+  deletion_job_id String
+  recorded_at    DateTime @default(now())
+
+  @@id([principal_id, organization_id])
+  @@index([organization_id], map: "deltallm_orgprincipaltombstone_org_idx")
+  @@index([deletion_job_id], map: "deltallm_orgprincipaltombstone_job_idx")
+  @@map("deltallm_organizationprincipaltombstone")
+}
+
+model DeltaLLM_OrganizationLifecycleGeneration {
+  singleton_id Int      @id @default(1) @db.SmallInt
+  generation   BigInt   @default(0)
+  updated_at   DateTime @updatedAt
+
+  @@map("deltallm_organizationlifecyclegeneration")
 }
 
 model DeltaLLM_AuditEvent {
@@ -1000,6 +1080,10 @@ model DeltaLLM_MCPApprovalRequest {
   @@index([mcp_server_id, status, created_at], map: "deltallm_mcpapproval_server_status_created_idx")
   @@index([status, created_at], map: "deltallm_mcpapproval_status_created_idx")
   @@index([request_fingerprint], map: "deltallm_mcpapproval_fingerprint_idx")
+  @@index([organization_id, status, created_at], map: "deltallm_mcpapproval_org_status_created_idx")
+  @@index([scope_type, scope_id, status, created_at], map: "deltallm_mcpapproval_scope_status_created_idx")
+  @@index([requested_by_api_key, created_at], map: "deltallm_mcpapproval_api_key_created_idx")
+  @@index([requested_by_user, created_at], map: "deltallm_mcpapproval_user_created_idx")
   @@map("deltallm_mcpapprovalrequest")
 }
 
@@ -1105,6 +1189,10 @@ model DeltaLLM_PromptRenderLog {
   @@index([created_at], map: "deltallm_promptrenderlog_created_at_idx")
   @@index([prompt_key, label, created_at], map: "deltallm_promptrenderlog_prompt_lookup_idx")
   @@index([request_id], map: "deltallm_promptrenderlog_request_idx")
+  @@index([organization_id, created_at], map: "deltallm_promptrenderlog_org_created_idx")
+  @@index([team_id, created_at], map: "deltallm_promptrenderlog_team_created_idx")
+  @@index([api_key, created_at], map: "deltallm_promptrenderlog_api_key_created_idx")
+  @@index([user_id, created_at], map: "deltallm_promptrenderlog_user_created_idx")
   @@map("deltallm_promptrenderlog")
 }
 
@@ -1217,6 +1305,7 @@ model DeltaLLM_BatchFile {
   @@index([purpose])
   @@index([created_at])
   @@index([expires_at])
+  @@index([created_by_organization_id, created_at], map: "deltallm_batch_file_org_created_idx")
   @@map("deltallm_batch_file")
 }
 
@@ -1263,6 +1352,7 @@ model DeltaLLM_BatchCreateSession {
   @@index([staged_storage_backend, staged_storage_key], map: "deltallm_batch_create_session_stage_artifact_idx")
   @@index([status, created_at], map: "deltallm_batch_create_session_status_created_idx")
   @@index([created_by_api_key, status, created_at], map: "deltallm_batch_create_session_api_key_status_created_idx")
+  @@index([created_by_user_id, status, created_at], map: "deltallm_batch_create_session_user_status_created_idx")
   @@index([created_by_team_id, status, created_at], map: "deltallm_batch_create_session_team_status_created_idx")
   @@index([created_by_organization_id, status, created_at], map: "deltallm_batch_create_session_org_status_created_idx")
   @@index([expires_at], map: "deltallm_batch_create_session_expires_idx")
@@ -1338,6 +1428,7 @@ model DeltaLLM_BatchJob {
   @@index([status, created_at])
   @@index([lease_expires_at])
   @@index([created_by_api_key, created_at])
+  @@index([created_by_user_id, created_at], map: "deltallm_batch_job_user_created_idx")
   @@index([created_by_team_id, created_at])
   @@index([created_by_organization_id, created_at])
   @@index([status, scheduling_model_group, service_tier, queue_entered_at], map: "deltallm_batch_job_sched_model_status_idx")
@@ -1459,5 +1550,6 @@ model DeltaLLM_BatchWebhookOutbox {
   @@index([lease_expires_at], map: "deltallm_batch_webhook_outbox_lease_idx")
   @@index([batch_id, created_at], map: "deltallm_batch_webhook_outbox_batch_idx")
   @@index([status, updated_at], map: "deltallm_batch_webhook_outbox_retention_idx")
+  @@index([created_by_organization_id, status, created_at, event_id], map: "deltallm_batch_webhook_outbox_org_status_created_idx")
   @@map("deltallm_batch_webhook_outbox")
 }

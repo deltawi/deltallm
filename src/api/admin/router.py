@@ -16,6 +16,7 @@ from src.api.admin.endpoints import (
     models_router,
     named_credentials_router,
     organization_tier_assignments_router,
+    organization_deletion_router,
     organizations_router,
     prompt_registry_router,
     rbac_router,
@@ -48,6 +49,7 @@ admin_router.include_router(teams_router)
 admin_router.include_router(telemetry_ingestion_router)
 admin_router.include_router(users_router)
 admin_router.include_router(organizations_router)
+admin_router.include_router(organization_deletion_router)
 admin_router.include_router(organization_tier_assignments_router)
 admin_router.include_router(batches_router)
 admin_router.include_router(batch_create_sessions_router)
