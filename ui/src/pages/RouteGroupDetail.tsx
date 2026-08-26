@@ -66,7 +66,7 @@ const ROUTING_LABELS: Record<string, string> = {
   'latency-based-routing': 'Latency',
   'cost-based-routing':    'Cost',
   'usage-based-routing':   'Usage',
-  'tag-based-routing':     'Tag',
+  'tag-based-routing':     'Tag (Legacy)',
   'priority-based-routing':'Priority',
   'rate-limit-aware':      'Rate Limit',
 };

@@ -370,32 +370,6 @@ class UsageBasedStrategy:
         return ordered[0] if ordered else None
 
 
-class TagBasedStrategy:
-    def __init__(self, fallback_strategy: RoutingStrategyImpl | None = None):
-        self.fallback = fallback_strategy or WeightedStrategy()
-
-    def state_query(self) -> StrategyStateQuery:
-        return self.fallback.state_query()
-
-    async def order(
-        self,
-        deployments: list[DeploymentLike],
-        context: dict[str, Any],
-        state_snapshot: StrategyStateSnapshot | None = None,
-    ) -> list[DeploymentLike]:
-        # Request-tag eligibility is enforced by Router before strategy ordering.
-        return await self.fallback.order(deployments, context, state_snapshot)
-
-    async def select(
-        self,
-        deployments: list[DeploymentLike],
-        context: dict[str, Any],
-        state_snapshot: StrategyStateSnapshot | None = None,
-    ) -> DeploymentLike | None:
-        ordered = await self.order(deployments, context, state_snapshot)
-        return ordered[0] if ordered else None
-
-
 class PriorityBasedStrategy:
     def __init__(self, fallback_strategy: RoutingStrategyImpl | None = None):
         self.fallback = fallback_strategy or WeightedStrategy()

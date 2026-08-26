@@ -23,7 +23,31 @@ interface FallbackEntry {
   to: string;
 }
 
-function parseFallbacks(raw: any[]): FallbackEntry[] {
+interface SettingsForm {
+  routing_strategy: string;
+  num_retries: string | number;
+  timeout: string | number;
+  cooldown_time: string | number;
+  retry_after: string | number;
+  allowed_fails: string | number;
+  cache_enabled: boolean;
+  cache_backend: string;
+  cache_ttl: string | number;
+  background_health_checks: boolean;
+  health_check_interval: string | number;
+  log_level: string;
+}
+
+interface FallbackEvent {
+  timestamp: number;
+  model_group: string;
+  from_deployment: string;
+  to_deployment: string | null;
+  error_classification: string;
+  success: boolean;
+}
+
+function parseFallbacks(raw: unknown): FallbackEntry[] {
   if (!Array.isArray(raw)) return [];
   const entries: FallbackEntry[] = [];
   for (const item of raw) {
@@ -40,7 +64,7 @@ function parseFallbacks(raw: any[]): FallbackEntry[] {
   return entries;
 }
 
-function serializeFallbacks(entries: FallbackEntry[]): any[] {
+function serializeFallbacks(entries: FallbackEntry[]): Array<Record<string, string[]>> {
   const map: Record<string, string[]> = {};
   for (const e of entries) {
     if (e.from && e.to) {
@@ -49,6 +73,32 @@ function serializeFallbacks(entries: FallbackEntry[]): any[] {
     }
   }
   return Object.entries(map).map(([k, v]) => ({ [k]: v }));
+}
+
+function parseFallbackEvents(value: unknown): FallbackEvent[] {
+  if (!value || typeof value !== 'object' || !('events' in value)) return [];
+  const events = value.events;
+  if (!Array.isArray(events)) return [];
+  return events.flatMap((event) => {
+    if (!event || typeof event !== 'object') return [];
+    const candidate = event as Record<string, unknown>;
+    if (
+      typeof candidate.timestamp !== 'number'
+      || typeof candidate.model_group !== 'string'
+      || typeof candidate.from_deployment !== 'string'
+      || (candidate.to_deployment !== null && typeof candidate.to_deployment !== 'string')
+      || typeof candidate.error_classification !== 'string'
+      || typeof candidate.success !== 'boolean'
+    ) return [];
+    return [{
+      timestamp: candidate.timestamp,
+      model_group: candidate.model_group,
+      from_deployment: candidate.from_deployment,
+      to_deployment: candidate.to_deployment,
+      error_classification: candidate.error_classification,
+      success: candidate.success,
+    }];
+  });
 }
 
 const TABS = [
@@ -68,11 +118,16 @@ const STRATEGIES = [
   { value: 'latency-based-routing', label: 'Latency Based', desc: 'Prefer deployments with lowest latency' },
   { value: 'cost-based-routing', label: 'Cost Based', desc: 'Prefer cheapest available deployment' },
   { value: 'usage-based-routing', label: 'Usage Based', desc: 'Distribute based on usage quotas' },
-  { value: 'tag-based-routing', label: 'Tag Based', desc: 'Route by deployment tags' },
   { value: 'priority-based-routing', label: 'Priority Based', desc: 'Route by deployment priority' },
   { value: 'rate-limit-aware', label: 'Rate Limit Aware', desc: 'Avoid rate-limited deployments' },
   { value: 'weighted', label: 'Weighted', desc: 'Custom weight distribution' },
 ];
+
+const LEGACY_TAG_STRATEGY = {
+  value: 'tag-based-routing',
+  label: 'Tag Based (Legacy)',
+  desc: 'Deprecated alias for weighted routing after tag filtering',
+};
 
 const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
 
@@ -219,7 +274,7 @@ function FieldGroup({ label, hint, children }: { label: string; hint?: string; c
   );
 }
 
-function SectionCard({ title, description, icon: Icon, children }: { title: string; description?: string; icon?: any; children: React.ReactNode }) {
+function SectionCard({ title, description, icon: Icon, children }: { title: string; description?: string; icon?: React.ElementType; children: React.ReactNode }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3">
@@ -283,13 +338,26 @@ export default function SettingsPage() {
   const { data, loading, refetch } = useApi(() => settings.get(), []);
   const { branding, setBranding } = useBranding();
   const [activeTab, setActiveTab] = useState<TabId>('general');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<SettingsForm>({
+    routing_strategy: 'simple-shuffle',
+    num_retries: 0,
+    timeout: 600,
+    cooldown_time: 60,
+    retry_after: 0,
+    allowed_fails: 3,
+    cache_enabled: false,
+    cache_backend: 'memory',
+    cache_ttl: 3600,
+    background_health_checks: false,
+    health_check_interval: 300,
+    log_level: 'INFO',
+  });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [fallbacks, setFallbacks] = useState<FallbackEntry[]>([]);
   const [ctxFallbacks, setCtxFallbacks] = useState<FallbackEntry[]>([]);
   const [contentFallbacks, setContentFallbacks] = useState<FallbackEntry[]>([]);
-  const [fallbackEvents, setFallbackEvents] = useState<any[]>([]);
+  const [fallbackEvents, setFallbackEvents] = useState<FallbackEvent[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [brandingForm, setBrandingForm] = useState<UIBranding>(branding);
   const [persistedBranding, setPersistedBranding] = useState<UIBranding>(branding);
@@ -328,8 +396,8 @@ export default function SettingsPage() {
     setLoadingEvents(true);
     try {
       const resp = await fetch('/health/fallback-events?limit=50');
-      const json = await resp.json();
-      setFallbackEvents(json.events || []);
+      const json: unknown = await resp.json();
+      setFallbackEvents(parseFallbackEvents(json));
     } catch {
       setFallbackEvents([]);
     } finally {
@@ -680,7 +748,9 @@ export default function SettingsPage() {
               <>
                 <SectionCard title="Routing Strategy" description="How requests are distributed across model deployments" icon={Route}>
                   <div className="grid grid-cols-1 gap-2">
-                    {STRATEGIES.map((s) => (
+                    {(form.routing_strategy === LEGACY_TAG_STRATEGY.value
+                      ? [LEGACY_TAG_STRATEGY, ...STRATEGIES]
+                      : STRATEGIES).map((s) => (
                       <label
                         key={s.value}
                         className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${form.routing_strategy === s.value ? 'border-violet-300 bg-violet-50/50 ring-1 ring-brand-primary/20' : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'}`}
@@ -853,7 +923,7 @@ export default function SettingsPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {fallbackEvents.map((evt: any, i: number) => (
+                          {fallbackEvents.map((evt, i) => (
                             <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                               <td className="py-2.5 px-3 text-gray-500 text-xs tabular-nums">
                                 <div className="flex items-center gap-1.5">

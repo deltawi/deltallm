@@ -16,7 +16,7 @@ import { Link } from 'react-router-dom';
 import PolicyGuidedEditor from '../PolicyGuidedEditor';
 import RouteGroupPolicySimulationPanel from './RouteGroupPolicySimulationPanel';
 import {
-  ROUTE_GROUP_STRATEGY_OPTIONS,
+  routeGroupStrategyOptions,
   type PolicyAction,
   type PolicyGuidedValues,
 } from '../../lib/routeGroups';
@@ -209,7 +209,7 @@ export default function RouteGroupAdvancedTab({
     'latency-based-routing': 'Latency',
     'cost-based-routing': 'Cost',
     'usage-based-routing': 'Usage',
-    'tag-based-routing': 'Tag',
+    'tag-based-routing': 'Tag (Legacy)',
     'priority-based-routing': 'Priority',
     'rate-limit-aware': 'Rate Limit',
   };
@@ -464,7 +464,7 @@ export default function RouteGroupAdvancedTab({
             <PolicyGuidedEditor
               values={guidedPolicy}
               onChange={onGuidedPolicyChange}
-              strategyOptions={[...ROUTE_GROUP_STRATEGY_OPTIONS]}
+              strategyOptions={routeGroupStrategyOptions(guidedPolicy.strategy)}
               memberOptions={members}
             />
           )}

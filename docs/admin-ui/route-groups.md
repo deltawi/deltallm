@@ -87,31 +87,37 @@ In practice, that means:
 
 The supported policy fields today are:
 
-- `mode`
+- `mode` (deprecated input alias only)
 - `strategy`
 - `members`
 - `timeouts.global_ms` or `timeouts.global_seconds`
 - `retry.max_attempts`
 - `retry.retryable_error_classes`
 
-The route group's workload type and the policy `mode` field are different concepts. The workload
-type identifies the compatible gateway endpoint; policy modes are only routing shortcuts.
+The route group's workload type and the legacy policy `mode` field are different concepts. The
+workload type identifies the compatible gateway endpoint. `strategy` is the canonical routing
+field; old policy modes are accepted only as migration input and are omitted from normalized writes.
 
 `retry.max_attempts` is the maximum number of additional same-deployment retries for the
 whole routed request. The budget is shared across all primary and fallback candidates; it
 is not reset for each candidate. Candidate failover attempts remain separate from retries.
 
-## Policy Modes
+## Legacy Policy Mode Aliases
 
-The UI can present policy modes as shortcuts:
+Older clients may send these aliases:
 
 - `weighted`: use weighted traffic splitting
 - `fallback`: use ordered primary and standby behavior
 
-How they behave:
+How compatibility behaves:
 
 - `weighted` maps to the `weighted` strategy if you do not set a strategy explicitly
 - `fallback` maps to `priority-based-routing` if you do not set a strategy explicitly
+- an explicit `strategy` remains authoritative when both fields are present
+- validation returns a deprecation warning and normalized writes contain only `strategy`
+
+The guided UI selects the concrete strategy directly and does not expose a separate policy-mode
+control. Existing stored versions are not rewritten.
 
 Do not plan around these as live runtime modes yet:
 
@@ -126,7 +132,7 @@ Choose by goal:
 
 - use `simple-shuffle` when the deployments are roughly equal
 - use `weighted` when you want a controlled traffic split
-- use `priority-based-routing` or `fallback` when one deployment should be primary
+- use `priority-based-routing` when one deployment should be primary
 - use `least-busy` when you are smoothing burst traffic
 - use `latency-based-routing` when end-user latency matters most
 - use `cost-based-routing` when cost matters most
@@ -144,7 +150,7 @@ Weighted rollout:
 
 ```json
 {
-  "mode": "weighted",
+  "strategy": "weighted",
   "members": [
     {"deployment_id": "dep-primary", "weight": 9},
     {"deployment_id": "dep-canary", "weight": 1}
@@ -156,7 +162,7 @@ Primary plus standby:
 
 ```json
 {
-  "mode": "fallback",
+  "strategy": "priority-based-routing",
   "members": [
     {"deployment_id": "dep-primary", "priority": 0},
     {"deployment_id": "dep-standby", "priority": 1}
@@ -188,7 +194,7 @@ Member overrides let the group behave differently without editing the underlying
 
 - `enabled`: take a member out of rotation without removing it
 - `weight`: change traffic share for `weighted`
-- `priority`: control order for `priority-based-routing` or `fallback`
+- `priority`: control order for `priority-based-routing`
 
 If a policy omits `members`, it inherits the group's enabled membership. Newly saved policies treat
 an explicit `members` list as authoritative: members not listed are excluded rather than silently

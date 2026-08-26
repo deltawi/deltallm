@@ -94,7 +94,7 @@ These strategy names are valid today:
 - `latency-based-routing`
 - `cost-based-routing`
 - `usage-based-routing`
-- `tag-based-routing`
+- `tag-based-routing` (deprecated compatibility alias for `weighted`)
 - `priority-based-routing`
 - `weighted`
 - `rate-limit-aware`
@@ -109,7 +109,8 @@ Short version:
 - `cost-based-routing`: use for lowest-cost routing
 - `usage-based-routing`: use to spread quota usage
 - `rate-limit-aware`: use to avoid hot deployments near RPM or TPM caps
-- `tag-based-routing`: use when tags decide eligibility and you want the route group to make that explicit
+- `tag-based-routing`: accepted for existing configuration only; migrate to `weighted` because tag
+  eligibility is applied before every strategy
 
 For non-text workloads, usage-aware routing can also use these deployment fields when they are configured:
 
@@ -124,25 +125,27 @@ See [Routing & Failover](../features/routing.md) for the full behavior and setup
 
 Route-group policies currently support:
 
-- `mode`
+- `mode` (deprecated input alias only)
 - `strategy`
 - `members`
 - `timeouts.global_ms` or `timeouts.global_seconds`
 - `retry.max_attempts`
 - `retry.retryable_error_classes`
 
-Helpful shortcut modes:
+Legacy mode aliases accepted on input:
 
 - `weighted` maps to `weighted`
 - `fallback` maps to `priority-based-routing`
 
 Do not treat `conditional` or `adaptive` as active runtime policy behaviors today.
 
-The policy `mode` field is a routing shortcut (`weighted` or `fallback`); it is separate from the
-route group's workload `mode`. When `members` is omitted, the policy inherits the group's enabled
-members. Newly saved policies treat an explicit list as authoritative. Policies created before this
-semantics version retain their legacy widening behavior, including when rolled back. A policy can
-disable an eligible member but cannot reactivate a group member disabled by an operator.
+`strategy` is the canonical routing field. The policy `mode` field remains accepted as a deprecated
+input shortcut (`weighted` or `fallback`) and produces a warning; normalized new writes omit it. It
+is separate from the route group's workload `mode`. Existing policy history is not rewritten and
+remains readable and rollback-safe. When `members` is omitted, the policy inherits the group's
+enabled members. Newly saved policies treat an explicit list as authoritative. Policies created
+before this semantics version retain their legacy widening behavior, including when rolled back. A
+policy can disable an eligible member but cannot reactivate a group member disabled by an operator.
 
 ## Fallback Configuration
 

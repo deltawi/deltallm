@@ -363,7 +363,6 @@ class FailoverManager:
         primary_deployment: Deployment,
         model_group: str,
         execute: Callable[[Deployment], Awaitable[Any]],
-        request_tokens: int = 0,
         *,
         return_deployment: bool = False,
         on_attempt: Callable[[Deployment], None] | None = None,
@@ -381,7 +380,6 @@ class FailoverManager:
                 primary_deployment=primary_deployment,
                 model_group=model_group,
                 execute=execute,
-                request_tokens=request_tokens,
                 return_deployment=return_deployment,
                 on_attempt=on_attempt,
                 timeout_seconds=timeout_seconds,
@@ -406,7 +404,6 @@ class FailoverManager:
         primary_deployment: Deployment,
         model_group: str,
         execute: Callable[[Deployment], Awaitable[Any]],
-        request_tokens: int = 0,
         *,
         return_deployment: bool = False,
         on_attempt: Callable[[Deployment], None] | None = None,
@@ -425,7 +422,6 @@ class FailoverManager:
             self._build_fallback_chain(
                 primary_deployment,
                 model_group,
-                request_tokens,
                 routing_context,
             )
         )
@@ -637,7 +633,6 @@ class FailoverManager:
         primary_deployment: Deployment,
         model_group: str,
         execute: Callable[[Deployment], Awaitable[Any]],
-        request_tokens: int = 0,
         *,
         on_attempt: Callable[[Deployment], None] | None = None,
         timeout_seconds: float | None = None,
@@ -650,7 +645,6 @@ class FailoverManager:
             primary_deployment=primary_deployment,
             model_group=model_group,
             execute=execute,
-            request_tokens=request_tokens,
             on_attempt=on_attempt,
             timeout_seconds=timeout_seconds,
             timeout_for_deployment=timeout_for_deployment,
@@ -1010,11 +1004,8 @@ class FailoverManager:
         self,
         primary_deployment: Deployment,
         model_group: str,
-        request_tokens: int,
         routing_context: dict[str, Any],
     ) -> list[Deployment]:
-        del request_tokens
-
         fallback_groups = self.config.fallbacks.get(model_group, [])
         groups = [model_group, *fallback_groups]
         plans = await self.candidate_planner.plan_deployments(groups, routing_context)

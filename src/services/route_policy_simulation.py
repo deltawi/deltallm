@@ -394,11 +394,6 @@ class RoutePolicySimulationService:
             strategy=self._runtime.strategy,
             state_backend=snapshot_state,
             config=RouterConfig(
-                num_retries=self._runtime.router_config.num_retries,
-                retry_after=self._runtime.router_config.retry_after,
-                timeout=self._runtime.router_config.timeout,
-                cooldown_time=self._runtime.router_config.cooldown_time,
-                allowed_fails=self._runtime.router_config.allowed_fails,
                 enable_pre_call_checks=self._runtime.router_config.enable_pre_call_checks,
                 model_group_alias=dict(self._runtime.router_config.model_group_alias),
                 route_group_policies=build_route_group_policies(runtime_groups),
@@ -415,8 +410,8 @@ class RoutePolicySimulationService:
         snapshot_state.freeze()
         cooldown = CooldownManager(
             snapshot_state,
-            cooldown_time=self._runtime.router_config.cooldown_time,
-            allowed_fails=self._runtime.router_config.allowed_fails,
+            cooldown_time=self._runtime.cooldown_manager.cooldown_time,
+            allowed_fails=self._runtime.cooldown_manager.allowed_fails,
         )
         failover = _SimulationFailoverManager(
             config=replace(self._runtime.failover_config),
