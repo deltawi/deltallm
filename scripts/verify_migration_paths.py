@@ -222,10 +222,27 @@ VALUES
 INSERT INTO deltallm_routepolicy
   (route_policy_id, route_group_id, version, status, policy_json, published_at)
 VALUES
-  ('migration-upgrade-route-policy-1', '{UPGRADE_ROUTE_GROUP_ID}', 1, 'published',
+  ('migration-upgrade-route-policy-1', '{UPGRADE_ROUTE_GROUP_ID}', 1,
+   CASE
+     WHEN to_regclass('public.deltallm_routepolicy_one_published_per_group') IS NULL
+       THEN 'published'
+     ELSE 'archived'
+   END,
    '{{"strategy":"weighted","server_revision":1}}'::jsonb, NOW()),
   ('migration-upgrade-route-policy-2', '{UPGRADE_ROUTE_GROUP_ID}', 2, 'published',
    '{{"strategy":"least-busy","server_revision":2}}'::jsonb, NOW());
+
+DO $migration_fixture$
+BEGIN
+  IF to_regclass('public.deltallm_routeruntimestate') IS NOT NULL THEN
+    UPDATE deltallm_routeruntimestate
+    SET route_groups_initialized = TRUE,
+        updated_at = NOW()
+    WHERE state_key = 'routing_runtime'
+      AND EXISTS (SELECT 1 FROM deltallm_routegroup);
+  END IF;
+END
+$migration_fixture$;
 """,
     )
 

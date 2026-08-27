@@ -66,6 +66,31 @@ def test_drop_database_uses_non_transactional_statements(monkeypatch: pytest.Mon
     assert statements[1] == ('DROP DATABASE IF EXISTS "deltallm_migration_verify_abc123_upgrade";')
 
 
+def test_upgrade_fixture_supports_already_applied_routing_invariants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statements: list[str] = []
+
+    def capture_execute(*_args: object, sql: str, **_kwargs: object) -> None:
+        statements.append(sql)
+
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", capture_execute)
+
+    verify_migration_paths._seed_upgrade_fixture(  # noqa: SLF001
+        "prisma",
+        "postgresql://localhost/upgrade",
+        verify_migration_paths.CURRENT_SCHEMA,
+    )
+
+    assert len(statements) == 1
+    sql = statements[0]
+    assert "deltallm_routepolicy_one_published_per_group" in sql
+    assert "THEN 'published'" in sql
+    assert "ELSE 'archived'" in sql
+    assert "to_regclass('public.deltallm_routeruntimestate')" in sql
+    assert "route_groups_initialized = TRUE" in sql
+
+
 def test_default_base_ref_prefers_environment_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
