@@ -19,7 +19,6 @@ from src.router.runtime_generation import (
 )
 from src.db.named_credentials import NamedCredentialRepository
 from src.db.repositories import (
-    ModelDeploymentNameConflictError,
     ModelDeploymentRecord,
     ModelDeploymentRepository,
 )
@@ -39,11 +38,7 @@ from src.router import (
 from src.router.registry import DeploymentRegistryStore
 from src.router.route_group_validation import resolve_route_group_modes_for_registry
 from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import (
-    DuplicateModelNameError,
-    ensure_model_name_available,
-    load_model_registry,
-)
+from src.services.model_deployments import load_model_registry
 from src.services.routing_authorization import RoutingAuthorizationReconciler
 from src.services.route_groups import (
     RouteGroupRuntimeCache,
@@ -139,10 +134,6 @@ class ModelHotReloadManager:
         deployment["routing_state_incarnation"] = str(uuid4())
 
         self._validate_model_config(deployment)
-        ensure_model_name_available(
-            getattr(self.app.state, "model_registry", {}) or {},
-            model_name=str(deployment["model_name"]),
-        )
         if self.model_repository is None:
             current = self.dynamic_config.get_config()
             model_list = list(current.get("model_list", []))
@@ -152,22 +143,19 @@ class ModelHotReloadManager:
             )
             warnings: tuple[str, ...] = ()
         else:
-            try:
-                await self.model_repository.create(
-                    ModelDeploymentRecord(
-                        deployment_id=deployment_id,
-                        model_name=str(deployment["model_name"]),
-                        named_credential_id=(
-                            str(deployment.get("named_credential_id")).strip() or None
-                            if deployment.get("named_credential_id") is not None
-                            else None
-                        ),
-                        deltallm_params=dict(deployment["deltallm_params"]),
-                        model_info=dict(deployment.get("model_info", {})),
-                    )
+            await self.model_repository.create(
+                ModelDeploymentRecord(
+                    deployment_id=deployment_id,
+                    model_name=str(deployment["model_name"]),
+                    named_credential_id=(
+                        str(deployment.get("named_credential_id")).strip() or None
+                        if deployment.get("named_credential_id") is not None
+                        else None
+                    ),
+                    deltallm_params=dict(deployment["deltallm_params"]),
+                    model_info=dict(deployment.get("model_info", {})),
                 )
-            except ModelDeploymentNameConflictError as exc:
-                raise DuplicateModelNameError(str(exc)) from exc
+            )
             warnings = await self._refresh_committed_model_runtime()
         return ModelMutationResult(value=deployment_id, warnings=warnings)
 
@@ -177,11 +165,6 @@ class ModelHotReloadManager:
         deployment = model_config.copy()
         deployment["deployment_id"] = deployment_id
         self._validate_model_config(deployment)
-        ensure_model_name_available(
-            getattr(self.app.state, "model_registry", {}) or {},
-            model_name=str(deployment["model_name"]),
-            exclude_deployment_id=deployment_id,
-        )
 
         if self.model_repository is None:
             current = self.dynamic_config.get_config()
@@ -202,13 +185,10 @@ class ModelHotReloadManager:
             )
             return ModelMutationResult(value=True)
 
-        try:
-            updated_record = await self.model_repository.update(
-                deployment_id,
-                **self._repository_update_kwargs(self.model_repository, deployment),
-            )
-        except ModelDeploymentNameConflictError as exc:
-            raise DuplicateModelNameError(str(exc)) from exc
+        updated_record = await self.model_repository.update(
+            deployment_id,
+            **self._repository_update_kwargs(self.model_repository, deployment),
+        )
         if updated_record is None:
             return ModelMutationResult(value=False)
         warnings = await self._refresh_committed_model_runtime()

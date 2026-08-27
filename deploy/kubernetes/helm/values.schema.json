@@ -9,6 +9,32 @@
     "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
     "minReadySeconds": { "type": "integer", "minimum": 0 },
     "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+    "strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "rollingUpdate"],
+      "properties": {
+        "type": { "type": "string", "enum": ["RollingUpdate", "Recreate"] },
+        "rollingUpdate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxUnavailable", "maxSurge"],
+          "properties": {
+            "maxUnavailable": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+            "maxSurge": { "oneOf": [{ "type": "integer" }, { "type": "string" }] }
+          }
+        }
+      }
+    },
+    "routerStateSchemaCutover": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "acknowledged"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "acknowledged": { "type": "boolean" }
+      }
+    },
     "image": {
       "type": "object",
       "additionalProperties": true,

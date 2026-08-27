@@ -51,10 +51,8 @@ class ModelDeploymentRecord:
     routing_state_incarnation: str | None = None
 
 
-class ModelDeploymentNameConflictError(ValueError):
-    def __init__(self, model_name: str) -> None:
-        self.model_name = model_name
-        super().__init__(f"Duplicate model_name '{model_name}' is not allowed")
+class _ModelDeploymentChangedWhileLocking(RuntimeError):
+    """Retry an update whose callable ownership changed before locks were held."""
 
 
 class ModelDeploymentRepository:
@@ -209,8 +207,6 @@ class ModelDeploymentRepository:
                 return await self.with_db(tx).create(record)
 
         await lock_callable_keys(self.prisma, record.model_name)
-        if await self.has_model_name(record.model_name):
-            raise ModelDeploymentNameConflictError(record.model_name)
         await self.prisma.execute_raw(
             """
             INSERT INTO deltallm_modeldeployment (
@@ -246,21 +242,46 @@ class ModelDeploymentRepository:
         if self.prisma is None:
             return None
         if self._use_transactions and hasattr(self.prisma, "tx"):
-            async with self.prisma.tx() as tx:
-                return await self.with_db(tx).update(
-                    deployment_id,
-                    model_name=model_name,
-                    named_credential_id=named_credential_id,
-                    deltallm_params=deltallm_params,
-                    model_info=model_info,
-                )
+            for attempt in range(3):
+                try:
+                    async with self.prisma.tx() as tx:
+                        return await self.with_db(tx).update(
+                            deployment_id,
+                            model_name=model_name,
+                            named_credential_id=named_credential_id,
+                            deltallm_params=deltallm_params,
+                            model_info=model_info,
+                        )
+                except _ModelDeploymentChangedWhileLocking:
+                    if attempt == 2:
+                        raise RuntimeError(
+                            "model deployment changed repeatedly while acquiring callable locks"
+                        ) from None
 
-        await lock_callable_keys(self.prisma, model_name)
-        if await self.has_model_name(
-            model_name,
-            exclude_deployment_id=deployment_id,
-        ):
-            raise ModelDeploymentNameConflictError(model_name)
+        current_rows = await self.prisma.query_raw(
+            """
+            SELECT model_name
+            FROM deltallm_modeldeployment
+            WHERE deployment_id = $1
+            """,
+            deployment_id,
+        )
+        if not current_rows:
+            return None
+        current_model_name = str(current_rows[0].get("model_name") or "")
+        await lock_callable_keys(self.prisma, current_model_name, model_name)
+        confirmed_rows = await self.prisma.query_raw(
+            """
+            SELECT model_name
+            FROM deltallm_modeldeployment
+            WHERE deployment_id = $1
+            """,
+            deployment_id,
+        )
+        if not confirmed_rows:
+            return None
+        if str(confirmed_rows[0].get("model_name") or "") != current_model_name:
+            raise _ModelDeploymentChangedWhileLocking
         locked_groups = (
             await self._lock_route_groups_for_deployment(deployment_id)
             if not self._use_transactions

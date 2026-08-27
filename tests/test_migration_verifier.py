@@ -64,3 +64,69 @@ def test_drop_database_uses_non_transactional_statements(monkeypatch: pytest.Mon
     assert len(statements) == 2
     assert statements[0].startswith("SELECT pg_terminate_backend")
     assert statements[1] == ('DROP DATABASE IF EXISTS "deltallm_migration_verify_abc123_upgrade";')
+
+
+def test_default_base_ref_prefers_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIGRATION_TEST_BASE_REF", "v0.1.35")
+
+    assert verify_migration_paths._default_base_ref() == "v0.1.35"  # noqa: SLF001
+
+
+def test_default_base_ref_selects_latest_stable_tag_on_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MIGRATION_TEST_BASE_REF", raising=False)
+
+    class Result:
+        stdout = "v0.2.0-rc.1\nv0.1.37\nv0.1.36\nexperimental\n"
+
+    def fake_run(command: list[str], **_kwargs: object) -> Result:
+        assert command == [
+            "git",
+            "tag",
+            "--merged",
+            "origin/main",
+            "--sort=-version:refname",
+        ]
+        return Result()
+
+    monkeypatch.setattr(verify_migration_paths.subprocess, "run", fake_run)
+
+    assert verify_migration_paths._default_base_ref() == "v0.1.37"  # noqa: SLF001
+
+
+def test_default_base_ref_ignores_blank_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIGRATION_TEST_BASE_REF", "   ")
+
+    class Result:
+        stdout = "v0.1.37\n"
+
+    monkeypatch.setattr(
+        verify_migration_paths.subprocess,
+        "run",
+        lambda *_args, **_kwargs: Result(),
+    )
+
+    assert verify_migration_paths._default_base_ref() == "v0.1.37"  # noqa: SLF001
+
+
+def test_default_base_ref_fails_without_stable_main_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MIGRATION_TEST_BASE_REF", raising=False)
+
+    class Result:
+        stdout = "v0.2.0-rc.1\nexperimental\n"
+
+    monkeypatch.setattr(
+        verify_migration_paths.subprocess,
+        "run",
+        lambda *_args, **_kwargs: Result(),
+    )
+
+    with pytest.raises(RuntimeError, match="no stable release tag reachable from origin/main"):
+        verify_migration_paths._default_base_ref()  # noqa: SLF001

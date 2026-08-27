@@ -1,3 +1,4 @@
+{{- include "deltallm.validateRouterStateSchemaCutover" . -}}
 {{- $hasGeneratedAppSecret := not .Values.secret.existingSecret -}}
 {{- $hasGeneratedS3Secret := and .Values.s3.enabled (not .Values.s3.existingSecret.name) (or .Values.s3.accessKeyId .Values.s3.secretAccessKey) -}}
 apiVersion: apps/v1

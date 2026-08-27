@@ -863,7 +863,7 @@ model DeltaLLM_NamedCredential {
 
 model DeltaLLM_ModelDeployment {
   deployment_id        String   @id
-  model_name           String   @unique(map: "deltallm_modeldeployment_model_name_key")
+  model_name           String
   named_credential_id  String?
   deltallm_params      Json
   model_info           Json?
@@ -874,6 +874,7 @@ model DeltaLLM_ModelDeployment {
 
   route_group_members DeltaLLM_RouteGroupMember[]
 
+  @@index([model_name], map: "deltallm_modeldeployment_model_name_idx")
   @@index([named_credential_id], map: "deltallm_modeldeployment_named_credential_idx")
   @@map("deltallm_modeldeployment")
 }

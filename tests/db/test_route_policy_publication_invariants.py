@@ -11,7 +11,7 @@ from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.route_groups import RouteGroupRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.services.route_group_mutations import RouteGroupMutationService
-from tests.db.tier_migration_helpers import connect_prisma
+from tests.db.tier_migration_helpers import connect_prisma, seed_organization
 
 
 async def _require_route_policy_schema(db) -> None:  # noqa: ANN001
@@ -276,10 +276,14 @@ async def test_group_delete_preserves_callable_binding_for_revealed_model() -> N
     suffix = uuid4().hex
     group_id = f"route-policy-collision-group-{suffix}"
     group_key = f"route-policy-collision-{suffix}"
+    organization_id = f"organization-{suffix}"
     group_seeded = False
+    organization_seeded = False
 
     try:
         await _require_route_policy_schema(db)
+        await seed_organization(db, organization_id=organization_id)
+        organization_seeded = True
         await _seed_group(db, group_id=group_id, group_key=group_key)
         group_seeded = True
         await db.execute_raw(
@@ -295,7 +299,7 @@ async def test_group_delete_preserves_callable_binding_for_revealed_model() -> N
         await bindings.upsert_binding(
             callable_key=group_key,
             scope_type="organization",
-            scope_id=f"organization-{suffix}",
+            scope_id=organization_id,
             enabled=True,
             metadata=None,
         )
@@ -311,7 +315,7 @@ async def test_group_delete_preserves_callable_binding_for_revealed_model() -> N
         assert result.callable_bindings_deleted == 0
         remaining_bindings, total = await bindings.list_bindings(callable_key=group_key)
         assert total == 1
-        assert remaining_bindings[0].scope_id == f"organization-{suffix}"
+        assert remaining_bindings[0].scope_id == organization_id
     finally:
         if group_seeded:
             await db.execute_raw(
@@ -319,4 +323,9 @@ async def test_group_delete_preserves_callable_binding_for_revealed_model() -> N
                 group_key,
             )
             await _cleanup_group(db, group_id)
+        if organization_seeded:
+            await db.execute_raw(
+                "DELETE FROM deltallm_organizationtable WHERE organization_id = $1",
+                organization_id,
+            )
         await db.disconnect()

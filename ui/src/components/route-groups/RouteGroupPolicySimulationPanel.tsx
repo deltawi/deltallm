@@ -5,6 +5,7 @@ import type {
   RoutePolicySimulationOutcome,
   RoutePolicySimulationSelection,
 } from '../../lib/api';
+import { effectivePolicyMemberIds } from '../../lib/routeGroups';
 import { useRoutePolicySimulation } from '../../lib/useRoutePolicySimulation';
 
 interface RouteGroupPolicySimulationPanelProps {
@@ -81,10 +82,32 @@ export default function RouteGroupPolicySimulationPanel({
 }: RouteGroupPolicySimulationPanelProps) {
   const [iterations, setIterations] = useState('100');
   const [tags, setTags] = useState('');
-  const [outcomes, setOutcomes] = useState<Record<string, RoutePolicySimulationOutcome>>({});
   const [inputError, setInputError] = useState<string | null>(null);
-  const enabledMembers = useMemo(() => members.filter((member) => member.enabled), [members]);
-  const scenarioOutcomes = enabledMembers.map((member) => ({
+  const effectiveMemberIds = useMemo(
+    () => effectivePolicyMemberIds(policy || {}, members),
+    [members, policy],
+  );
+  const effectiveMemberIdSet = useMemo(() => new Set(effectiveMemberIds), [effectiveMemberIds]);
+  const effectiveMembers = useMemo(
+    () => members.filter((member) => effectiveMemberIdSet.has(member.deployment_id)),
+    [effectiveMemberIdSet, members],
+  );
+  const outcomeScope = JSON.stringify(effectiveMemberIds);
+  const [outcomeState, setOutcomeState] = useState<{
+    scope: string;
+    values: Record<string, RoutePolicySimulationOutcome>;
+  }>(() => ({ scope: outcomeScope, values: {} }));
+  const outcomes = outcomeState.scope === outcomeScope
+    ? outcomeState.values
+    : Object.fromEntries(
+        Object.entries(outcomeState.values).filter(([deploymentId]) => (
+          effectiveMemberIdSet.has(deploymentId)
+        )),
+      ) as Record<string, RoutePolicySimulationOutcome>;
+  if (outcomeState.scope !== outcomeScope) {
+    setOutcomeState({ scope: outcomeScope, values: outcomes });
+  }
+  const scenarioOutcomes = effectiveMembers.map((member) => ({
     deployment_id: member.deployment_id,
     outcome: outcomes[member.deployment_id] || 'success' as RoutePolicySimulationOutcome,
   }));
@@ -184,13 +207,13 @@ export default function RouteGroupPolicySimulationPanel({
 
       <div>
         <p className="mb-2 text-xs font-medium text-slate-700">Assumed provider outcomes</p>
-        {enabledMembers.length === 0 ? (
+        {effectiveMembers.length === 0 ? (
           <p className="rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500">
             There are no enabled deployments to simulate.
           </p>
         ) : (
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-            {enabledMembers.map((member) => (
+            {effectiveMembers.map((member) => (
               <label
                 key={member.deployment_id}
                 className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
@@ -200,10 +223,13 @@ export default function RouteGroupPolicySimulationPanel({
                 </span>
                 <select
                   value={outcomes[member.deployment_id] || 'success'}
-                  onChange={(event) => setOutcomes((current) => ({
-                    ...current,
-                    [member.deployment_id]: event.target.value as RoutePolicySimulationOutcome,
-                  }))}
+                  onChange={(event) => setOutcomeState({
+                    scope: outcomeScope,
+                    values: {
+                      ...outcomes,
+                      [member.deployment_id]: event.target.value as RoutePolicySimulationOutcome,
+                    },
+                  })}
                   className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
                 >
                   {OUTCOME_OPTIONS.map((option) => (
@@ -220,7 +246,7 @@ export default function RouteGroupPolicySimulationPanel({
         <button
           type="button"
           onClick={handleRun}
-          disabled={simulation.loading || !policy || enabledMembers.length === 0}
+          disabled={simulation.loading || !policy || effectiveMembers.length === 0}
           className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary shadow-sm hover:bg-brand-primary-hover disabled:opacity-50"
         >
           <RefreshCw className={`h-4 w-4 ${simulation.loading ? 'animate-spin' : ''}`} />

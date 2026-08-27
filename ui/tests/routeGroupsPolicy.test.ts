@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildPolicyFromGuided,
+  effectivePolicyMemberIds,
   LEGACY_TAG_ROUTING_STRATEGY,
   reconcileGuidedPolicyMembers,
   ROUTE_GROUP_STRATEGY_OPTIONS,
@@ -94,6 +95,19 @@ test('inherited membership follows enabled group members without serializing a s
   const reconciled = reconcileGuidedPolicyMembers(guided, changedMembers);
   assert.deepEqual(reconciled.memberIds, ['dep-b', 'dep-c']);
   assert.equal('members' in buildPolicyFromGuided({}, reconciled), false);
+});
+
+test('effective policy membership filters explicit, disabled, unknown, and duplicate members', () => {
+  assert.deepEqual(effectivePolicyMemberIds({}, MEMBERS), ['dep-a', 'dep-b']);
+  assert.deepEqual(effectivePolicyMemberIds({
+    members: [
+      { deployment_id: 'dep-b' },
+      { deployment_id: 'dep-off' },
+      { deployment_id: 'dep-a', enabled: false },
+      { deployment_id: 'missing' },
+      { deployment_id: 'dep-b' },
+    ],
+  }, MEMBERS), ['dep-b']);
 });
 
 test('legacy policy mode is read as a canonical strategy and omitted on write', () => {

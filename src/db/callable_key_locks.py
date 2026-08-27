@@ -12,7 +12,12 @@ async def lock_callable_keys(prisma: Any, *callable_keys: str) -> None:
     normalized = sorted({str(key or "").strip() for key in callable_keys if str(key or "").strip()})
     for callable_key in normalized:
         await prisma.query_raw(
-            "SELECT pg_advisory_xact_lock($1, hashtext($2))",
+            """
+            SELECT pg_advisory_xact_lock(
+                $1::integer,
+                hashtext($2)::integer
+            )::text AS locked
+            """,
             _CALLABLE_KEY_LOCK_NAMESPACE,
             callable_key,
         )

@@ -4,11 +4,7 @@ import json
 
 import pytest
 
-from src.db.repositories import (
-    ModelDeploymentNameConflictError,
-    ModelDeploymentRecord,
-    ModelDeploymentRepository,
-)
+from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 
 
@@ -29,6 +25,9 @@ class FakePrisma:
                 for deployment_id, row in self.rows.items()
                 if row["model_name"] == model_name and deployment_id != excluded
             ][:1]
+        if "SELECT model_name" in query and "WHERE deployment_id = $1" in query:
+            row = self.rows.get(str(args[0]))
+            return [{"model_name": row["model_name"]}] if row else []
         if (
             "SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info"
             in query
@@ -214,7 +213,7 @@ async def test_model_deployment_repository_bulk_insert_if_empty_only_once():
 
 
 @pytest.mark.asyncio
-async def test_model_deployment_repository_rejects_duplicate_model_name() -> None:
+async def test_model_deployment_repository_preserves_duplicate_model_name() -> None:
     repo = ModelDeploymentRepository(FakePrisma())
     await repo.create(
         ModelDeploymentRecord(
@@ -224,14 +223,17 @@ async def test_model_deployment_repository_rejects_duplicate_model_name() -> Non
         )
     )
 
-    with pytest.raises(ModelDeploymentNameConflictError, match="shared-model"):
-        await repo.create(
-            ModelDeploymentRecord(
-                deployment_id="dep-b",
-                model_name="shared-model",
-                deltallm_params={"model": "openai/b"},
-            )
+    await repo.create(
+        ModelDeploymentRecord(
+            deployment_id="dep-b",
+            model_name="shared-model",
+            deltallm_params={"model": "openai/b"},
         )
+    )
+
+    rows = await repo.list_all()
+    assert [row.deployment_id for row in rows] == ["dep-a", "dep-b"]
+    assert {row.model_name for row in rows} == {"shared-model"}
 
 
 @pytest.mark.asyncio

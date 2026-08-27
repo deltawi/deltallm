@@ -30,6 +30,14 @@ strategy:
     maxUnavailable: 0
     maxSurge: 1
 
+# Router Redis keys moved from an unscoped schema to the v1 application and
+# environment namespace. Upgrades from an unmarked legacy release must
+# explicitly confirm that every old API and worker pod has been drained and
+# stopped before Recreate starts v1 pods. Later v1 upgrades detect the marker.
+routerStateSchemaCutover:
+  enabled: true
+  acknowledged: false
+
 service:
   type: ClusterIP
   port: 4000

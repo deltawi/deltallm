@@ -95,6 +95,35 @@ function memberReferenceFromEntry(entry: unknown): string | null {
   return null;
 }
 
+export function effectivePolicyMemberIds(
+  policy: Record<string, unknown>,
+  memberOptions: PolicyMemberOption[],
+): string[] {
+  const enabledIds = new Set(
+    memberOptions.filter((member) => member.enabled).map((member) => member.deployment_id),
+  );
+  if (!Array.isArray(policy.members)) {
+    return memberOptions
+      .filter((member) => member.enabled)
+      .map((member) => member.deployment_id);
+  }
+
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of policy.members) {
+    const deploymentId = memberReferenceFromEntry(entry);
+    if (
+      !deploymentId
+      || !enabledIds.has(deploymentId)
+      || seen.has(deploymentId)
+      || (isObjectRecord(entry) && entry.enabled === false)
+    ) continue;
+    seen.add(deploymentId);
+    selected.push(deploymentId);
+  }
+  return selected;
+}
+
 function memberWeight(entry: unknown): string {
   if (!isObjectRecord(entry)) return '';
   return toIntegerString(entry.weight, 1);
@@ -139,16 +168,7 @@ export function toGuidedPolicy(
     const deploymentId = memberReferenceFromEntry(entry);
     if (deploymentId) entriesById.set(deploymentId, entry);
   }
-  const enabledOptionIds = memberOptions
-    .filter((member) => member.enabled)
-    .map((member) => member.deployment_id);
-  const selectedMembers = hasExplicitMembers
-    ? memberEntries.flatMap((entry) => {
-        const deploymentId = memberReferenceFromEntry(entry);
-        if (!deploymentId || (isObjectRecord(entry) && entry.enabled === false)) return [];
-        return [deploymentId];
-      })
-    : enabledOptionIds;
+  const selectedMembers = effectivePolicyMemberIds(policy, memberOptions);
   const memberWeights = Object.fromEntries(memberOptions.map((member) => {
     const policyWeight = memberWeight(entriesById.get(member.deployment_id));
     return [member.deployment_id, policyWeight];

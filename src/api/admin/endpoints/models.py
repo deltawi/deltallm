@@ -39,8 +39,6 @@ from src.router.runtime_generation import (
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import (
-    DuplicateModelNameError,
-    ensure_model_name_available,
     resolve_runtime_deltallm_params,
 )
 from src.services.named_credentials import (
@@ -317,8 +315,6 @@ async def _sync_auto_follow_org_bindings(app: Any) -> None:
 def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
     try:
         validate_provider_mode_compatibility(model_config)
-    except DuplicateModelNameError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -676,12 +672,6 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
             status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required"
         )
     deployment_id = str(payload.get("deployment_id") or f"{model_name}-{secrets.token_hex(4)}")
-    try:
-        ensure_model_name_available(
-            getattr(request.app.state, "model_registry", {}) or {}, model_name=model_name
-        )
-    except DuplicateModelNameError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     model_config = {
         "deployment_id": deployment_id,
         "model_name": model_name,
@@ -809,14 +799,6 @@ async def update_model(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required"
         )
-    try:
-        ensure_model_name_available(
-            getattr(request.app.state, "model_registry", {}) or {},
-            model_name=new_model_name,
-            exclude_deployment_id=deployment_id,
-        )
-    except DuplicateModelNameError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     model_config = {
         "deployment_id": deployment_id,
         "model_name": new_model_name,

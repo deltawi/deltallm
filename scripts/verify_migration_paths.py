@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Verify current migrations on fresh and last-release upgrade databases.
+"""Verify current migrations on fresh, last-release, and shared-feature databases.
 
-The verifier creates two uniquely named disposable databases, applies the current
-migration chain to one, and upgrades the other from a Git ref after seeding data
-that exercises additive telemetry columns. Both databases are dropped on exit.
+The verifier creates uniquely named disposable databases, applies the current
+migration chain to one, upgrades one from a Git ref after seeding compatibility
+data, and upgrades one from the already-shared route-policy migration. Every
+database is dropped on exit.
 """
 
 from __future__ import annotations
@@ -31,7 +32,10 @@ UPGRADE_EMAIL_ID = "migration-upgrade-fixture-email"
 UPGRADE_SPEND_EVENT_ID = "migration-upgrade-fixture-spend"
 UPGRADE_ROUTE_GROUP_ID = "migration-upgrade-route-group"
 UPGRADE_MODEL_DEPLOYMENT_ID = "migration-upgrade-model-deployment"
+UPGRADE_MODEL_DEPLOYMENT_SECOND_ID = "migration-upgrade-model-deployment-second"
 UPGRADE_MODEL_NAME = "migration-upgrade-model"
+STABLE_RELEASE_TAG_PATTERN = re.compile(r"\Av\d+\.\d+\.\d+\Z")
+SHARED_ROUTE_POLICY_MIGRATION_REF = "3372602bf7bff6107ee9595217b7f2fd75da61cd"
 
 
 def database_url_for(base_url: str, database_name: str) -> str:
@@ -127,15 +131,22 @@ def _resolve_prisma_command(explicit: str | None) -> str:
 
 def _default_base_ref() -> str:
     configured = os.getenv("MIGRATION_TEST_BASE_REF")
-    if configured:
-        return configured
-    return subprocess.run(
-        ["git", "describe", "--tags", "--abbrev=0"],
+    if configured and (normalized := configured.strip()):
+        return normalized
+    tags = subprocess.run(
+        ["git", "tag", "--merged", "origin/main", "--sort=-version:refname"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.strip()
+    ).stdout.splitlines()
+    try:
+        return next(tag for tag in tags if STABLE_RELEASE_TAG_PATTERN.fullmatch(tag))
+    except StopIteration as exc:
+        raise RuntimeError(
+            "no stable release tag reachable from origin/main; "
+            "set MIGRATION_TEST_BASE_REF explicitly"
+        ) from exc
 
 
 def _create_database(prisma: str, admin_url: str, database_name: str) -> None:
@@ -200,7 +211,8 @@ VALUES
 INSERT INTO deltallm_modeldeployment
   (deployment_id, model_name, deltallm_params)
 VALUES
-  ('{UPGRADE_MODEL_DEPLOYMENT_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb);
+  ('{UPGRADE_MODEL_DEPLOYMENT_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb),
+  ('{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb);
 
 INSERT INTO deltallm_routegroup
   (route_group_id, group_key, mode)
@@ -214,6 +226,24 @@ VALUES
    '{{"strategy":"weighted","server_revision":1}}'::jsonb, NOW()),
   ('migration-upgrade-route-policy-2', '{UPGRADE_ROUTE_GROUP_ID}', 2, 'published',
    '{{"strategy":"least-busy","server_revision":2}}'::jsonb, NOW());
+""",
+    )
+
+
+def _seed_shared_migration_fixture(
+    prisma: str,
+    database_url: str,
+    shared_schema: Path,
+) -> None:
+    _db_execute(
+        prisma,
+        schema=shared_schema,
+        database_url=database_url,
+        sql=f"""
+INSERT INTO deltallm_modeldeployment
+  (deployment_id, model_name, deltallm_params)
+VALUES
+  ('{UPGRADE_MODEL_DEPLOYMENT_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb);
 """,
     )
 
@@ -338,14 +368,25 @@ BEGIN
         AND route_groups_initialized = FALSE) <> 1 THEN
     RAISE EXCEPTION 'route runtime revision seed row is invalid';
   END IF;
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1
     FROM pg_indexes
     WHERE schemaname = 'public'
       AND indexname = 'deltallm_modeldeployment_model_name_key'
-      AND indexdef LIKE 'CREATE UNIQUE INDEX%'
   ) THEN
-    RAISE EXCEPTION 'model deployment name uniqueness is missing';
+    RAISE EXCEPTION 'model deployment name uniqueness was not removed';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND indexname = 'deltallm_modeldeployment_model_name_idx'
+      AND indexdef NOT LIKE 'CREATE UNIQUE INDEX%'
+  ) THEN
+    RAISE EXCEPTION 'non-unique model deployment name index is missing';
+  END IF;
+  IF to_regclass('public._deltallm_model_name_restore_20260823') IS NOT NULL THEN
+    RAISE EXCEPTION 'temporary model-name restore table was not removed';
   END IF;
 END
 $migration_verify$;
@@ -463,20 +504,73 @@ BEGIN
 
   SELECT count(*) INTO fixture_count
   FROM deltallm_modeldeployment
-  WHERE deployment_id = '{UPGRADE_MODEL_DEPLOYMENT_ID}'
+  WHERE deployment_id IN (
+      '{UPGRADE_MODEL_DEPLOYMENT_ID}',
+      '{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}'
+    )
     AND model_name = '{UPGRADE_MODEL_NAME}';
-  IF fixture_count <> 1 THEN
-    RAISE EXCEPTION 'model deployment upgrade fixture was not preserved';
+  IF fixture_count <> 2 THEN
+    RAISE EXCEPTION 'implicit model-group upgrade fixtures were not preserved';
   END IF;
 
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1
     FROM pg_indexes
     WHERE schemaname = 'public'
       AND indexname = 'deltallm_modeldeployment_model_name_key'
-      AND indexdef LIKE 'CREATE UNIQUE INDEX%'
   ) THEN
-    RAISE EXCEPTION 'model deployment name uniqueness was not installed';
+    RAISE EXCEPTION 'model deployment name uniqueness was not removed';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND indexname = 'deltallm_modeldeployment_model_name_idx'
+      AND indexdef NOT LIKE 'CREATE UNIQUE INDEX%'
+  ) THEN
+    RAISE EXCEPTION 'non-unique model deployment name index was not installed';
+  END IF;
+  IF to_regclass('public._deltallm_model_name_restore_20260823') IS NOT NULL THEN
+    RAISE EXCEPTION 'temporary model-name restore table was not removed';
+  END IF;
+END
+$migration_verify$;
+""",
+    )
+
+
+def _verify_shared_migration_database(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=f"""
+INSERT INTO deltallm_modeldeployment
+  (deployment_id, model_name, deltallm_params)
+VALUES
+  ('{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb);
+
+DO $migration_verify$
+BEGIN
+  IF (
+    SELECT count(*)
+    FROM deltallm_modeldeployment
+    WHERE model_name = '{UPGRADE_MODEL_NAME}'
+      AND deployment_id IN (
+        '{UPGRADE_MODEL_DEPLOYMENT_ID}',
+        '{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}'
+      )
+  ) <> 2 THEN
+    RAISE EXCEPTION 'shared-migration database did not accept an implicit model group';
+  END IF;
+  IF to_regclass('public.deltallm_modeldeployment_model_name_key') IS NOT NULL THEN
+    RAISE EXCEPTION 'shared-migration model-name uniqueness was not removed';
+  END IF;
+  IF to_regclass('public.deltallm_modeldeployment_model_name_idx') IS NULL THEN
+    RAISE EXCEPTION 'shared-migration non-unique model-name index is missing';
+  END IF;
+  IF to_regclass('public._deltallm_model_name_restore_20260823') IS NOT NULL THEN
+    RAISE EXCEPTION 'shared-migration temporary model-name restore table was not removed';
   END IF;
 END
 $migration_verify$;
@@ -488,25 +582,36 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
     suffix = uuid.uuid4().hex[:12]
     fresh_name = f"deltallm_migration_verify_{suffix}_fresh"
     upgrade_name = f"deltallm_migration_verify_{suffix}_upgrade"
+    shared_name = f"deltallm_migration_verify_{suffix}_shared"
     created: list[str] = []
 
     print(f"Verifying fresh install and upgrade from {base_ref}...")
     try:
-        for name in (fresh_name, upgrade_name):
+        for name in (fresh_name, upgrade_name, shared_name):
             _create_database(prisma, admin_url, name)
             created.append(name)
 
         fresh_url = database_url_for(admin_url, fresh_name)
         upgrade_url = database_url_for(admin_url, upgrade_name)
+        shared_url = database_url_for(admin_url, shared_name)
         _migrate(prisma, schema=CURRENT_SCHEMA, database_url=fresh_url)
         _verify_fresh_database(prisma, fresh_url)
 
         with tempfile.TemporaryDirectory(prefix="deltallm-migration-base-") as temp:
-            base_schema = _extract_prisma_at_ref(base_ref, Path(temp))
+            temp_root = Path(temp)
+            base_schema = _extract_prisma_at_ref(base_ref, temp_root / "base")
             _migrate(prisma, schema=base_schema, database_url=upgrade_url)
             _seed_upgrade_fixture(prisma, upgrade_url, base_schema)
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=upgrade_url)
+            shared_schema = _extract_prisma_at_ref(
+                SHARED_ROUTE_POLICY_MIGRATION_REF,
+                temp_root / "shared",
+            )
+            _migrate(prisma, schema=shared_schema, database_url=shared_url)
+            _seed_shared_migration_fixture(prisma, shared_url, shared_schema)
+            _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
         _verify_upgrade_database(prisma, upgrade_url)
+        _verify_shared_migration_database(prisma, shared_url)
     finally:
         primary_error = sys.exc_info()[1]
         cleanup_errors: list[subprocess.CalledProcessError] = []
@@ -518,7 +623,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         if cleanup_errors and primary_error is None:
             raise cleanup_errors[0]
 
-    print("Fresh-install and last-release upgrade migration checks passed.")
+    print("Fresh-install, last-release, and shared-feature migration checks passed.")
 
 
 def main() -> None:

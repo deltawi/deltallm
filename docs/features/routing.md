@@ -414,7 +414,9 @@ scoped or deleted.
 
 This namespace is a schema cutover from the earlier raw router keys. Drain replicas running the old
 binary before namespaced replicas accept traffic, and use the same drain procedure for rollback;
-mixed binaries would otherwise maintain separate admission and cooldown state.
+mixed binaries would otherwise maintain separate admission and cooldown state. The
+[router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md) documents the guarded
+Helm upgrade and rollback sequence.
 
 During a Redis outage, `redis_degraded_mode: fail_open` uses bounded process-local health state and
 reports the router backend as degraded; it does not claim that state is cluster-wide. After Redis

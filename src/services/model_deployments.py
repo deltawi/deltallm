@@ -17,37 +17,6 @@ if TYPE_CHECKING:
     from src.config_runtime.secrets import SecretResolver
 
 
-class DuplicateModelNameError(ValueError):
-    """Raised when multiple deployments share the same public model name."""
-
-
-def _raise_duplicate_model_name(model_name: str) -> None:
-    raise DuplicateModelNameError(f"Duplicate model_name '{model_name}' is not allowed")
-
-
-def ensure_unique_model_names(model_names: list[str]) -> None:
-    seen: set[str] = set()
-    for raw_name in model_names:
-        model_name = str(raw_name).strip()
-        if model_name in seen:
-            _raise_duplicate_model_name(model_name)
-        seen.add(model_name)
-
-
-def ensure_model_name_available(
-    model_registry: dict[str, list[dict[str, Any]]],
-    *,
-    model_name: str,
-    exclude_deployment_id: str | None = None,
-) -> None:
-    deployments = model_registry.get(model_name, [])
-    for index, deployment in enumerate(deployments):
-        deployment_id = str(deployment.get("deployment_id") or f"{model_name}-{index}")
-        if exclude_deployment_id is not None and deployment_id == exclude_deployment_id:
-            continue
-        _raise_duplicate_model_name(model_name)
-
-
 def _deployment_id(model_name: str, index: int, value: str | None) -> str:
     if value:
         return str(value)
@@ -78,7 +47,6 @@ async def _named_credentials_by_id(
 
 
 def model_records_from_config(cfg: AppConfig) -> list[ModelDeploymentRecord]:
-    ensure_unique_model_names([entry.model_name for entry in cfg.model_list])
     records: list[ModelDeploymentRecord] = []
     for index, entry in enumerate(cfg.model_list):
         records.append(
@@ -107,7 +75,6 @@ async def build_model_registry_from_config(
     named_credential_repository: NamedCredentialRepository | None = None,
     secret_resolver: "SecretResolver | None" = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    ensure_unique_model_names([entry.model_name for entry in cfg.model_list])
     named_credentials = await _named_credentials_by_id(
         named_credential_repository,
         [
@@ -159,7 +126,6 @@ async def build_model_registry_from_records(
     *,
     secret_resolver: "SecretResolver | None" = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    ensure_unique_model_names([record.model_name for record in records])
     named_credentials = await _named_credentials_by_id(
         named_credential_repository,
         [record.named_credential_id for record in records if record.named_credential_id],

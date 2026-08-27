@@ -10,6 +10,7 @@ from src.db.named_credentials import NamedCredentialRecord
 from src.db.repositories import ModelDeploymentRecord
 from src.services.model_deployments import (
     bootstrap_model_deployments_from_config,
+    build_model_registry_from_config,
     load_model_registry,
     model_records_from_config,
 )
@@ -45,7 +46,9 @@ class FakeNamedCredentialRepository:
 
 @pytest.mark.asyncio
 async def test_load_model_registry_prefers_db_records():
-    settings = SimpleNamespace(openai_api_key="default-key", openai_base_url="https://api.openai.com/v1")
+    settings = SimpleNamespace(
+        openai_api_key="default-key", openai_base_url="https://api.openai.com/v1"
+    )
     cfg = AppConfig.model_validate(
         {
             "model_list": [
@@ -78,7 +81,9 @@ async def test_load_model_registry_prefers_db_records():
 
 @pytest.mark.asyncio
 async def test_load_model_registry_falls_back_to_config_when_table_empty():
-    settings = SimpleNamespace(openai_api_key="default-key", openai_base_url="https://api.openai.com/v1")
+    settings = SimpleNamespace(
+        openai_api_key="default-key", openai_base_url="https://api.openai.com/v1"
+    )
     cfg = AppConfig.model_validate(
         {
             "model_list": [
@@ -103,7 +108,9 @@ async def test_load_model_registry_falls_back_to_config_when_table_empty():
 
 @pytest.mark.asyncio
 async def test_load_model_registry_db_only_raises_when_table_empty():
-    settings = SimpleNamespace(openai_api_key="default-key", openai_base_url="https://api.openai.com/v1")
+    settings = SimpleNamespace(
+        openai_api_key="default-key", openai_base_url="https://api.openai.com/v1"
+    )
     cfg = AppConfig.model_validate(
         {
             "model_list": [
@@ -123,7 +130,9 @@ async def test_load_model_registry_db_only_raises_when_table_empty():
 
 @pytest.mark.asyncio
 async def test_load_model_registry_config_only_ignores_db_records():
-    settings = SimpleNamespace(openai_api_key="default-key", openai_base_url="https://api.openai.com/v1")
+    settings = SimpleNamespace(
+        openai_api_key="default-key", openai_base_url="https://api.openai.com/v1"
+    )
     cfg = AppConfig.model_validate(
         {
             "model_list": [
@@ -146,7 +155,9 @@ async def test_load_model_registry_config_only_ignores_db_records():
         ]
     )
 
-    model_registry, source = await load_model_registry(repo, cfg, settings, source_mode="config_only")
+    model_registry, source = await load_model_registry(
+        repo, cfg, settings, source_mode="config_only"
+    )
 
     assert source == "config"
     assert sorted(model_registry.keys()) == ["cfg-model"]
@@ -199,9 +210,10 @@ def test_model_records_from_config_preserves_request_pricing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_model_registry_rejects_duplicate_model_names_from_db() -> None:
-    """Duplicate model names in DB records are rejected per current contract."""
-    settings = SimpleNamespace(openai_api_key="default-key", openai_base_url="https://api.openai.com/v1")
+async def test_load_model_registry_groups_duplicate_model_names_from_db() -> None:
+    settings = SimpleNamespace(
+        openai_api_key="default-key", openai_base_url="https://api.openai.com/v1"
+    )
     cfg = AppConfig.model_validate({})
     repo = FakeModelRepository(
         records=[
@@ -220,10 +232,46 @@ async def test_load_model_registry_rejects_duplicate_model_names_from_db() -> No
         ]
     )
 
-    from src.services.model_deployments import DuplicateModelNameError
+    model_registry, source = await load_model_registry(repo, cfg, settings)
 
-    with pytest.raises(DuplicateModelNameError, match="Duplicate model_name 'shared-model' is not allowed"):
-        await load_model_registry(repo, cfg, settings)
+    assert source == "db"
+    assert [deployment["deployment_id"] for deployment in model_registry["shared-model"]] == [
+        "db-1",
+        "db-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_registry_groups_duplicate_model_names_from_static_config() -> None:
+    settings = SimpleNamespace(
+        openai_api_key="default-key",
+        openai_base_url="https://api.openai.com/v1",
+    )
+    cfg = AppConfig.model_validate(
+        {
+            "model_list": [
+                {
+                    "deployment_id": "cfg-1",
+                    "model_name": "shared-model",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                },
+                {
+                    "deployment_id": "cfg-2",
+                    "model_name": "shared-model",
+                    "deltallm_params": {"model": "azure/gpt-4o-mini"},
+                },
+            ]
+        }
+    )
+
+    records = model_records_from_config(cfg)
+    registry = await build_model_registry_from_config(cfg, settings)
+
+    assert [record.deployment_id for record in records] == ["cfg-1", "cfg-2"]
+    assert [deployment["deployment_id"] for deployment in registry["shared-model"]] == [
+        "cfg-1",
+        "cfg-2",
+    ]
 
 
 @pytest.mark.asyncio
@@ -279,7 +327,9 @@ async def test_load_model_registry_resolves_named_credential_connection_params()
 
 
 @pytest.mark.asyncio
-async def test_load_model_registry_resolves_named_credential_env_secret_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_load_model_registry_resolves_named_credential_env_secret_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OPENAI_PROVIDER_KEY", "env-secret")
     settings = SimpleNamespace(openai_api_key=None, openai_base_url="https://api.openai.com/v1")
     cfg = AppConfig.model_validate({})

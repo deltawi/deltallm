@@ -8,18 +8,30 @@ import { JSDOM } from 'jsdom';
 import RouteGroupPolicySimulationPanel from '../src/components/route-groups/RouteGroupPolicySimulationPanel';
 
 interface PendingFetch {
+  input: RequestInfo | URL;
+  init?: RequestInit;
   resolve: (response: Response) => void;
   reject: (error: Error) => void;
 }
 
-const MEMBERS = [{
-  membership_id: 'member-1',
-  route_group_id: 'group-1',
-  deployment_id: 'dep-a',
-  enabled: true,
-  weight: 1,
-  priority: 0,
-}];
+const MEMBERS = [
+  {
+    membership_id: 'member-1',
+    route_group_id: 'group-1',
+    deployment_id: 'dep-a',
+    enabled: true,
+    weight: 1,
+    priority: 0,
+  },
+  {
+    membership_id: 'member-2',
+    route_group_id: 'group-1',
+    deployment_id: 'dep-b',
+    enabled: true,
+    weight: 1,
+    priority: 1,
+  },
+];
 
 function simulationResponse(): Response {
   return new Response(JSON.stringify({
@@ -67,8 +79,8 @@ test('policy simulation panel covers permission, loading, results, stale, error,
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
   const requests: PendingFetch[] = [];
-  globalThis.fetch = (async () => new Promise<Response>((resolve, reject) => {
-    requests.push({ resolve, reject });
+  globalThis.fetch = (async (input, init) => new Promise<Response>((resolve, reject) => {
+    requests.push({ input, init, resolve, reject });
   })) as typeof fetch;
   const rootNode = document.getElementById('root');
   assert.ok(rootNode);
@@ -105,7 +117,30 @@ test('policy simulation panel covers permission, loading, results, stale, error,
     assert.match(document.body.innerHTML, /md:hidden/);
     assert.match(document.body.innerHTML, /hidden overflow-x-auto md:block/);
 
-    await act(async () => renderPanel(true, { mode: 'weighted', strategy: 'weighted' }));
+    const depBSelect = Array.from(document.querySelectorAll('select')).find(
+      (select) => select.parentElement?.textContent?.includes('dep-b'),
+    );
+    assert.ok(depBSelect);
+    await act(async () => {
+      depBSelect.value = 'timeout';
+      depBSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    });
+
+    const explicitPolicy = {
+      strategy: 'weighted',
+      members: [{ deployment_id: 'dep-a' }],
+    };
+    await act(async () => renderPanel(true, explicitPolicy));
+    assert.doesNotMatch(document.body.textContent || '', /dep-b/);
+
+    await act(async () => renderPanel(true, { strategy: 'weighted' }));
+    const restoredDepBSelect = Array.from(document.querySelectorAll('select')).find(
+      (select) => select.parentElement?.textContent?.includes('dep-b'),
+    );
+    assert.ok(restoredDepBSelect);
+    assert.equal(restoredDepBSelect.value, 'success');
+
+    await act(async () => renderPanel(true, explicitPolicy));
     assert.match(document.body.textContent || '', /results are stale/);
 
     const rerunButton = Array.from(document.querySelectorAll('button')).find(
@@ -113,6 +148,9 @@ test('policy simulation panel covers permission, loading, results, stale, error,
     );
     assert.ok(rerunButton);
     await act(async () => rerunButton.click());
+    assert.equal(typeof requests[1].init?.body, 'string');
+    const requestBody = JSON.parse(String(requests[1].init?.body));
+    assert.deepEqual(requestBody.outcomes, []);
     await act(async () => {
       requests[1].reject(new Error('simulation unavailable'));
       await Promise.resolve();

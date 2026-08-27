@@ -83,7 +83,9 @@ Every router key is scoped as `deltallm:<app_env>:v1:<router-capability>:<identi
 schema cutover from the previous unscoped ephemeral router keys: drain replicas running the old
 binary before sending traffic to namespaced replicas, and use the same drain procedure for
 rollback. Do not run the two key schemas concurrently because admission and cooldown ownership
-would be split.
+would be split. Helm operators must follow the
+[router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md); chart upgrades are
+blocked until the drain is acknowledged and `strategy.type=Recreate` is selected.
 
 ## Supported Strategies
 

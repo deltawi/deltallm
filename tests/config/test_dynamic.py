@@ -1958,7 +1958,7 @@ async def test_model_hot_reload_manager_invalidates_route_group_l1_cache_on_mode
 
 
 @pytest.mark.asyncio
-async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
+async def test_model_hot_reload_manager_adds_deployment_to_existing_model_group() -> None:
     settings = SimpleNamespace(
         openai_api_key="default-key",
         openai_base_url="https://api.openai.com/v1",
@@ -2012,7 +2012,20 @@ async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
             turn_off_message_logging=False,
         )
     )
-    dynamic = DynamicConfigManager(db_client=FakeDB(), redis_client=None, file_config={})
+    dynamic = DynamicConfigManager(
+        db_client=FakeDB(),
+        redis_client=None,
+        file_config={
+            "model_list": [
+                {
+                    "model_name": "gpt-4o-mini",
+                    "deployment_id": "old-dep",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {},
+                }
+            ]
+        },
+    )
     await dynamic.initialize()
     manager = ModelHotReloadManager(
         app=app,
@@ -2021,14 +2034,18 @@ async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
         route_group_cache=FakeRouteGroupCache(),
     )
 
-    with pytest.raises(ValueError, match="Duplicate model_name 'gpt-4o-mini' is not allowed"):
-        await manager.add_model(
-            {
-                "model_name": "gpt-4o-mini",
-                "deployment_id": "new-dep",
-                "deltallm_params": {"model": "azure/gpt-4o-mini"},
-                "model_info": {"weight": 2},
-            }
-        )
+    result = await manager.add_model(
+        {
+            "model_name": "gpt-4o-mini",
+            "deployment_id": "new-dep",
+            "deltallm_params": {"model": "azure/gpt-4o-mini"},
+            "model_info": {"weight": 2},
+        }
+    )
+
+    assert result.value == "new-dep"
+    assert [
+        deployment["deployment_id"] for deployment in app.state.model_registry["gpt-4o-mini"]
+    ] == ["old-dep", "new-dep"]
 
     await dynamic.close()
