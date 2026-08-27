@@ -26,6 +26,12 @@ Create the template with three services:
 | `Postgres` | Railway PostgreSQL service | Referenced by the app through `DATABASE_URL` |
 | `Redis` | Railway Redis service | Referenced by the app through `REDIS_URL` and `DELTALLM_REDIS_URL` |
 
+!!! warning "Evaluation exposure"
+    The checked-in template uses a public application domain and `/health/readiness` as its
+    platform health check. DeltaLLM does not authenticate the readiness payload. Treat this as an
+    evaluation tradeoff; a production design must put detailed readiness and `/metrics` on a
+    private operational route while preserving a coarse liveness probe for the platform.
+
 Use the published Docker image for a fully CLI-driven template setup. Use a GitHub repo source only when Railway's GitHub integration can fetch the repository; otherwise `templates create` can reject the source during generation.
 
 ## App Service Settings
@@ -105,23 +111,20 @@ Set `APP_URL` to the public Railway domain:
 export APP_URL="https://your-deltallm-service.up.railway.app"
 ```
 
-Check readiness:
+Check coarse liveness from the public domain:
 
 ```bash
-curl "$APP_URL/health/readiness"
+curl "$APP_URL/health/liveliness"
 ```
 
 Expected response:
 
 ```json
-{
-  "status": "ok",
-  "checks": {
-    "redis": true,
-    "database": true
-  }
-}
+{"status": "ok"}
 ```
+
+Railway itself continues to use readiness for deployment health. Do not use its detailed payload
+as a public status API.
 
 Log in to the Admin UI at `APP_URL` with:
 

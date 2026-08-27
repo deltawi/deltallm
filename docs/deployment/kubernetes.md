@@ -527,23 +527,40 @@ prometheus:
     enabled: true
 ```
 
-## Optional migration job
+## Production migration sequence
 
 The current container image still bootstraps Prisma on startup by default.
 
-The chart also exposes an optional `migrationJob` for teams that want a separate Kubernetes job for explicit migration control. Its default command uses the checked-in organization-deletion migration coordinator, which runs strict Prisma migrations, repairs only allowlisted interrupted concurrent indexes, performs the bounded ownership backfill, and verifies readiness:
+The chart exposes an optional `migrationJob`, but its built-in hook is a
+`post-install,post-upgrade` hook. It does not prove that schema migration finishes before a
+Deployment rollout. Its default command is also the release-specific organization-deletion
+coordinator rather than a generic migration-only contract.
+
+For production, make migration an explicit delivery stage before `helm upgrade`:
+
+1. Pin the application image by release tag and, preferably, digest.
+2. Run one retry-safe migration job using that exact release image.
+3. Wait for the job and release-specific verification to pass.
+4. Roll API and worker replicas with an explicit application command that bypasses the image's
+   bootstrap wrapper.
+
+Use this values override after the separate migration succeeds:
 
 ```yaml
 migrationJob:
-  enabled: true
-  hook:
-    enabled: true
+  enabled: false
+
+command: ["uvicorn"]
+args: ["src.main:app", "--host", "0.0.0.0", "--port", "4000"]
 ```
 
-Use that only if your rollout process is intentionally built around a separate migration step. If you want the application pods to stop using the image default bootstrap path, set `command` and `args` explicitly for the app container.
-Run this job successfully before rolling application binaries when organization deletion is part of
-the release. Keep `organization_deletion_requests_enabled: false` until the job reports `ready` and
-every API and worker replica runs the current lifecycle protocol.
+The global command also applies to the chart's batch-worker Deployment; each role still receives
+its role-specific configuration. If a release calls for the organization-deletion coordinator or
+another special cutover, run that documented workflow instead of the generic command and keep its
+feature gate disabled until every required verification passes.
+
+See [Database migrations](database-migrations.md) for the job manifest and ordering contract and
+[Upgrades and rollbacks](upgrade-and-rollback.md) for the complete release procedure.
 
 ## S3 request logging
 
@@ -626,4 +643,4 @@ helm dependency build deploy/kubernetes/helm
 | App cannot connect to Redis | Wrong Redis URL or missing Redis auth password | Check `runtime.redis.*` or bundled `redis.auth.password` |
 | Provider calls fail immediately | Missing provider env vars | Add them via `envFrom` / `env` |
 | Config change did not roll pods | External secret changed outside Helm | Restart the deployment or rotate through your secret operator |
-| Migration job fails | DB not reachable or migration command not appropriate | Inspect `kubectl logs job/<release>-migrate` and adjust `migrationJob.args` |
+| Release migration job fails | DB not reachable, migration history conflict, or wrong release workflow | Stop rollout, preserve job logs, and follow [Database migrations](database-migrations.md); do not use `db push` |

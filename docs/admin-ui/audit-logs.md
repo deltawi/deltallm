@@ -4,6 +4,10 @@ Audit Logs are the operator-facing record of control-plane and data-plane activi
 
 ![Audit Logs](images/audit-logs.png)
 
+**Access:** platform admin or `audit.read`; results remain limited to authorized tenant scope. See
+[Access requirements](access-requirements.md), the [Audit API](../api/admin.md#audit), and [Audit
+Log](../features/audit-log.md).
+
 ## What this page covers
 
 - Administrative changes such as model, route-group, prompt, key, and membership updates

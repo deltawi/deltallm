@@ -4,6 +4,10 @@ Settings control the global runtime behavior of the gateway.
 
 ![Settings](images/settings.png)
 
+**Access:** platform admin or master-key break-glass session. Changes are installation-wide. See
+[Access requirements](access-requirements.md), the [settings API](../api/admin.md#settings-and-routing-config),
+and [General Settings](../configuration/general.md).
+
 ## Main sections
 
 - **General**: runtime log level

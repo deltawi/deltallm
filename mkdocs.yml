@@ -1,8 +1,13 @@
 site_name: DeltaLLM Documentation
 site_description: Open-source LLM gateway with unified API, RBAC, guardrails, and observability
-site_url: https://docs.deltallm.io
+site_url: https://docs.deltallm.io/
 repo_url: https://github.com/deltawi/deltallm
 repo_name: deltallm
+
+# Internal plans live beside the public sources for repository-local review, but
+# they must never be rendered, indexed, or included in the public sitemap.
+exclude_docs: |
+  internal/
 
 theme:
   name: material
@@ -60,13 +65,23 @@ nav:
       - Quick Start: getting-started/quickstart.md
       - MCP Quick Start: getting-started/mcp-quickstart.md
       - Docker: getting-started/docker.md
-  - Configuration:
+  - Concepts:
+      - concepts/index.md
+      - Architecture: concepts/architecture.md
+      - Life of a Request: concepts/request-lifecycle.md
+      - Tenancy & Access: concepts/tenancy-and-access.md
+  - Configuration Reference:
       - configuration/index.md
       - Model Deployments: configuration/models.md
       - Router Settings: configuration/router.md
-      - General Settings: configuration/general.md
-  - Features:
+      - General Settings Guide: configuration/general.md
+      - Complete Settings Index: configuration/general-settings-reference.md
+  - Providers:
+      - providers/index.md
+      - Capability & Model Catalog: providers/capabilities.md
+  - Guides:
       - features/index.md
+      - Operator Journeys: guides/operator-journeys.md
       - Authentication & SSO: features/authentication.md
       - MCP Gateway & Tools: features/mcp.md
       - Routing & Failover: features/routing.md
@@ -80,7 +95,9 @@ nav:
       - Observability: features/observability.md
   - Admin UI:
       - Overview: admin-ui/index.md
+      - Access Requirements: admin-ui/access-requirements.md
       - Dashboard: admin-ui/dashboard.md
+      - Playground: admin-ui/playground.md
       - AI Gateway:
           - Models: admin-ui/models.md
           - Tiers: admin-ui/tiers.md
@@ -101,20 +118,38 @@ nav:
           - Settings: admin-ui/settings.md
   - API Reference:
       - api/index.md
+      - API Conventions: api/conventions.md
+      - OpenAPI Schema: api/openapi.md
       - Proxy Endpoints: api/proxy.md
       - Anthropic Messages: api/messages.md
       - MCP Gateway & Tooling: api/mcp.md
       - Admin Endpoints: api/admin.md
       - Health & Metrics: api/health.md
-  - Deployment:
+  - Security:
+      - Security Model: security/index.md
+      - Production Hardening: security/hardening.md
+      - Report a Vulnerability: security/vulnerability-reporting.md
+  - Deployment & Operations:
       - deployment/index.md
+      - Production Checklist: deployment/production-checklist.md
+      - Database Migrations: deployment/database-migrations.md
+      - Upgrades & Rollbacks: deployment/upgrade-and-rollback.md
+      - Backup & Restore: deployment/backup-and-restore.md
+      - Incident Runbooks: deployment/incident-runbooks.md
       - Railway: deployment/railway.md
       - Docker: deployment/docker.md
       - Governance Rollout: deployment/governance.md
       - Kubernetes: deployment/kubernetes.md
       - Organization Tiers Rollout: deployment/organization-tiers-rollout.md
+      - Batch Scheduler Rollout: deployment/batch-scheduler-rollout.md
       - Batch Webhook Rollout: deployment/batch-webhook-rollout.md
+      - Router State Schema Cutover: deployment/router-state-schema-cutover.md
+      - Telemetry Ingestion Rollout: deployment/telemetry-ingestion-rollout.md
+      - Usage Reporting V2 Rollout: deployment/usage-reporting-v2.md
       - Upstream HTTP Tuning: deployment/upstream-http.md
+  - Project:
+      - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
+      - Documentation Governance: project/documentation-governance.md
 
 extra:
   social:

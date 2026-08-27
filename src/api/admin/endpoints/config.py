@@ -154,7 +154,14 @@ def _asset_response_headers(
     }
 
 
-@router.api_route("/ui/api/branding/assets/{asset_key}", methods=["GET", "HEAD"])
+@router.get(
+    "/ui/api/branding/assets/{asset_key}",
+    operation_id="get_ui_branding_asset",
+)
+@router.head(
+    "/ui/api/branding/assets/{asset_key}",
+    include_in_schema=False,
+)
 async def get_ui_branding_asset(
     request: Request,
     asset_key: str,

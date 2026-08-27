@@ -4,6 +4,10 @@ People & Access is the RBAC and onboarding control surface for platform accounts
 
 ![People & Access](images/people-and-access.png)
 
+**Access:** platform admin. This page changes platform accounts, invitations, and memberships. See
+[Access requirements](access-requirements.md), [Authentication and SSO](../features/authentication.md),
+and the [access/identity API](../api/admin.md#access-and-identity).
+
 ## What this page manages
 
 - Platform accounts

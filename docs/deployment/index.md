@@ -7,7 +7,7 @@ Use this section when you are moving from local evaluation to a repeatable envir
 | Path | Best for | Start here |
 |------|----------|------------|
 | Railway | Managed one-click evaluation stack with hosted PostgreSQL and Redis | [Railway](railway.md) |
-| Docker Compose | Single instance, demos, small teams, simple self-hosting | [Docker](docker.md) |
+| Docker Compose | Local evaluation, demos, and single-host testing | [Docker](docker.md) |
 | Kubernetes | Multi-instance production, autoscaling, managed infrastructure | [Kubernetes](kubernetes.md) |
 | Batch production setup | Async embedding/chat workloads with dedicated workers and shared storage | [Batch API & Production Setup](../features/batching.md#recommended-production-setup) |
 | Batch webhook rollout | Optional terminal callbacks, split workers, alerts, rollout, and rollback | [Batch Webhook Rollout](batch-webhook-rollout.md) |
@@ -18,11 +18,11 @@ Use this section when you are moving from local evaluation to a repeatable envir
 ## Quick Path to Success
 
 1. Choose Railway if you want the fastest managed evaluation deployment
-2. Choose Docker if you want a production-style setup on your own host
+2. Choose Docker if you want a local or single-host evaluation
 3. Choose Kubernetes if you need replicas, ingress, and cluster-native operations
 4. Generate a valid `DELTALLM_MASTER_KEY` and `DELTALLM_SALT_KEY`
 5. Keep secrets in environment variables, not in `config.yaml`
-6. Verify `/health/liveliness` and `/health/readiness` after startup
+6. Verify `/health/liveliness` and, from a trusted operator network, `/health/readiness`
 
 ## Shared Requirements
 
@@ -52,15 +52,29 @@ general_settings:
 - `GET /health/readiness` for dependency readiness
 - `GET /metrics` for Prometheus scraping
 
-### Expect Schema Setup on Startup
+Readiness, deployment diagnostics, fallback events, and metrics currently have no application
+authentication. Keep them on a private operational path. See [Health, diagnostics, and
+metrics](../api/health.md).
 
-The application runs Prisma schema setup automatically during container startup. You do not need a separate manual migration step for the default deployment paths documented here.
+### Coordinate Schema Migrations
+
+The default image runs strict Prisma migrations before Uvicorn. That is convenient for
+single-container evaluation, but it is not the multi-replica production contract. Production
+delivery must run one migration job for the pinned release, wait for success, and only then roll
+application and worker replicas with the image bootstrap command overridden. See [Database
+migrations](database-migrations.md).
 
 ## Next Steps
 
 - [Docker deployment guide](docker.md)
 - [Railway deployment guide](railway.md)
 - [Kubernetes deployment guide](kubernetes.md)
+- [Production checklist](production-checklist.md)
+- [Database migrations](database-migrations.md)
+- [Upgrades and rollbacks](upgrade-and-rollback.md)
+- [Backup and restore](backup-and-restore.md)
+- [Incident runbooks](incident-runbooks.md)
+- [Security hardening](../security/hardening.md)
 - [Upstream HTTP tuning](upstream-http.md)
 - [Scoped usage reporting rollout](usage-reporting-v2.md)
 - [Durable telemetry ingestion rollout](telemetry-ingestion-rollout.md)

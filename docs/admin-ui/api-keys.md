@@ -4,6 +4,11 @@ The API Keys page is where operators issue credentials for applications, teams, 
 
 ![API Keys](images/api-keys.png)
 
+**Access:** platform admins and roles with `key.read`/`key.update` see authorized keys; eligible
+team members with `key.create_self` can manage only their own keys under team policy. See [Access
+requirements](access-requirements.md), [Tenancy and access](../concepts/tenancy-and-access.md), and
+the [API-key admin API](../api/admin.md#api-keys).
+
 ## What this page is for
 
 - Create a new key for a team-owned application or integration

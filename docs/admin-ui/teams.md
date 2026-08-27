@@ -4,6 +4,10 @@ Teams are the working unit for developers, applications, keys, and team-level bu
 
 ![Teams](images/teams.png)
 
+**Access:** platform admin or `team.read` for authorized teams. Create/edit/member actions require
+the applicable organization or team update capability. See [Access requirements](access-requirements.md),
+[Tenancy and access](../concepts/tenancy-and-access.md), and the [Teams API](../api/admin.md#teams).
+
 ## What this page manages
 
 - Team identity and parent organization

@@ -9,6 +9,10 @@ DeltaLLM exposes multiple API surfaces:
 | [Admin Endpoints](admin.md) | `/ui/api/` and `/auth/` | Gateway management, runtime configuration, invitations, recovery, accounts, and operations |
 | [Health & Metrics](health.md) | `/health` and `/metrics` | Monitoring and diagnostics |
 
+Shared authentication, error, pagination, idempotency, correlation, and streaming behavior is
+documented in [API conventions](conventions.md). For machine-readable paths and schemas,
+download the generated [OpenAPI specification](openapi.md).
+
 ## Start Here
 
 Most developers should follow this order:

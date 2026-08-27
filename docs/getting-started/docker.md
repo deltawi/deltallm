@@ -9,7 +9,9 @@ Run DeltaLLM with Docker for a quick, reproducible setup.
 
 ## Using Docker Compose (Recommended)
 
-The project includes a `docker-compose.yaml` with two deployment profiles: **single** (one instance) and **ha** (high availability with load balancing).
+The project includes a `docker-compose.yaml` with two evaluation profiles: **single** (one
+instance) and **ha** (two instances behind a load balancer on one host). Despite its profile
+name, `ha` is a multi-instance behavior test—not a production high-availability design.
 
 ## Before You Start
 
@@ -72,7 +74,7 @@ Without `INSTALL_PRESIDIO=true`, Presidio guardrails still work, but DeltaLLM us
 
 Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
 
-### High availability (multi-instance)
+### Multi-instance evaluation
 
 Run two DeltaLLM instances behind an Nginx load balancer:
 
@@ -80,7 +82,9 @@ Run two DeltaLLM instances behind an Nginx load balancer:
 docker compose --profile ha up -d --build
 ```
 
-Each DeltaLLM container runs `prisma migrate deploy --schema=./prisma/schema.prisma` before starting the API.
+Each DeltaLLM container runs `prisma migrate deploy --schema=./prisma/schema.prisma` before
+starting the API. Concurrent startup is acceptable only for this evaluation profile. Production
+rollouts must run one coordinated migration job before starting replicas.
 
 This starts:
 - 2 DeltaLLM instances (load balanced)
@@ -89,6 +93,12 @@ This starts:
 - Redis cache
 
 DeltaLLM is available at `http://localhost`.
+
+!!! warning "This profile is not highly available"
+    Nginx, PostgreSQL, Redis, storage, and both application containers share one host and one
+    failure domain. The profile does not provide production TLS, stateful-service redundancy,
+    coordinated migrations, or recovery automation. See [Docker and Compose
+    boundaries](../deployment/docker.md) before operating outside local evaluation.
 
 Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
 
@@ -155,7 +165,9 @@ The starter config keeps the common optional features commented out with guidanc
 - JWT auth: optional bearer-token validation for proxy traffic
 - Guardrails and S3 callbacks: enable only when the related provider credentials are configured
 
-The container applies the Prisma schema automatically on boot, so you do not need a separate schema initialization step for the default Compose setup.
+The container applies strict Prisma migrations automatically on boot, so you do not need a
+separate schema initialization step for the local Compose profiles. Do not extend this
+per-container behavior to a multi-replica production rollout.
 
 ## Custom Config
 
@@ -184,7 +196,11 @@ To build an image with the full Presidio engine:
 docker build --build-arg INSTALL_PRESIDIO=true -t deltallm .
 ```
 
-The image runs `prisma migrate deploy --schema=./prisma/schema.prisma` before starting `uvicorn`, so the target database must be reachable when the container starts.
+The image runs `prisma migrate deploy --schema=./prisma/schema.prisma` before starting `uvicorn`,
+so the target database must be reachable when the container starts. This direct command is for a
+single-container evaluation. In production, pin the image, run the release migration once, and
+override the application command so replicas do not run migration bootstrap. See [Database
+migrations](../deployment/database-migrations.md).
 
 ## Health Check
 

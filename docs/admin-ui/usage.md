@@ -4,6 +4,10 @@ Usage & Spend is the analytics surface for requests, tokens, and cost.
 
 ![Usage & Spend](images/usage-and-spend.png)
 
+**Access:** platform admin or an enabled spend-read permission. The server selects platform,
+organization, team, or self scope before returning data. See [Access requirements](access-requirements.md),
+the [Spend API](../api/admin.md#spend), and [Budgets and Spend](../features/budgets.md).
+
 ## What this page provides
 
 - Date-range filtering
