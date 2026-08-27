@@ -15,6 +15,7 @@ from src.middleware.rate_limit import (
 from src.models.errors import InvalidRequestError
 from src.models.requests import EmbeddingRequest
 from src.routers.utils import enforce_budget_if_configured
+from src.router.runtime_generation import RoutingRuntimeGeneration
 from src.services.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
@@ -36,6 +37,7 @@ async def run_embedding_preflight(
     *,
     request: Request,
     payload: EmbeddingRequest,
+    routing_runtime: RoutingRuntimeGeneration,
 ) -> EmbeddingPreflightResult:
     prepared = getattr(request.state, "prepared_embedding_request", None)
     if isinstance(prepared, EmbeddingPreflightResult):
@@ -76,6 +78,7 @@ async def run_embedding_preflight(
             "callable_target_grant_service",
             None,
         ),
+        callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),

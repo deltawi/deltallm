@@ -18,6 +18,7 @@ from src.billing.audio_usage import normalize_speech_usage
 from src.billing.cost import compute_billing_result
 from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
+from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import (
     _release_rate_limits,
@@ -31,9 +32,12 @@ from src.metrics import (
     observe_api_latency,
     observe_request_latency,
 )
-from src.models.errors import InvalidRequestError
+from src.models.errors import InvalidRequestError, ProxyError
 from src.models.requests import AudioSpeechRequest
+from src.providers.base import invalid_provider_response_error, parse_provider_json_response
+from src.providers.gemini import reject_gemini_failure_response
 from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.router.router import Deployment
@@ -158,25 +162,18 @@ async def _execute_tts(
         ),
     )
     if response.status_code >= 400:
-        try:
-            upstream_body = response.json()
-            upstream_msg = upstream_body.get("error", {}).get("message", response.text)
-        except Exception:
-            upstream_msg = response.text
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "upstream TTS %s returned %d: %s", api_base, response.status_code, upstream_msg
-        )
-        raise httpx.HTTPStatusError(
-            f"Upstream TTS call failed with status {response.status_code}: {upstream_msg}",
+        status_error = httpx.HTTPStatusError(
+            f"Upstream TTS call failed with status {response.status_code}",
             request=httpx.Request("POST", f"{api_base}/audio/speech"),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error(provider, status_error)
     audio_bytes = response.content
     billing_payload: dict[str, Any] | None = None
     if upstream_payload.get("stream_format") == "sse":
         audio_bytes, billing_payload = _extract_sse_audio_and_usage(response.content)
+    if not audio_bytes:
+        raise invalid_provider_response_error()
     return {
         "_audio_bytes": audio_bytes,
         "_billing_payload": billing_payload,
@@ -202,6 +199,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         audit_action=AuditAction.AUDIO_SPEECH_REQUEST,
     )
     auth = request.state.user_api_key
+    routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
     await acquire_preflight_capacity(request, auth=auth)
     ensure_model_allowed(
         auth,
@@ -209,6 +207,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         callable_target_grant_service=getattr(
             request.app.state, "callable_target_grant_service", None
         ),
+        callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),
@@ -236,9 +235,13 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
     finally:
         await release_preflight_capacity(request)
 
-    app_router = request.app.state.router
+    app_router = routing_runtime.router
     model_group = app_router.resolve_model_group(payload.model)
-    request_context = {"metadata": {}, "user_id": auth.user_id or auth.api_key}
+    request_context = {
+        "metadata": {},
+        "user_id": auth.user_id or auth.api_key,
+        ROUTING_MODE_CONTEXT_KEY: "audio_speech",
+    }
     primary = app_router.require_deployment(
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
@@ -255,12 +258,13 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         capture_attempted_deployment(request, deployment)
 
     try:
-        result, served_deployment = await request.app.state.failover_manager.execute_with_failover(
+        result, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_tts(request, payload, dep),
             return_deployment=True,
             on_attempt=track_attempt,
+            routing_context=request_context,
             **failover_kwargs,
         )
         update_served_route_decision(
@@ -581,17 +585,25 @@ async def _execute_gemini_tts(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
+        status_error = httpx.HTTPStatusError(
             f"Upstream Gemini TTS call failed with status {response.status_code}",
             request=httpx.Request("POST", endpoint),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error("gemini", status_error)
 
-    data = response.json()
-    audio_bytes = _extract_gemini_audio_bytes(data, response_format=effective_format)
+    data = parse_provider_json_response(response)
+    reject_gemini_failure_response(data)
+    try:
+        audio_bytes = _extract_gemini_audio_bytes(data, response_format=effective_format)
+        billing_payload = _extract_gemini_billing_payload(data)
+    except ProxyError:
+        raise
+    except Exception as exc:
+        raise invalid_provider_response_error() from exc
     return {
         "_audio_bytes": audio_bytes,
-        "_billing_payload": _extract_gemini_billing_payload(data),
+        "_billing_payload": billing_payload,
         "_api_latency_ms": (perf_counter() - upstream_start) * 1000,
         "_api_base": api_base,
         "_deployment_model": deployment.deltallm_params.get("model"),
@@ -637,14 +649,18 @@ async def _execute_elevenlabs_tts(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
-            _format_elevenlabs_tts_error(response),
+        status_error = httpx.HTTPStatusError(
+            f"Upstream ElevenLabs TTS call failed with status {response.status_code}",
             request=httpx.Request("POST", endpoint),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error("elevenlabs", status_error)
 
+    audio_bytes = response.content
+    if not audio_bytes:
+        raise invalid_provider_response_error()
     return {
-        "_audio_bytes": response.content,
+        "_audio_bytes": audio_bytes,
         "_billing_payload": _extract_elevenlabs_billing_payload(response),
         "_api_latency_ms": (perf_counter() - upstream_start) * 1000,
         "_api_base": api_base,
@@ -795,25 +811,6 @@ def _extract_elevenlabs_billing_payload(response: httpx.Response) -> dict[str, A
     return {"input_characters": character_count}
 
 
-def _format_elevenlabs_tts_error(response: httpx.Response) -> str:
-    upstream_msg = response.text
-    try:
-        upstream_body = response.json()
-    except Exception:
-        upstream_body = None
-
-    if isinstance(upstream_body, Mapping):
-        detail = upstream_body.get("detail")
-        if isinstance(detail, Mapping):
-            upstream_msg = str(detail.get("message") or detail.get("detail") or upstream_msg)
-        elif detail:
-            upstream_msg = str(detail)
-        else:
-            upstream_msg = str(upstream_body.get("message") or upstream_msg)
-
-    return f"Upstream ElevenLabs TTS call failed with status {response.status_code}: {upstream_msg}"
-
-
 def _resolve_gemini_response_format(payload: AudioSpeechRequest) -> str:
     requested_format = (payload.response_format or "mp3").strip().lower()
     if requested_format in GEMINI_SUPPORTED_RESPONSE_FORMATS:
@@ -865,13 +862,18 @@ def _extract_gemini_audio_bytes(response_payload: dict[str, Any], *, response_fo
         encoded_audio = inline_data.get("data")
         if not isinstance(encoded_audio, str) or not encoded_audio:
             continue
-        pcm_bytes = base64.b64decode(encoded_audio)
+        try:
+            pcm_bytes = base64.b64decode(encoded_audio, validate=True)
+        except ValueError as exc:
+            raise invalid_provider_response_error() from exc
+        if not pcm_bytes:
+            raise invalid_provider_response_error()
         if response_format == "pcm":
             return pcm_bytes
         mime_type = str(inline_data.get("mimeType") or inline_data.get("mime_type") or "")
         sample_rate_hz = _extract_pcm_sample_rate(mime_type) or 24000
         return _wrap_pcm_as_wav(pcm_bytes, sample_rate_hz=sample_rate_hz)
-    raise InvalidRequestError(message="Gemini TTS response did not include audio data")
+    raise invalid_provider_response_error()
 
 
 def _extract_gemini_billing_payload(response_payload: dict[str, Any]) -> dict[str, Any] | None:

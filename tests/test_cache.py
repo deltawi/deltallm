@@ -6,9 +6,16 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
-from src.cache import CacheKeyBuilder, InMemoryBackend, NoopCacheMetrics, StreamWriteContext, StreamingCacheHandler
+from src.cache import (
+    CacheKeyBuilder,
+    InMemoryBackend,
+    NoopCacheMetrics,
+    StreamWriteContext,
+    StreamingCacheHandler,
+)
 from src.cache.backends.base import CacheBackend, CacheEntry
 from src.callbacks import CallbackManager, CustomLogger
 from src.db.repositories import KeyRecord
@@ -158,12 +165,8 @@ class _FailingCacheBackend(CacheBackend):
 
 def _refresh_runtime_registry(test_app) -> None:
     rebuilt = build_deployment_registry(test_app.state.model_registry)
-    test_app.state.router.deployment_registry.clear()
-    test_app.state.router.deployment_registry.update(rebuilt)
-    test_app.state.failover_manager.registry.clear()
-    test_app.state.failover_manager.registry.update(rebuilt)
-    test_app.state.router_health_handler.registry.clear()
-    test_app.state.router_health_handler.registry.update(rebuilt)
+    test_app.state.router.deployment_registry.replace(rebuilt)
+    test_app.state.router_health_handler.registry = test_app.state.router.deployment_registry
 
 
 def _configure_groq_openai_compatible_chat_model(test_app) -> None:
@@ -312,7 +315,9 @@ async def test_embeddings_cache_hit(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_embedding_cache_hit_uses_input_only_cached_pricing_without_live_route_selection(client, test_app):
+async def test_embedding_cache_hit_uses_input_only_cached_pricing_without_live_route_selection(
+    client, test_app
+):
     _enable_cache(test_app)
     recorder = _SpendRecorder()
     test_app.state.spend_tracking_service = recorder
@@ -413,7 +418,9 @@ async def test_streaming_cache_miss_populates_cache_entry(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_streaming_cache_hit_bills_from_estimated_usage_without_provider_cost(client, test_app):
+async def test_streaming_cache_hit_bills_from_estimated_usage_without_provider_cost(
+    client, test_app
+):
     _enable_stream_cache(test_app)
     recorder = _SpendRecorder()
     test_app.state.spend_tracking_service = recorder
@@ -445,7 +452,11 @@ async def test_streaming_cache_hit_bills_from_estimated_usage_without_provider_c
     warm = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert warm.status_code == 200
     stored = next(iter(test_app.state.cache_backend._cache.values()))
-    assert stored.response["usage"] == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+    assert stored.response["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 1,
+        "total_tokens": 4,
+    }
 
     hit = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -499,7 +510,9 @@ async def test_streaming_cache_hit_forwards_usage_when_client_requested_usage(cl
 
 
 @pytest.mark.asyncio
-async def test_cache_hit_uses_persisted_provider_metadata_when_runtime_deployment_missing(client, test_app):
+async def test_cache_hit_uses_persisted_provider_metadata_when_runtime_deployment_missing(
+    client, test_app
+):
     _enable_cache(test_app)
     _configure_groq_openai_compatible_chat_model(test_app)
     recorder = _SpendRecorder()
@@ -530,7 +543,9 @@ async def test_cache_hit_uses_persisted_provider_metadata_when_runtime_deploymen
 
 
 @pytest.mark.asyncio
-async def test_streaming_cache_hit_uses_persisted_provider_metadata_when_runtime_deployment_missing(client, test_app):
+async def test_streaming_cache_hit_uses_persisted_provider_metadata_when_runtime_deployment_missing(
+    client, test_app
+):
     _enable_stream_cache(test_app)
     _configure_groq_openai_compatible_chat_model(test_app)
     recorder = _SpendRecorder()
@@ -586,7 +601,7 @@ async def test_streaming_cache_handler_skips_store_when_buffer_limit_exceeded():
 
 
 @pytest.mark.asyncio
-async def test_streaming_cache_skips_store_after_invalid_chunk_without_breaking_stream(client, test_app):
+async def test_streaming_cache_discards_committed_stream_after_invalid_chunk(test_app):
     _enable_stream_cache(test_app)
     calls = {"count": 0}
 
@@ -603,19 +618,32 @@ async def test_streaming_cache_skips_store_after_invalid_chunk_without_breaking_
 
     test_app.state.http_client.stream = stream
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
-    first = await client.post("/v1/chat/completions", headers=headers, json=body)
-    second = await client.post("/v1/chat/completions", headers=headers, json=body)
+    transport = httpx.ASGITransport(app=test_app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.post("/v1/chat/completions", headers=headers, json=body)
+        second = await client.post("/v1/chat/completions", headers=headers, json=body)
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert "data: [DONE]" in first.text
-    assert "data: [DONE]" in second.text
+    assert '"content":"hi"' in first.text
+    assert '"content":"hi"' in second.text
+    assert "data: [DONE]" not in first.text
+    assert "data: [DONE]" not in second.text
     assert calls["count"] == 2
     assert len(test_app.state.cache_backend._cache) == 0
-    assert test_app.state.streaming_cache_handler.disabled_streams_total == 2
+    # The provider validator rejects the malformed frame before it reaches the
+    # cache accumulator, while the stream lifecycle still discards its state.
+    assert test_app.state.streaming_cache_handler.disabled_streams_total == 0
     assert test_app.state.streaming_cache_handler.active_stream_count == 0
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+    assert health["last_error"] == "Provider returned an invalid response"
 
 
 @pytest.mark.asyncio
@@ -634,7 +662,11 @@ async def test_streaming_cache_malformed_usage_does_not_break_stream(client, tes
 
     test_app.state.http_client.stream = stream
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -642,7 +674,11 @@ async def test_streaming_cache_malformed_usage_does_not_break_stream(client, tes
     assert "data: [DONE]" in response.text
     assert test_app.state.streaming_cache_handler.active_stream_count == 0
     stored = next(iter(test_app.state.cache_backend._cache.values()))
-    assert stored.response["usage"] == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+    assert stored.response["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 1,
+        "total_tokens": 4,
+    }
 
 
 @pytest.mark.asyncio
@@ -650,7 +686,11 @@ async def test_streaming_cache_write_failure_does_not_fail_stream_response(clien
     failing_backend = _FailingCacheBackend()
     _enable_stream_cache(test_app, backend=failing_backend)
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
@@ -658,6 +698,53 @@ async def test_streaming_cache_write_failure_does_not_fail_stream_response(clien
     assert "data: [DONE]" in response.text
     assert failing_backend.set_calls == 1
     assert test_app.state.streaming_cache_handler.write_failures_total == 1
+    assert test_app.state.streaming_cache_handler.active_stream_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_discards_active_cache_accumulator(client, test_app):
+    _enable_stream_cache(test_app)
+    waiting_for_next_chunk = asyncio.Event()
+
+    class BlockingStreamContext(_StreamContext):
+        async def aiter_lines(self):
+            yield (
+                'data: {"id":"chatcmpl-cancel-cache","object":"chat.completion.chunk",'
+                '"choices":[{"index":0,"delta":{"content":"partial"},'
+                '"finish_reason":null}]}'
+            )
+            waiting_for_next_chunk.set()
+            await asyncio.Event().wait()
+
+    def stream(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        json: dict[str, Any],
+        timeout: int,
+    ):  # noqa: ANN201
+        del method, url, headers, json, timeout
+        return BlockingStreamContext(lines=[])
+
+    test_app.state.http_client.stream = stream
+    request_task = asyncio.create_task(
+        client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+    )
+    await waiting_for_next_chunk.wait()
+
+    assert test_app.state.streaming_cache_handler.active_stream_count == 1
+    request_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request_task
+
     assert test_app.state.streaming_cache_handler.active_stream_count == 0
 
 
@@ -689,7 +776,9 @@ async def test_cache_partitioned_by_api_key_scope(client, test_app):
     }
 
     key2 = "sk-test-2"
-    token_hash2 = hashlib.sha256(f"{test_app.state.key_service.salt}:{key2}".encode("utf-8")).hexdigest()
+    token_hash2 = hashlib.sha256(
+        f"{test_app.state.key_service.salt}:{key2}".encode("utf-8")
+    ).hexdigest()
     # Create key2 under org-default so it has model access via callable-target grants
     test_app.state._test_repo.records[token_hash2] = KeyRecord(
         token=token_hash2,
@@ -807,7 +896,10 @@ async def test_cache_hit_uses_partial_cached_pricing_without_live_route_selectio
     assert recorder.events[-1]["cost"] == 0.2500006
     assert recorder.events[-1]["metadata"]["provider_cost"] == 0.0
     assert recorder.events[-1]["metadata"]["provider_cost_avoided"] == 0.2500006
-    assert recorder.events[-1]["metadata"]["provider_cost_avoided_basis"] == "cache_hit_pricing_fallback"
+    assert (
+        recorder.events[-1]["metadata"]["provider_cost_avoided_basis"]
+        == "cache_hit_pricing_fallback"
+    )
     assert recorder.events[-1]["metadata"]["cache_cost_basis"] == "avoided_provider_cost"
     assert recorder.events[-1]["metadata"]["billing_status"] == "priced"
     assert recorder.events[-1]["metadata"]["effective_pricing_sources"] == [

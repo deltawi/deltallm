@@ -38,7 +38,7 @@ interface FallbackEvent {
   timestamp: number;
   model_group: string;
   from_deployment: string;
-  to_deployment: string;
+  to_deployment: string | null;
   error_classification: string;
   success: boolean;
 }
@@ -94,15 +94,23 @@ function parseFallbackEvents(payload: unknown): FallbackEvent[] {
   if (!isRecord(payload) || !Array.isArray(payload.events)) return [];
 
   return payload.events.flatMap((event) => {
-    if (!isRecord(event) || typeof event.timestamp !== 'number') return [];
+    if (
+      !isRecord(event)
+      || typeof event.timestamp !== 'number'
+      || typeof event.model_group !== 'string'
+      || typeof event.from_deployment !== 'string'
+      || (event.to_deployment !== null && typeof event.to_deployment !== 'string')
+      || typeof event.error_classification !== 'string'
+      || typeof event.success !== 'boolean'
+    ) return [];
 
     return [{
       timestamp: event.timestamp,
-      model_group: typeof event.model_group === 'string' ? event.model_group : '',
-      from_deployment: typeof event.from_deployment === 'string' ? event.from_deployment : '',
-      to_deployment: typeof event.to_deployment === 'string' ? event.to_deployment : '',
-      error_classification: typeof event.error_classification === 'string' ? event.error_classification : '',
-      success: event.success === true,
+      model_group: event.model_group,
+      from_deployment: event.from_deployment,
+      to_deployment: event.to_deployment,
+      error_classification: event.error_classification,
+      success: event.success,
     }];
   });
 }
@@ -124,11 +132,16 @@ const STRATEGIES = [
   { value: 'latency-based-routing', label: 'Latency Based', desc: 'Prefer deployments with lowest latency' },
   { value: 'cost-based-routing', label: 'Cost Based', desc: 'Prefer cheapest available deployment' },
   { value: 'usage-based-routing', label: 'Usage Based', desc: 'Distribute based on usage quotas' },
-  { value: 'tag-based-routing', label: 'Tag Based', desc: 'Route by deployment tags' },
   { value: 'priority-based-routing', label: 'Priority Based', desc: 'Route by deployment priority' },
   { value: 'rate-limit-aware', label: 'Rate Limit Aware', desc: 'Avoid rate-limited deployments' },
   { value: 'weighted', label: 'Weighted', desc: 'Custom weight distribution' },
 ];
+
+const LEGACY_TAG_STRATEGY = {
+  value: 'tag-based-routing',
+  label: 'Tag Based (Legacy)',
+  desc: 'Deprecated alias for weighted routing after tag filtering',
+};
 
 function Toggle({ checked, onChange, id }: { checked: boolean; onChange: (v: boolean) => void; id: string }) {
   return (
@@ -404,7 +417,9 @@ export default function SettingsPage() {
               <>
                 <SettingsSection title="Routing Strategy" description="How requests are distributed across model deployments" icon={Route}>
                   <div className="grid grid-cols-1 gap-2">
-                    {STRATEGIES.map((s) => (
+                    {(form.routing_strategy === LEGACY_TAG_STRATEGY.value
+                      ? [LEGACY_TAG_STRATEGY, ...STRATEGIES]
+                      : STRATEGIES).map((s) => (
                       <label
                         key={s.value}
                         className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${form.routing_strategy === s.value ? 'border-violet-300 bg-violet-50/50 ring-1 ring-brand-primary/20' : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'}`}

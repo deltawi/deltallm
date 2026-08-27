@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -14,6 +15,7 @@ from src.billing.tier_pricing import (
     resolve_token_billing_result,
 )
 from src.callbacks import CallbackManager, build_standard_logging_payload
+from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import (
     _release_rate_limits,
@@ -29,7 +31,13 @@ from src.metrics import (
 )
 from src.models.errors import InvalidRequestError
 from src.models.requests import RerankRequest
+from src.providers.base import (
+    is_valid_provider_number,
+    parse_provider_json_response,
+    validate_provider_success_payload,
+)
 from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.router.router import Deployment
@@ -59,6 +67,33 @@ from src.services.preflight_capacity import acquire_preflight_capacity, release_
 router = APIRouter(prefix="/v1", tags=["rerank"])
 
 
+def _is_valid_rerank_success_payload(
+    data: Mapping[str, Any],
+    *,
+    document_count: int,
+    maximum_count: int,
+) -> bool:
+    results = data.get("results")
+    if not isinstance(results, list) or not results or len(results) > maximum_count:
+        return False
+    indexes: set[int] = set()
+    for item in results:
+        if not isinstance(item, Mapping):
+            return False
+        index = item.get("index")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index < 0
+            or index >= document_count
+            or index in indexes
+            or not is_valid_provider_number(item.get("relevance_score"))
+        ):
+            return False
+        indexes.add(index)
+    return len(indexes) == len(results)
+
+
 async def _execute_rerank(
     request: Request,
     payload: RerankRequest,
@@ -70,8 +105,9 @@ async def _execute_rerank(
         raise InvalidRequestError(message="Provider API key is missing for selected model")
 
     api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
+    provider = resolve_provider(params)
     headers = build_openai_compatible_auth_headers(
-        provider=resolve_provider(params),
+        provider=provider,
         api_key=str(api_key),
         auth_header_name=params.get("auth_header_name"),
         auth_header_format=params.get("auth_header_format"),
@@ -97,12 +133,23 @@ async def _execute_rerank(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
+        status_error = httpx.HTTPStatusError(
             f"Upstream rerank call failed with status {response.status_code}",
             request=httpx.Request("POST", f"{api_base}/rerank"),
             response=response,
         )
-    data = response.json()
+        raise request.app.state.provider_error_mapper_registry.map_error(provider, status_error)
+    data = parse_provider_json_response(response)
+    document_count = len(payload.documents)
+    maximum_count = min(document_count, payload.top_n or document_count)
+    validate_provider_success_payload(
+        data,
+        lambda response: _is_valid_rerank_success_payload(
+            response,
+            document_count=document_count,
+            maximum_count=maximum_count,
+        ),
+    )
     data["_api_latency_ms"] = (perf_counter() - upstream_start) * 1000
     data["_api_base"] = api_base
     data["_deployment_model"] = params.get("model")
@@ -122,6 +169,7 @@ async def rerank(request: Request, payload: RerankRequest):
         audit_action=AuditAction.RERANK_REQUEST,
     )
     auth = request.state.user_api_key
+    routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
     await acquire_preflight_capacity(request, auth=auth)
     ensure_model_allowed(
         auth,
@@ -129,6 +177,7 @@ async def rerank(request: Request, payload: RerankRequest):
         callable_target_grant_service=getattr(
             request.app.state, "callable_target_grant_service", None
         ),
+        callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),
@@ -156,9 +205,13 @@ async def rerank(request: Request, payload: RerankRequest):
     finally:
         await release_preflight_capacity(request)
 
-    app_router = request.app.state.router
+    app_router = routing_runtime.router
     model_group = app_router.resolve_model_group(payload.model)
-    request_context = {"metadata": {}, "user_id": auth.user_id or auth.api_key}
+    request_context = {
+        "metadata": {},
+        "user_id": auth.user_id or auth.api_key,
+        ROUTING_MODE_CONTEXT_KEY: "rerank",
+    }
     primary = app_router.require_deployment(
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
@@ -175,12 +228,13 @@ async def rerank(request: Request, payload: RerankRequest):
         capture_attempted_deployment(request, deployment)
 
     try:
-        data, served_deployment = await request.app.state.failover_manager.execute_with_failover(
+        data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_rerank(request, payload, dep),
             return_deployment=True,
             on_attempt=track_attempt,
+            routing_context=request_context,
             **failover_kwargs,
         )
         update_served_route_decision(

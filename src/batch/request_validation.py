@@ -17,6 +17,7 @@ from src.batch.endpoints import (
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest, MCPToolDefinition
 from src.models.responses import UserAPIKeyAuth
+from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
 from src.services.tier_model_access import TierPolicyMode
@@ -40,6 +41,7 @@ def parse_batch_input_line(
     seen_custom_ids: set[str],
     callable_target_grant_service: CallableTargetGrantService | None,
     callable_target_scope_policy_mode: CallableTargetPolicyMode | str,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     tier_policy_mode: TierPolicyMode | str = "disabled",
     tier_policy_missing_service_mode: str = "fail_open",
@@ -63,32 +65,50 @@ def parse_batch_input_line(
             detail=f"Invalid JSONL at line {line_number}: {exc.msg}",
         ) from exc
     if not isinstance(obj, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} must be an object"
+        )
 
     method = str(obj.get("method") or "POST").strip().upper()
     if method != "POST":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} method must be POST")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Line {line_number} method must be POST",
+        )
 
     custom_id = str(obj.get("custom_id") or "").strip()
     if not custom_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing custom_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing custom_id"
+        )
     if custom_id in seen_custom_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Duplicate custom_id at line {line_number}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Duplicate custom_id at line {line_number}",
+        )
     seen_custom_ids.add(custom_id)
 
     url = str(obj.get("url") or endpoint)
     if url != endpoint:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} must target {endpoint}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Line {line_number} must target {endpoint}",
+        )
 
     body = obj.get("body")
     if not isinstance(body, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing body")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing body"
+        )
 
-    request_body, model = _validate_batch_request_body(body, endpoint=endpoint, line_number=line_number)
+    request_body, model = _validate_batch_request_body(
+        body, endpoint=endpoint, line_number=line_number
+    )
     model_access_validator(
         auth,
         model,
         callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
         tier_policy_service=tier_policy_service,
         policy_mode=callable_target_scope_policy_mode,
         tier_policy_mode=tier_policy_mode,

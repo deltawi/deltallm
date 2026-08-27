@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
+import asyncio
 import httpx
 from fastapi import Request
 
+from src.chat.stream_validation import validate_first_downstream_stream_frame
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.metrics import observe_request_phase
+from src.providers.base import read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import is_openai_family_provider, resolve_provider
 from src.providers.signing import apply_request_signing
@@ -31,22 +34,24 @@ class OpenedStream:
     internal_stream_usage_requested: bool
     upstream_started: float
     _closed: bool = False
+    _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
-    async def close(self, exc: Exception | None = None) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if exc is None:
-            await self.context_manager.__aexit__(None, None, None)
-        else:
-            await self.context_manager.__aexit__(type(exc), exc, exc.__traceback__)
-        observe_request_phase(
-            route="chat_completions",
-            phase="upstream_stream",
-            outcome="error" if exc is not None else "success",
-            response_kind="stream",
-            latency_seconds=perf_counter() - self.upstream_started,
-        )
+    async def close(self, exc: BaseException | None = None) -> None:
+        async with self._close_lock:
+            if self._closed:
+                return
+            if exc is None:
+                await self.context_manager.__aexit__(None, None, None)
+            else:
+                await self.context_manager.__aexit__(type(exc), exc, exc.__traceback__)
+            self._closed = True
+            observe_request_phase(
+                route="chat_completions",
+                phase="upstream_stream",
+                outcome="error" if exc is not None else "success",
+                response_kind="stream",
+                latency_seconds=perf_counter() - self.upstream_started,
+            )
 
 
 async def execute_chat(
@@ -132,8 +137,7 @@ async def execute_chat(
         )
         raise adapter.map_error(status_exc)
     response_transform_started = perf_counter()
-    data = response.json()
-    canonical = await adapter.translate_response(data, payload.model)
+    canonical = await adapter.translate_success_response(response, payload.model)
     canonical_payload = canonical.model_dump(mode="json")
     observe_request_phase(
         route="chat_completions",
@@ -233,18 +237,20 @@ async def open_stream_with_first_chunk(
         raise
     try:
         if response.status_code >= 400:
+            details = await read_streaming_provider_error_details(response)
             status_exc = httpx.HTTPStatusError(
                 f"Upstream chat call failed with status {response.status_code}",
                 request=httpx.Request("POST", request_url),
                 response=response,
             )
-            raise adapter.map_error(status_exc)
+            raise adapter.map_error(status_exc, details=details)
 
         raw_stream = response.aiter_bytes() if adapter.stream_uses_bytes else response.aiter_lines()
         translated_stream = adapter.translate_stream(raw_stream, model_name=payload.model)
         first_line: str | None = None
         async for line in translated_stream:
             if line:
+                validate_first_downstream_stream_frame(line)
                 first_line = line
                 break
         if first_line is None:
@@ -273,7 +279,7 @@ async def open_stream_with_first_chunk(
             internal_stream_usage_requested=internal_stream_usage_requested,
             upstream_started=upstream_started,
         )
-    except Exception as exc:
+    except BaseException as exc:
         observe_request_phase(
             route="chat_completions",
             phase="upstream_http",

@@ -7,7 +7,9 @@ import pytest
 async def test_provider_presets_endpoint_returns_known_presets(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
-    response = await client.get("/ui/api/provider-presets", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/provider-presets", headers={"Authorization": "Bearer mk-test"}
+    )
     assert response.status_code == 200
     payload = response.json()
     items = payload["data"]
@@ -19,10 +21,14 @@ async def test_provider_presets_endpoint_returns_known_presets(client, test_app)
 
 
 @pytest.mark.asyncio
-async def test_provider_presets_endpoint_returns_elevenlabs_as_native_audio_provider(client, test_app):
+async def test_provider_presets_endpoint_returns_elevenlabs_as_native_audio_provider(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
-    response = await client.get("/ui/api/provider-presets", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/provider-presets", headers={"Authorization": "Bearer mk-test"}
+    )
     assert response.status_code == 200
     payload = response.json()
     presets = {item["provider"]: item for item in payload["data"]}
@@ -112,7 +118,7 @@ async def test_create_model_rejects_unsupported_provider_mode_combo(client, test
 
 
 @pytest.mark.asyncio
-async def test_create_model_rejects_duplicate_model_name(client, test_app):
+async def test_create_model_adds_deployment_to_existing_model_group(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     response = await client.post(
@@ -130,5 +136,7 @@ async def test_create_model_rejects_duplicate_model_name(client, test_app):
         },
     )
 
-    assert response.status_code == 409
-    assert "Duplicate model_name 'gpt-4o-mini' is not allowed" in response.text
+    assert response.status_code == 200, response.text
+    deployments = test_app.state.model_registry["gpt-4o-mini"]
+    assert len(deployments) == 2
+    assert deployments[1]["deltallm_params"]["model"] == "azure/gpt-4o-mini"

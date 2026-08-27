@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from src.router.runtime_generation import RoutingRuntimeAppliedState
 from src.services.governance_invalidation import (
     GovernanceInvalidationApplyError,
     GovernanceInvalidationService,
@@ -39,6 +40,9 @@ class _FakePubSub:
     async def subscribe(self, channel: str) -> None:
         self.channel = channel
         self.broker.subscribers.append(self)
+        self.broker.subscribe_count += 1
+        if self.broker.subscribe_count >= 2:
+            self.broker.resubscribed.set()
 
     def listen(self):  # noqa: ANN201
         return self
@@ -64,6 +68,8 @@ class _FakeRedis:
     def __init__(self) -> None:
         self.subscribers: list[_FakePubSub] = []
         self.messages: list[tuple[str, str]] = []
+        self.subscribe_count = 0
+        self.resubscribed = asyncio.Event()
 
     def pubsub(self) -> _FakePubSub:
         return _FakePubSub(self)
@@ -130,6 +136,49 @@ async def test_governance_invalidation_service_returns_false_when_publish_fails(
     service = GovernanceInvalidationService(redis_client=_FailingRedis())
 
     assert await service.notify("tier_policy") is False
+
+
+@pytest.mark.asyncio
+async def test_governance_invalidation_listener_restarts_after_disconnect() -> None:
+    redis = _FakeRedis()
+    service = GovernanceInvalidationService(redis_client=redis)
+    await service.start()
+    try:
+        await redis.subscribers[0].queue.put({"type": "stop"})
+        await asyncio.wait_for(redis.resubscribed.wait(), timeout=1)
+
+        assert service._pubsub_task is not None
+        assert not service._pubsub_task.done()
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_governance_invalidation_listener_recovers_when_pubsub_factory_fails() -> None:
+    class FactoryFailRedis(_FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.factory_calls = 0
+            self.recovered = asyncio.Event()
+
+        def pubsub(self) -> _FakePubSub:
+            self.factory_calls += 1
+            if self.factory_calls == 1:
+                raise RuntimeError("pubsub factory unavailable")
+            self.recovered.set()
+            return super().pubsub()
+
+    redis = FactoryFailRedis()
+    service = GovernanceInvalidationService(redis_client=redis)
+    await service.start()
+    try:
+        await asyncio.wait_for(redis.recovered.wait(), timeout=1)
+
+        assert redis.subscribe_count == 1
+        assert service._pubsub_task is not None
+        assert not service._pubsub_task.done()
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio
@@ -218,6 +267,11 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
     remote_tier = _FakeReloadService()
     remote_registry = _FakeInvalidateService()
     remote_mcp = _FakeReloadService()
+    route_group_reload_calls = 0
+
+    async def reload_route_groups() -> None:
+        nonlocal route_group_reload_calls
+        route_group_reload_calls += 1
 
     local = GovernanceInvalidationService(redis_client=redis, remote_apply_delay_seconds=0.01)
     remote = GovernanceInvalidationService(
@@ -226,6 +280,7 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
         tier_policy_service=remote_tier,
         mcp_registry_service=remote_registry,
         mcp_governance_service=remote_mcp,
+        route_group_reload=reload_route_groups,
         remote_apply_delay_seconds=0.01,
     )
     await local.start()
@@ -234,12 +289,14 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
     await local.notify("callable_target")
     await local.notify("tier_policy")
     await local.notify("mcp")
+    await local.notify("route_groups")
     await asyncio.sleep(0.05)
 
-    assert remote_callable.reload_calls == 1
+    assert remote_callable.reload_calls == 0
     assert remote_tier.reload_calls == 1
     assert remote_registry.invalidate_calls == 1
     assert remote_mcp.reload_calls == 1
+    assert route_group_reload_calls == 1
 
     await local.close()
     await remote.close()
@@ -270,3 +327,74 @@ async def test_governance_invalidation_service_retries_failed_remote_targets() -
 
     await local.close()
     await remote.close()
+
+
+@pytest.mark.asyncio
+async def test_route_group_revision_poll_recovers_without_pubsub() -> None:
+    class RevisionSource:
+        revision = 1
+
+        async def get_runtime_revision(self) -> int:
+            return self.revision
+
+    source = RevisionSource()
+    applied_revision = 1
+    reloaded = asyncio.Event()
+
+    async def reload_route_groups() -> None:
+        nonlocal applied_revision
+        applied_revision = source.revision
+        reloaded.set()
+
+    service = GovernanceInvalidationService(
+        redis_client=None,
+        route_group_reload=reload_route_groups,
+        route_group_revision_source=source,
+        route_group_applied_revision=lambda: applied_revision,
+        route_group_poll_interval_seconds=0.01,
+    )
+    await service.start()
+    try:
+        source.revision = 2
+        await asyncio.wait_for(reloaded.wait(), timeout=1)
+
+        assert applied_revision == 2
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_route_group_revision_poll_recovers_degraded_revision_zero() -> None:
+    class RevisionSource:
+        async def get_runtime_revision(self) -> int:
+            return 0
+
+    applied_state = RoutingRuntimeAppliedState(
+        revision=0,
+        source="config_db_unavailable",
+        requires_reconciliation=True,
+    )
+    reloaded = asyncio.Event()
+
+    async def reload_route_groups() -> None:
+        nonlocal applied_state
+        applied_state = RoutingRuntimeAppliedState(
+            revision=0,
+            source="database",
+            requires_reconciliation=False,
+        )
+        reloaded.set()
+
+    service = GovernanceInvalidationService(
+        redis_client=None,
+        route_group_reload=reload_route_groups,
+        route_group_revision_source=RevisionSource(),
+        routing_applied_state=lambda: applied_state,
+        route_group_poll_interval_seconds=0.01,
+    )
+    await service.start()
+    try:
+        await asyncio.wait_for(reloaded.wait(), timeout=1)
+        assert applied_state.requires_reconciliation is False
+    finally:
+        await service.close()

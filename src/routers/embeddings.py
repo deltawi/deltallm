@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -16,6 +17,7 @@ from src.billing.tier_pricing import (
 )
 from src.cache.pricing import cache_pricing_snapshot_from_deployment
 from src.callbacks import build_standard_logging_payload
+from src.router.runtime_generation import pin_routing_runtime_generation
 from src.embedding_preflight import run_embedding_preflight
 from src.middleware.auth import require_api_key
 from src.metrics import (
@@ -28,7 +30,14 @@ from src.metrics import (
 )
 from src.models.errors import InvalidRequestError
 from src.models.requests import EmbeddingRequest
+from src.providers.base import (
+    is_valid_provider_number,
+    is_valid_provider_token_count,
+    parse_provider_json_response,
+    validate_provider_success_payload,
+)
 from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
@@ -54,6 +63,64 @@ from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
+
+
+def _is_valid_embedding_success_payload(
+    data: Mapping[str, Any],
+    *,
+    expected_count: int,
+    expected_dimensions: int | None,
+    encoding_format: str,
+) -> bool:
+    embeddings = data.get("data")
+    usage = data.get("usage")
+    if (
+        not isinstance(embeddings, list)
+        or len(embeddings) != expected_count
+        or not isinstance(usage, Mapping)
+    ):
+        return False
+    indexes: set[int] = set()
+    for item in embeddings:
+        if not isinstance(item, Mapping):
+            return False
+        index = item.get("index")
+        embedding = item.get("embedding")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index < 0
+            or index >= expected_count
+            or index in indexes
+        ):
+            return False
+        indexes.add(index)
+        if encoding_format == "base64":
+            if not isinstance(embedding, str) or not embedding:
+                return False
+        elif (
+            not isinstance(embedding, list)
+            or not embedding
+            or (expected_dimensions is not None and len(embedding) != expected_dimensions)
+            or not all(is_valid_provider_number(component) for component in embedding)
+        ):
+            return False
+    prompt_tokens = usage.get("prompt_tokens")
+    total_tokens = usage.get("total_tokens")
+    return (
+        indexes == set(range(expected_count))
+        and is_valid_provider_token_count(prompt_tokens)
+        and is_valid_provider_token_count(total_tokens)
+        and total_tokens >= prompt_tokens
+    )
+
+
+def _embedding_input_count(value: str | list[str] | list[int] | list[list[int]]) -> int:
+    if isinstance(value, str):
+        return 1
+    if value and all(isinstance(item, int) and not isinstance(item, bool) for item in value):
+        return 1
+    return len(value)
 
 
 def _request_client_ip(request: Request) -> str | None:
@@ -131,8 +198,9 @@ async def _execute_embedding(
         raise InvalidRequestError(message="Provider API key is missing for selected model")
 
     api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
+    provider = resolve_provider(params)
     headers = build_openai_compatible_auth_headers(
-        provider=resolve_provider(params),
+        provider=provider,
         api_key=str(api_key),
         auth_header_name=params.get("auth_header_name"),
         auth_header_format=params.get("auth_header_format"),
@@ -158,12 +226,22 @@ async def _execute_embedding(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
+        status_error = httpx.HTTPStatusError(
             f"Upstream embedding call failed with status {response.status_code}",
             request=httpx.Request("POST", f"{api_base}/embeddings"),
             response=response,
         )
-    data = response.json()
+        raise request.app.state.provider_error_mapper_registry.map_error(provider, status_error)
+    data = parse_provider_json_response(response)
+    validate_provider_success_payload(
+        data,
+        lambda response: _is_valid_embedding_success_payload(
+            response,
+            expected_count=_embedding_input_count(payload.input),
+            expected_dimensions=payload.dimensions,
+            encoding_format=payload.encoding_format or "float",
+        ),
+    )
     api_latency_ms = (perf_counter() - upstream_start) * 1000
     data["_api_latency_ms"] = api_latency_ms
     data["_api_base"] = api_base
@@ -182,15 +260,24 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         request_start=request_start,
         audit_action=AuditAction.EMBEDDING_REQUEST.value,
     )
-    preflight = await run_embedding_preflight(request=request, payload=payload)
+    routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
+    preflight = await run_embedding_preflight(
+        request=request,
+        payload=payload,
+        routing_runtime=routing_runtime,
+    )
     auth = preflight.auth
     payload = preflight.payload
     request_data = preflight.request_data
     callback_manager = preflight.callback_manager
 
-    app_router = request.app.state.router
+    app_router = routing_runtime.router
     model_group = app_router.resolve_model_group(payload.model)
-    request_context = {"metadata": {}, "user_id": auth.user_id or auth.api_key}
+    request_context = {
+        "metadata": {},
+        "user_id": auth.user_id or auth.api_key,
+        ROUTING_MODE_CONTEXT_KEY: "embedding",
+    }
     primary = app_router.require_deployment(
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
@@ -207,12 +294,13 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         capture_attempted_deployment(request, deployment)
 
     try:
-        data, served_deployment = await request.app.state.failover_manager.execute_with_failover(
+        data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_embedding(request, payload, dep),
             return_deployment=True,
             on_attempt=track_attempt,
+            routing_context=request_context,
             **failover_kwargs,
         )
         update_served_route_decision(

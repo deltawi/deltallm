@@ -8,11 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, field_validator, model_validator
 
 from src.api.admin.endpoints.common import build_connection_summary, model_entries, to_json_value
+from src.api.admin.model_contracts import ModelDeleteResponse, ModelMutationResponse
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated, require_master_key
 from src.upstream_auth import (
@@ -22,11 +24,23 @@ from src.upstream_auth import (
 )
 from src.providers.healthcheck import probe_provider_health
 from src.providers.model_discovery import discover_provider_models
-from src.providers.resolution import provider_presets, resolve_provider, validate_provider_mode_compatibility
-from src.router import build_deployment_registry
+from src.providers.resolution import (
+    provider_presets,
+    resolve_provider,
+    validate_provider_mode_compatibility,
+)
+from src.router import HealthCheckInProgressError, build_deployment_registry
+from src.router.health_state import HealthRefInput
+from src.router.registry import DeploymentRegistryStore
+from src.router.runtime_generation import (
+    RoutingRuntimeGenerationStore,
+    rebuild_routing_runtime_generation,
+)
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import DuplicateModelNameError, ensure_model_name_available, resolve_runtime_deltallm_params
+from src.services.model_deployments import (
+    resolve_runtime_deltallm_params,
+)
 from src.services.named_credentials import (
     canonicalize_named_credential_provider,
     merge_named_credential_params,
@@ -85,7 +99,9 @@ class ProviderModelDiscoveryRequest(BaseModel):
         if self.auth_header_name is None and self.auth_header_format is None:
             return self
         if not supports_custom_openai_compatible_auth(self.provider):
-            raise ValueError(f"Custom auth headers are not supported for provider '{self.provider}'")
+            raise ValueError(
+                f"Custom auth headers are not supported for provider '{self.provider}'"
+            )
         return self
 
 
@@ -96,6 +112,11 @@ def _find_runtime_deployment(app: Any, deployment_id: str) -> Any | None:
             if deployment.deployment_id == deployment_id:
                 return deployment
     return None
+
+
+def _runtime_health_ref(app: Any, deployment_id: str) -> HealthRefInput:
+    deployment = _find_runtime_deployment(app, deployment_id)
+    return deployment.health_ref if deployment is not None else deployment_id
 
 
 def _to_int_or_none(value: Any) -> int | None:
@@ -140,16 +161,22 @@ async def _load_named_credential_or_400(
         return None
     repository = _named_credential_repository(app)
     if repository is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Named credential repository unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Named credential repository unavailable",
+        )
     named_credential = await repository.get_by_id(normalized_id)
     if named_credential is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="named_credential_id is invalid")
-    if (
-        provider is not None
-        and canonicalize_named_credential_provider(named_credential.provider)
-        != canonicalize_named_credential_provider(provider)
-    ):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Named credential provider does not match deployment provider")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="named_credential_id is invalid"
+        )
+    if provider is not None and canonicalize_named_credential_provider(
+        named_credential.provider
+    ) != canonicalize_named_credential_provider(provider):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Named credential provider does not match deployment provider",
+        )
     return named_credential
 
 
@@ -161,10 +188,12 @@ async def _deployment_health_flags(app: Any, deployment_ids: list[str]) -> dict[
     if health_backend is None:
         return {deployment_id: True for deployment_id in deployment_ids}
 
-    health_by_deployment = await health_backend.get_health_batch(deployment_ids)
-    cooldown_by_deployment = await health_backend.get_cooldown_batch(deployment_ids)
+    health_refs = [_runtime_health_ref(app, deployment_id) for deployment_id in deployment_ids]
+    health_by_deployment = await health_backend.get_health_batch(health_refs)
+    cooldown_by_deployment = await health_backend.get_cooldown_batch(health_refs)
     return {
-        deployment_id: str(health_by_deployment.get(deployment_id, {}).get("healthy", "true")) != "false"
+        deployment_id: str(health_by_deployment.get(deployment_id, {}).get("healthy", "true"))
+        != "false"
         and not cooldown_by_deployment.get(deployment_id, False)
         for deployment_id in deployment_ids
     }
@@ -182,8 +211,9 @@ async def _serialize_deployment_health(app: Any, deployment_id: str) -> dict[str
             "last_success_at": None,
         }
 
-    health = await health_backend.get_health(deployment_id)
-    in_cooldown = await health_backend.is_cooled_down(deployment_id)
+    health_ref = _runtime_health_ref(app, deployment_id)
+    health = await health_backend.get_health(health_ref)
+    in_cooldown = await health_backend.is_cooled_down(health_ref)
     healthy = str(health.get("healthy", "true")) != "false" and not in_cooldown
     return {
         "healthy": healthy,
@@ -205,6 +235,7 @@ def _serialize_model_write_response(
     deltallm_params: dict[str, Any],
     summary_params: dict[str, Any] | None,
     model_info: dict[str, Any],
+    warnings: list[str],
 ) -> dict[str, Any]:
     credential_source = "named" if named_credential_id else "inline"
     effective_summary_params = summary_params or deltallm_params
@@ -215,9 +246,9 @@ def _serialize_model_write_response(
             "provider": provider,
             "mode": model_info.get("mode", "chat"),
             "credential_source": credential_source,
-            "inline_credentials_present": credential_source == "inline" and any(
-                str(deltallm_params.get(field) or "").strip()
-                for field in _INLINE_SECRET_FIELDS
+            "inline_credentials_present": credential_source == "inline"
+            and any(
+                str(deltallm_params.get(field) or "").strip() for field in _INLINE_SECRET_FIELDS
             ),
             "connection_summary": build_connection_summary(
                 effective_summary_params,
@@ -227,6 +258,7 @@ def _serialize_model_write_response(
             "named_credential_name": named_credential_name,
             "deltallm_params": redact_connection_config(deltallm_params),
             "model_info": model_info,
+            "warnings": warnings,
         }
     )
 
@@ -240,17 +272,25 @@ def _rebuild_runtime_registry(app: Any) -> None:
     )
     rebuilt = build_deployment_registry(model_registry, route_groups=route_groups)
 
-    runtime_registry = getattr(getattr(app.state, "router", None), "deployment_registry", None)
-    if isinstance(runtime_registry, dict):
-        runtime_registry.clear()
-        runtime_registry.update(rebuilt)
+    runtime_registry = DeploymentRegistryStore(rebuilt)
+    generation_store = getattr(app.state, "routing_runtime_generation_store", None)
+    if isinstance(generation_store, RoutingRuntimeGenerationStore):
+        replacement = rebuild_routing_runtime_generation(
+            generation_store.require_snapshot(),
+            model_registry=model_registry,
+            route_groups=route_groups,
+            callable_target_catalog=app.state.callable_target_catalog,
+            deployment_registry=runtime_registry,
+        )
+        generation_store.replace(replacement)
+        app.state.router = replacement.router
+        app.state.failover_manager = replacement.failover_manager
+        app.state.cooldown_manager = replacement.cooldown_manager
 
-    for attr in ("failover_manager", "router_health_handler", "background_health_checker"):
+    for attr in ("router_health_handler", "background_health_checker"):
         holder = getattr(app.state, attr, None)
-        registry = getattr(holder, "registry", None)
-        if isinstance(registry, dict) and registry is not runtime_registry:
-            registry.clear()
-            registry.update(rebuilt)
+        if holder is not None and runtime_registry is not None:
+            holder.registry = runtime_registry
 
 
 async def _invalidate_route_group_runtime_cache(app: Any) -> None:
@@ -263,7 +303,9 @@ async def _invalidate_route_group_runtime_cache(app: Any) -> None:
 async def _sync_auto_follow_org_bindings(app: Any) -> None:
     await sync_auto_follow_organization_bindings(
         db=getattr(getattr(app.state, "prisma_manager", None), "client", None),
-        callable_target_binding_repository=getattr(app.state, "callable_target_binding_repository", None),
+        callable_target_binding_repository=getattr(
+            app.state, "callable_target_binding_repository", None
+        ),
         route_group_repository=getattr(app.state, "route_group_repository", None),
         callable_target_catalog=getattr(app.state, "callable_target_catalog", None),
     )
@@ -273,8 +315,6 @@ async def _sync_auto_follow_org_bindings(app: Any) -> None:
 def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
     try:
         validate_provider_mode_compatibility(model_config)
-    except DuplicateModelNameError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -284,7 +324,9 @@ def _normalize_model_info_or_400(model_info: dict[str, Any]) -> dict[str, Any]:
     if "access_groups" not in normalized:
         return normalized
     try:
-        normalized["access_groups"] = normalize_access_group_list(normalized.get("access_groups"), strict=True)
+        normalized["access_groups"] = normalize_access_group_list(
+            normalized.get("access_groups"), strict=True
+        )
     except InvalidAccessGroupError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return normalized
@@ -300,7 +342,9 @@ def _normalized_model_payload_or_400(
 ) -> tuple[str, str | None, dict[str, Any], dict[str, Any]]:
     model_name = str(payload.get("model_name") or existing_model_name or "").strip()
     if not model_name:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_name is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="model_name is required"
+        )
 
     raw_named_credential_id = payload.get("named_credential_id", _MISSING)
     if raw_named_credential_id is _MISSING:
@@ -318,7 +362,9 @@ def _normalized_model_payload_or_400(
             named_credential_id=named_credential_id,
         )
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params must be an object"
+        )
 
     provider = str(params.get("provider") or "").strip().lower()
     model = str(params.get("model") or "").strip()
@@ -327,7 +373,9 @@ def _normalized_model_payload_or_400(
     if not provider:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider is required")
     if not model:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.model is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.model is required"
+        )
 
     params["provider"] = provider
     params["model"] = model
@@ -345,7 +393,9 @@ def _normalized_model_payload_or_400(
     elif isinstance(raw_model_info, dict):
         model_info = dict(raw_model_info)
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_info must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="model_info must be an object"
+        )
 
     return model_name, named_credential_id, params, _normalize_model_info_or_400(model_info)
 
@@ -357,9 +407,15 @@ def _merged_model_params(
     named_credential_id: str | None,
 ) -> dict[str, Any]:
     merged = dict(existing_params or {})
-    existing_provider = str(merged.get("provider") or "").strip().lower() or resolve_provider(merged)
-    incoming_provider = str(incoming_params.get("provider") or existing_provider or "").strip().lower()
-    provider_changed = bool(existing_provider and incoming_provider and existing_provider != incoming_provider)
+    existing_provider = str(merged.get("provider") or "").strip().lower() or resolve_provider(
+        merged
+    )
+    incoming_provider = (
+        str(incoming_params.get("provider") or existing_provider or "").strip().lower()
+    )
+    provider_changed = bool(
+        existing_provider and incoming_provider and existing_provider != incoming_provider
+    )
 
     if named_credential_id is not None or provider_changed:
         for field in _CREDENTIAL_CONNECTION_FIELDS:
@@ -392,7 +448,13 @@ async def list_models(
 
     if search:
         q = search.lower()
-        entries = [e for e in entries if q in e["model_name"].lower() or q in e["deployment_id"].lower() or q in e.get("provider", "").lower()]
+        entries = [
+            e
+            for e in entries
+            if q in e["model_name"].lower()
+            or q in e["deployment_id"].lower()
+            or q in e.get("provider", "").lower()
+        ]
     if provider:
         p = provider.lower()
         entries = [e for e in entries if e.get("provider", "").lower() == p]
@@ -401,18 +463,25 @@ async def list_models(
         entries = [e for e in entries if (e.get("mode") or "chat").lower() == m]
 
     total = len(entries)
-    page = entries[offset: offset + limit]
+    page = entries[offset : offset + limit]
 
     for entry in page:
         healthy = True
         if health_backend is not None:
-            health = await health_backend.get_health(entry["deployment_id"])
+            health = await health_backend.get_health(
+                _runtime_health_ref(request.app, entry["deployment_id"])
+            )
             healthy = str(health.get("healthy", "true")) != "false"
         entry["healthy"] = healthy
 
     return {
         "data": page,
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -479,7 +548,9 @@ async def list_provider_presets() -> dict[str, Any]:
 
 
 @router.post("/ui/api/provider-models/discover", dependencies=[Depends(require_authenticated)])
-async def discover_models_for_provider(request: Request, payload: ProviderModelDiscoveryRequest) -> dict[str, Any]:
+async def discover_models_for_provider(
+    request: Request, payload: ProviderModelDiscoveryRequest
+) -> dict[str, Any]:
     raw_named_credential = await _load_named_credential_or_400(
         request.app,
         payload.named_credential_id,
@@ -509,7 +580,9 @@ async def discover_models_for_provider(request: Request, payload: ProviderModelD
         api_version=merged_params.get("api_version"),
         auth_header_name=merged_params.get("auth_header_name"),
         auth_header_format=merged_params.get("auth_header_format"),
-        default_openai_base_url=getattr(request.app.state.settings, "openai_base_url", "https://api.openai.com/v1"),
+        default_openai_base_url=getattr(
+            request.app.state.settings, "openai_base_url", "https://api.openai.com/v1"
+        ),
         general_settings=getattr(
             request.app.state,
             "upstream_http_settings",
@@ -530,7 +603,10 @@ async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
 
 
-@router.post("/ui/api/models/{deployment_id:path}/health-check", dependencies=[Depends(require_authenticated)])
+@router.post(
+    "/ui/api/models/{deployment_id:path}/health-check",
+    dependencies=[Depends(require_authenticated)],
+)
 async def check_model_health(request: Request, deployment_id: str) -> dict[str, Any]:
     deployment = _find_runtime_deployment(request.app, deployment_id)
     if deployment is None:
@@ -538,7 +614,13 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
 
     health_checker = getattr(request.app.state, "background_health_checker", None)
     if health_checker is not None:
-        result = await health_checker.check_deployment_once(deployment)
+        try:
+            result = await health_checker.check_deployment_once(deployment)
+        except HealthCheckInProgressError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
     else:
         result = await probe_provider_health(
             request.app.state.http_client,
@@ -553,20 +635,32 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
         )
 
     health = await _serialize_deployment_health(request.app, deployment_id)
+    if result.healthy and health["healthy"]:
+        message = "Health check passed"
+    elif result.healthy:
+        message = "Provider health check passed; deployment remains in cooldown"
+    else:
+        message = result.error or "Health check failed"
     return {
         "deployment_id": deployment_id,
         "healthy": health["healthy"],
         "health": health,
-        "message": "Health check passed" if result.healthy else (result.error or "Health check failed"),
+        "message": message,
         "status_code": result.status_code,
         "checked_at": result.checked_at,
     }
 
 
-@router.post("/ui/api/models", dependencies=[Depends(require_master_key)])
+@router.post(
+    "/ui/api/models",
+    dependencies=[Depends(require_master_key)],
+    response_model=ModelMutationResponse,
+)
 async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
-    model_name, named_credential_id, deltallm_params, model_info = _normalized_model_payload_or_400(payload)
+    model_name, named_credential_id, deltallm_params, model_info = _normalized_model_payload_or_400(
+        payload
+    )
     named_credential = await _load_named_credential_or_400(
         request.app,
         named_credential_id,
@@ -574,12 +668,10 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     )
     effective_params = merge_named_credential_params(deltallm_params, named_credential)
     if not str(effective_params.get("api_base") or "").strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required"
+        )
     deployment_id = str(payload.get("deployment_id") or f"{model_name}-{secrets.token_hex(4)}")
-    try:
-        ensure_model_name_available(getattr(request.app.state, "model_registry", {}) or {}, model_name=model_name)
-    except DuplicateModelNameError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     model_config = {
         "deployment_id": deployment_id,
         "model_name": model_name,
@@ -589,15 +681,22 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     }
     _validate_model_config_or_400(model_config)
 
-    hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
+    hot_reload: ModelHotReloadManager | None = getattr(
+        request.app.state, "model_hot_reload_manager", None
+    )
+    warnings: list[str] = []
     if hot_reload is not None:
-        deployment_id = await hot_reload.add_model(model_config, updated_by="admin_api")
+        mutation = await hot_reload.add_model(model_config, updated_by="admin_api")
+        deployment_id = mutation.value
+        warnings = list(mutation.warnings)
     else:
         request.app.state.model_registry.setdefault(model_name, []).append(
             {
                 "deployment_id": deployment_id,
                 "named_credential_id": named_credential_id,
-                "named_credential_name": named_credential.name if named_credential is not None else None,
+                "named_credential_name": named_credential.name
+                if named_credential is not None
+                else None,
                 "deltallm_params": resolve_runtime_deltallm_params(
                     deltallm_params,
                     request.app.state.settings,
@@ -619,6 +718,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         deltallm_params=deltallm_params,
         summary_params=effective_params,
         model_info=model_info,
+        warnings=warnings,
     )
     await emit_control_audit_event(
         request=request,
@@ -634,10 +734,18 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     return response
 
 
-@router.put("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_master_key)])
-async def update_model(request: Request, deployment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.put(
+    "/ui/api/models/{deployment_id:path}",
+    dependencies=[Depends(require_master_key)],
+    response_model=ModelMutationResponse,
+)
+async def update_model(
+    request: Request, deployment_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     request_start = perf_counter()
-    hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
+    hot_reload: ModelHotReloadManager | None = getattr(
+        request.app.state, "model_hot_reload_manager", None
+    )
     registry: dict[str, list[dict[str, Any]]] = request.app.state.model_registry
     model_repository = getattr(request.app.state, "model_deployment_repository", None)
     get_by_deployment_id = getattr(model_repository, "get_by_deployment_id", None)
@@ -672,12 +780,14 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     if found_deployment is None or found_model_name is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
 
-    new_model_name, named_credential_id, deltallm_params, model_info = _normalized_model_payload_or_400(
-        payload,
-        existing_model_name=found_model_name,
-        existing_named_credential_id=found_deployment.get("named_credential_id"),
-        existing_params=found_deployment.get("deltallm_params", {}),
-        existing_model_info=found_deployment.get("model_info", {}),
+    new_model_name, named_credential_id, deltallm_params, model_info = (
+        _normalized_model_payload_or_400(
+            payload,
+            existing_model_name=found_model_name,
+            existing_named_credential_id=found_deployment.get("named_credential_id"),
+            existing_params=found_deployment.get("deltallm_params", {}),
+            existing_model_info=found_deployment.get("model_info", {}),
+        )
     )
     named_credential = await _load_named_credential_or_400(
         request.app,
@@ -686,15 +796,9 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     )
     effective_params = merge_named_credential_params(deltallm_params, named_credential)
     if not str(effective_params.get("api_base") or "").strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
-    try:
-        ensure_model_name_available(
-            getattr(request.app.state, "model_registry", {}) or {},
-            model_name=new_model_name,
-            exclude_deployment_id=deployment_id,
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required"
         )
-    except DuplicateModelNameError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     model_config = {
         "deployment_id": deployment_id,
         "model_name": new_model_name,
@@ -705,14 +809,21 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     _validate_model_config_or_400(model_config)
 
     if hot_reload is not None:
-        updated = await hot_reload.update_model(
-            deployment_id,
-            model_config,
-            updated_by="admin_api",
-        )
-        if not updated:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+        try:
+            mutation = await hot_reload.update_model(
+                deployment_id,
+                model_config,
+                updated_by="admin_api",
+            )
+        except RoutePolicyStateConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if not mutation.value:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found"
+            )
+        warnings = list(mutation.warnings)
     else:
+        warnings = []
         deployments = registry.get(found_model_name, [])
         for idx, deployment in enumerate(deployments):
             if str(deployment.get("deployment_id") or f"{found_model_name}-{idx}") == deployment_id:
@@ -724,7 +835,9 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
             {
                 "deployment_id": deployment_id,
                 "named_credential_id": named_credential_id,
-                "named_credential_name": named_credential.name if named_credential is not None else None,
+                "named_credential_name": named_credential.name
+                if named_credential is not None
+                else None,
                 "deltallm_params": resolve_runtime_deltallm_params(
                     deltallm_params,
                     request.app.state.settings,
@@ -746,6 +859,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         deltallm_params=deltallm_params,
         summary_params=effective_params,
         model_info=model_info,
+        warnings=warnings,
     )
     await emit_control_audit_event(
         request=request,
@@ -761,16 +875,27 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     return response
 
 
-@router.delete("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_master_key)])
-async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
+@router.delete(
+    "/ui/api/models/{deployment_id:path}",
+    dependencies=[Depends(require_master_key)],
+    response_model=ModelDeleteResponse,
+)
+async def delete_model(request: Request, deployment_id: str) -> dict[str, object]:
     request_start = perf_counter()
-    hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
+    hot_reload: ModelHotReloadManager | None = getattr(
+        request.app.state, "model_hot_reload_manager", None
+    )
 
     if hot_reload is not None:
-        removed = await hot_reload.remove_model(deployment_id, updated_by="admin_api")
-        if not removed:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
-        response = {"deleted": True}
+        try:
+            mutation = await hot_reload.remove_model(deployment_id, updated_by="admin_api")
+        except RoutePolicyStateConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if not mutation.value:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found"
+            )
+        response = {"deleted": True, "warnings": list(mutation.warnings)}
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
@@ -802,7 +927,7 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
             await _invalidate_route_group_runtime_cache(request.app)
             _rebuild_runtime_registry(request.app)
             await _sync_auto_follow_org_bindings(request.app)
-            response = {"deleted": True}
+            response = {"deleted": True, "warnings": []}
             await emit_control_audit_event(
                 request=request,
                 request_start=request_start,

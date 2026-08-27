@@ -35,6 +35,7 @@ def _configure_elevenlabs_stt_deployment(
         "input_cost_per_second": 0.5,
         "default_params": dict(default_params or {}),
         **dict(model_info or {}),
+        "mode": "audio_transcription",
     }
 
 
@@ -113,8 +114,20 @@ async def test_audio_transcription_elevenlabs_native_multipart_defaults_and_bill
                 "language_probability": 0.98,
                 "text": "Hello world.",
                 "words": [
-                    {"text": "Hello", "start": 0.0, "end": 0.4, "type": "word", "speaker_id": "speaker_0"},
-                    {"text": "world.", "start": 0.5, "end": 1.2, "type": "word", "speaker_id": "speaker_0"},
+                    {
+                        "text": "Hello",
+                        "start": 0.0,
+                        "end": 0.4,
+                        "type": "word",
+                        "speaker_id": "speaker_0",
+                    },
+                    {
+                        "text": "world.",
+                        "start": 0.5,
+                        "end": 1.2,
+                        "type": "word",
+                        "speaker_id": "speaker_0",
+                    },
                 ],
                 "transcription_id": "tr_123",
             },
@@ -178,7 +191,16 @@ async def test_audio_transcription_elevenlabs_native_multipart_defaults_and_bill
         "use_multi_channel": "false",
         "no_verbatim": "true",
     }
-    for field in ("model", "language", "prompt", "response_format", "additional_formats", "webhook", "entity_detection", "keyterms"):
+    for field in (
+        "model",
+        "language",
+        "prompt",
+        "response_format",
+        "additional_formats",
+        "webhook",
+        "entity_detection",
+        "keyterms",
+    ):
         assert field not in upstream_data
 
     assert "x-deltallm-route-deployment" in response.headers
@@ -213,7 +235,9 @@ async def test_audio_transcription_elevenlabs_response_formats(
 ):
     _configure_elevenlabs_stt_deployment(test_app)
 
-    async def post(url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout):  # noqa: ANN001, ANN201
+    async def post(
+        url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout
+    ):  # noqa: ANN001, ANN201
         del headers, files, data, timeout
         return httpx.Response(
             200,
@@ -252,7 +276,9 @@ async def test_audio_transcription_elevenlabs_multichannel_uses_billable_channel
         model_info={"input_cost_per_second": 0.2},
     )
 
-    async def post(url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout):  # noqa: ANN001, ANN201
+    async def post(
+        url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout
+    ):  # noqa: ANN001, ANN201
         del headers, files, data, timeout
         return httpx.Response(
             200,
@@ -300,11 +326,13 @@ async def test_audio_transcription_elevenlabs_multichannel_uses_billable_channel
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_elevenlabs_surfaces_upstream_errors(client, test_app):
+async def test_audio_transcription_elevenlabs_sanitizes_upstream_errors(client, test_app):
     test_app.state.spend_tracking_service = _SpendRecorder()
     _configure_elevenlabs_stt_deployment(test_app)
 
-    async def post(url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout):  # noqa: ANN001, ANN201
+    async def post(
+        url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout
+    ):  # noqa: ANN001, ANN201
         del headers, files, data, timeout
         return httpx.Response(
             422,
@@ -322,7 +350,8 @@ async def test_audio_transcription_elevenlabs_surfaces_upstream_errors(client, t
     )
 
     assert response.status_code == 400
-    assert "bad audio" in response.text
+    assert response.json()["error"]["message"] == "Provider rejected request"
+    assert "bad audio" not in response.text
 
     await asyncio.sleep(0.05)
     last_event = test_app.state.spend_tracking_service.events[-1]
@@ -331,18 +360,20 @@ async def test_audio_transcription_elevenlabs_surfaces_upstream_errors(client, t
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_elevenlabs_invalid_json_logs_upstream_502(
+async def test_audio_transcription_elevenlabs_invalid_schema_returns_sanitized_error(
     client,
     test_app,
 ):
     test_app.state.spend_tracking_service = _SpendRecorder()
     _configure_elevenlabs_stt_deployment(test_app)
 
-    async def post(url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout):  # noqa: ANN001, ANN201
+    async def post(
+        url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout
+    ):  # noqa: ANN001, ANN201
         del headers, files, data, timeout
         return httpx.Response(
             200,
-            content=b"not-json",
+            json={"secret": "sk-upstream"},
             request=httpx.Request("POST", url),
         )
 
@@ -356,7 +387,8 @@ async def test_audio_transcription_elevenlabs_invalid_json_logs_upstream_502(
     )
 
     assert response.status_code == 503
-    assert "invalid JSON" in response.text
+    assert response.json()["error"]["message"] == "Provider returned an invalid response"
+    assert "sk-upstream" not in response.text
 
     await asyncio.sleep(0.05)
     last_event = test_app.state.spend_tracking_service.events[-1]
@@ -385,9 +417,12 @@ async def test_audio_transcription_openai_compatible_providers_keep_existing_pat
     deployment.deltallm_params["model"] = upstream_model
     deployment.deltallm_params["api_base"] = api_base
     deployment.deltallm_params["api_key"] = "provider-key"
+    deployment.model_info["mode"] = "audio_transcription"
     captured: dict[str, object] = {}
 
-    async def post(url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout):  # noqa: ANN001, ANN201
+    async def post(
+        url: str, headers: dict[str, str], files: dict, data: dict, timeout: httpx.Timeout
+    ):  # noqa: ANN001, ANN201
         del timeout
         captured["url"] = url
         captured["headers"] = headers

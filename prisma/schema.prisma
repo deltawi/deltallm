@@ -874,7 +874,7 @@ model DeltaLLM_ModelDeployment {
 
   route_group_members DeltaLLM_RouteGroupMember[]
 
-  @@index([model_name])
+  @@index([model_name], map: "deltallm_modeldeployment_model_name_idx")
   @@index([named_credential_id], map: "deltallm_modeldeployment_named_credential_idx")
   @@map("deltallm_modeldeployment")
 }
@@ -1258,6 +1258,7 @@ model DeltaLLM_RoutePolicy {
   route_policy_id String   @id @default(uuid())
   route_group_id  String
   version         Int
+  semantics_version Int @default(1)
   status          String   @default("draft")
   policy_json     Json
   published_at    DateTime?
@@ -1270,6 +1271,15 @@ model DeltaLLM_RoutePolicy {
   @@unique([route_group_id, version], map: "deltallm_routepolicy_route_group_id_version_key")
   @@index([route_group_id, status], map: "deltallm_routepolicy_group_status_idx")
   @@map("deltallm_routepolicy")
+}
+
+model DeltaLLM_RouteRuntimeState {
+  state_key                String   @id
+  revision                 BigInt   @default(0)
+  route_groups_initialized Boolean  @default(false)
+  updated_at               DateTime @updatedAt
+
+  @@map("deltallm_routeruntimestate")
 }
 
 model DeltaLLM_BatchFile {

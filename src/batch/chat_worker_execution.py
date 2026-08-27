@@ -24,6 +24,8 @@ from src.batch.worker_types import (
     _PreparedChatItem,
     _PreparedEmbeddingItem,
     _RequestShim,
+    capture_batch_routing_runtime,
+    routing_generation_batch_key,
 )
 from src.metrics import (
     increment_batch_chat_item_executed,
@@ -37,6 +39,11 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, MCPToolDefinition
 from src.providers.resolution import resolve_provider
+from src.router import ProviderAttemptResult, ROUTING_MODE_CONTEXT_KEY
+from src.router.execution import (
+    attach_failover_attempt_context,
+    get_failover_attempt_context,
+)
 from src.router.health_policy import affects_deployment_health
 from src.routers.routing_decision import route_failover_kwargs
 
@@ -61,12 +68,14 @@ class ChatWorkerExecutionMixin:
         started_at_monotonic = perf_counter()
         chat_request = ChatCompletionRequest.model_validate(item.request_body)
         self._validate_batch_chat_request(chat_request)
+        routing_generation = capture_batch_routing_runtime(self.app.state)
         preflight = await run_batch_request_preflight(
             app=self.app,
             job=job,
             payload=chat_request,
             request_data=dump_request_for_preflight(chat_request),
             call_type="completion",
+            routing_runtime=routing_generation,
         )
         chat_request = preflight.payload
         self._validate_batch_chat_request(chat_request)
@@ -74,8 +83,9 @@ class ChatWorkerExecutionMixin:
         request_context: dict[str, Any] = {
             "metadata": chat_request.metadata or {},
             "user_id": preflight.auth.user_id or preflight.auth.api_key or "batch-worker",
+            ROUTING_MODE_CONTEXT_KEY: "chat",
         }
-        app_router = self.app.state.router
+        app_router = routing_generation.router
         model_group = app_router.resolve_model_group(chat_request.model)
         await self._raise_if_model_group_deferred(model_group)
 
@@ -93,12 +103,15 @@ class ChatWorkerExecutionMixin:
             request_context=request_context,
             failover_kwargs=route_failover_kwargs(request_context),
             request_shim=_RequestShim(app=self.app),
+            routing_generation=routing_generation,
             policy_auth=preflight.auth,
         )
 
     def _validate_batch_chat_request(self, payload: ChatCompletionRequest) -> None:
         if payload.stream is True:
-            raise InvalidRequestError(message="Chat batch requests support non-streaming requests only; stream must be false")
+            raise InvalidRequestError(
+                message="Chat batch requests support non-streaming requests only; stream must be false"
+            )
         if any(isinstance(tool, MCPToolDefinition) for tool in payload.tools or []):
             raise InvalidRequestError(message="MCP tools are not supported in batch chat yet")
 
@@ -150,12 +163,8 @@ class ChatWorkerExecutionMixin:
                     provider_cost=provider_cost,
                     billing=customer_billing.billing,
                     provider_billing=provider_billing.billing,
-                    effective_pricing_sources=(
-                        customer_billing.pricing_sources_used
-                    ),
-                    missing_pricing_fields=(
-                        customer_billing.missing_pricing_fields
-                    ),
+                    effective_pricing_sources=(customer_billing.pricing_sources_used),
+                    missing_pricing_fields=(customer_billing.missing_pricing_fields),
                     pricing_tier="batch",
                 ),
                 batch_execution_mode=batch_execution_mode,
@@ -177,7 +186,9 @@ class ChatWorkerExecutionMixin:
         try:
             await self._acquire_prepared_policy_lease(prepared=prepared)
         except Exception as exc:
-            record_batch_policy_failure(endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc)
+            record_batch_policy_failure(
+                endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc
+            )
             await self._mark_item_failed(
                 job=job,
                 item=prepared.item,
@@ -201,10 +212,13 @@ class ChatWorkerExecutionMixin:
                 lease_lost_event=item_lease_lost,
             )
             (
-                response_body,
-                api_latency_ms,
-            ), served_deployment = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+                (
+                    response_body,
+                    api_latency_ms,
+                ),
+                served_deployment,
+            ) = await self._await_with_lease_loss_cancellation(
+                prepared.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=prepared.primary_deployment,
                     model_group=prepared.model_group,
                     execute=lambda dep: self._execute_chat(
@@ -214,6 +228,7 @@ class ChatWorkerExecutionMixin:
                         record_usage=False,
                     ),
                     return_deployment=True,
+                    routing_context=prepared.request_context,
                     **prepared.failover_kwargs,
                 ),
                 lease_lost_event=item_lease_lost,
@@ -294,7 +309,8 @@ class ChatWorkerExecutionMixin:
                 item=prepared.item,
                 model_name=prepared.model_name,
                 exc=exc,
-                deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "") or None,
+                deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "")
+                or None,
                 started_at_monotonic=prepared.started_at_monotonic,
             )
             increment_batch_chat_item_executed(mode=batch_execution_mode, status="error")
@@ -305,8 +321,14 @@ class ChatWorkerExecutionMixin:
             await self._release_prepared_policy_lease(prepared)
 
     @staticmethod
-    def _chat_deployment_key(prepared: _PreparedChatItem) -> str:
-        return str(getattr(prepared.primary_deployment, "deployment_id", None) or id(prepared.primary_deployment))
+    def _chat_deployment_key(prepared: _PreparedChatItem) -> tuple[str, str]:
+        return (
+            routing_generation_batch_key(prepared.routing_generation),
+            str(
+                getattr(prepared.primary_deployment, "deployment_id", None)
+                or id(prepared.primary_deployment)
+            ),
+        )
 
     def _resolve_chat_microbatch_executor(
         self,
@@ -322,7 +344,9 @@ class ChatWorkerExecutionMixin:
         try:
             from src.providers.registry import resolve_chat_upstream
 
-            upstream = resolve_chat_upstream(prepared.request_shim, target_deployment.deltallm_params)
+            upstream = resolve_chat_upstream(
+                prepared.request_shim, target_deployment.deltallm_params
+            )
         except Exception:
             return None
         adapter = upstream.adapter
@@ -331,7 +355,9 @@ class ChatWorkerExecutionMixin:
         return None
 
     @staticmethod
-    def _chat_microbatch_unsupported_error(deployment: Any, *, reason: str = "unsupported") -> ServiceUnavailableError:
+    def _chat_microbatch_unsupported_error(
+        deployment: Any, *, reason: str = "unsupported"
+    ) -> ServiceUnavailableError:
         deployment_id = str(getattr(deployment, "deployment_id", None) or "unknown")
         return ServiceUnavailableError(
             message=f"Deployment '{deployment_id}' does not support sync chat microbatch: {reason}",
@@ -361,13 +387,24 @@ class ChatWorkerExecutionMixin:
     ) -> ChatMicrobatchExecutor:
         settings = resolve_chat_batching_settings(getattr(deployment, "deltallm_params", None))
         if settings.mode != "sync_microbatch":
-            raise self._chat_microbatch_unsupported_error(deployment, reason=f"mode={settings.mode}")
+            raise self._chat_microbatch_unsupported_error(
+                deployment, reason=f"mode={settings.mode}"
+            )
         if settings.upstream_max_batch_size < chunk_size:
-            raise self._chat_microbatch_unsupported_error(deployment, reason="upstream_max_batch_size")
-        if settings.max_total_input_tokens is not None and input_tokens > settings.max_total_input_tokens:
-            raise self._chat_microbatch_unsupported_error(deployment, reason="max_total_input_tokens")
+            raise self._chat_microbatch_unsupported_error(
+                deployment, reason="upstream_max_batch_size"
+            )
+        if (
+            settings.max_total_input_tokens is not None
+            and input_tokens > settings.max_total_input_tokens
+        ):
+            raise self._chat_microbatch_unsupported_error(
+                deployment, reason="max_total_input_tokens"
+            )
 
-        deployment_executor = self._resolve_chat_microbatch_executor(prepared, deployment=deployment)
+        deployment_executor = self._resolve_chat_microbatch_executor(
+            prepared, deployment=deployment
+        )
         if deployment_executor is None:
             raise self._chat_microbatch_unsupported_error(deployment, reason="executor_unavailable")
         return deployment_executor
@@ -419,7 +456,11 @@ class ChatWorkerExecutionMixin:
                 continue
 
             exceeds_count = len(current_chunk) >= max_batch_size
-            exceeds_tokens = token_cap is not None and current_chunk and current_tokens + input_tokens > token_cap
+            exceeds_tokens = (
+                token_cap is not None
+                and current_chunk
+                and current_tokens + input_tokens > token_cap
+            )
             if exceeds_count or exceeds_tokens:
                 flush_current()
 
@@ -509,7 +550,9 @@ class ChatWorkerExecutionMixin:
             decision=decision,
             retry_delay_seconds=retry_delay,
         )
-        if not self._chat_microbatch_retry_fits_job_deadline(job=job, retry_delay_seconds=retry_delay):
+        if not self._chat_microbatch_retry_fits_job_deadline(
+            job=job, retry_delay_seconds=retry_delay
+        ):
             return False
 
         for prepared in prepared_items:
@@ -522,11 +565,17 @@ class ChatWorkerExecutionMixin:
                 return False
 
         chunk_size = len(prepared_items)
-        retry_count = max(
-            self._chat_microbatch_retry_count(prepared.item.error_body) for prepared in prepared_items
-        ) + 1
+        retry_count = (
+            max(
+                self._chat_microbatch_retry_count(prepared.item.error_body)
+                for prepared in prepared_items
+            )
+            + 1
+        )
         original_size = max(
-            self._chat_microbatch_original_size(error_body=prepared.item.error_body, fallback=chunk_size)
+            self._chat_microbatch_original_size(
+                error_body=prepared.item.error_body, fallback=chunk_size
+            )
             for prepared in prepared_items
         )
         item_ids = [prepared.item.item_id for prepared in prepared_items]
@@ -546,8 +595,7 @@ class ChatWorkerExecutionMixin:
                 error_body=error_body,
                 last_error=str(exc),
                 item_claim_epochs={
-                    prepared.item.item_id: prepared.item.claim_epoch
-                    for prepared in prepared_items
+                    prepared.item.item_id: prepared.item.claim_epoch for prepared in prepared_items
                 },
             )
         except Exception as release_exc:
@@ -608,29 +656,36 @@ class ChatWorkerExecutionMixin:
         if not prepared_items:
             return
         if len(prepared_items) <= 1:
-            await self._execute_prepared_chat_item(job, prepared_items[0], batch_execution_mode="sync_microbatch")
+            await self._execute_prepared_chat_item(
+                job, prepared_items[0], batch_execution_mode="sync_microbatch"
+            )
             return
 
         batch_id = job.batch_id
         chunk_size = len(prepared_items)
         first_item = prepared_items[0]
-        chat_settings = settings or resolve_chat_batching_settings(first_item.primary_deployment.deltallm_params)
+        chat_settings = settings or resolve_chat_batching_settings(
+            first_item.primary_deployment.deltallm_params
+        )
         item_ids = [prepared.item.item_id for prepared in prepared_items]
         item_heartbeats: dict[str, asyncio.Task[None]] = {}
         item_lease_lost = asyncio.Event()
         microbatch_id = f"{batch_id}:{item_ids[0]}:{chunk_size}"
         chunk_started_at = perf_counter()
-        chunk_input_tokens = sum(estimate_chat_input_tokens(prepared.payload) for prepared in prepared_items)
+        chunk_input_tokens = sum(
+            estimate_chat_input_tokens(prepared.payload) for prepared in prepared_items
+        )
         served_deployment: Any | None = None
         last_retryable_microbatch_exc: Exception | None = None
-        last_retryable_microbatch_deployment_id: str | None = None
         request_context = self._build_chat_microbatch_request_context(
             job=job,
             prepared_items=prepared_items,
         )
 
-        async def _execute_for_deployment(deployment: Any) -> Sequence[Any]:
-            nonlocal last_retryable_microbatch_deployment_id, last_retryable_microbatch_exc
+        async def _execute_for_deployment(
+            deployment: Any,
+        ) -> Sequence[Any] | ProviderAttemptResult[Sequence[Any]]:
+            nonlocal last_retryable_microbatch_exc
             deployment_executor = self._resolve_chat_microbatch_capable_executor(
                 first_item,
                 deployment=deployment,
@@ -638,11 +693,29 @@ class ChatWorkerExecutionMixin:
                 input_tokens=chunk_input_tokens,
             )
             try:
-                return await deployment_executor.execute_chat_microbatch(
+                raw_results = await deployment_executor.execute_chat_microbatch(
                     requests=[prepared.payload for prepared in prepared_items],
                     deployment=deployment,
                     request_context=request_context,
                 )
+                normalized_results = normalize_chat_microbatch_results(
+                    raw_results,
+                    expected_count=chunk_size,
+                    custom_ids=[prepared.item.custom_id for prepared in prepared_items],
+                )
+                health_errors = [
+                    result.error
+                    for result in normalized_results
+                    if result.error is not None and affects_deployment_health(result.error)
+                ]
+                if len(health_errors) == len(normalized_results):
+                    raise health_errors[0]
+                if health_errors:
+                    return ProviderAttemptResult(
+                        value=normalized_results,
+                        health_error=health_errors[0],
+                    )
+                return normalized_results
             except Exception as exc:
                 retry_decision = classify_batch_retry(exc)
                 if (
@@ -650,41 +723,36 @@ class ChatWorkerExecutionMixin:
                     and retry_decision.retryable
                     and affects_deployment_health(exc)
                 ):
-                    deployment_id = str(getattr(deployment, "deployment_id", None) or "")
                     last_retryable_microbatch_exc = exc
-                    last_retryable_microbatch_deployment_id = deployment_id or None
                 raise
 
         try:
             for prepared in prepared_items:
                 item_heartbeats[prepared.item.item_id] = self._start_heartbeat_fn(
-                    renew=lambda item_id=prepared.item.item_id,
-                    claim_epoch=prepared.item.claim_epoch: self.repository.renew_item_lease(
-                        item_id=item_id,
-                        worker_id=self.config.worker_id,
-                        lease_seconds=self.config.item_lease_seconds,
-                        claim_epoch=claim_epoch,
+                    renew=lambda item_id=prepared.item.item_id, claim_epoch=prepared.item.claim_epoch: (
+                        self.repository.renew_item_lease(
+                            item_id=item_id,
+                            worker_id=self.config.worker_id,
+                            lease_seconds=self.config.item_lease_seconds,
+                            claim_epoch=claim_epoch,
+                        )
                     ),
                     label=f"item:{prepared.item.item_id}",
                     lease_lost_event=item_lease_lost,
                 )
 
             observe_batch_chat_microbatch_size(batch_size=chunk_size)
-            raw_results, served_deployment = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+            normalized_results, served_deployment = await self._await_with_lease_loss_cancellation(
+                first_item.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=first_item.primary_deployment,
                     model_group=first_item.model_group,
                     execute=_execute_for_deployment,
                     return_deployment=True,
+                    routing_context=first_item.request_context,
                     **first_item.failover_kwargs,
                 ),
                 lease_lost_event=item_lease_lost,
                 label=f"chat_microbatch:{microbatch_id}",
-            )
-            normalized_results = normalize_chat_microbatch_results(
-                raw_results,
-                expected_count=chunk_size,
-                custom_ids=[prepared.item.custom_id for prepared in prepared_items],
             )
         except BatchItemLeaseLostError as exc:
             logger.warning(
@@ -719,17 +787,14 @@ class ChatWorkerExecutionMixin:
                         max_in_flight=chat_settings.max_in_flight,
                     )
                     return
+                terminal_context = get_failover_attempt_context(exc)
                 exc = last_retryable_microbatch_exc
-                failure_deployment_id = last_retryable_microbatch_deployment_id
-            else:
-                failure_deployment = served_deployment or first_item.primary_deployment
-                failure_deployment_id = str(getattr(failure_deployment, "deployment_id", None) or "") or None
-            await self._record_upstream_failure_runtime_hook(
-                batch_id=batch_id,
-                deployment_id=failure_deployment_id,
-                exc=exc,
-                reference=microbatch_id,
-            )
+                if terminal_context is not None:
+                    attach_failover_attempt_context(
+                        exc,
+                        model_group=terminal_context.model_group,
+                        attempted_deployment_ids=list(terminal_context.attempted_deployment_ids),
+                    )
             retry_decision = classify_batch_retry(exc)
             requeued = await self._release_failed_chat_microbatch_for_retry(
                 job=job,
@@ -801,7 +866,9 @@ class ChatWorkerExecutionMixin:
 
             if result.response_body is None or result.usage is None:
                 failure_count += 1
-                exc = BatchResponseShapeError("chat microbatch result is missing response body or per-item usage")
+                exc = BatchResponseShapeError(
+                    "chat microbatch result is missing response body or per-item usage"
+                )
                 item_heartbeat = item_heartbeats.pop(prepared.item.item_id, None)
                 if item_heartbeat is not None:
                     await self._stop_heartbeat_fn(item_heartbeat)
@@ -898,7 +965,9 @@ class ChatWorkerExecutionMixin:
             try:
                 await self._acquire_prepared_policy_lease(prepared=prepared)
             except Exception as exc:
-                record_batch_policy_failure(endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc)
+                record_batch_policy_failure(
+                    endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc
+                )
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
@@ -920,7 +989,9 @@ class ChatWorkerExecutionMixin:
         max_in_flight: int | None = None,
     ) -> None:
         configured_limit = max_in_flight or self.config.worker_concurrency
-        fallback_limit = max(1, min(int(configured_limit), self.config.worker_concurrency, len(prepared_items)))
+        fallback_limit = max(
+            1, min(int(configured_limit), self.config.worker_concurrency, len(prepared_items))
+        )
         fallback_semaphore = asyncio.Semaphore(fallback_limit)
 
         async def _execute_single(prepared: _PreparedChatItem) -> None:
@@ -974,7 +1045,9 @@ class ChatWorkerExecutionMixin:
                 try:
                     prepared = await prepare_item(job, item)
                     if not isinstance(prepared, _PreparedChatItem):
-                        raise InvalidRequestError(message="Prepared batch chat item has an invalid execution shape")
+                        raise InvalidRequestError(
+                            message="Prepared batch chat item has an invalid execution shape"
+                        )
                     async with prepared_lock:
                         prepared_items.append(prepared)
                 except Exception as exc:
@@ -999,12 +1072,16 @@ class ChatWorkerExecutionMixin:
             for _ in range(prepare_runner_count):
                 task_group.create_task(_prepare_runner())
 
-        work_units: deque[tuple[str, ChatBatchingSettings, Callable[[], Awaitable[None]]]] = deque()
-        by_deployment: dict[str, list[_PreparedChatItem]] = {}
+        work_units: deque[
+            tuple[tuple[int, str], ChatBatchingSettings, Callable[[], Awaitable[None]]]
+        ] = deque()
+        by_deployment: dict[tuple[int, str], list[_PreparedChatItem]] = {}
         for prepared in prepared_items:
             by_deployment.setdefault(self._chat_deployment_key(prepared), []).append(prepared)
 
-        def _queue_single(prepared: _PreparedChatItem, settings: ChatBatchingSettings, *, mode: str) -> None:
+        def _queue_single(
+            prepared: _PreparedChatItem, settings: ChatBatchingSettings, *, mode: str
+        ) -> None:
             work_units.append(
                 (
                     self._chat_deployment_key(prepared),
@@ -1018,7 +1095,9 @@ class ChatWorkerExecutionMixin:
             )
 
         for deployment_key, deployment_items in by_deployment.items():
-            settings = resolve_chat_batching_settings(deployment_items[0].primary_deployment.deltallm_params)
+            settings = resolve_chat_batching_settings(
+                deployment_items[0].primary_deployment.deltallm_params
+            )
             if settings.mode in {"disabled", "concurrent"}:
                 for prepared in deployment_items:
                     _queue_single(prepared, settings, mode=settings.mode)
@@ -1043,10 +1122,14 @@ class ChatWorkerExecutionMixin:
                     failover_kwargs=prepared.failover_kwargs,
                 )
                 if not eligibility.eligible or eligibility.group_key is None:
-                    increment_batch_chat_microbatch_fallback(reason=eligibility.reason or "ineligible")
+                    increment_batch_chat_microbatch_fallback(
+                        reason=eligibility.reason or "ineligible"
+                    )
                     _queue_single(prepared, settings, mode="sync_microbatch_fallback")
                     continue
-                grouped_candidates.setdefault(eligibility.group_key, []).append((prepared, eligibility.input_tokens))
+                grouped_candidates.setdefault(eligibility.group_key, []).append(
+                    (prepared, eligibility.input_tokens)
+                )
 
             for candidates in grouped_candidates.values():
                 chunks, fallbacks = self._split_chat_microbatch_candidates(candidates, settings)

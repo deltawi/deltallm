@@ -117,6 +117,19 @@ deltallm_config_reload_events_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_router_health_transitions_metric = Counter(
+    "deltallm_router_health_transitions_total",
+    "Router deployment health state transitions",
+    ["transition"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_router_health_update_failures_metric = Counter(
+    "deltallm_router_health_update_failures_total",
+    "Router health outcome updates that could not be persisted",
+    registry=get_prometheus_registry(),
+)
+
 deltallm_tier_capacity_fair_share_decisions_metric = Counter(
     "deltallm_tier_capacity_fair_share_decisions_total",
     "Tier capacity fair-share decisions",
@@ -210,6 +223,16 @@ def increment_config_reload(*, source: str, result: str) -> None:
         source=sanitize_label(source),
         result=sanitize_label(result),
     ).inc()
+
+
+def increment_router_health_transition(*, transition: str) -> None:
+    deltallm_router_health_transitions_metric.labels(
+        transition=sanitize_label(transition),
+    ).inc()
+
+
+def increment_router_health_update_failure() -> None:
+    deltallm_router_health_update_failures_metric.inc()
 
 
 def increment_prompt_cache_lookup(*, entity: str, tier: str) -> None:

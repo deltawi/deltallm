@@ -96,6 +96,7 @@ class DynamicConfigManager:
         self._db_config: dict[str, Any] = {}
         self._config = build_app_config(self.file_config, {}, self.secret_resolver)
         self._subscribers: list[ConfigSubscriber] = []
+        self._final_subscriber: ConfigSubscriber | None = None
         self._pubsub_task: asyncio.Task[None] | None = None
         self._poll_task: asyncio.Task[None] | None = None
         self._stopping = False
@@ -135,6 +136,13 @@ class DynamicConfigManager:
 
     def subscribe(self, callback: ConfigSubscriber) -> None:
         self._subscribers.append(callback)
+
+    def subscribe_finalizer(self, callback: ConfigSubscriber) -> None:
+        """Register the sole subscriber that atomically publishes runtime state last."""
+
+        if self._final_subscriber is not None:
+            raise RuntimeError("dynamic config final subscriber is already registered")
+        self._final_subscriber = callback
 
     def get_config(self) -> dict[str, Any]:
         return self._config.model_dump(mode="python", exclude_none=True)
@@ -353,8 +361,15 @@ class DynamicConfigManager:
         return changed
 
     async def _reload_config(self, *, forced_modified_keys: tuple[str, ...] = ()) -> bool:
-        db_config = await self._load_from_db()
-        return await self._apply_db_config(db_config, forced_modified_keys=forced_modified_keys)
+        # Load only after entering the same transaction boundary as direct
+        # updates. Otherwise a poll can capture stale durable state, wait behind
+        # a newer update, and publish the stale candidate afterward.
+        async with self._update_lock:
+            db_config = await self._load_from_db()
+            return await self._apply_db_config(
+                db_config,
+                forced_modified_keys=forced_modified_keys,
+            )
 
     async def _apply_db_config(
         self,
@@ -385,7 +400,10 @@ class DynamicConfigManager:
                 new_app_config,
                 previous_app_config,
             )
-            for callback in list(self._subscribers):
+            callbacks = list(self._subscribers)
+            if self._final_subscriber is not None:
+                callbacks.append(self._final_subscriber)
+            for callback in callbacks:
                 try:
                     result = callback(previous_app_config, rollback_changes)
                     if asyncio.iscoroutine(result):
@@ -442,6 +460,10 @@ class DynamicConfigManager:
     ) -> None:
         for callback in list(self._subscribers):
             result = callback(app_config, changes)
+            if asyncio.iscoroutine(result):
+                await result
+        if self._final_subscriber is not None:
+            result = self._final_subscriber(app_config, changes)
             if asyncio.iscoroutine(result):
                 await result
 

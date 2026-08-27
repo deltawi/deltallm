@@ -12,8 +12,6 @@ export class ApiError extends Error {
   }
 }
 
-export type ApiFetchOptions = RequestInit & { json?: unknown };
-
 export interface StructuredApiErrorDetail {
   code?: string;
   message?: string;
@@ -54,26 +52,28 @@ async function parseErrorDetail(response: Response): Promise<unknown> {
   }
 }
 
-function objectMessage(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const record = value as Record<string, unknown>;
-  if (typeof record.message === 'string' && record.message.trim()) return record.message;
-  if (typeof record.detail === 'string' && record.detail.trim()) return record.detail;
-  return objectMessage(record.detail);
-}
-
 function errorMessage(status: number, detail: unknown): string {
+  if (detail && typeof detail === 'object' && 'detail' in detail) {
+    const nested = (detail as { detail?: unknown }).detail;
+    if (typeof nested === 'string' && nested.trim()) return nested;
+    if (nested && typeof nested === 'object' && 'message' in nested) {
+      const message = (nested as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim()) return message;
+    }
+  }
   if (typeof detail === 'string' && detail.trim()) return detail;
-  return objectMessage(detail) || `Request failed (${status})`;
+  return `Request failed (${status})`;
 }
 
-export async function apiFetch<T>(path: string, options?: ApiFetchOptions): Promise<T> {
-  const hasJson = options !== undefined && Object.prototype.hasOwnProperty.call(options, 'json');
-  const body = hasJson ? JSON.stringify(options?.json ?? null) : options?.body;
+export async function apiFetch<T>(
+  path: string,
+  opts?: RequestInit & { json?: unknown },
+): Promise<T> {
+  const body = opts && 'json' in opts ? JSON.stringify(opts.json ?? null) : opts?.body;
   const response = await fetch(path, {
     credentials: 'include',
-    ...options,
-    headers: buildHeaders(options?.headers, body),
+    ...opts,
+    headers: buildHeaders(opts?.headers, body),
     body,
   });
 
@@ -83,13 +83,30 @@ export async function apiFetch<T>(path: string, options?: ApiFetchOptions): Prom
     const retryAfterSeconds = rawRetryAfter && /^\d+$/.test(rawRetryAfter)
       ? Number.parseInt(rawRetryAfter, 10)
       : undefined;
-    throw new ApiError(errorMessage(response.status, detail), response.status, detail, retryAfterSeconds);
+    throw new ApiError(
+      errorMessage(response.status, detail),
+      response.status,
+      detail,
+      retryAfterSeconds,
+    );
   }
 
   if (response.status === 204) return undefined as T;
+
   const contentType = response.headers.get('content-type') || '';
-  if (!contentType.includes('application/json')) {
-    return (await response.text()) as unknown as T;
-  }
+  if (!contentType.includes('application/json')) return (await response.text()) as T;
   return (await response.json()) as T;
+}
+
+export function withQuery<Query extends object>(path: string, params?: Query): string {
+  if (!params) return path;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue;
+    const serialized = String(value);
+    if (!serialized.trim()) continue;
+    query.set(key, serialized);
+  }
+  const suffix = query.toString();
+  return suffix ? `${path}?${suffix}` : path;
 }

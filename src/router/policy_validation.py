@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 from src.router.router import RoutingStrategy
 
 ALLOWED_POLICY_MODES = {"fallback", "weighted", "conditional", "adaptive"}
+POLICY_MODE_STRATEGY_ALIASES = {
+    "fallback": RoutingStrategy.PRIORITY_BASED.value,
+    "weighted": RoutingStrategy.WEIGHTED.value,
+}
 ALLOWED_POLICY_KEYS = {"mode", "strategy", "members", "timeouts", "retry"}
 ALLOWED_TIMEOUT_KEYS = {"global_ms", "global_seconds"}
 ALLOWED_RETRY_KEYS = {"max_attempts", "retryable_error_classes"}
@@ -16,6 +22,16 @@ ALLOWED_RETRYABLE_ERROR_CLASSES = {
     "content_policy_violation",
     "generic",
 }
+POLICY_MEMBER_KEYS = {"deployment_id", "enabled", "weight", "priority"}
+LEGACY_POLICY_SEMANTICS_VERSION = 1
+CURRENT_POLICY_SEMANTICS_VERSION = 2
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyMemberInventoryItem:
+    deployment_id: str
+    enabled: bool = True
+    workload_mode: str | None = None
 
 
 def _normalize_int(value: Any, field_name: str, *, minimum: int = 0) -> int:
@@ -54,144 +70,312 @@ def _normalize_string_list(value: Any, field_name: str) -> list[str]:
     return normalized
 
 
+def merge_policy_members(
+    base_members: list[dict[str, Any]],
+    policy_members: Any,
+    *,
+    semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
+) -> list[dict[str, Any]]:
+    """Resolve policy membership under the version persisted with the policy."""
+
+    if not isinstance(policy_members, list):
+        return [dict(member) for member in base_members]
+
+    base_by_id = {
+        str(member.get("deployment_id") or ""): dict(member)
+        for member in base_members
+        if isinstance(member, dict) and str(member.get("deployment_id") or "")
+    }
+    resolved: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    for item in policy_members:
+        if not isinstance(item, dict):
+            continue
+        deployment_id = str(item.get("deployment_id") or "").strip()
+        base = base_by_id.get(deployment_id)
+        if base is None:
+            continue
+        selected_ids.add(deployment_id)
+        merged = dict(base)
+        for field_name in ("weight", "priority"):
+            if field_name in item:
+                merged[field_name] = item[field_name]
+        # Group membership is the eligibility boundary. A policy may narrow it,
+        # but must never reactivate a member disabled by an operator.
+        merged["enabled"] = bool(base.get("enabled", True)) and bool(item.get("enabled", True))
+        resolved.append(merged)
+    if semantics_version <= LEGACY_POLICY_SEMANTICS_VERSION:
+        resolved.extend(
+            dict(member)
+            for deployment_id, member in base_by_id.items()
+            if deployment_id not in selected_ids
+        )
+    return resolved
+
+
+def merge_policy_document_for_write(
+    existing: dict[str, Any] | None,
+    replacement: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace client-owned policy fields while retaining opaque stored fields."""
+
+    current = existing if isinstance(existing, dict) else {}
+    merged = {
+        key: deepcopy(value) for key, value in current.items() if key not in ALLOWED_POLICY_KEYS
+    }
+    merged.update(deepcopy(replacement))
+
+    for field_name, client_keys in (
+        ("timeouts", ALLOWED_TIMEOUT_KEYS),
+        ("retry", ALLOWED_RETRY_KEYS),
+    ):
+        current_value = current.get(field_name)
+        replacement_value = replacement.get(field_name)
+        current_mapping = current_value if isinstance(current_value, dict) else {}
+        opaque = {
+            key: deepcopy(value) for key, value in current_mapping.items() if key not in client_keys
+        }
+        if isinstance(replacement_value, dict):
+            opaque.update(deepcopy(replacement_value))
+        if opaque:
+            merged[field_name] = opaque
+
+    replacement_members = replacement.get("members")
+    if isinstance(replacement_members, list):
+        current_members = current.get("members")
+        current_member_list = current_members if isinstance(current_members, list) else []
+        current_by_id = {
+            str(member.get("deployment_id") or ""): member
+            for member in current_member_list
+            if isinstance(member, dict) and str(member.get("deployment_id") or "")
+        }
+        preserved_members: list[dict[str, Any]] = []
+        for replacement_member in replacement_members:
+            if not isinstance(replacement_member, dict):
+                continue
+            deployment_id = str(replacement_member.get("deployment_id") or "")
+            current_member = current_by_id.get(deployment_id, {})
+            member = {
+                key: deepcopy(value)
+                for key, value in current_member.items()
+                if key not in POLICY_MEMBER_KEYS
+            }
+            member.update(deepcopy(replacement_member))
+            preserved_members.append(member)
+        merged["members"] = preserved_members
+
+    return merged
+
+
+def _validate_policy_mode(normalized: dict[str, Any]) -> str | None:
+    if "mode" not in normalized:
+        return None
+    mode = str(normalized.get("mode") or "").strip().lower()
+    if mode not in ALLOWED_POLICY_MODES:
+        allowed = ", ".join(sorted(ALLOWED_POLICY_MODES))
+        raise ValueError(f"mode must be one of: {allowed}")
+    if mode in {"conditional", "adaptive"}:
+        raise ValueError(
+            f"mode '{mode}' is not supported by the runtime; use a concrete strategy instead"
+        )
+    normalized["mode"] = mode
+    return mode
+
+
+def _validate_policy_strategy(normalized: dict[str, Any]) -> None:
+    if "strategy" not in normalized:
+        return
+    strategy = str(normalized.get("strategy") or "").strip()
+    if strategy and strategy not in RoutingStrategy._value2member_map_:
+        allowed = ", ".join(item.value for item in RoutingStrategy)
+        raise ValueError(f"strategy must be one of: {allowed}")
+    normalized["strategy"] = strategy or None
+
+
+def _ignored_fields_warning(path: str, fields: list[str]) -> str:
+    return f"Ignored opaque {path} fields: {', '.join(fields)}"
+
+
+def _validate_policy_members(normalized: dict[str, Any], warnings: list[str]) -> None:
+    members = normalized.get("members")
+    if members is None:
+        return
+    if not isinstance(members, list):
+        raise ValueError("members must be a list")
+
+    validated_members: list[dict[str, Any]] = []
+    seen_member_ids: set[str] = set()
+    for idx, raw_member in enumerate(members):
+        if not isinstance(raw_member, dict):
+            raise ValueError(f"members[{idx}] must be an object")
+        deployment_id = str(raw_member.get("deployment_id") or "").strip()
+        if not deployment_id:
+            raise ValueError(f"members[{idx}].deployment_id is required")
+        if deployment_id in seen_member_ids:
+            raise ValueError(f"members[{idx}].deployment_id is duplicated")
+        seen_member_ids.add(deployment_id)
+        unknown = sorted(key for key in raw_member if key not in POLICY_MEMBER_KEYS)
+        if unknown:
+            warnings.append(_ignored_fields_warning(f"members[{idx}]", unknown))
+        member: dict[str, Any] = {
+            "deployment_id": deployment_id,
+            "enabled": bool(raw_member.get("enabled", True)),
+        }
+        if raw_member.get("weight") is not None:
+            member["weight"] = _normalize_int(
+                raw_member["weight"], f"members[{idx}].weight", minimum=1
+            )
+        if raw_member.get("priority") is not None:
+            member["priority"] = _normalize_int(
+                raw_member["priority"], f"members[{idx}].priority", minimum=0
+            )
+        validated_members.append(member)
+    normalized["members"] = validated_members
+
+
+def _validate_policy_timeouts(normalized: dict[str, Any], warnings: list[str]) -> None:
+    if "timeouts" not in normalized:
+        return
+    timeouts = normalized.get("timeouts")
+    if not isinstance(timeouts, dict):
+        raise ValueError("timeouts must be an object")
+    unknown = sorted(key for key in timeouts if key not in ALLOWED_TIMEOUT_KEYS)
+    if unknown:
+        warnings.append(_ignored_fields_warning("timeouts", unknown))
+
+    validated: dict[str, Any] = {}
+    if "global_ms" in timeouts:
+        validated["global_ms"] = _normalize_int(
+            timeouts["global_ms"], "timeouts.global_ms", minimum=1
+        )
+    if "global_seconds" in timeouts:
+        validated["global_seconds"] = _normalize_float(
+            timeouts["global_seconds"], "timeouts.global_seconds", minimum=0.001
+        )
+    normalized["timeouts"] = validated
+
+
+def _validate_policy_retry(normalized: dict[str, Any], warnings: list[str]) -> None:
+    if "retry" not in normalized:
+        return
+    retry = normalized.get("retry")
+    if not isinstance(retry, dict):
+        raise ValueError("retry must be an object")
+    unknown = sorted(key for key in retry if key not in ALLOWED_RETRY_KEYS)
+    if unknown:
+        warnings.append(_ignored_fields_warning("retry", unknown))
+
+    validated: dict[str, Any] = {}
+    if "max_attempts" in retry:
+        validated["max_attempts"] = _normalize_int(
+            retry["max_attempts"], "retry.max_attempts", minimum=0
+        )
+    if "retryable_error_classes" in retry:
+        values = _normalize_string_list(
+            retry["retryable_error_classes"], "retry.retryable_error_classes"
+        )
+        invalid = sorted(set(values) - ALLOWED_RETRYABLE_ERROR_CLASSES)
+        if invalid:
+            allowed = ", ".join(sorted(ALLOWED_RETRYABLE_ERROR_CLASSES))
+            raise ValueError(f"retry.retryable_error_classes values must be one of: {allowed}")
+        validated["retryable_error_classes"] = values
+    normalized["retry"] = validated
+
+
+def _validate_member_pool(
+    normalized: dict[str, Any],
+    available_members: Mapping[str, PolicyMemberInventoryItem] | None,
+    *,
+    semantics_version: int,
+) -> list[dict[str, Any]]:
+    valid_ids = set(available_members or {})
+    members = normalized.get("members", [])
+    if available_members is not None:
+        referenced_ids = {
+            str(member.get("deployment_id") or "").strip()
+            for member in members
+            if isinstance(member, dict)
+        }
+        unknown = sorted(member_id for member_id in referenced_ids if member_id not in valid_ids)
+        if unknown:
+            raise ValueError(f"policy references unknown members: {', '.join(unknown)}")
+
+    if available_members is None:
+        active = [member for member in members if bool(member.get("enabled", True))]
+    else:
+        base_members = [
+            {
+                "deployment_id": member_id,
+                "enabled": available_members[member_id].enabled,
+            }
+            for member_id in sorted(valid_ids)
+        ]
+        effective = merge_policy_members(
+            base_members,
+            members if "members" in normalized else None,
+            semantics_version=semantics_version,
+        )
+        active = [member for member in effective if bool(member.get("enabled", True))]
+    if not active:
+        raise ValueError("policy results in empty active member pool")
+    return active
+
+
+def _apply_policy_mode(
+    normalized: dict[str, Any],
+    active_members: list[dict[str, Any]],
+    warnings: list[str],
+    *,
+    mode: str | None,
+) -> None:
+    expected_strategy = POLICY_MODE_STRATEGY_ALIASES.get(mode or "")
+    if expected_strategy:
+        warnings.append(f"Policy mode '{mode}' is deprecated; use strategy '{expected_strategy}'.")
+        strategy = normalized.get("strategy")
+        if strategy in (None, ""):
+            normalized["strategy"] = expected_strategy
+        elif strategy != expected_strategy:
+            warnings.append(
+                f"{mode.title()} mode is advisory when strategy is set explicitly; "
+                "strategy takes precedence."
+            )
+
+    if mode == "fallback" and "members" in normalized:
+        for index, member in enumerate(normalized["members"]):
+            if member.get("priority") is None:
+                member["priority"] = index
+    if mode == "weighted" and not any(
+        member.get("weight") is not None for member in active_members
+    ):
+        warnings.append(
+            "Weighted mode without explicit member weights will use deployment defaults."
+        )
+
+
 def validate_route_policy(
     payload: dict[str, Any],
     *,
-    available_member_ids: set[str] | None = None,
+    available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
+    semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
 ) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("policy payload must be an object")
-
-    unknown = sorted([key for key in payload.keys() if key not in ALLOWED_POLICY_KEYS])
-    if unknown:
-        raise ValueError(f"unknown policy fields: {', '.join(unknown)}")
-
-    normalized = dict(payload)
+    unknown = sorted(key for key in payload if key not in ALLOWED_POLICY_KEYS)
     warnings: list[str] = []
+    if unknown:
+        warnings.append(_ignored_fields_warning("policy", unknown))
 
-    if "mode" in normalized:
-        mode = str(normalized.get("mode") or "").strip().lower()
-        if mode not in ALLOWED_POLICY_MODES:
-            allowed = ", ".join(sorted(ALLOWED_POLICY_MODES))
-            raise ValueError(f"mode must be one of: {allowed}")
-        if mode == "conditional":
-            raise ValueError("mode 'conditional' is not supported by the runtime; use a concrete strategy instead")
-        if mode == "adaptive":
-            raise ValueError("mode 'adaptive' is not supported by the runtime; use a concrete strategy instead")
-        normalized["mode"] = mode
-
-    if "strategy" in normalized:
-        strategy = str(normalized.get("strategy") or "").strip()
-        if strategy and strategy not in RoutingStrategy._value2member_map_:
-            allowed = ", ".join(item.value for item in RoutingStrategy)
-            raise ValueError(f"strategy must be one of: {allowed}")
-        normalized["strategy"] = strategy or None
-
-    members = normalized.get("members")
-    if members is not None:
-        if not isinstance(members, list):
-            raise ValueError("members must be a list")
-
-        validated_members: list[dict[str, Any]] = []
-        for idx, raw_member in enumerate(members):
-            if not isinstance(raw_member, dict):
-                raise ValueError(f"members[{idx}] must be an object")
-            deployment_id = str(raw_member.get("deployment_id") or "").strip()
-            if not deployment_id:
-                raise ValueError(f"members[{idx}].deployment_id is required")
-
-            member = {
-                "deployment_id": deployment_id,
-                "enabled": bool(raw_member.get("enabled", True)),
-            }
-            weight = raw_member.get("weight")
-            if weight is not None:
-                member["weight"] = _normalize_int(weight, f"members[{idx}].weight", minimum=1)
-            priority = raw_member.get("priority")
-            if priority is not None:
-                member["priority"] = _normalize_int(priority, f"members[{idx}].priority", minimum=0)
-            validated_members.append(member)
-        normalized["members"] = validated_members
-
-    if "timeouts" in normalized:
-        timeouts = normalized.get("timeouts")
-        if not isinstance(timeouts, dict):
-            raise ValueError("timeouts must be an object")
-        timeout_unknown = sorted([key for key in timeouts.keys() if key not in ALLOWED_TIMEOUT_KEYS])
-        if timeout_unknown:
-            raise ValueError(f"unknown timeouts fields: {', '.join(timeout_unknown)}")
-        validated_timeouts: dict[str, Any] = {}
-        if "global_ms" in timeouts:
-            validated_timeouts["global_ms"] = _normalize_int(timeouts["global_ms"], "timeouts.global_ms", minimum=1)
-        if "global_seconds" in timeouts:
-            validated_timeouts["global_seconds"] = _normalize_float(
-                timeouts["global_seconds"],
-                "timeouts.global_seconds",
-                minimum=0.001,
-            )
-        normalized["timeouts"] = validated_timeouts
-
-    if "retry" in normalized:
-        retry = normalized.get("retry")
-        if not isinstance(retry, dict):
-            raise ValueError("retry must be an object")
-        retry_unknown = sorted([key for key in retry.keys() if key not in ALLOWED_RETRY_KEYS])
-        if retry_unknown:
-            raise ValueError(f"unknown retry fields: {', '.join(retry_unknown)}")
-        validated_retry: dict[str, Any] = {}
-        if "max_attempts" in retry:
-            validated_retry["max_attempts"] = _normalize_int(retry["max_attempts"], "retry.max_attempts", minimum=0)
-        if "retryable_error_classes" in retry:
-            values = _normalize_string_list(retry["retryable_error_classes"], "retry.retryable_error_classes")
-            invalid = sorted(set(values) - ALLOWED_RETRYABLE_ERROR_CLASSES)
-            if invalid:
-                allowed = ", ".join(sorted(ALLOWED_RETRYABLE_ERROR_CLASSES))
-                raise ValueError(f"retry.retryable_error_classes values must be one of: {allowed}")
-            validated_retry["retryable_error_classes"] = values
-        normalized["retry"] = validated_retry
-
-    valid_member_ids = {item.strip() for item in (available_member_ids or set()) if item and item.strip()}
-    if valid_member_ids:
-        referenced_ids = {
-            str(member.get("deployment_id") or "").strip()
-            for member in normalized.get("members", [])
-            if isinstance(member, dict)
-        }
-        unknown_refs = sorted([member_id for member_id in referenced_ids if member_id and member_id not in valid_member_ids])
-        if unknown_refs:
-            raise ValueError(f"policy references unknown members: {', '.join(unknown_refs)}")
-
-    if "members" in normalized:
-        active_members = [member for member in normalized["members"] if bool(member.get("enabled", True))]
-    else:
-        active_members = [{"deployment_id": member_id, "enabled": True} for member_id in sorted(valid_member_ids)]
-    if not active_members:
-        raise ValueError("policy results in empty active member pool")
-
-    mode = normalized.get("mode")
-    strategy = normalized.get("strategy")
-    if mode == "fallback":
-        if strategy in (None, ""):
-            normalized["strategy"] = RoutingStrategy.PRIORITY_BASED.value
-        elif strategy != RoutingStrategy.PRIORITY_BASED.value:
-            warnings.append("Fallback mode is advisory when strategy is set explicitly; strategy takes precedence.")
-        if "members" in normalized:
-            prioritized_members: list[dict[str, Any]] = []
-            for index, member in enumerate(normalized["members"]):
-                updated_member = deepcopy(member)
-                if updated_member.get("priority") is None:
-                    updated_member["priority"] = index
-                prioritized_members.append(updated_member)
-            normalized["members"] = prioritized_members
-    elif mode == "weighted":
-        if strategy in (None, ""):
-            normalized["strategy"] = RoutingStrategy.WEIGHTED.value
-        elif strategy != RoutingStrategy.WEIGHTED.value:
-            warnings.append("Weighted mode is advisory when strategy is set explicitly; strategy takes precedence.")
-
-    if "mode" in normalized and normalized["mode"] == "weighted":
-        has_weight = any(isinstance(member, dict) and member.get("weight") is not None for member in active_members)
-        if not has_weight:
-            warnings.append("Weighted mode without explicit member weights will use deployment defaults.")
-
+    normalized = {key: value for key, value in payload.items() if key in ALLOWED_POLICY_KEYS}
+    mode = _validate_policy_mode(normalized)
+    _validate_policy_strategy(normalized)
+    _validate_policy_members(normalized, warnings)
+    _validate_policy_timeouts(normalized, warnings)
+    _validate_policy_retry(normalized, warnings)
+    active_members = _validate_member_pool(
+        normalized,
+        available_members,
+        semantics_version=semantics_version,
+    )
+    _apply_policy_mode(normalized, active_members, warnings, mode=mode)
+    normalized.pop("mode", None)
     return normalized, warnings

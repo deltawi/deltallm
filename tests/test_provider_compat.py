@@ -7,13 +7,25 @@ from binascii import crc32
 import httpx
 import pytest
 
-from src.models.errors import InvalidRequestError, RateLimitError, ServiceUnavailableError
+from src.models.errors import (
+    FailureClassification,
+    InvalidRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.azure import AzureOpenAIAdapter
 from src.providers.bedrock import BedrockAdapter
+from src.providers.base import (
+    INVALID_PROVIDER_RESPONSE_MESSAGE,
+    MAX_PROVIDER_ERROR_BODY_BYTES,
+    parse_provider_json_response,
+    read_streaming_provider_error_details,
+)
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
+from src.providers.registry import ProviderErrorMapperRegistry
 
 
 async def _line_stream(lines: list[str]):
@@ -24,6 +36,28 @@ async def _line_stream(lines: list[str]):
 async def _byte_stream(chunks: list[bytes]):
     for chunk in chunks:
         yield chunk
+
+
+class _AsyncBytes(httpx.AsyncByteStream):
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _provider_error_mapper_registry(client: httpx.AsyncClient) -> ProviderErrorMapperRegistry:
+    return ProviderErrorMapperRegistry(
+        openai=OpenAIAdapter(client),
+        azure_openai=AzureOpenAIAdapter(client),
+        anthropic=AnthropicAdapter(client),
+        gemini=GeminiAdapter(client),
+        bedrock=BedrockAdapter(client),
+    )
 
 
 def _encode_eventstream_message(headers: dict[str, str], payload: dict) -> bytes:
@@ -42,7 +76,13 @@ def _encode_eventstream_message(headers: dict[str, str], payload: dict) -> bytes
     prelude_crc = crc32(prelude_no_crc) & 0xFFFFFFFF
     prelude_crc_bytes = struct.pack("!I", prelude_crc)
     message_crc = crc32(prelude_crc_bytes + header_bytes + payload_bytes, prelude_crc) & 0xFFFFFFFF
-    return prelude_no_crc + prelude_crc_bytes + header_bytes + payload_bytes + struct.pack("!I", message_crc)
+    return (
+        prelude_no_crc
+        + prelude_crc_bytes
+        + header_bytes
+        + payload_bytes
+        + struct.pack("!I", message_crc)
+    )
 
 
 def _stream_json_payloads(lines: list[str]) -> list[dict]:
@@ -79,7 +119,9 @@ async def test_openai_adapter_keeps_tool_choice_with_tools() -> None:
         req = ChatCompletionRequest(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hi"}],
-            tools=[{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}],
+            tools=[
+                {"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}
+            ],
             tool_choice="auto",
         )
         payload = await adapter.translate_request(req, {"model": "openai/gpt-4o-mini"})
@@ -164,7 +206,7 @@ async def test_openai_adapter_allows_tool_call_messages_without_content() -> Non
                                     "type": "function",
                                     "function": {
                                         "name": "docs.search",
-                                        "arguments": "{\"query\":\"DeltaLLM\"}",
+                                        "arguments": '{"query":"DeltaLLM"}',
                                     },
                                 }
                             ],
@@ -178,13 +220,15 @@ async def test_openai_adapter_allows_tool_call_messages_without_content() -> Non
         )
         payload = canonical.model_dump(mode="json")
         assert payload["choices"][0]["message"]["content"] == ""
-        assert payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "docs.search"
+        assert (
+            payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "docs.search"
+        )
     finally:
         await adapter.http_client.aclose()
 
 
 @pytest.mark.asyncio
-async def test_openai_adapter_surfaces_provider_error_message() -> None:
+async def test_openai_adapter_sanitizes_unclassified_provider_error_message() -> None:
     adapter = OpenAIAdapter(httpx.AsyncClient())
     try:
         response = httpx.Response(
@@ -194,9 +238,564 @@ async def test_openai_adapter_surfaces_provider_error_message() -> None:
         )
         exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
         mapped = adapter.map_error(exc)
-        assert str(mapped) == "tool_choice is not supported for this model"
+        assert str(mapped) == "Provider rejected request"
+        assert mapped.failure_classification is FailureClassification.GENERIC
+        assert "tool_choice" not in str(mapped)
     finally:
         await adapter.http_client.aclose()
+
+
+def test_provider_success_json_parser_rejects_non_object_without_exposing_body() -> None:
+    response = httpx.Response(
+        200,
+        content=b'["sk-upstream"]',
+        request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+    )
+
+    with pytest.raises(ServiceUnavailableError) as error_info:
+        parse_provider_json_response(response)
+
+    error = error_info.value
+    assert str(error) == INVALID_PROVIDER_RESPONSE_MESSAGE
+    assert error.affects_deployment_health is True
+    assert error.failure_classification is FailureClassification.GENERIC
+    assert "sk-upstream" not in str(error)
+    assert "internal.provider.example" not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_sanitizes_malformed_success_schema() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            200,
+            json={"secret": "sk-upstream", "messages": ["private-output"]},
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            await adapter.translate_success_response(response, "provider-model")
+
+        error = error_info.value
+        assert str(error) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error.affects_deployment_health is True
+        assert error.failure_classification is FailureClassification.GENERIC
+        assert "sk-upstream" not in str(error)
+        assert "private-output" not in str(error)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+async def test_openai_compatible_adapter_rejects_empty_success_choices(adapter_type) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-empty",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "provider-model",
+                "choices": [],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            await adapter.translate_success_response(response, "provider-model")
+
+        assert str(error_info.value) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error_info.value.affects_deployment_health is True
+        assert error_info.value.failure_classification is FailureClassification.GENERIC
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+async def test_openai_compatible_stream_classifies_filter_before_output(adapter_type) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"id":"chatcmpl-filtered","choices":[{"index":0,'
+            '"delta":{"role":"assistant"},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-filtered","choices":[{"index":0,'
+            '"delta":{},"finish_reason":"content_filter"}]}',
+            "data: [DONE]",
+        ]
+
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert error_info.value.failure_classification is FailureClassification.CONTENT_POLICY
+        assert error_info.value.affects_deployment_health is False
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+async def test_openai_compatible_stream_preserves_filter_after_output(adapter_type) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"id":"chatcmpl-filtered","choices":[{"index":0,'
+            '"delta":{"role":"assistant"},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-filtered","choices":[{"index":0,'
+            '"delta":{"content":"partial"},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-filtered","choices":[{"index":0,'
+            '"delta":{},"finish_reason":"content_filter"}]}',
+            "data: [DONE]",
+        ]
+
+        out = [line async for line in adapter.translate_stream(_line_stream(lines))]
+
+        assert out == lines
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ["data: [DONE]"],
+        [
+            'data: {"id":"chatcmpl-truncated","choices":[{"index":0,'
+            '"delta":{"role":"assistant"},"finish_reason":null}]}'
+        ],
+    ],
+)
+async def test_openai_compatible_stream_rejects_terminal_only_or_truncated_input(
+    adapter_type,
+    lines: list[str],
+) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert str(error_info.value) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error_info.value.affects_deployment_health is True
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [AnthropicAdapter, GeminiAdapter, BedrockAdapter])
+async def test_native_adapter_sanitizes_empty_success_schema(adapter_type) -> None:  # noqa: ANN001
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            200,
+            json={"secret": "sk-upstream"},
+            request=httpx.Request("POST", "https://internal.provider.example/native"),
+        )
+
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            await adapter.translate_success_response(response, "provider-model")
+
+        error = error_info.value
+        assert str(error) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error.affects_deployment_health is True
+        assert error.failure_classification is FailureClassification.GENERIC
+        assert "sk-upstream" not in str(error)
+        assert "internal.provider.example" not in str(error)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_5xx_status_preserves_specialized_envelope_classification() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            500,
+            json={"error": {"code": "content_filter", "message": "sk-upstream"}},
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+        status_error = httpx.HTTPStatusError(
+            "provider failed",
+            request=response.request,
+            response=response,
+        )
+
+        mapped = adapter.map_error(status_error)
+
+        assert isinstance(mapped, ServiceUnavailableError)
+        assert str(mapped) == "Provider unavailable"
+        assert mapped.affects_deployment_health is True
+        assert mapped.failure_classification is FailureClassification.CONTENT_POLICY
+        assert "sk-upstream" not in str(mapped)
+        assert "internal.provider.example" not in str(mapped)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gemini_5xx_context_failure_stays_health_affecting_and_classified() -> None:
+    adapter = GeminiAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            500,
+            json={
+                "error": {
+                    "status": "INTERNAL",
+                    "message": "The input context is too long sk-upstream",
+                }
+            },
+            request=httpx.Request("POST", "https://internal.provider.example/generateContent"),
+        )
+        status_error = httpx.HTTPStatusError(
+            "provider failed",
+            request=response.request,
+            response=response,
+        )
+
+        mapped = adapter.map_error(status_error)
+
+        assert isinstance(mapped, ServiceUnavailableError)
+        assert mapped.affects_deployment_health is True
+        assert mapped.failure_classification is FailureClassification.CONTEXT_WINDOW
+        assert str(mapped) == "Provider unavailable"
+        assert "sk-upstream" not in str(mapped)
+        assert "internal.provider.example" not in str(mapped)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_429_status_remains_rate_limit_when_envelope_is_specialized() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            429,
+            json={"error": {"code": "content_filter", "message": "sk-upstream"}},
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+        status_error = httpx.HTTPStatusError(
+            "provider failed",
+            request=response.request,
+            response=response,
+        )
+
+        mapped = adapter.map_error(status_error)
+
+        assert isinstance(mapped, RateLimitError)
+        assert mapped.affects_deployment_health is True
+        assert mapped.failure_classification is FailureClassification.RATE_LIMIT
+        assert str(mapped) == "Provider rate limited request"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_unclassified_5xx_remains_generic() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            503,
+            json={"error": {"code": "upstream_unavailable", "message": "sk-upstream"}},
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+        status_error = httpx.HTTPStatusError(
+            "provider failed",
+            request=response.request,
+            response=response,
+        )
+
+        mapped = adapter.map_error(status_error)
+
+        assert isinstance(mapped, ServiceUnavailableError)
+        assert mapped.affects_deployment_health is True
+        assert mapped.failure_classification is FailureClassification.GENERIC
+        assert str(mapped) == "Provider unavailable"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inner_error_key", ["innererror", "inner_error"])
+async def test_provider_error_mapper_registry_reuses_adapter_classification(
+    inner_error_key: str,
+) -> None:
+    client = httpx.AsyncClient()
+    try:
+        registry = _provider_error_mapper_registry(client)
+        response = httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "provider-owned sensitive detail",
+                    inner_error_key: {"code": "ResponsibleAIPolicyViolation"},
+                }
+            },
+            request=httpx.Request("POST", "https://provider.invalid/embeddings"),
+        )
+        error = httpx.HTTPStatusError("bad request", request=response.request, response=response)
+
+        mapped = registry.map_error("azure", error)
+
+        assert isinstance(mapped, InvalidRequestError)
+        assert str(mapped) == "Provider rejected request"
+        assert mapped.failure_classification is FailureClassification.CONTENT_POLICY
+        assert "provider-owned sensitive detail" not in str(mapped)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_error_mapper_registry_limits_openai_rules_to_compatible_providers() -> None:
+    client = httpx.AsyncClient()
+    try:
+        registry = _provider_error_mapper_registry(client)
+
+        assert registry.resolve("openai") is registry.openai
+        assert registry.resolve("vllm") is registry.openai
+        assert registry.resolve("unknown") is registry.openai
+        assert registry.resolve("") is registry.openai
+        assert registry.resolve("custom-gateway") is None
+
+        response = httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "maximum context length sk-upstream",
+                }
+            },
+            request=httpx.Request("POST", "https://custom.provider.invalid/embeddings"),
+        )
+        error = httpx.HTTPStatusError("bad request", request=response.request, response=response)
+
+        mapped = registry.map_error("custom-gateway", error)
+
+        assert isinstance(mapped, InvalidRequestError)
+        assert mapped.failure_classification is FailureClassification.GENERIC
+        assert str(mapped) == "Provider rejected request"
+        assert "sk-upstream" not in str(mapped)
+        assert "custom.provider.invalid" not in str(mapped)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+async def test_openai_compatible_adapter_classifies_content_filter_finish_reason(
+    adapter_type,
+) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            await adapter.translate_response(
+                {
+                    "id": "chatcmpl-filtered",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": None},
+                            "finish_reason": "content_filter",
+                        }
+                    ],
+                },
+                model_name="provider-model",
+            )
+
+        assert error_info.value.failure_classification is FailureClassification.CONTENT_POLICY
+        assert error_info.value.affects_deployment_health is False
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "payload", "expected"),
+    [
+        (
+            OpenAIAdapter,
+            {"error": {"code": "context_length_exceeded", "message": "sk-upstream"}},
+            FailureClassification.CONTEXT_WINDOW,
+        ),
+        (
+            OpenAIAdapter,
+            {"error": {"type": "content_policy_violation", "message": "sk-upstream"}},
+            FailureClassification.CONTENT_POLICY,
+        ),
+        (
+            AzureOpenAIAdapter,
+            {"error": {"code": "context_length_exceeded", "message": "sk-upstream"}},
+            FailureClassification.CONTEXT_WINDOW,
+        ),
+        (
+            AzureOpenAIAdapter,
+            {
+                "error": {
+                    "message": "sk-upstream",
+                    "innererror": {"code": "ResponsibleAIPolicyViolation"},
+                }
+            },
+            FailureClassification.CONTENT_POLICY,
+        ),
+        (
+            AnthropicAdapter,
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long sk-upstream",
+                }
+            },
+            FailureClassification.CONTEXT_WINDOW,
+        ),
+        (
+            AnthropicAdapter,
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "request blocked by content filtering policy sk-upstream",
+                }
+            },
+            FailureClassification.CONTENT_POLICY,
+        ),
+        (
+            GeminiAdapter,
+            {
+                "error": {
+                    "status": "INVALID_ARGUMENT",
+                    "message": "sk-upstream",
+                    "details": [{"reason": "CONTEXT_LENGTH_EXCEEDED"}],
+                }
+            },
+            FailureClassification.CONTEXT_WINDOW,
+        ),
+        (
+            GeminiAdapter,
+            {"error": {"code": "SAFETY", "message": "sk-upstream"}},
+            FailureClassification.CONTENT_POLICY,
+        ),
+        (
+            BedrockAdapter,
+            {"__type": "ValidationException", "message": "maximum context length sk-upstream"},
+            FailureClassification.CONTEXT_WINDOW,
+        ),
+        (
+            BedrockAdapter,
+            {"__type": "GuardrailIntervenedException", "message": "sk-upstream"},
+            FailureClassification.CONTENT_POLICY,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_provider_adapters_return_typed_sanitized_classified_failures(
+    adapter_type,
+    payload: dict,
+    expected: FailureClassification,
+) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            400,
+            json=payload,
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+        exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
+
+        mapped = adapter.map_error(exc)
+
+        assert isinstance(mapped, InvalidRequestError)
+        assert str(mapped) == "Provider rejected request"
+        assert mapped.failure_classification is expected
+        assert "sk-upstream" not in str(mapped)
+        assert "internal.provider.example" not in str(mapped)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_adapter_malformed_error_body_is_sanitized_generic() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            400,
+            content=b"maximum context length sk-upstream",
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+        exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
+
+        mapped = adapter.map_error(exc)
+
+        assert str(mapped) == "Provider rejected request"
+        assert mapped.failure_classification is FailureClassification.GENERIC
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unread_streaming_provider_error_is_bounded_and_classified() -> None:
+    adapter = AzureOpenAIAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            400,
+            stream=_AsyncBytes(
+                json.dumps(
+                    {
+                        "error": {
+                            "code": "context_length_exceeded",
+                            "message": "maximum context length sk-upstream",
+                        }
+                    }
+                ).encode()
+            ),
+            request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+        )
+        exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
+
+        details = await read_streaming_provider_error_details(response)
+        mapped = adapter.map_error(exc, details=details)
+
+        assert isinstance(mapped, InvalidRequestError)
+        assert mapped.failure_classification is FailureClassification.CONTEXT_WINDOW
+        assert str(mapped) == "Provider rejected request"
+        assert "sk-upstream" not in str(mapped)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_oversized_streaming_provider_error_uses_status_only() -> None:
+    response = httpx.Response(
+        400,
+        stream=_AsyncBytes(b"{" + b"x" * MAX_PROVIDER_ERROR_BODY_BYTES),
+        request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+    )
+
+    details = await read_streaming_provider_error_details(response)
+
+    assert details.status_code == 400
+    assert details.identifiers == frozenset()
+    assert details.message is None
+
+
+@pytest.mark.asyncio
+async def test_deeply_nested_streaming_provider_error_uses_status_only() -> None:
+    nested = b"[" * 2048 + b"0" + b"]" * 2048
+    response = httpx.Response(
+        400,
+        stream=_AsyncBytes(nested),
+        request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+    )
+
+    details = await read_streaming_provider_error_details(response)
+
+    assert details.status_code == 400
+    assert details.identifiers == frozenset()
+    assert details.message is None
 
 
 @pytest.mark.asyncio
@@ -263,6 +862,7 @@ async def test_openai_adapter_health_check_defaults_provider_when_missing() -> N
 async def test_openai_adapter_health_check_returns_false_on_unexpected_error() -> None:
     adapter = OpenAIAdapter(httpx.AsyncClient())
     try:
+
         async def fake_get(url, headers, timeout):  # noqa: ANN001, ANN201
             del url, headers, timeout
             raise RuntimeError("unexpected client failure")
@@ -305,7 +905,9 @@ async def test_anthropic_adapter_translate_request_and_response() -> None:
             ],
             max_tokens=32,
         )
-        upstream = await adapter.translate_request(req, {"model": "anthropic/claude-3-5-sonnet-latest"})
+        upstream = await adapter.translate_request(
+            req, {"model": "anthropic/claude-3-5-sonnet-latest"}
+        )
         assert upstream["model"] == "claude-3-5-sonnet-latest"
         assert upstream["system"] == "be concise"
         assert upstream["max_tokens"] == 32
@@ -345,7 +947,10 @@ async def test_anthropic_adapter_forwards_tools_and_tool_messages() -> None:
                             {
                                 "id": "toolu_1",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": json.dumps({"query": "delta"})},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": json.dumps({"query": "delta"}),
+                                },
                             }
                         ],
                     },
@@ -357,7 +962,10 @@ async def test_anthropic_adapter_forwards_tools_and_tool_messages() -> None:
                         "function": {
                             "name": "docs.search",
                             "description": "Search docs",
-                            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                            },
                         },
                     }
                 ],
@@ -376,11 +984,20 @@ async def test_anthropic_adapter_forwards_tools_and_tool_messages() -> None:
         assert upstream["tool_choice"] == {"type": "any"}
         assert upstream["messages"][1] == {
             "role": "assistant",
-            "content": [{"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {"query": "delta"}}],
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "docs.search",
+                    "input": {"query": "delta"},
+                }
+            ],
         }
         assert upstream["messages"][2] == {
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "delta docs result"}],
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "delta docs result"}
+            ],
         }
     finally:
         await adapter.http_client.aclose()
@@ -396,7 +1013,12 @@ async def test_anthropic_adapter_translate_response_maps_tool_use_blocks() -> No
                 "model": "claude-3-5-sonnet-latest",
                 "content": [
                     {"type": "text", "text": "Checking."},
-                    {"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {"query": "delta"}},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "docs.search",
+                        "input": {"query": "delta"},
+                    },
                 ],
                 "stop_reason": "tool_use",
                 "usage": {"input_tokens": 4, "output_tokens": 2},
@@ -414,6 +1036,41 @@ async def test_anthropic_adapter_translate_response_maps_tool_use_blocks() -> No
             }
         ]
         assert payload["choices"][0]["finish_reason"] == "tool_calls"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stop_reason", "expected"),
+    [
+        ("refusal", FailureClassification.CONTENT_POLICY),
+        ("model_context_window_exceeded", FailureClassification.CONTEXT_WINDOW),
+    ],
+)
+async def test_anthropic_adapter_classifies_documented_stop_reason(
+    stop_reason: str,
+    expected: FailureClassification,
+) -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            200,
+            json={
+                "id": "msg_blocked",
+                "model": "claude-3-5-sonnet-latest",
+                "content": [],
+                "stop_reason": stop_reason,
+                "usage": {"input_tokens": 4, "output_tokens": 0},
+            },
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        )
+
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            await adapter.translate_success_response(response, "anthropic/claude")
+
+        assert error_info.value.failure_classification is expected
+        assert error_info.value.affects_deployment_health is False
     finally:
         await adapter.http_client.aclose()
 
@@ -460,6 +1117,130 @@ async def test_anthropic_adapter_translate_stream_to_openai_chunks() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stop_reason", "expected"),
+    [
+        ("refusal", FailureClassification.CONTENT_POLICY),
+        ("model_context_window_exceeded", FailureClassification.CONTEXT_WINDOW),
+    ],
+)
+async def test_anthropic_stream_classified_stop_before_output_is_typed(
+    stop_reason: str,
+    expected: FailureClassification,
+) -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"type":"message_start","message":{"id":"msg_1","model":"claude"}}',
+            f'data: {{"type":"message_delta","delta":{{"stop_reason":"{stop_reason}"}}}}',
+            'data: {"type":"message_stop"}',
+        ]
+        translated = adapter.translate_stream(_line_stream(lines)).__aiter__()
+
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            await anext(translated)
+
+        assert error_info.value.failure_classification is expected
+        assert error_info.value.affects_deployment_health is False
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stop_reason", "finish_reason"),
+    [
+        ("refusal", "content_filter"),
+        ("model_context_window_exceeded", "length"),
+    ],
+)
+async def test_anthropic_stream_classified_stop_after_output_finishes_without_retry_signal(
+    stop_reason: str,
+    finish_reason: str,
+) -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"type":"message_start","message":{"id":"msg_1","model":"claude"}}',
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}',
+            f'data: {{"type":"message_delta","delta":{{"stop_reason":"{stop_reason}"}}}}',
+            'data: {"type":"message_stop"}',
+        ]
+
+        out = [line async for line in adapter.translate_stream(_line_stream(lines))]
+
+        assert any('"content":"partial"' in line for line in out)
+        assert any(f'"finish_reason":"{finish_reason}"' in line for line in out)
+        assert out[-1] == "data: [DONE]"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_adapter_stream_error_is_typed_and_sanitized() -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        lines = [
+            "event: error",
+            'data: {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"prompt is too long sk-upstream"}}',
+        ]
+
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert error_info.value.failure_classification is FailureClassification.CONTEXT_WINDOW
+        assert "sk-upstream" not in str(error_info.value)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_adapter_stream_rate_limit_is_retryable() -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"type":"error","error":{"type":"rate_limit_error",'
+            '"message":"too many requests sk-upstream"}}'
+        ]
+
+        with pytest.raises(RateLimitError, match="Provider rate limited request") as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert error_info.value.failure_classification is FailureClassification.RATE_LIMIT
+        assert error_info.value.affects_deployment_health is True
+        assert "sk-upstream" not in str(error_info.value)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ["data: [DONE]"],
+        ['data: {"type":"message_start","message":{"id":"msg_1","model":"claude"}}'],
+        ["data: not-json"],
+    ],
+)
+async def test_anthropic_stream_rejects_terminal_only_or_truncated_input(
+    lines: list[str],
+) -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert str(error_info.value) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error_info.value.affects_deployment_health is True
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_gemini_adapter_translate_request_and_response() -> None:
     adapter = GeminiAdapter(httpx.AsyncClient())
     try:
@@ -485,13 +1266,141 @@ async def test_gemini_adapter_translate_request_and_response() -> None:
                         "finishReason": "STOP",
                     }
                 ],
-                "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 2, "totalTokenCount": 6},
+                "usageMetadata": {
+                    "promptTokenCount": 4,
+                    "candidatesTokenCount": 2,
+                    "totalTokenCount": 6,
+                },
             },
             model_name="gemini/gemini-2.5-flash",
         )
         payload = canonical.model_dump(mode="json")
         assert payload["choices"][0]["message"]["content"] == "Hello"
         assert payload["usage"]["total_tokens"] == 6
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_payload",
+    [
+        {"promptFeedback": {"blockReason": "SAFETY"}},
+        {
+            "candidates": [
+                {
+                    "content": {"parts": []},
+                    "finishReason": "PROHIBITED_CONTENT",
+                }
+            ]
+        },
+        {
+            "candidates": [
+                {
+                    "content": {"parts": []},
+                    "finishReason": "IMAGE_RECITATION",
+                }
+            ]
+        },
+        {
+            "candidates": [
+                {
+                    "content": {"parts": []},
+                    "finishReason": "ESCALATION",
+                }
+            ]
+        },
+    ],
+)
+async def test_gemini_adapter_classifies_documented_policy_response(
+    response_payload: dict,
+) -> None:
+    adapter = GeminiAdapter(httpx.AsyncClient())
+    try:
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            await adapter.translate_response(
+                response_payload,
+                model_name="gemini/gemini-2.5-flash",
+            )
+
+        assert error_info.value.failure_classification is FailureClassification.CONTENT_POLICY
+        assert error_info.value.affects_deployment_health is False
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "finish_reason",
+    [
+        "LANGUAGE",
+        "OTHER",
+        "MALFORMED_FUNCTION_CALL",
+        "IMAGE_OTHER",
+        "NO_IMAGE",
+        "UNEXPECTED_TOOL_CALL",
+        "TOO_MANY_TOOL_CALLS",
+        "MISSING_THOUGHT_SIGNATURE",
+        "MALFORMED_RESPONSE",
+        "FUTURE_PROVIDER_FAILURE",
+    ],
+)
+async def test_gemini_adapter_rejects_non_success_finish_reason_as_malformed(
+    finish_reason: str,
+) -> None:
+    adapter = GeminiAdapter(httpx.AsyncClient())
+    try:
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            await adapter.translate_response(
+                {
+                    "secret": "sk-upstream",
+                    "candidates": [
+                        {
+                            "content": {"parts": []},
+                            "finishReason": finish_reason,
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 4,
+                        "candidatesTokenCount": 0,
+                        "totalTokenCount": 4,
+                    },
+                },
+                model_name="gemini/gemini-2.5-flash",
+            )
+
+        error = error_info.value
+        assert str(error) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error.affects_deployment_health is True
+        assert error.failure_classification is FailureClassification.GENERIC
+        assert "sk-upstream" not in str(error)
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gemini_adapter_preserves_max_tokens_as_successful_length_finish() -> None:
+    adapter = GeminiAdapter(httpx.AsyncClient())
+    try:
+        canonical = await adapter.translate_response(
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "partial"}]},
+                        "finishReason": "MAX_TOKENS",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 4,
+                    "candidatesTokenCount": 2,
+                    "totalTokenCount": 6,
+                },
+            },
+            model_name="gemini/gemini-2.5-flash",
+        )
+
+        assert canonical.choices[0].finish_reason == "length"
+        assert canonical.choices[0].message.content == "partial"
     finally:
         await adapter.http_client.aclose()
 
@@ -508,7 +1417,9 @@ async def test_bedrock_adapter_translate_request_and_response() -> None:
             ],
             max_tokens=32,
         )
-        upstream = await adapter.translate_request(req, {"model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"})
+        upstream = await adapter.translate_request(
+            req, {"model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"}
+        )
         assert upstream["system"][0]["text"] == "be concise"
         assert upstream["messages"][0]["role"] == "user"
         assert upstream["inferenceConfig"]["maxTokens"] == 32
@@ -529,6 +1440,38 @@ async def test_bedrock_adapter_translate_request_and_response() -> None:
         payload = canonical.model_dump(mode="json")
         assert payload["choices"][0]["message"]["content"] == "Hello"
         assert payload["usage"]["total_tokens"] == 6
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stop_reason", "expected"),
+    [
+        ("guardrail_intervened", FailureClassification.CONTENT_POLICY),
+        ("content_filtered", FailureClassification.CONTENT_POLICY),
+        ("model_context_window_exceeded", FailureClassification.CONTEXT_WINDOW),
+    ],
+)
+async def test_bedrock_adapter_classifies_documented_stop_reason(
+    stop_reason: str,
+    expected: FailureClassification,
+) -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            await adapter.translate_response(
+                {
+                    "requestId": "req_blocked",
+                    "output": {"message": {"content": []}},
+                    "stopReason": stop_reason,
+                    "usage": {"inputTokens": 4, "outputTokens": 0, "totalTokens": 4},
+                },
+                model_name="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            )
+
+        assert error_info.value.failure_classification is expected
+        assert error_info.value.affects_deployment_health is False
     finally:
         await adapter.http_client.aclose()
 
@@ -573,17 +1516,20 @@ async def test_bedrock_adapter_only_sends_explicit_sampling_params() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bedrock_adapter_surfaces_provider_error_message() -> None:
+async def test_bedrock_adapter_sanitizes_provider_error_message() -> None:
     adapter = BedrockAdapter(httpx.AsyncClient())
     try:
         response = httpx.Response(
             400,
             json={"message": "`temperature` and `top_p` cannot both be specified"},
-            request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/claude/converse"),
+            request=httpx.Request(
+                "POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/claude/converse"
+            ),
         )
         exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
         mapped = adapter.map_error(exc)
-        assert str(mapped) == "`temperature` and `top_p` cannot both be specified"
+        assert str(mapped) == "Provider rejected request"
+        assert mapped.failure_classification is FailureClassification.GENERIC
     finally:
         await adapter.http_client.aclose()
 
@@ -641,6 +1587,77 @@ async def test_bedrock_adapter_translate_stream_to_openai_chunks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bedrock_adapter_stream_stop_failure_is_not_reported_as_done() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        frames = b"".join(
+            [
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStart"},
+                    {"role": "assistant"},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStop"},
+                    {"stopReason": "guardrail_intervened"},
+                ),
+            ]
+        )
+        translated = adapter.translate_stream(_byte_stream([frames])).__aiter__()
+
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
+            await anext(translated)
+
+        assert error_info.value.failure_classification is FailureClassification.CONTENT_POLICY
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_stream_classified_stop_after_output_is_terminal() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        frames = b"".join(
+            [
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStart"},
+                    {"role": "assistant"},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "contentBlockDelta"},
+                    {"contentBlockIndex": 0, "delta": {"text": "partial"}},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStop"},
+                    {"stopReason": "guardrail_intervened"},
+                ),
+            ]
+        )
+
+        out = [line async for line in adapter.translate_stream(_byte_stream([frames]))]
+
+        assert any('"content":"partial"' in line for line in out)
+        assert any('"finish_reason":"content_filter"' in line for line in out)
+        assert out[-1] == "data: [DONE]"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks", [[], [b""]])
+async def test_bedrock_adapter_stream_rejects_empty_input(chunks: list[bytes]) -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            async for _ in adapter.translate_stream(_byte_stream(chunks)):
+                pass
+
+        assert str(error_info.value) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error_info.value.affects_deployment_health is True
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_bedrock_adapter_translate_stream_uses_sequential_tool_call_indexes() -> None:
     adapter = BedrockAdapter(httpx.AsyncClient())
     try:
@@ -656,7 +1673,10 @@ async def test_bedrock_adapter_translate_stream_uses_sequential_tool_call_indexe
                 ),
                 _encode_eventstream_message(
                     {":message-type": "event", ":event-type": "contentBlockStart"},
-                    {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "toolu_1", "name": "docs.search"}}},
+                    {
+                        "contentBlockIndex": 1,
+                        "start": {"toolUse": {"toolUseId": "toolu_1", "name": "docs.search"}},
+                    },
                 ),
                 _encode_eventstream_message(
                     {":message-type": "event", ":event-type": "contentBlockDelta"},
@@ -669,7 +1689,12 @@ async def test_bedrock_adapter_translate_stream_uses_sequential_tool_call_indexe
             ]
         )
 
-        out = [line async for line in adapter.translate_stream(_byte_stream([frames]), model_name="bedrock-public-model")]
+        out = [
+            line
+            async for line in adapter.translate_stream(
+                _byte_stream([frames]), model_name="bedrock-public-model"
+            )
+        ]
         payloads = _stream_json_payloads(out)
         tool_deltas = [
             tool_call
@@ -702,7 +1727,10 @@ async def test_bedrock_adapter_forwards_tools_and_tool_messages() -> None:
                             {
                                 "id": "toolu_1",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": json.dumps({"query": "delta"})},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": json.dumps({"query": "delta"}),
+                                },
                             }
                         ],
                     },
@@ -714,7 +1742,10 @@ async def test_bedrock_adapter_forwards_tools_and_tool_messages() -> None:
                         "function": {
                             "name": "docs.search",
                             "description": "Search docs",
-                            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                            },
                         },
                     }
                 ],
@@ -729,7 +1760,9 @@ async def test_bedrock_adapter_forwards_tools_and_tool_messages() -> None:
                     "toolSpec": {
                         "name": "docs.search",
                         "description": "Search docs",
-                        "inputSchema": {"json": {"type": "object", "properties": {"query": {"type": "string"}}}},
+                        "inputSchema": {
+                            "json": {"type": "object", "properties": {"query": {"type": "string"}}}
+                        },
                     }
                 }
             ],
@@ -737,11 +1770,21 @@ async def test_bedrock_adapter_forwards_tools_and_tool_messages() -> None:
         }
         assert upstream["messages"][1] == {
             "role": "assistant",
-            "content": [{"toolUse": {"toolUseId": "toolu_1", "name": "docs.search", "input": {"query": "delta"}}}],
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "toolu_1",
+                        "name": "docs.search",
+                        "input": {"query": "delta"},
+                    }
+                }
+            ],
         }
         assert upstream["messages"][2] == {
             "role": "user",
-            "content": [{"toolResult": {"toolUseId": "toolu_1", "content": [{"text": "delta docs result"}]}}],
+            "content": [
+                {"toolResult": {"toolUseId": "toolu_1", "content": [{"text": "delta docs result"}]}}
+            ],
         }
     finally:
         await adapter.http_client.aclose()
@@ -757,7 +1800,13 @@ async def test_bedrock_adapter_translate_response_maps_tool_use_blocks() -> None
                     "message": {
                         "content": [
                             {"text": "Checking."},
-                            {"toolUse": {"toolUseId": "toolu_1", "name": "docs.search", "input": {"query": "delta"}}},
+                            {
+                                "toolUse": {
+                                    "toolUseId": "toolu_1",
+                                    "name": "docs.search",
+                                    "input": {"query": "delta"},
+                                }
+                            },
                         ]
                     }
                 },
@@ -789,9 +1838,10 @@ async def test_bedrock_adapter_translate_stream_raises_on_exception_event() -> N
             {":message-type": "exception", ":exception-type": "validationException"},
             {"message": "Malformed input request"},
         )
-        with pytest.raises(InvalidRequestError, match="Malformed input request"):
+        with pytest.raises(InvalidRequestError, match="Provider rejected request") as error_info:
             async for _ in adapter.translate_stream(_byte_stream([frame])):
                 pass
+        assert error_info.value.failure_classification is FailureClassification.GENERIC
     finally:
         await adapter.http_client.aclose()
 
@@ -804,7 +1854,9 @@ async def test_bedrock_adapter_translate_stream_classifies_retryable_errors() ->
             {":message-type": "exception", ":exception-type": "throttlingException"},
             {"message": "Too many requests"},
         )
-        with pytest.raises(RateLimitError, match="Too many requests") as rate_limit_info:
+        with pytest.raises(
+            RateLimitError, match="Provider rate limited request"
+        ) as rate_limit_info:
             async for _ in adapter.translate_stream(_byte_stream([throttle_frame])):
                 pass
         assert rate_limit_info.value.affects_deployment_health is True
@@ -813,7 +1865,9 @@ async def test_bedrock_adapter_translate_stream_classifies_retryable_errors() ->
             {":message-type": "exception", ":exception-type": "internalServerException"},
             {"message": "Internal failure"},
         )
-        with pytest.raises(ServiceUnavailableError, match="Internal failure") as unavailable_info:
+        with pytest.raises(
+            ServiceUnavailableError, match="Provider unavailable"
+        ) as unavailable_info:
             async for _ in adapter.translate_stream(_byte_stream([server_frame])):
                 pass
         assert unavailable_info.value.affects_deployment_health is True
@@ -822,8 +1876,80 @@ async def test_bedrock_adapter_translate_stream_classifies_retryable_errors() ->
             {":message-type": "error", ":event-type": "somethingUnexpected"},
             {"message": "mystery failure"},
         )
-        with pytest.raises(ServiceUnavailableError, match="mystery failure"):
+        with pytest.raises(ServiceUnavailableError, match="Provider unavailable"):
             async for _ in adapter.translate_stream(_byte_stream([unknown_frame])):
                 pass
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "message", "error_type", "classification", "affects_health"),
+    [
+        (
+            "internalServerException",
+            "guardrail intervened",
+            ServiceUnavailableError,
+            FailureClassification.GENERIC,
+            True,
+        ),
+        (
+            "modelStreamErrorException",
+            "guardrail intervened",
+            ServiceUnavailableError,
+            FailureClassification.GENERIC,
+            True,
+        ),
+        (
+            "serviceUnavailableException",
+            "input is too long",
+            ServiceUnavailableError,
+            FailureClassification.GENERIC,
+            True,
+        ),
+        (
+            "throttlingException",
+            "input is too long",
+            RateLimitError,
+            FailureClassification.RATE_LIMIT,
+            True,
+        ),
+        (
+            "validationException",
+            "input is too long",
+            InvalidRequestError,
+            FailureClassification.CONTEXT_WINDOW,
+            False,
+        ),
+        (
+            "validationException",
+            "guardrail intervened",
+            InvalidRequestError,
+            FailureClassification.CONTENT_POLICY,
+            False,
+        ),
+    ],
+)
+async def test_bedrock_stream_exception_type_precedes_message_classification(
+    exception_type: str,
+    message: str,
+    error_type: type[Exception],
+    classification: FailureClassification,
+    affects_health: bool,
+) -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        frame = _encode_eventstream_message(
+            {":message-type": "exception", ":exception-type": exception_type},
+            {"message": message},
+        )
+
+        with pytest.raises(error_type) as error_info:
+            async for _ in adapter.translate_stream(_byte_stream([frame])):
+                pass
+
+        assert error_info.value.failure_classification is classification
+        assert error_info.value.affects_deployment_health is affects_health
     finally:
         await adapter.http_client.aclose()

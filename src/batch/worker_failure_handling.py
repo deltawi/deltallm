@@ -19,6 +19,7 @@ from src.metrics import (
     increment_batch_item_terminal_failure,
     observe_batch_item_retry_delay,
 )
+from src.router.execution import get_failover_attempt_context
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class WorkerFailureHandlingMixin:
         started_at_monotonic: float,
     ) -> None:
         batch_id = job.batch_id
+        failover_context = get_failover_attempt_context(exc)
+        if failover_context is not None:
+            deployment_id = failover_context.last_attempted_deployment_id
         retry_decision = classify_batch_retry(exc)
         candidate_retry_delay = (
             self._retry_delay_seconds(item_attempts=item.attempts, decision=retry_decision)

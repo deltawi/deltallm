@@ -18,13 +18,18 @@ import {
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
+import { useAuth } from '../lib/auth';
 import { models, promptRegistry, routeGroups, type PromptBinding } from '../lib/api';
+import { resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import {
   buildPolicyFromGuided,
   GUIDED_POLICY_DEFAULTS,
   parsePolicyTextLoose,
+  reconcileGuidedPolicyMembers,
+  routeGroupMutationOutcome,
   toGuidedPolicy,
+  validateGuidedPolicy,
   type PolicyAction,
   type PolicyGuidedValues,
 } from '../lib/routeGroups';
@@ -61,7 +66,7 @@ const ROUTING_LABELS: Record<string, string> = {
   'latency-based-routing': 'Latency',
   'cost-based-routing':    'Cost',
   'usage-based-routing':   'Usage',
-  'tag-based-routing':     'Tag',
+  'tag-based-routing':     'Tag (Legacy)',
   'priority-based-routing':'Priority',
   'rate-limit-aware':      'Rate Limit',
 };
@@ -86,12 +91,17 @@ function requiredPromptVariables(schema: unknown): string[] {
   return required.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 }
 
+function mutationErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
 export default function RouteGroupDetail() {
   const { groupKey } = useParams<{ groupKey: string }>();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const { authMode, session } = useAuth();
 
   const [activeTab, setActiveTab] = useState<TabId>('models');
   const [savingGroup, setSavingGroup] = useState(false);
@@ -117,8 +127,11 @@ export default function RouteGroupDetail() {
   const [policyText, setPolicyText] = useState('{\n  "strategy": "weighted"\n}');
 
   /* API */
-  const detail = useApi(() => routeGroups.get(groupKey!), [groupKey]);
-  const policyHistory = useApi(() => routeGroups.listPolicies(groupKey!), [groupKey]);
+  const detail = useApi((signal) => routeGroups.get(groupKey!, signal), [groupKey]);
+  const policyHistory = useApi(
+    (signal) => routeGroups.listPolicies(groupKey!, signal),
+    [groupKey],
+  );
   const groupBindings = useApi(
     () => promptRegistry.listBindings({ scope_type: 'group', scope_id: groupKey!, limit: 20, offset: 0 }),
     [groupKey],
@@ -126,17 +139,21 @@ export default function RouteGroupDetail() {
   const promptTemplates = useApi(() => promptRegistry.listTemplates({ limit: 100, offset: 0 }), []);
   const bindingPreview = useApi(() => promptRegistry.previewResolution({ route_group_key: groupKey! }), [groupKey]);
   const deploymentCandidates = useApi(
-    () => models.list({ search: memberSearch, mode: form.mode, limit: 20, offset: 0 }),
+    (signal) => models.list(
+      { search: memberSearch, mode: form.mode, limit: 20, offset: 0 },
+      signal,
+    ),
     [memberSearch, form.mode],
   );
 
-  const policies = policyHistory.data?.policies || [];
-  const members = detail.data?.members || [];
-  const bindings = groupBindings.data?.data || [];
+  const policies = useMemo(() => policyHistory.data?.policies || [], [policyHistory.data?.policies]);
+  const members = useMemo(() => detail.data?.members || [], [detail.data?.members]);
+  const bindings = useMemo(() => groupBindings.data?.data || [], [groupBindings.data?.data]);
   const healthyMembers = members.filter((m) => m.healthy === true).length;
   const missingMembers = members.filter((m) => m.healthy == null).length;
   const memberIds = useMemo(() => members.map((m) => m.deployment_id), [members]);
   const isPolicyBusy = policyAction !== null;
+  const canSimulatePolicy = resolveUiAccess(authMode, session).route_groups;
   const publishedPolicy = useMemo(() => policies.find((p) => p.status === 'published') || null, [policies]);
   const draftPolicy = useMemo(() => policies.find((p) => p.status === 'draft') || null, [policies]);
   const winningPrompt = bindingPreview.data?.winner || null;
@@ -176,25 +193,16 @@ export default function RouteGroupDetail() {
         ? preferred.policy_json
         : {};
     setPolicyText(JSON.stringify(policyJson, null, 2));
-    setGuidedPolicy(toGuidedPolicy(policyJson, memberIds));
+    setGuidedPolicy(toGuidedPolicy(policyJson, members));
     const rollbackCandidates = policies
       .filter((p) => p.status === 'archived' || p.status === 'published')
       .sort((a, b) => b.version - a.version);
     setSelectedRollbackVersion(rollbackCandidates[0]?.version ?? null);
-  }, [draftPolicy, memberIds, policies]);
+  }, [draftPolicy, members, policies]);
 
   useEffect(() => {
-    if (memberIds.length === 0) {
-      setGuidedPolicy((cur) => (cur.memberIds.length === 0 ? cur : { ...cur, memberIds: [] }));
-      return;
-    }
-    setGuidedPolicy((cur) => {
-      const filtered = cur.memberIds.filter((id) => memberIds.includes(id));
-      const next = filtered.length > 0 ? filtered : memberIds;
-      if (next.length === cur.memberIds.length && next.every((id, i) => id === cur.memberIds[i])) return cur;
-      return { ...cur, memberIds: next };
-    });
-  }, [memberIds]);
+    setGuidedPolicy((current) => reconcileGuidedPolicyMembers(current, members));
+  }, [members]);
 
   const canRollbackVersions = useMemo(
     () => policies.filter((p) => p.status === 'archived' || p.status === 'published'),
@@ -211,6 +219,18 @@ export default function RouteGroupDetail() {
     const base = parsePolicyTextLoose(policyText) || {};
     return JSON.stringify(buildPolicyFromGuided(base, guidedPolicy), null, 2);
   }, [guidedPolicy, policyText]);
+
+  const simulationPolicy = useMemo(() => {
+    if (showAdvancedJson) return parsePolicyTextLoose(policyText);
+    if (validateGuidedPolicy(guidedPolicy, members)) return null;
+    return buildPolicyFromGuided(parsePolicyTextLoose(policyText) || {}, guidedPolicy);
+  }, [guidedPolicy, members, policyText, showAdvancedJson]);
+  const simulationPolicyError = useMemo(() => {
+    if (showAdvancedJson) {
+      return parsePolicyTextLoose(policyText) ? null : 'Enter valid policy JSON before simulating.';
+    }
+    return validateGuidedPolicy(guidedPolicy, members);
+  }, [guidedPolicy, members, policyText, showAdvancedJson]);
 
   const promptSummary = useMemo(() => {
     if (!winningPrompt || !winningPromptDetail.data) return null;
@@ -234,6 +254,11 @@ export default function RouteGroupDetail() {
   /* ── Handlers ── */
   const parsePolicy = (): Record<string, unknown> | null => {
     if (!showAdvancedJson) {
+      const guidedError = validateGuidedPolicy(guidedPolicy, members);
+      if (guidedError) {
+        setPolicyError(guidedError);
+        return null;
+      }
       const base = parsePolicyTextLoose(policyText) || {};
       const payload = buildPolicyFromGuided(base, guidedPolicy);
       setPolicyText(JSON.stringify(payload, null, 2));
@@ -249,11 +274,12 @@ export default function RouteGroupDetail() {
   const handleSaveGroup = async () => {
     setSavingGroup(true);
     try {
-      await routeGroups.update(groupKey!, { name: form.name.trim() || null, mode: form.mode, enabled: form.enabled });
-      await detail.refetch();
-      pushToast({ tone: 'success', title: 'Group updated', message: 'Route group settings were saved.' });
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Update failed', message: error?.message || 'Failed to update route group.' });
+      const result = await routeGroups.update(groupKey!, { name: form.name.trim() || null, mode: form.mode, enabled: form.enabled });
+      detail.refetch();
+      const outcome = routeGroupMutationOutcome('Route group settings were saved.', result.warnings);
+      pushToast({ tone: outcome.tone, title: 'Group updated', message: outcome.message });
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Update failed', message: mutationErrorMessage(error, 'Failed to update route group.') });
     } finally {
       setSavingGroup(false);
     }
@@ -262,11 +288,12 @@ export default function RouteGroupDetail() {
   const handleDeleteGroup = async () => {
     setDeletingGroup(true);
     try {
-      await routeGroups.delete(groupKey!);
-      pushToast({ tone: 'success', title: 'Group deleted', message: `"${groupKey}" was deleted.` });
+      const result = await routeGroups.delete(groupKey!);
+      const outcome = routeGroupMutationOutcome(`"${groupKey}" was deleted.`, result.warnings);
+      pushToast({ tone: outcome.tone, title: 'Group deleted', message: outcome.message });
       navigate('/route-groups');
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete route group.' });
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Delete failed', message: mutationErrorMessage(error, 'Failed to delete route group.') });
       setDeletingGroup(false);
     }
   };
@@ -278,7 +305,7 @@ export default function RouteGroupDetail() {
     }
     setAddingMember(true);
     try {
-      await routeGroups.upsertMember(groupKey!, {
+      const result = await routeGroups.upsertMember(groupKey!, {
         deployment_id: memberForm.deployment_id.trim(),
         enabled: memberForm.enabled,
         weight: memberForm.weight ? Number(memberForm.weight) : null,
@@ -288,10 +315,14 @@ export default function RouteGroupDetail() {
       setMemberSearchInput('');
       setMemberSearch('');
       setManualMemberEntry(false);
-      pushToast({ tone: 'success', title: 'Member added', message: 'Deployment was added to the route group.' });
-      await detail.refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Add member failed', message: error?.message || 'Failed to add deployment to group.' });
+      const outcome = routeGroupMutationOutcome(
+        'Deployment was added to the route group.',
+        result.warnings,
+      );
+      pushToast({ tone: outcome.tone, title: 'Member added', message: outcome.message });
+      detail.refetch();
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Add member failed', message: mutationErrorMessage(error, 'Failed to add deployment to group.') });
     } finally {
       setAddingMember(false);
     }
@@ -313,9 +344,10 @@ export default function RouteGroupDetail() {
         enabled: bindingForm.enabled,
       });
       pushToast({ tone: 'success', title: 'Prompt bound', message: 'This group will now resolve the selected prompt binding.' });
-      await Promise.all([groupBindings.refetch(), bindingPreview.refetch()]);
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Bind prompt failed', message: error?.message || 'Failed to save prompt binding.' });
+      groupBindings.refetch();
+      bindingPreview.refetch();
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Bind prompt failed', message: mutationErrorMessage(error, 'Failed to save prompt binding.') });
     } finally {
       setSavingBinding(false);
     }
@@ -326,9 +358,10 @@ export default function RouteGroupDetail() {
     try {
       await promptRegistry.deleteBinding(binding.prompt_binding_id);
       pushToast({ tone: 'success', title: 'Binding removed', message: 'The prompt is no longer bound to this group.' });
-      await Promise.all([groupBindings.refetch(), bindingPreview.refetch()]);
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Remove binding failed', message: error?.message || 'Failed to remove prompt binding.' });
+      groupBindings.refetch();
+      bindingPreview.refetch();
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Remove binding failed', message: mutationErrorMessage(error, 'Failed to remove prompt binding.') });
     } finally {
       setDeletingBinding(null);
     }
@@ -338,12 +371,13 @@ export default function RouteGroupDetail() {
     if (!memberToRemove) return;
     setRemovingMember(true);
     try {
-      await routeGroups.removeMember(groupKey!, memberToRemove);
-      pushToast({ tone: 'success', title: 'Member removed', message: `"${memberToRemove}" was removed.` });
+      const result = await routeGroups.removeMember(groupKey!, memberToRemove);
+      const outcome = routeGroupMutationOutcome(`"${memberToRemove}" was removed.`, result.warnings);
+      pushToast({ tone: outcome.tone, title: 'Member removed', message: outcome.message });
       setMemberToRemove(null);
-      await detail.refetch();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Remove member failed', message: error?.message || 'Failed to remove member.' });
+      detail.refetch();
+    } catch (error: unknown) {
+      pushToast({ tone: 'error', title: 'Remove member failed', message: mutationErrorMessage(error, 'Failed to remove member.') });
     } finally {
       setRemovingMember(false);
     }
@@ -356,11 +390,11 @@ export default function RouteGroupDetail() {
     try {
       const result = await routeGroups.validatePolicy(groupKey!, parsed);
       setPolicyText(JSON.stringify(result.policy, null, 2));
-      setGuidedPolicy(toGuidedPolicy(result.policy, memberIds));
+      setGuidedPolicy(toGuidedPolicy(result.policy, members));
       setPolicyMessage(result.warnings?.length ? `Valid with warnings: ${result.warnings.join(' ')}` : 'Policy is valid.');
       setPolicyError(null);
-    } catch (error: any) {
-      setPolicyError(error?.message || 'Policy validation failed');
+    } catch (error: unknown) {
+      setPolicyError(mutationErrorMessage(error, 'Policy validation failed'));
       setPolicyMessage(null);
     } finally {
       setPolicyAction(null);
@@ -373,11 +407,13 @@ export default function RouteGroupDetail() {
     setPolicyAction('save-draft');
     try {
       const result = await routeGroups.savePolicyDraft(groupKey!, parsed);
-      setPolicyMessage(`Draft saved (v${result.policy.version}).`);
+      setPolicyMessage(
+        routeGroupMutationOutcome(`Draft saved (v${result.policy.version}).`, result.warnings).message,
+      );
       setPolicyError(null);
-      await policyHistory.refetch();
-    } catch (error: any) {
-      setPolicyError(error?.message || 'Failed to save draft');
+      policyHistory.refetch();
+    } catch (error: unknown) {
+      setPolicyError(mutationErrorMessage(error, 'Failed to save draft'));
       setPolicyMessage(null);
     } finally {
       setPolicyAction(null);
@@ -390,11 +426,17 @@ export default function RouteGroupDetail() {
     setPolicyAction('publish-json');
     try {
       const result = await routeGroups.publishPolicy(groupKey!, parsed);
-      setPolicyMessage(`Published policy version ${result.policy.version}.`);
+      setPolicyMessage(
+        routeGroupMutationOutcome(
+          `Published policy version ${result.policy.version}.`,
+          result.warnings,
+        ).message,
+      );
       setPolicyError(null);
-      await Promise.all([detail.refetch(), policyHistory.refetch()]);
-    } catch (error: any) {
-      setPolicyError(error?.message || 'Failed to publish policy');
+      detail.refetch();
+      policyHistory.refetch();
+    } catch (error: unknown) {
+      setPolicyError(mutationErrorMessage(error, 'Failed to publish policy'));
       setPolicyMessage(null);
     } finally {
       setPolicyAction(null);
@@ -406,11 +448,17 @@ export default function RouteGroupDetail() {
     setPolicyAction('rollback');
     try {
       const result = await routeGroups.rollbackPolicy(groupKey!, selectedRollbackVersion);
-      setPolicyMessage(`Rolled back to new published version ${result.policy.version}.`);
+      setPolicyMessage(
+        routeGroupMutationOutcome(
+          `Rolled back to new published version ${result.policy.version}.`,
+          result.warnings,
+        ).message,
+      );
       setPolicyError(null);
-      await Promise.all([detail.refetch(), policyHistory.refetch()]);
-    } catch (error: any) {
-      setPolicyError(error?.message || 'Failed to rollback policy');
+      detail.refetch();
+      policyHistory.refetch();
+    } catch (error: unknown) {
+      setPolicyError(mutationErrorMessage(error, 'Failed to rollback policy'));
       setPolicyMessage(null);
     } finally {
       setPolicyAction(null);
@@ -576,6 +624,7 @@ export default function RouteGroupDetail() {
             />
           ) : activeTab === 'advanced' ? (
             <RouteGroupAdvancedTab
+              groupKey={group.group_key}
               bindings={bindings}
               templates={promptTemplates.data?.data || []}
               bindingForm={bindingForm}
@@ -586,8 +635,15 @@ export default function RouteGroupDetail() {
               onSaveBinding={handleSaveBinding}
               onDeleteBinding={handleDeleteBinding}
               guidedPolicy={guidedPolicy}
-              memberIds={memberIds}
+              members={members}
               guidedPreview={guidedPreview}
+              simulationPolicy={simulationPolicy}
+              simulationPolicyError={simulationPolicyError}
+              simulationPromptRef={promptSummary ? {
+                template_key: promptSummary.templateKey,
+                ...(promptSummary.label ? { label: promptSummary.label } : {}),
+              } : null}
+              canSimulate={canSimulatePolicy}
               policyText={policyText}
               policyMessage={policyMessage}
               policyError={policyError}

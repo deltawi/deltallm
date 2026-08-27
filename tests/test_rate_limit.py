@@ -7,6 +7,7 @@ import pytest
 
 from src.middleware.rate_limit import _check_and_acquire_rate_limits
 from src.models.errors import InvalidRequestError
+from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.limit_counter import LimitCounter
 
 
@@ -22,7 +23,10 @@ async def _multimodal_success_response(url: str, *args, **kwargs):  # noqa: ANN0
     if url.endswith("/rerank"):
         return httpx.Response(
             200,
-            json={"results": [], "usage": {"prompt_tokens": 1, "total_tokens": 1}},
+            json={
+                "results": [{"index": 0, "relevance_score": 0.9}],
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
             request=request,
         )
     if url.endswith("/audio/speech"):
@@ -92,7 +96,7 @@ async def test_rate_limit_org_rpm_enforced_before_key_limit(client, test_app):
             enabled=True,
         )
     )
-    await test_app.state.callable_target_grant_service.reload()
+    await reload_callable_target_grants_for_app(test_app, notify=False)
 
     ok = await client.post("/v1/chat/completions", headers=headers, json=body)
     blocked = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -154,6 +158,8 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
     record.rpm_limit = 50
     record.team_model_rpm_limit = {"gpt-4o-mini": 1}
     test_app.state.limit_counter = RecordingLimitCounter()
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = "audio_transcription"
 
     async def stt_post(url: str, headers: dict[str, str], files, data, timeout: int):  # noqa: ANN001, ANN201
         del headers, files, data, timeout
@@ -180,37 +186,38 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "path",
+    ("path", "routing_mode"),
     [
-        "/v1/images/generations",
-        "/v1/rerank",
-        "/v1/audio/speech",
-        "/v1/audio/transcriptions",
+        ("/v1/images/generations", "image_generation"),
+        ("/v1/rerank", "rerank"),
+        ("/v1/audio/speech", "audio_speech"),
+        ("/v1/audio/transcriptions", "audio_transcription"),
     ],
 )
 async def test_multimodal_access_denial_does_not_consume_rate_quota(
     client,
     test_app,
     path: str,
+    routing_mode: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     record = next(iter(test_app.state._test_repo.records.values()))
     record.rpm_limit = 1
     test_app.state.http_client.post = _multimodal_success_response
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = routing_mode
+    if routing_mode == "rerank":
+        deployment.deltallm_params["provider"] = "vllm"
 
     grant_service = test_app.state.callable_target_grant_service
     grant_repository = grant_service.repository
     removed_bindings = [
-        binding
-        for binding in grant_repository.bindings
-        if binding.callable_key == "gpt-4o-mini"
+        binding for binding in grant_repository.bindings if binding.callable_key == "gpt-4o-mini"
     ]
     grant_repository.bindings = [
-        binding
-        for binding in grant_repository.bindings
-        if binding.callable_key != "gpt-4o-mini"
+        binding for binding in grant_repository.bindings if binding.callable_key != "gpt-4o-mini"
     ]
-    await grant_service.reload()
+    await reload_callable_target_grants_for_app(test_app, notify=False)
 
     denied = await client.post(path, headers=headers, **_multimodal_request(path))
 
@@ -218,7 +225,7 @@ async def test_multimodal_access_denial_does_not_consume_rate_quota(
     assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
 
     grant_repository.bindings.extend(removed_bindings)
-    await grant_service.reload()
+    await reload_callable_target_grants_for_app(test_app, notify=False)
 
     allowed = await client.post(path, headers=headers, **_multimodal_request(path))
 

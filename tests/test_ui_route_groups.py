@@ -8,9 +8,21 @@ import pytest
 
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.prompt_registry import PromptResolvedRecord
-from src.db.route_groups import RouteGroupBindingRecord, RouteGroupMemberRecord, RouteGroupRecord, RoutePolicyRecord
+from src.db.route_groups import (
+    RouteGroupBindingRecord,
+    RouteGroupMemberRecord,
+    RouteGroupRecord,
+    RoutePolicyRecord,
+)
+from src.router import build_deployment_registry
+from src.router.policy_validation import (
+    merge_policy_document_for_write,
+    merge_policy_members,
+)
+from src.router.runtime_generation import rebuild_routing_runtime_generation
 from src.services.asset_ownership import owner_scope_from_metadata
 from src.services.asset_scopes import normalize_scope_type
+from src.services.callable_targets import build_callable_target_catalog
 
 
 def _extract_default_prompt(metadata: dict[str, Any] | None) -> dict[str, str] | None:
@@ -27,6 +39,23 @@ def _extract_default_prompt(metadata: dict[str, Any] | None) -> dict[str, str] |
     if label:
         payload["label"] = label
     return payload
+
+
+def _publish_test_model_registry(test_app: Any) -> None:
+    """Keep the immutable routing generation aligned with test registry overrides."""
+
+    store = test_app.state.routing_runtime_generation_store
+    current = store.require_snapshot()
+    model_registry = test_app.state.model_registry
+    store.replace(
+        rebuild_routing_runtime_generation(
+            current,
+            model_registry=model_registry,
+            route_groups=list(current.route_groups),
+            callable_target_catalog=build_callable_target_catalog(model_registry),
+            deployment_registry=build_deployment_registry(model_registry),
+        )
+    )
 
 
 class _FakeRouteGroupRepository:
@@ -66,7 +95,9 @@ class _FakeRouteGroupRepository:
         self.groups[group_key] = record
         return record
 
-    async def update_group(self, group_key: str, *, name, mode, routing_strategy, enabled, metadata):  # noqa: ANN001, ANN201
+    async def update_group(
+        self, group_key: str, *, name, mode, routing_strategy, enabled, metadata
+    ):  # noqa: ANN001, ANN201
         existing = self.groups.get(group_key)
         if existing is None:
             return None
@@ -94,7 +125,9 @@ class _FakeRouteGroupRepository:
         self.policies.pop(group_key, None)
         return True
 
-    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = [binding for bindings in self.bindings.values() for binding in bindings]
         if group_key:
             items = [binding for binding in items if binding.group_key == group_key]
@@ -188,27 +221,48 @@ class _FakeRouteGroupRepository:
         runtime_groups: list[dict] = []
         for group_key, group in self.groups.items():
             policy = self.policies.get(group_key)
-            policy_json = policy.policy_json if policy is not None and policy.status == "published" else {}
-            strategy = policy_json.get("strategy") if isinstance(policy_json.get("strategy"), str) else group.routing_strategy
+            policy_json = (
+                policy.policy_json if policy is not None and policy.status == "published" else {}
+            )
+            strategy = (
+                policy_json.get("strategy")
+                if isinstance(policy_json.get("strategy"), str)
+                else group.routing_strategy
+            )
+            base_members = [
+                {
+                    "deployment_id": member.deployment_id,
+                    "enabled": member.enabled,
+                    "weight": member.weight,
+                    "priority": member.priority,
+                }
+                for member in self.members.get(group_key, [])
+            ]
             runtime_groups.append(
                 {
                     "key": group.group_key,
                     "mode": group.mode,
                     "enabled": group.enabled,
                     "strategy": strategy,
-                    "policy_version": policy.version if policy is not None and policy.status == "published" else None,
-                    "timeouts": policy_json.get("timeouts") if isinstance(policy_json.get("timeouts"), dict) else None,
-                    "retry": policy_json.get("retry") if isinstance(policy_json.get("retry"), dict) else None,
+                    "policy_version": policy.version
+                    if policy is not None and policy.status == "published"
+                    else None,
+                    "timeouts": policy_json.get("timeouts")
+                    if isinstance(policy_json.get("timeouts"), dict)
+                    else None,
+                    "retry": policy_json.get("retry")
+                    if isinstance(policy_json.get("retry"), dict)
+                    else None,
                     "default_prompt": group.default_prompt,
-                    "members": [
-                        {
-                            "deployment_id": member.deployment_id,
-                            "enabled": member.enabled,
-                            "weight": member.weight,
-                            "priority": member.priority,
-                        }
-                        for member in self.members.get(group_key, [])
-                    ],
+                    "members": merge_policy_members(
+                        base_members,
+                        policy_json.get("members"),
+                        semantics_version=(
+                            policy.semantics_version
+                            if policy is not None and policy.status == "published"
+                            else 2
+                        ),
+                    ),
                 }
             )
         return runtime_groups
@@ -217,13 +271,19 @@ class _FakeRouteGroupRepository:
         group = self.groups.get(group_key)
         if group is None:
             return None
+        current = self.policies.get(group_key)
+        effective = merge_policy_document_for_write(
+            current.policy_json if current is not None else None,
+            policy_json,
+        )
         self._policy_counter += 1
         policy = RoutePolicyRecord(
             route_policy_id=f"p-{self._policy_counter}",
             route_group_id=group.route_group_id,
             version=self._policy_counter,
             status="draft",
-            policy_json=policy_json,
+            policy_json=effective,
+            semantics_version=2,
             published_by=None,
         )
         self.policies[group_key] = policy
@@ -233,13 +293,19 @@ class _FakeRouteGroupRepository:
         group = self.groups.get(group_key)
         if group is None:
             return None
+        current = self.policies.get(group_key)
+        effective = merge_policy_document_for_write(
+            current.policy_json if current is not None else None,
+            policy_json,
+        )
         self._policy_counter += 1
         policy = RoutePolicyRecord(
             route_policy_id=f"p-{self._policy_counter}",
             route_group_id=group.route_group_id,
             version=self._policy_counter,
             status="published",
-            policy_json=policy_json,
+            policy_json=effective,
+            semantics_version=2,
             published_by=published_by,
         )
         self.policies[group_key] = policy
@@ -305,7 +371,9 @@ class _FakeCallableTargetBindingRepository:
         self.bindings: list[CallableTargetBindingRecord] = []
         self._counter = 0
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -317,7 +385,11 @@ class _FakeCallableTargetBindingRepository:
 
     async def upsert_binding(self, *, callable_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         for index, binding in enumerate(self.bindings):
-            if binding.callable_key == callable_key and binding.scope_type == scope_type and binding.scope_id == scope_id:
+            if (
+                binding.callable_key == callable_key
+                and binding.scope_type == scope_type
+                and binding.scope_id == scope_id
+            ):
                 updated = replace(binding, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -334,11 +406,20 @@ class _FakeCallableTargetBindingRepository:
         return binding
 
     async def delete_binding(self, binding_id: str) -> bool:
-        kept = [binding for binding in self.bindings if binding.callable_target_binding_id != binding_id]
+        kept = [
+            binding for binding in self.bindings if binding.callable_target_binding_id != binding_id
+        ]
         if len(kept) == len(self.bindings):
             return False
         self.bindings = kept
         return True
+
+    async def delete_by_callable_key(self, callable_key: str) -> int:
+        original_count = len(self.bindings)
+        self.bindings = [
+            binding for binding in self.bindings if binding.callable_key != callable_key
+        ]
+        return original_count - len(self.bindings)
 
 
 class _FakeGrantReload:
@@ -355,6 +436,19 @@ class _FakeHotReload:
 
     async def reload_runtime(self) -> None:
         self.calls += 1
+
+    async def reload_route_groups(self) -> None:
+        self.calls += 1
+
+
+class _FailingHotReload(_FakeHotReload):
+    async def reload_runtime(self) -> None:
+        self.calls += 1
+        raise RuntimeError("runtime reload unavailable")
+
+    async def reload_route_groups(self) -> None:
+        self.calls += 1
+        raise RuntimeError("runtime reload unavailable")
 
 
 class _FakeRouteGroupRuntimeCache:
@@ -383,6 +477,7 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     assert create_response.json()["group_key"] == "support-route"
     assert create_response.json()["owner_scope_type"] == "global"
     assert create_response.json()["owner_scope_id"] is None
+    assert create_response.json()["warnings"] == []
 
     member_response = await client.post(
         "/ui/api/route-groups/support-route/members",
@@ -391,6 +486,7 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     )
     assert member_response.status_code == 200
     assert member_response.json()["deployment_id"] == "dep-a"
+    assert member_response.json()["warnings"] == []
 
     policy_response = await client.put(
         "/ui/api/route-groups/support-route/policy",
@@ -399,6 +495,20 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     )
     assert policy_response.status_code == 200
     assert policy_response.json()["policy"]["status"] == "published"
+    assert policy_response.json()["policy"]["semantics_version"] == 2
+    assert policy_response.json()["warnings"] == []
+    assert policy_response.headers["link"] == (
+        '</ui/api/route-groups/support-route/policy/publish>; rel="successor-version"'
+    )
+
+    canonical_publish = await client.post(
+        "/ui/api/route-groups/support-route/policy/publish",
+        headers=headers,
+        json={"strategy": "weighted"},
+    )
+    assert canonical_publish.status_code == 200
+    assert canonical_publish.json()["policy"]["policy_json"]["strategy"] == "weighted"
+    assert canonical_publish.json()["warnings"] == []
 
     detail_response = await client.get("/ui/api/route-groups/support-route", headers=headers)
     assert detail_response.status_code == 200
@@ -406,10 +516,115 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     assert payload["group"]["group_key"] == "support-route"
     assert payload["group"]["owner_scope_type"] == "global"
     assert len(payload["members"]) == 1
-    assert payload["policy"]["policy_json"]["strategy"] == "least-busy"
+    assert payload["policy"]["policy_json"]["strategy"] == "weighted"
 
-    assert test_app.state.model_hot_reload_manager.calls == 3
-    assert runtime_cache.invalidate_calls == 3
+    assert test_app.state.model_hot_reload_manager.calls == 4
+    # The reload manager owns cache fencing; endpoints must not invalidate it again.
+    assert runtime_cache.invalidate_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", ["false", 0, 1, None])
+async def test_route_group_create_rejects_non_boolean_enabled(client, test_app, enabled):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+
+    response = await client.post(
+        "/ui/api/route-groups",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"group_key": "strict-route", "mode": "chat", "enabled": enabled},
+    )
+
+    assert response.status_code == 400
+    assert "enabled must be a boolean" in response.text
+
+
+@pytest.mark.asyncio
+async def test_route_group_create_normalizes_and_validates_access_groups(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+
+    normalized = await client.post(
+        "/ui/api/route-groups",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "group_key": "strict-route",
+            "mode": "chat",
+            "metadata": {"access_groups": ["Support", "beta", "support"]},
+        },
+    )
+    invalid = await client.post(
+        "/ui/api/route-groups",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "group_key": "invalid-route",
+            "mode": "chat",
+            "metadata": {"access_groups": [123]},
+        },
+    )
+
+    assert normalized.status_code == 200
+    assert normalized.json()["metadata"]["access_groups"] == ["beta", "support"]
+    assert invalid.status_code == 400
+    assert "access group key must be a string" in invalid.text
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_update_preserves_stored_opaque_fields(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repository
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "opaque-route", "mode": "chat"},
+    )
+    await client.post(
+        "/ui/api/route-groups/opaque-route/members",
+        headers=headers,
+        json={"deployment_id": "dep-a"},
+    )
+    initial = await client.put(
+        "/ui/api/route-groups/opaque-route/policy",
+        headers=headers,
+        json={"strategy": "weighted"},
+    )
+    assert initial.status_code == 200
+    stored = repository.policies["opaque-route"]
+    repository.policies["opaque-route"] = replace(
+        stored,
+        policy_json={
+            **stored.policy_json,
+            "server_revision": 7,
+            "retry": {"max_attempts": 2, "server_backoff_mode": "adaptive"},
+        },
+    )
+
+    response = await client.put(
+        "/ui/api/route-groups/opaque-route/policy",
+        headers=headers,
+        json={
+            "strategy": "least-busy",
+            "server_revision": 999,
+            "retry": {"max_attempts": 3, "server_backoff_mode": "client-value"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == [
+        "Ignored opaque policy fields: server_revision",
+        "Ignored opaque retry fields: server_backoff_mode",
+    ]
+    assert payload["policy"]["policy_json"] == {
+        "strategy": "least-busy",
+        "server_revision": 7,
+        "retry": {"max_attempts": 3, "server_backoff_mode": "adaptive"},
+    }
 
 
 @pytest.mark.asyncio
@@ -444,7 +659,7 @@ async def test_route_group_member_delete_supports_encoded_deployment_ids(
         headers=headers,
     )
     assert delete_response.status_code == 200
-    assert delete_response.json() == {"deleted": True}
+    assert delete_response.json() == {"deleted": True, "warnings": []}
 
     detail_response = await client.get("/ui/api/route-groups/support-route", headers=headers)
     assert detail_response.status_code == 200
@@ -474,10 +689,21 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     validate_response = await client.post(
         "/ui/api/route-groups/ops-route/policy/validate",
         headers=headers,
-        json={"strategy": "least-busy", "mode": "weighted", "members": [{"deployment_id": "dep-a"}]},
+        json={
+            "strategy": "least-busy",
+            "mode": "weighted",
+            "members": [{"deployment_id": "dep-a"}],
+        },
     )
     assert validate_response.status_code == 200
-    assert validate_response.json()["valid"] is True
+    validate_payload = validate_response.json()
+    assert validate_payload["valid"] is True
+    assert "mode" not in validate_payload["policy"]
+    assert validate_payload["warnings"] == [
+        "Policy mode 'weighted' is deprecated; use strategy 'weighted'.",
+        "Weighted mode is advisory when strategy is set explicitly; strategy takes precedence.",
+        "Weighted mode without explicit member weights will use deployment defaults.",
+    ]
 
     draft_response = await client.post(
         "/ui/api/route-groups/ops-route/policy/draft",
@@ -486,6 +712,7 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     )
     assert draft_response.status_code == 200
     assert draft_response.json()["policy"]["status"] == "draft"
+    assert draft_response.json()["policy"]["semantics_version"] == 2
 
     publish_response = await client.post(
         "/ui/api/route-groups/ops-route/policy/publish",
@@ -494,10 +721,12 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     )
     assert publish_response.status_code == 200
     assert publish_response.json()["policy"]["status"] == "published"
+    assert publish_response.json()["policy"]["semantics_version"] == 2
 
     list_response = await client.get("/ui/api/route-groups/ops-route/policies", headers=headers)
     assert list_response.status_code == 200
     assert len(list_response.json()["policies"]) == 1
+    assert list_response.json()["policies"][0]["semantics_version"] == 2
 
     rollback_response = await client.post(
         "/ui/api/route-groups/ops-route/policy/rollback",
@@ -506,7 +735,151 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     )
     assert rollback_response.status_code == 200
     assert rollback_response.json()["policy"]["status"] == "published"
-    assert runtime_cache.invalidate_calls == 4
+    assert rollback_response.json()["policy"]["semantics_version"] == 2
+    assert rollback_response.json()["warnings"] == []
+    assert runtime_cache.invalidate_calls == 0
+
+
+def test_legacy_policy_publish_is_deprecated_in_openapi(test_app):  # noqa: ANN001
+    operation = test_app.openapi()["paths"]["/ui/api/route-groups/{group_key}/policy"]["put"]
+
+    assert operation["deprecated"] is True
+
+
+@pytest.mark.asyncio
+async def test_policy_publish_reports_refresh_failure_as_post_commit_warning(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repository
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "refresh-warning", "mode": "chat"},
+    )
+    await client.post(
+        "/ui/api/route-groups/refresh-warning/members",
+        headers=headers,
+        json={"deployment_id": "gpt-4o-mini-0"},
+    )
+    test_app.state.model_hot_reload_manager = _FailingHotReload()
+
+    response = await client.put(
+        "/ui/api/route-groups/refresh-warning/policy",
+        headers=headers,
+        json={"strategy": "weighted"},
+    )
+
+    assert response.status_code == 200
+    assert repository.policies["refresh-warning"].status == "published"
+    assert response.json()["warnings"] == [
+        "Mutation committed, but local route-group runtime refresh failed"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_group_create_reports_refresh_failure_as_post_commit_warning(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repository
+    test_app.state.model_hot_reload_manager = _FailingHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+
+    response = await client.post(
+        "/ui/api/route-groups",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"group_key": "committed-warning", "mode": "chat"},
+    )
+
+    assert response.status_code == 200
+    assert repository.groups["committed-warning"].group_key == "committed-warning"
+    assert response.json()["warnings"] == [
+        "Mutation committed, but local route-group runtime refresh failed"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_group_delete_reports_refresh_failure_after_committed_delete(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repository
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    created = await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "delete-warning", "mode": "chat"},
+    )
+    assert created.status_code == 200
+    test_app.state.model_hot_reload_manager = _FailingHotReload()
+
+    response = await client.delete(
+        "/ui/api/route-groups/delete-warning",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert "delete-warning" not in repository.groups
+    assert response.json()["warnings"] == [
+        "Mutation committed, but local route-group runtime refresh failed"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_route_group_rejects_member_with_different_workload_mode(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repository
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "embedding-route", "mode": "embedding"},
+    )
+
+    response = await client.post(
+        "/ui/api/route-groups/embedding-route/members",
+        headers=headers,
+        json={"deployment_id": "gpt-4o-mini-0"},
+    )
+
+    assert response.status_code == 400
+    assert "incompatible with members: gpt-4o-mini-0" in response.text
+    assert repository.members.get("embedding-route") is None
+
+
+@pytest.mark.asyncio
+async def test_route_group_rejects_mode_change_incompatible_with_members(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repository
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "chat-route", "mode": "chat"},
+    )
+    await client.post(
+        "/ui/api/route-groups/chat-route/members",
+        headers=headers,
+        json={"deployment_id": "gpt-4o-mini-0"},
+    )
+
+    response = await client.put(
+        "/ui/api/route-groups/chat-route",
+        headers=headers,
+        json={"mode": "embedding"},
+    )
+
+    assert response.status_code == 400
+    assert repository.groups["chat-route"].mode == "chat"
 
 
 @pytest.mark.asyncio
@@ -546,9 +919,13 @@ async def test_route_group_policy_simulation_returns_selection_summary(client, t
     test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
     test_app.state.model_registry = {
         "gpt-4o-mini": [
-            {"deployment_id": "dep-a", "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"}}
+            {
+                "deployment_id": "dep-a",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+            }
         ]
     }
+    _publish_test_model_registry(test_app)
     headers = {"Authorization": "Bearer mk-test"}
 
     await client.post(
@@ -565,7 +942,13 @@ async def test_route_group_policy_simulation_returns_selection_summary(client, t
     response = await client.post(
         "/ui/api/route-groups/sim-route/policy/simulate",
         headers=headers,
-        json={"iterations": 20, "policy": {"strategy": "weighted", "members": [{"deployment_id": "dep-a", "weight": 1}]}},
+        json={
+            "iterations": 20,
+            "policy": {
+                "strategy": "weighted",
+                "members": [{"deployment_id": "dep-a", "weight": 1}],
+            },
+        },
     )
 
     assert response.status_code == 200
@@ -585,7 +968,10 @@ async def test_route_group_policy_simulation_applies_prompt_route_preferences(cl
     test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
     test_app.state.model_registry = {
         "gpt-4o-mini": [
-            {"deployment_id": "dep-a", "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"}},
+            {
+                "deployment_id": "dep-a",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+            },
             {
                 "deployment_id": "dep-b",
                 "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
@@ -593,9 +979,12 @@ async def test_route_group_policy_simulation_applies_prompt_route_preferences(cl
             },
         ]
     }
+    _publish_test_model_registry(test_app)
 
     class _PromptRepoForSimulation:
-        async def resolve_prompt(self, *, template_key: str, label: str | None = None, version: int | None = None):  # noqa: ANN201
+        async def resolve_prompt(
+            self, *, template_key: str, label: str | None = None, version: int | None = None
+        ):  # noqa: ANN201
             del label, version
             if template_key != "support.prompt":
                 return None
@@ -636,7 +1025,10 @@ async def test_route_group_policy_simulation_applies_prompt_route_preferences(cl
         headers=headers,
         json={
             "iterations": 20,
-            "policy": {"strategy": "weighted", "members": [{"deployment_id": "dep-a"}, {"deployment_id": "dep-b"}]},
+            "policy": {
+                "strategy": "weighted",
+                "members": [{"deployment_id": "dep-a"}, {"deployment_id": "dep-b"}],
+            },
             "prompt_ref": {"template_key": "support.prompt", "label": "production"},
         },
     )
@@ -646,6 +1038,206 @@ async def test_route_group_policy_simulation_applies_prompt_route_preferences(cl
     assert payload["effective_metadata"]["tags"] == ["vip"]
     assert payload["selections"][0]["deployment_id"] == "dep-b"
     assert payload["selections"][0]["count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_simulation_reports_retries_and_fallbacks(
+    client, test_app, monkeypatch
+):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    test_app.state.model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "dep-a",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "key"},
+            },
+            {
+                "deployment_id": "dep-b",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "key"},
+            },
+        ]
+    }
+    _publish_test_model_registry(test_app)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "sim-route", "mode": "chat", "strategy": "weighted"},
+    )
+    for deployment_id, priority in (("dep-a", 0), ("dep-b", 1)):
+        await client.post(
+            "/ui/api/route-groups/sim-route/members",
+            headers=headers,
+            json={"deployment_id": deployment_id, "weight": 1, "priority": priority},
+        )
+
+    state = test_app.state.routing_runtime_generation_store.require_snapshot().router.state
+    health_reads = 0
+    cooldown_reads = 0
+    get_health_batch = state.get_health_batch
+    get_cooldown_batch = state.get_cooldown_batch
+
+    async def count_health_reads(health_refs):  # noqa: ANN001, ANN202
+        nonlocal health_reads
+        health_reads += 1
+        return await get_health_batch(health_refs)
+
+    async def count_cooldown_reads(health_refs):  # noqa: ANN001, ANN202
+        nonlocal cooldown_reads
+        cooldown_reads += 1
+        return await get_cooldown_batch(health_refs)
+
+    monkeypatch.setattr(state, "get_health_batch", count_health_reads)
+    monkeypatch.setattr(state, "get_cooldown_batch", count_cooldown_reads)
+
+    response = await client.post(
+        "/ui/api/route-groups/sim-route/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 2,
+            "policy": {
+                "mode": "fallback",
+                "members": [
+                    {"deployment_id": "dep-a", "priority": 0},
+                    {"deployment_id": "dep-b", "priority": 1},
+                ],
+                "retry": {
+                    "max_attempts": 1,
+                    "retryable_error_classes": ["timeout"],
+                },
+            },
+            "outcomes": [{"deployment_id": "dep-a", "outcome": "timeout"}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"] == {
+        "selected_requests": 2,
+        "no_selection_requests": 0,
+        "served_requests": 2,
+        "failed_requests": 0,
+        "fallback_requests": 2,
+        "timed_out_requests": 0,
+        "total_attempts": 6,
+    }
+    assert payload["served_deployments"] == [{"deployment_id": "dep-b", "count": 2, "ratio": 1.0}]
+    assert [attempt["transition"] for attempt in payload["sample_attempts"][:3]] == [
+        "primary",
+        "retry",
+        "fallback",
+    ]
+    assert health_reads == 1
+    assert cooldown_reads == 1
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_simulation_replaces_published_policy_fields(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    test_app.state.model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": deployment_id,
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "key"},
+            }
+            for deployment_id in ("dep-a", "dep-b")
+        ]
+    }
+    _publish_test_model_registry(test_app)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "replace-route", "mode": "chat", "strategy": "weighted"},
+    )
+    for deployment_id, priority in (("dep-a", 0), ("dep-b", 1)):
+        await client.post(
+            "/ui/api/route-groups/replace-route/members",
+            headers=headers,
+            json={"deployment_id": deployment_id, "weight": 1, "priority": priority},
+        )
+    published = await client.put(
+        "/ui/api/route-groups/replace-route/policy",
+        headers=headers,
+        json={
+            "mode": "weighted",
+            "members": [{"deployment_id": "dep-a", "weight": 1}],
+            "timeouts": {"global_ms": 9000},
+            "retry": {
+                "max_attempts": 2,
+                "retryable_error_classes": ["generic"],
+            },
+        },
+    )
+    assert published.status_code == 200
+
+    explicit_replacement = await client.post(
+        "/ui/api/route-groups/replace-route/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 2,
+            "policy": {
+                "mode": "weighted",
+                "members": [{"deployment_id": "dep-b", "weight": 1}],
+            },
+        },
+    )
+    assert explicit_replacement.status_code == 200
+    explicit_payload = explicit_replacement.json()
+    assert explicit_payload["selections"] == [{"deployment_id": "dep-b", "count": 2, "ratio": 1.0}]
+    assert explicit_payload["sample_decision"]["timeout_seconds"] is None
+    assert explicit_payload["sample_decision"]["retry_max_attempts"] is None
+
+    inherited_replacement = await client.post(
+        "/ui/api/route-groups/replace-route/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 1,
+            "policy": {"mode": "fallback"},
+            "outcomes": [{"deployment_id": "dep-a", "outcome": "unavailable"}],
+        },
+    )
+    assert inherited_replacement.status_code == 200
+    inherited_payload = inherited_replacement.json()
+    assert inherited_payload["summary"]["total_attempts"] == 2
+    assert inherited_payload["summary"]["fallback_requests"] == 1
+    assert inherited_payload["served_deployments"] == [
+        {"deployment_id": "dep-b", "count": 1, "ratio": 1.0}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_simulation_rejects_unknown_outcome_target(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "sim-route", "mode": "chat", "strategy": "weighted"},
+    )
+    response = await client.post(
+        "/ui/api/route-groups/sim-route/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 1,
+            "outcomes": [{"deployment_id": "missing", "outcome": "timeout"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "unknown deployment_id" in response.text
 
 
 @pytest.mark.asyncio
@@ -685,11 +1277,17 @@ async def test_route_group_default_prompt_is_saved_and_cleared(client, test_app)
         },
     )
     assert create_response.status_code == 200
-    assert create_response.json()["default_prompt"] == {"template_key": "support.prompt", "label": "production"}
+    assert create_response.json()["default_prompt"] == {
+        "template_key": "support.prompt",
+        "label": "production",
+    }
 
     detail_response = await client.get("/ui/api/route-groups/support-route", headers=headers)
     assert detail_response.status_code == 200
-    assert detail_response.json()["group"]["default_prompt"] == {"template_key": "support.prompt", "label": "production"}
+    assert detail_response.json()["group"]["default_prompt"] == {
+        "template_key": "support.prompt",
+        "label": "production",
+    }
 
     update_response = await client.put(
         "/ui/api/route-groups/support-route",
@@ -698,7 +1296,7 @@ async def test_route_group_default_prompt_is_saved_and_cleared(client, test_app)
     )
     assert update_response.status_code == 200
     assert update_response.json()["default_prompt"] is None
-    assert runtime_cache.invalidate_calls >= 2
+    assert runtime_cache.invalidate_calls == 0
     assert ("group", "support-route") in prompt_service.invalidations
 
 
@@ -826,9 +1424,10 @@ async def test_route_group_binding_admin_lifecycle(client, test_app):
     assert payload["group_key"] == "bound-route"
     assert payload["scope_type"] == "organization"
     assert payload["scope_id"] == "org-1"
-    assert {(binding.callable_key, binding.scope_type, binding.scope_id) for binding in callable_repo.bindings} == {
-        ("bound-route", "organization", "org-1")
-    }
+    assert {
+        (binding.callable_key, binding.scope_type, binding.scope_id)
+        for binding in callable_repo.bindings
+    } == {("bound-route", "organization", "org-1")}
     assert scope_db.organizations["org-1"]["metadata"] is None
     assert grant_reload.reload_count == 1
 
@@ -845,7 +1444,9 @@ async def test_route_group_binding_admin_lifecycle(client, test_app):
     assert detail_response.status_code == 200
     assert detail_response.json()["bindings"][0]["scope_id"] == "org-1"
 
-    scope_db.organizations["org-1"]["metadata"] = {"_callable_target_access": {"auto_follow_catalog": True}}
+    scope_db.organizations["org-1"]["metadata"] = {
+        "_callable_target_access": {"auto_follow_catalog": True}
+    }
     delete_response = await client.delete(
         f"/ui/api/route-group-bindings/{payload['route_group_binding_id']}",
         headers=headers,

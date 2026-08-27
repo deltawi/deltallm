@@ -10,7 +10,12 @@ from pydantic import ValidationError
 
 from src.batch.retry import BatchResponseShapeError
 from src.config import ChatBatchingConfig
-from src.models.errors import InvalidRequestError, RateLimitError, ServiceUnavailableError, TimeoutError as GatewayTimeoutError
+from src.models.errors import (
+    InvalidRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    TimeoutError as GatewayTimeoutError,
+)
 from src.models.requests import ChatCompletionRequest, MCPToolDefinition
 from src.providers.resolution import resolve_provider
 
@@ -51,17 +56,22 @@ class ChatMicrobatchExecutor(Protocol):
         requests: list[ChatCompletionRequest],
         deployment: Any,
         request_context: dict[str, Any],
-    ) -> Sequence[Any]:
-        ...
+    ) -> Sequence[Any]: ...
 
 
-def resolve_chat_batching_settings(deltallm_params: Mapping[str, Any] | None) -> ChatBatchingSettings:
+def resolve_chat_batching_settings(
+    deltallm_params: Mapping[str, Any] | None,
+) -> ChatBatchingSettings:
     raw_config = dict(deltallm_params or {}).get("chat_batching")
     if raw_config is None:
         return ChatBatchingSettings()
 
     try:
-        config = raw_config if isinstance(raw_config, ChatBatchingConfig) else ChatBatchingConfig.model_validate(raw_config)
+        config = (
+            raw_config
+            if isinstance(raw_config, ChatBatchingConfig)
+            else ChatBatchingConfig.model_validate(raw_config)
+        )
     except (TypeError, ValidationError, ValueError):
         return ChatBatchingSettings()
 
@@ -82,7 +92,9 @@ def estimate_chat_input_tokens(payload: ChatCompletionRequest) -> int:
         if isinstance(content, str):
             total_chars += len(content)
         else:
-            total_chars += len(json.dumps(content, sort_keys=True, separators=(",", ":"), default=str))
+            total_chars += len(
+                json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+            )
     return max(1, (total_chars + 3) // 4)
 
 
@@ -143,18 +155,26 @@ def normalize_chat_microbatch_results(
         result = _result_mapping(raw_result)
         index = _result_index(result, custom_id_to_index)
         if index < 0 or index >= expected_count:
-            raise BatchResponseShapeError(f"chat microbatch response item {row_number} index out of range index={index}")
+            raise BatchResponseShapeError(
+                f"chat microbatch response item {row_number} index out of range index={index}"
+            )
         if normalized_rows[index] is not None:
-            raise BatchResponseShapeError(f"chat microbatch response contains duplicate index={index}")
+            raise BatchResponseShapeError(
+                f"chat microbatch response contains duplicate index={index}"
+            )
 
         api_latency_ms = _optional_float(result.get("api_latency_ms") or result.get("latency_ms"))
         error = _normalize_result_error(result.get("error") or result.get("exception"))
         response_body = _result_response_body(result)
         usage = _result_usage(result, response_body)
         if error is None and response_body is None:
-            error = BatchResponseShapeError(f"chat microbatch response item {row_number} is missing response body")
+            error = BatchResponseShapeError(
+                f"chat microbatch response item {row_number} is missing response body"
+            )
         if error is None and not usage:
-            error = BatchResponseShapeError(f"chat microbatch response item {row_number} is missing per-item usage")
+            error = BatchResponseShapeError(
+                f"chat microbatch response item {row_number} is missing per-item usage"
+            )
 
         normalized_rows[index] = NormalizedChatMicrobatchResult(
             index=index,
@@ -165,7 +185,9 @@ def normalize_chat_microbatch_results(
         )
 
     if any(row is None for row in normalized_rows):
-        raise BatchResponseShapeError("chat microbatch response is missing one or more expected indexes")
+        raise BatchResponseShapeError(
+            "chat microbatch response is missing one or more expected indexes"
+        )
     return [row for row in normalized_rows if row is not None]
 
 
@@ -190,12 +212,18 @@ def _result_index(result: Mapping[str, Any], custom_id_to_index: Mapping[str, in
     item_index = _coerce_result_index(raw_item_index) if raw_item_index is not None else None
     index = _coerce_result_index(raw_index) if raw_index is not None else item_index
     if item_index is not None and index is not None and item_index != index:
-        raise BatchResponseShapeError("chat microbatch response item has mismatched item_index and index")
-    custom_id_index = _custom_id_result_index(custom_id, custom_id_to_index) if custom_id is not None else None
+        raise BatchResponseShapeError(
+            "chat microbatch response item has mismatched item_index and index"
+        )
+    custom_id_index = (
+        _custom_id_result_index(custom_id, custom_id_to_index) if custom_id is not None else None
+    )
 
     if index is not None and custom_id_index is not None:
         if index != custom_id_index:
-            raise BatchResponseShapeError("chat microbatch response item has mismatched index and custom_id")
+            raise BatchResponseShapeError(
+                "chat microbatch response item has mismatched index and custom_id"
+            )
         return index
     if index is not None:
         return index
@@ -214,7 +242,9 @@ def _coerce_result_index(raw_index: Any) -> int:
         try:
             return int(stripped)
         except ValueError as exc:
-            raise BatchResponseShapeError("chat microbatch response item has invalid index") from exc
+            raise BatchResponseShapeError(
+                "chat microbatch response item has invalid index"
+            ) from exc
     try:
         return operator.index(raw_index)
     except TypeError as exc:
@@ -237,7 +267,9 @@ def _result_response_body(result: Mapping[str, Any]) -> dict[str, Any] | None:
     return dict(raw_response)
 
 
-def _result_usage(result: Mapping[str, Any], response_body: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _result_usage(
+    result: Mapping[str, Any], response_body: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
     raw_usage = result.get("usage")
     if raw_usage is None and response_body is not None:
         raw_usage = response_body.get("usage")
@@ -276,11 +308,16 @@ def _normalize_result_error(raw_error: Any) -> Exception | None:
     )
 
     if status_code == 429 or "rate_limit" in error_kind or "rate limit" in error_kind:
-        return RateLimitError(message=message, retry_after=retry_after)
+        return RateLimitError(
+            message=message,
+            retry_after=retry_after,
+            affects_deployment_health=True,
+        )
     if status_code == 408 or "timeout" in error_kind or "timed_out" in error_kind:
         return GatewayTimeoutError(message=message)
     if (status_code is not None and status_code >= 500) or any(
-        token in error_kind for token in ("service_unavailable", "server_error", "overload", "upstream_5xx")
+        token in error_kind
+        for token in ("service_unavailable", "server_error", "overload", "upstream_5xx")
     ):
         return ServiceUnavailableError(message=message, affects_deployment_health=True)
     return InvalidRequestError(message=message)

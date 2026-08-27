@@ -2,16 +2,51 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from typing import Any, AsyncIterator
 
 import httpx
 from botocore.eventstream import EventStreamBuffer
 
-from src.models.errors import InvalidRequestError, RateLimitError, ServiceUnavailableError
+from src.models.errors import (
+    FailureClassification,
+    InvalidRequestError,
+    ProxyError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
-from src.providers.base import ProviderAdapter, map_standard_provider_error, provider_http_error_message
+from src.providers.base import (
+    ProviderAdapter,
+    ProviderErrorDetails,
+    classify_provider_failure,
+    invalid_provider_response_error,
+    is_valid_provider_token_count,
+    map_standard_provider_error,
+    map_standard_provider_status_error,
+    provider_error_details,
+    validate_provider_success_payload,
+)
 from src.providers.healthcheck import is_provider_healthy
+
+_CONTEXT_IDENTIFIERS = frozenset(
+    {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "model_context_window_exceeded",
+    }
+)
+_CONTENT_IDENTIFIERS = frozenset(
+    {
+        "content_filtered",
+        "contentpolicyviolationexception",
+        "guardrail_intervened",
+        "guardrailintervenedexception",
+    }
+)
+_CONTEXT_MESSAGE_MARKERS = ("input is too long", "maximum context length")
+_CONTENT_MESSAGE_MARKERS = ("guardrail intervened", "violates content policy")
 
 _STOP_REASON_MAP = {
     "end_turn": "stop",
@@ -22,10 +57,20 @@ _STOP_REASON_MAP = {
     "content_filtered": "content_filter",
 }
 
+_BEDROCK_STREAM_STATUS_BY_EXCEPTION = {
+    "validationexception": 400,
+    "throttlingexception": 429,
+    "modelstreamerrorexception": 424,
+    "internalserverexception": 500,
+    "serviceunavailableexception": 503,
+}
+
 
 def _flatten_text_content(content: Any) -> str:
     if isinstance(content, list):
-        return "\n".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content)
+        return "\n".join(
+            str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content
+        )
     return str(content or "")
 
 
@@ -69,13 +114,93 @@ def _chat_tool_choice_to_bedrock(tool_choice: Any) -> dict[str, Any] | None:
     return None
 
 
-def _map_stream_error(exception_type: str, message: str) -> Exception:
-    normalized = exception_type.lower()
-    if "throttling" in normalized:
-        return RateLimitError(message=message, affects_deployment_health=True)
-    if "validation" in normalized:
-        return InvalidRequestError(message=message, affects_deployment_health=False)
-    return ServiceUnavailableError(message=message, affects_deployment_health=True)
+def _map_stream_error(exception_type: str, message: str) -> ProxyError:
+    normalized = exception_type.rsplit("#", 1)[-1].strip().lower()
+    status_code = _BEDROCK_STREAM_STATUS_BY_EXCEPTION.get(normalized, 500)
+    if status_code == 429:
+        return RateLimitError(
+            message="Provider rate limited request",
+            affects_deployment_health=True,
+            failure_classification=FailureClassification.RATE_LIMIT,
+        )
+    if status_code == 400:
+        classification = _classify_bedrock_failure(
+            ProviderErrorDetails(
+                status_code=status_code,
+                identifiers=frozenset({normalized}),
+                message=message,
+            )
+        )
+        return InvalidRequestError(
+            message="Provider rejected request",
+            affects_deployment_health=False,
+            failure_classification=classification or FailureClassification.GENERIC,
+        )
+    return ServiceUnavailableError(
+        message="Provider unavailable",
+        affects_deployment_health=True,
+        failure_classification=FailureClassification.GENERIC,
+    )
+
+
+def _classify_bedrock_failure(
+    details: ProviderErrorDetails,
+) -> FailureClassification | None:
+    return classify_provider_failure(
+        details,
+        context_identifiers=_CONTEXT_IDENTIFIERS,
+        content_identifiers=_CONTENT_IDENTIFIERS,
+        context_message_markers=_CONTEXT_MESSAGE_MARKERS,
+        content_message_markers=_CONTENT_MESSAGE_MARKERS,
+    )
+
+
+def _bedrock_stop_failure(stop_reason: object) -> ProxyError | None:
+    if not isinstance(stop_reason, str) or not stop_reason:
+        return None
+    normalized = stop_reason.rsplit("#", 1)[-1].strip().lower()
+    classification = _classify_bedrock_failure(
+        ProviderErrorDetails(
+            status_code=400,
+            identifiers=frozenset({normalized}),
+        )
+    )
+    if classification is None:
+        return None
+    return map_standard_provider_status_error(
+        400,
+        failure_classification=classification,
+    )
+
+
+def _is_valid_bedrock_success_payload(data: Mapping[str, Any]) -> bool:
+    output = data.get("output")
+    message = output.get("message") if isinstance(output, Mapping) else None
+    content = message.get("content") if isinstance(message, Mapping) else None
+    usage = data.get("usage")
+    stop_reason = data.get("stopReason")
+    return (
+        isinstance(content, list)
+        and all(isinstance(block, Mapping) for block in content)
+        and isinstance(stop_reason, str)
+        and bool(stop_reason.strip())
+        and isinstance(usage, Mapping)
+        and is_valid_provider_token_count(usage.get("inputTokens"))
+        and is_valid_provider_token_count(usage.get("outputTokens"))
+        and is_valid_provider_token_count(usage.get("totalTokens"))
+    )
+
+
+def _stream_index(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise invalid_provider_response_error()
+    return value
+
+
+def _classified_stream_finish_reason(failure: ProxyError) -> str:
+    if failure.failure_classification is FailureClassification.CONTENT_POLICY:
+        return "content_filter"
+    return "length"
 
 
 class BedrockAdapter(ProviderAdapter):
@@ -112,7 +237,14 @@ class BedrockAdapter(ProviderAdapter):
             if message.role == "tool":
                 append_blocks(
                     "user",
-                    [{"toolResult": {"toolUseId": message.tool_call_id or "", "content": [{"text": text}]}}],
+                    [
+                        {
+                            "toolResult": {
+                                "toolUseId": message.tool_call_id or "",
+                                "content": [{"text": text}],
+                            }
+                        }
+                    ],
                 )
                 continue
             role = "assistant" if message.role == "assistant" else "user"
@@ -120,16 +252,23 @@ class BedrockAdapter(ProviderAdapter):
             if text:
                 blocks.append({"text": text})
             if role == "assistant":
-                blocks.extend(_tool_call_to_tool_use_block(tool_call) for tool_call in message.tool_calls or [])
+                blocks.extend(
+                    _tool_call_to_tool_use_block(tool_call)
+                    for tool_call in message.tool_calls or []
+                )
             if not blocks and role == "user":
                 blocks.append({"text": text})
             append_blocks(role, blocks)
 
-        payload: dict[str, Any] = {"messages": messages or [{"role": "user", "content": [{"text": ""}]}]}
+        payload: dict[str, Any] = {
+            "messages": messages or [{"role": "user", "content": [{"text": ""}]}]
+        }
         if system_blocks:
             payload["system"] = system_blocks
         if canonical_request.tools and canonical_request.tool_choice != "none":
-            tool_config: dict[str, Any] = {"tools": [_function_tool_to_tool_spec(tool) for tool in canonical_request.tools]}
+            tool_config: dict[str, Any] = {
+                "tools": [_function_tool_to_tool_spec(tool) for tool in canonical_request.tools]
+            }
             tool_choice = _chat_tool_choice_to_bedrock(canonical_request.tool_choice)
             if tool_choice is not None:
                 tool_config["toolChoice"] = tool_choice
@@ -144,14 +283,25 @@ class BedrockAdapter(ProviderAdapter):
         if "top_p" in fields_set and canonical_request.top_p is not None:
             inference_config["topP"] = canonical_request.top_p
         if canonical_request.stop:
-            inference_config["stopSequences"] = canonical_request.stop if isinstance(canonical_request.stop, list) else [canonical_request.stop]
+            inference_config["stopSequences"] = (
+                canonical_request.stop
+                if isinstance(canonical_request.stop, list)
+                else [canonical_request.stop]
+            )
         if inference_config:
             payload["inferenceConfig"] = inference_config
 
         return payload
 
-    async def translate_response(self, provider_response: Any, model_name: str) -> ChatCompletionResponse:
-        data = provider_response if isinstance(provider_response, dict) else json.loads(provider_response)
+    async def translate_response(
+        self, provider_response: Any, model_name: str
+    ) -> ChatCompletionResponse:
+        data = (
+            provider_response
+            if isinstance(provider_response, dict)
+            else json.loads(provider_response)
+        )
+        validate_provider_success_payload(data, _is_valid_bedrock_success_payload)
         output = data.get("output") or {}
         message = output.get("message") or {}
         contents = message.get("content") or []
@@ -171,7 +321,10 @@ class BedrockAdapter(ProviderAdapter):
                     }
                 )
 
-        finish_reason = _STOP_REASON_MAP.get(str(data.get("stopReason") or "end_turn"), "stop")
+        stop_reason = data.get("stopReason") or "end_turn"
+        if failure := _bedrock_stop_failure(stop_reason):
+            raise failure
+        finish_reason = _STOP_REASON_MAP.get(str(stop_reason), "stop")
         response_message: dict[str, Any] = {"role": "assistant", "content": text}
         if tool_calls:
             response_message["tool_calls"] = tool_calls
@@ -215,6 +368,9 @@ class BedrockAdapter(ProviderAdapter):
         finish_reason = "stop"
         usage: dict[str, int] = {}
         tool_call_indexes: dict[int, int] = {}
+        saw_message_start = False
+        saw_message_stop = False
+        emitted_output = False
 
         def _chunk(delta: dict[str, Any], *, stop: str | None = None) -> str:
             body: dict[str, Any] = {
@@ -237,25 +393,41 @@ class BedrockAdapter(ProviderAdapter):
                 event_type = message.headers.get(":event-type")
                 try:
                     event = json.loads(message.payload) if message.payload else {}
-                except json.JSONDecodeError:
-                    continue
+                except (RecursionError, TypeError, ValueError) as exc:
+                    raise invalid_provider_response_error() from exc
+                if not isinstance(event, Mapping):
+                    raise invalid_provider_response_error()
 
                 if message.headers.get(":message-type") in ("exception", "error"):
                     exception_type = str(message.headers.get(":exception-type") or event_type or "")
                     raise _map_stream_error(
                         exception_type,
-                        str(event.get("message") or f"Bedrock stream error: {exception_type or 'unknown'}"),
+                        str(
+                            event.get("message")
+                            or f"Bedrock stream error: {exception_type or 'unknown'}"
+                        ),
                     )
 
                 if event_type == "messageStart":
-                    if not sent_role:
-                        yield _chunk({"role": "assistant", "content": ""})
-                        sent_role = True
+                    if saw_message_start or saw_message_stop:
+                        raise invalid_provider_response_error()
+                    saw_message_start = True
                 elif event_type == "contentBlockStart":
-                    tool_use = (event.get("start") or {}).get("toolUse")
+                    if not saw_message_start or saw_message_stop:
+                        raise invalid_provider_response_error()
+                    start = event.get("start")
+                    if not isinstance(start, Mapping):
+                        raise invalid_provider_response_error()
+                    tool_use = start.get("toolUse")
                     if isinstance(tool_use, dict):
-                        block_index = int(event.get("contentBlockIndex") or 0)
-                        tool_index = tool_call_indexes.setdefault(block_index, len(tool_call_indexes))
+                        if not sent_role:
+                            yield _chunk({"role": "assistant", "content": ""})
+                            sent_role = True
+                        emitted_output = True
+                        block_index = _stream_index(event.get("contentBlockIndex"))
+                        tool_index = tool_call_indexes.setdefault(
+                            block_index, len(tool_call_indexes)
+                        )
                         yield _chunk(
                             {
                                 "tool_calls": [
@@ -263,33 +435,75 @@ class BedrockAdapter(ProviderAdapter):
                                         "index": tool_index,
                                         "id": tool_use.get("toolUseId") or "",
                                         "type": "function",
-                                        "function": {"name": tool_use.get("name") or "", "arguments": ""},
+                                        "function": {
+                                            "name": tool_use.get("name") or "",
+                                            "arguments": "",
+                                        },
                                     }
                                 ]
                             }
                         )
                 elif event_type == "contentBlockDelta":
-                    delta = event.get("delta") or {}
+                    if not saw_message_start or saw_message_stop:
+                        raise invalid_provider_response_error()
+                    delta = event.get("delta")
+                    if not isinstance(delta, Mapping):
+                        raise invalid_provider_response_error()
                     text = delta.get("text")
                     if isinstance(text, str) and text:
+                        if not sent_role:
+                            yield _chunk({"role": "assistant", "content": ""})
+                            sent_role = True
+                        emitted_output = True
                         yield _chunk({"content": text})
                     tool_use_delta = delta.get("toolUse")
                     if isinstance(tool_use_delta, dict):
                         partial = tool_use_delta.get("input")
                         if isinstance(partial, str) and partial:
-                            block_index = int(event.get("contentBlockIndex") or 0)
+                            block_index = _stream_index(event.get("contentBlockIndex"))
                             tool_index = tool_call_indexes.get(block_index)
                             if tool_index is not None:
-                                yield _chunk({"tool_calls": [{"index": tool_index, "function": {"arguments": partial}}]})
+                                yield _chunk(
+                                    {
+                                        "tool_calls": [
+                                            {
+                                                "index": tool_index,
+                                                "function": {"arguments": partial},
+                                            }
+                                        ]
+                                    }
+                                )
                 elif event_type == "messageStop":
-                    finish_reason = _STOP_REASON_MAP.get(str(event.get("stopReason") or "end_turn"), "stop")
+                    if not saw_message_start or saw_message_stop:
+                        raise invalid_provider_response_error()
+                    stop_reason = event.get("stopReason") or "end_turn"
+                    if failure := _bedrock_stop_failure(stop_reason):
+                        if not emitted_output:
+                            raise failure
+                        finish_reason = _classified_stream_finish_reason(failure)
+                    else:
+                        finish_reason = _STOP_REASON_MAP.get(str(stop_reason), "stop")
+                    saw_message_stop = True
                 elif event_type == "metadata":
-                    usage_data = event.get("usage") or {}
+                    if not saw_message_start or not saw_message_stop:
+                        raise invalid_provider_response_error()
+                    usage_data = event.get("usage")
+                    if not isinstance(usage_data, Mapping) or not all(
+                        is_valid_provider_token_count(usage_data.get(key))
+                        for key in ("inputTokens", "outputTokens", "totalTokens")
+                    ):
+                        raise invalid_provider_response_error()
                     usage = {
-                        "prompt_tokens": int(usage_data.get("inputTokens") or 0),
-                        "completion_tokens": int(usage_data.get("outputTokens") or 0),
-                        "total_tokens": int(usage_data.get("totalTokens") or 0),
+                        "prompt_tokens": int(usage_data["inputTokens"]),
+                        "completion_tokens": int(usage_data["outputTokens"]),
+                        "total_tokens": int(usage_data["totalTokens"]),
                     }
+
+        if not saw_message_start or not saw_message_stop:
+            raise invalid_provider_response_error()
+        if not sent_role:
+            yield _chunk({"role": "assistant", "content": ""})
+            sent_role = True
 
         final: dict[str, Any] = {
             "id": stream_id,
@@ -303,17 +517,18 @@ class BedrockAdapter(ProviderAdapter):
         yield f"data: {json.dumps(final, separators=(',', ':'))}"
         yield "data: [DONE]"
 
-    def map_error(self, provider_error: Exception) -> Exception:
-        status = provider_error.response.status_code if isinstance(provider_error, httpx.HTTPStatusError) else None
-        invalid_request_message = (
-            provider_http_error_message(provider_error, fallback=f"Provider rejected request: {status}")
-            if isinstance(provider_error, httpx.HTTPStatusError)
-            else f"Provider rejected request: {status}"
+    def map_error(
+        self,
+        provider_error: Exception,
+        *,
+        details: ProviderErrorDetails | None = None,
+    ) -> ProxyError:
+        classification = _classify_bedrock_failure(
+            details or provider_error_details(provider_error)
         )
         return map_standard_provider_error(
             provider_error,
-            invalid_request_message=invalid_request_message,
-            rate_limit_message=invalid_request_message if status == 429 else f"Provider rate limited request: {status}",
+            failure_classification=classification,
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:

@@ -19,6 +19,7 @@ from src.middleware.rate_limit import (
 )
 from src.metrics import observe_request_phase
 from src.routers.routing_decision import set_prompt_provenance
+from src.router.runtime_generation import RoutingRuntimeGeneration
 from src.services.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
@@ -43,6 +44,7 @@ async def run_text_preflight(
     request: Request,
     payload: ChatCompletionRequest,
     request_data: dict[str, Any] | None,
+    routing_runtime: RoutingRuntimeGeneration,
 ) -> tuple[Any, ChatCompletionRequest, dict[str, Any], CallbackManager, Any]:
     prepared = getattr(request.state, "prepared_text_request", None)
     if isinstance(prepared, TextPreflightResult):
@@ -190,6 +192,7 @@ async def run_text_preflight(
             callable_target_grant_service=getattr(
                 request.app.state, "callable_target_grant_service", None
             ),
+            callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
             tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
             policy_mode=get_callable_target_policy_mode_from_app(request.app),
             tier_policy_mode=get_tier_policy_mode_from_app(request.app),

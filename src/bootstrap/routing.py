@@ -11,16 +11,21 @@ from typing import Any
 from src.bootstrap.status import BootstrapStatus
 from src.cache import configure_cache_runtime
 from src.config_runtime import ModelHotReloadManager
+from src.router.runtime_generation import (
+    RoutingRuntimeGeneration,
+    RoutingRuntimeGenerationStore,
+)
 from src.providers.healthcheck import probe_provider_health
 from src.router import (
     BackgroundHealthChecker,
     CooldownManager,
     FallbackConfig,
+    FallbackEventJournal,
     FailoverManager,
     HealthCheckConfig,
     HealthEndpointHandler,
-    PassiveHealthTracker,
     RedisStateBackend,
+    RouterRedisKeyspace,
     Router,
     RouterConfig,
     RoutingStrategy,
@@ -28,8 +33,12 @@ from src.router import (
     build_route_group_policies,
 )
 from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
-from src.services.route_groups import load_route_groups
+from src.services.model_deployments import (
+    bootstrap_model_deployments_from_config,
+    load_model_registry,
+)
+from src.services.route_groups import load_route_group_snapshot_result
+from src.router.route_group_validation import resolve_route_group_modes_for_registry
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +74,7 @@ async def _load_model_registry_compat(
         "secret_resolver": secret_resolver,
     }
     signature = inspect.signature(loader)
-    supported_kwargs = {
-        key: value
-        for key, value in kwargs.items()
-        if key in signature.parameters
-    }
+    supported_kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
     return await loader(repository, cfg, settings, **supported_kwargs)
 
 
@@ -83,7 +88,9 @@ async def init_routing_runtime(
     salt_key: str,
 ) -> RoutingRuntime:
     if cfg.general_settings.model_deployment_bootstrap_from_config:
-        did_bootstrap = await bootstrap_model_deployments_from_config(app.state.model_deployment_repository, cfg)
+        did_bootstrap = await bootstrap_model_deployments_from_config(
+            app.state.model_deployment_repository, cfg
+        )
         if did_bootstrap:
             logger.info("bootstrapped model deployments from config into database")
 
@@ -98,11 +105,27 @@ async def init_routing_runtime(
     )
     logger.info("loaded model registry from %s source", model_registry_source)
 
-    app.state.route_groups, route_group_source = await load_route_groups(
+    route_group_load = await load_route_group_snapshot_result(
         app.state.route_group_repository,
         cfg,
         route_group_cache=app.state.route_group_runtime_cache,
     )
+    route_group_snapshot = route_group_load.snapshot
+    route_group_source = route_group_load.source
+    loaded_route_groups = route_group_snapshot.groups
+    app.state.route_group_runtime_revision = route_group_snapshot.revision
+    app.state.route_group_runtime_source = route_group_source
+    app.state.route_group_runtime_requires_reconciliation = route_group_load.requires_reconciliation
+    mode_resolution = resolve_route_group_modes_for_registry(
+        loaded_route_groups,
+        app.state.model_registry,
+    )
+    app.state.route_groups = mode_resolution.groups
+    if mode_resolution.inferred_group_keys:
+        logger.warning(
+            "inferred omitted route-group workload modes; declare mode explicitly groups=%s",
+            ",".join(mode_resolution.inferred_group_keys),
+        )
     logger.info("loaded route groups from %s source", route_group_source)
     app.state.callable_target_catalog = build_callable_target_catalog(
         app.state.model_registry,
@@ -113,15 +136,16 @@ async def init_routing_runtime(
         getattr(cfg.general_settings, "redis_degraded_mode", None)
         or getattr(settings, "redis_degraded_mode", "fail_open")
     )
-    state_backend = RedisStateBackend(redis_client, degraded_mode=degraded_mode)
+    state_backend = RedisStateBackend(
+        redis_client,
+        degraded_mode=degraded_mode,
+        keyspace=RouterRedisKeyspace(environment=getattr(settings, "app_env", "dev")),
+    )
     route_groups = list(getattr(app.state, "route_groups", []))
-    deployment_registry = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
+    deployment_registry = build_deployment_registry(
+        app.state.model_registry, route_groups=route_groups
+    )
     router_config = RouterConfig(
-        num_retries=cfg.router_settings.num_retries,
-        retry_after=cfg.router_settings.retry_after,
-        timeout=cfg.router_settings.timeout,
-        cooldown_time=cfg.router_settings.cooldown_time,
-        allowed_fails=cfg.router_settings.allowed_fails,
         enable_pre_call_checks=cfg.router_settings.enable_pre_call_checks,
         model_group_alias=cfg.router_settings.model_group_alias,
         route_group_policies=build_route_group_policies(route_groups),
@@ -138,23 +162,29 @@ async def init_routing_runtime(
         cooldown_time=cfg.router_settings.cooldown_time,
         allowed_fails=cfg.router_settings.allowed_fails,
     )
-    app.state.failover_manager = FailoverManager(
-        config=FallbackConfig(
-            num_retries=cfg.router_settings.num_retries,
-            retry_after=cfg.router_settings.retry_after,
-            timeout=cfg.router_settings.timeout,
-            fallbacks=_normalize_fallbacks(cfg.deltallm_settings.fallbacks),
-            context_window_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.context_window_fallbacks),
-            content_policy_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.content_policy_fallbacks),
-            event_history_size=cfg.general_settings.failover_event_history_size,
+    failover_config = FallbackConfig(
+        num_retries=cfg.router_settings.num_retries,
+        retry_after=cfg.router_settings.retry_after,
+        timeout=cfg.router_settings.timeout,
+        fallbacks=_normalize_fallbacks(cfg.deltallm_settings.fallbacks),
+        context_window_fallbacks=_normalize_fallbacks(
+            cfg.deltallm_settings.context_window_fallbacks
         ),
-        deployment_registry=deployment_registry,
+        content_policy_fallbacks=_normalize_fallbacks(
+            cfg.deltallm_settings.content_policy_fallbacks
+        ),
+        event_history_size=cfg.general_settings.failover_event_history_size,
+    )
+    fallback_event_journal = FallbackEventJournal(failover_config.event_history_size)
+    app.state.failover_manager = FailoverManager(
+        config=failover_config,
+        candidate_planner=app.state.router,
         state_backend=state_backend,
         cooldown_manager=app.state.cooldown_manager,
+        event_journal=fallback_event_journal,
     )
-    app.state.passive_health_tracker = PassiveHealthTracker(state_backend=state_backend)
     app.state.router_health_handler = HealthEndpointHandler(
-        deployment_registry=deployment_registry,
+        deployment_registry=app.state.router.deployment_registry,
         state_backend=state_backend,
     )
     configure_cache_runtime(
@@ -181,11 +211,29 @@ async def init_routing_runtime(
             interval_seconds=cfg.general_settings.health_check_interval,
             timeout_seconds=health_check_timeout_seconds,
         ),
-        deployment_registry=deployment_registry,
-        state_backend=state_backend,
+        deployment_registry=app.state.router.deployment_registry,
+        health_manager=app.state.cooldown_manager,
         checker=_deployment_health_check,
     )
     app.state.background_health_checker = health_checker
+    initial_generation = RoutingRuntimeGeneration.create(
+        revision=route_group_snapshot.revision,
+        app_config=cfg,
+        model_registry=app.state.model_registry,
+        route_groups=app.state.route_groups,
+        callable_target_catalog=app.state.callable_target_catalog,
+        deployment_registry=app.state.router.deployment_registry,
+        strategy=app.state.router.strategy,
+        router_config=router_config,
+        failover_config=failover_config,
+        salt_key=salt_key,
+        router=app.state.router,
+        failover_manager=app.state.failover_manager,
+        cooldown_manager=app.state.cooldown_manager,
+        source=route_group_source,
+        requires_reconciliation=route_group_load.requires_reconciliation,
+    )
+    app.state.routing_runtime_generation_store = RoutingRuntimeGenerationStore(initial_generation)
     app.state.model_hot_reload_manager = ModelHotReloadManager(
         app=app,
         dynamic_config=dynamic_config_manager,
@@ -193,6 +241,7 @@ async def init_routing_runtime(
         named_credential_repository=getattr(app.state, "named_credential_repository", None),
         route_group_repository=app.state.route_group_repository,
         route_group_cache=app.state.route_group_runtime_cache,
+        router_state_backend=state_backend,
     )
 
     health_task: Task[None] | None = None
@@ -208,7 +257,9 @@ async def init_routing_runtime(
                 "ready",
                 f"models={len(app.state.model_registry)} route_groups={len(app.state.route_groups)} callable_targets={len(app.state.callable_target_catalog)}",
             ),
-            BootstrapStatus("background_health_checks", "ready" if health_task is not None else "disabled"),
+            BootstrapStatus(
+                "background_health_checks", "ready" if health_task is not None else "disabled"
+            ),
         ),
     )
 

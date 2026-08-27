@@ -76,7 +76,9 @@ class _FakeNamedCredentialRepository:
     async def count_linked_deployments(self, credential_id: str) -> int:
         return int(self.usage_counts.get(credential_id, 0))
 
-    async def list_linked_deployments(self, credential_id: str, *, limit: int = 25) -> list[dict[str, str]]:
+    async def list_linked_deployments(
+        self, credential_id: str, *, limit: int = 25
+    ) -> list[dict[str, str]]:
         del limit
         if self.usage_counts.get(credential_id):
             return [{"deployment_id": "dep-1", "model_name": "gpt-4o-mini"}]
@@ -91,6 +93,12 @@ class _FakeHotReloadManager:
         self.reloads += 1
 
 
+class _FailingHotReloadManager(_FakeHotReloadManager):
+    async def reload_runtime(self) -> None:
+        await super().reload_runtime()
+        raise RuntimeError("simulated routing refresh failure")
+
+
 class _FakeModelDeploymentRepository:
     def __init__(self, records: list[dict[str, object]]) -> None:
         self.records = {str(record["deployment_id"]): dict(record) for record in records}
@@ -102,7 +110,9 @@ class _FakeModelDeploymentRepository:
             ModelDeploymentRecord(
                 deployment_id=str(record["deployment_id"]),
                 model_name=str(record["model_name"]),
-                named_credential_id=str(record["named_credential_id"]) if record.get("named_credential_id") is not None else None,
+                named_credential_id=str(record["named_credential_id"])
+                if record.get("named_credential_id") is not None
+                else None,
                 deltallm_params=dict(record["deltallm_params"]),
                 model_info=dict(record.get("model_info") or {}),
             )
@@ -121,14 +131,24 @@ class _FakeModelDeploymentRepository:
                 ModelDeploymentRecord(
                     deployment_id=str(record["deployment_id"]),
                     model_name=str(record["model_name"]),
-                    named_credential_id=str(record["named_credential_id"]) if record.get("named_credential_id") is not None else None,
+                    named_credential_id=str(record["named_credential_id"])
+                    if record.get("named_credential_id") is not None
+                    else None,
                     deltallm_params=dict(record["deltallm_params"]),
                     model_info=dict(record.get("model_info") or {}),
                 )
             )
         return results
 
-    async def update(self, deployment_id: str, *, model_name: str, named_credential_id: str | None, deltallm_params: dict[str, object], model_info: dict[str, object] | None):  # noqa: ANN201
+    async def update(
+        self,
+        deployment_id: str,
+        *,
+        model_name: str,
+        named_credential_id: str | None,
+        deltallm_params: dict[str, object],
+        model_info: dict[str, object] | None,
+    ):  # noqa: ANN201
         record = self.records.get(deployment_id)
         if record is None:
             return None
@@ -144,7 +164,15 @@ class _FailingModelDeploymentRepository(_FakeModelDeploymentRepository):
         super().__init__(records)
         self.fail_on_deployment_id = fail_on_deployment_id
 
-    async def update(self, deployment_id: str, *, model_name: str, named_credential_id: str | None, deltallm_params: dict[str, object], model_info: dict[str, object] | None):  # noqa: ANN201
+    async def update(
+        self,
+        deployment_id: str,
+        *,
+        model_name: str,
+        named_credential_id: str | None,
+        deltallm_params: dict[str, object],
+        model_info: dict[str, object] | None,
+    ):  # noqa: ANN201
         if deployment_id == self.fail_on_deployment_id:
             raise RuntimeError("simulated update failure")
         return await super().update(
@@ -257,7 +285,9 @@ async def test_named_credentials_create_accepts_elevenlabs_api_key_config(client
 
 
 @pytest.mark.asyncio
-async def test_named_credentials_update_reloads_runtime_when_in_use_and_delete_blocks(client, test_app):
+async def test_named_credentials_update_reloads_runtime_when_in_use_and_delete_blocks(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     repository = _FakeNamedCredentialRepository()
     hot_reload = _FakeHotReloadManager()
@@ -285,6 +315,7 @@ async def test_named_credentials_update_reloads_runtime_when_in_use_and_delete_b
 
     assert update_response.status_code == 200
     assert hot_reload.reloads == 1
+    assert update_response.json()["warnings"] == []
 
     delete_response = await client.delete(
         "/ui/api/named-credentials/cred-1",
@@ -292,6 +323,50 @@ async def test_named_credentials_update_reloads_runtime_when_in_use_and_delete_b
     )
 
     assert delete_response.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reload_failure", ["exception", "unavailable"])
+async def test_named_credential_update_reports_post_commit_reload_failure_as_warning(
+    client,
+    test_app,
+    reload_failure,
+):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeNamedCredentialRepository()
+    record = await repository.create(
+        NamedCredentialRecord(
+            credential_id="cred-1",
+            name="OpenAI Prod",
+            provider="openai",
+            connection_config={"api_key": "sk-secret"},
+        )
+    )
+    repository.usage_counts[record.credential_id] = 1
+    hot_reload = _FailingHotReloadManager()
+    test_app.state.named_credential_repository = repository
+    test_app.state.model_hot_reload_manager = hot_reload if reload_failure == "exception" else None
+
+    response = await client.put(
+        "/ui/api/named-credentials/cred-1",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "OpenAI Production",
+            "provider": "openai",
+            "connection_config": {"api_key": "sk-rotated"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "OpenAI Production"
+    assert response.json()["warnings"] == [
+        "The credential change was committed, but this replica could not refresh its routing "
+        "runtime immediately; automatic reconciliation will retry."
+    ]
+    assert hot_reload.reloads == (1 if reload_failure == "exception" else 0)
+    stored = await repository.get_by_id("cred-1")
+    assert stored is not None
+    assert stored.name == "OpenAI Production"
 
 
 @pytest.mark.asyncio
@@ -375,7 +450,10 @@ async def test_named_credentials_validate_provider_specific_fields(client, test_
         json={
             "name": "vLLM Prod",
             "provider": "vllm",
-            "connection_config": {"api_key": "provider-key", "auth_header_format": "Bearer {token}"},
+            "connection_config": {
+                "api_key": "provider-key",
+                "auth_header_format": "Bearer {token}",
+            },
         },
     )
     assert invalid_auth_format.status_code == 400
@@ -387,7 +465,10 @@ async def test_named_credentials_validate_provider_specific_fields(client, test_
         json={
             "name": "vLLM Prod",
             "provider": "vllm",
-            "connection_config": {"api_key": "provider-key", "auth_header_format": "Token {{api_key}}"},
+            "connection_config": {
+                "api_key": "provider-key",
+                "auth_header_format": "Token {{api_key}}",
+            },
         },
     )
     assert escaped_auth_format.status_code == 400
@@ -511,7 +592,9 @@ async def test_inline_named_credential_report_redacts_connection_config(client, 
 
 
 @pytest.mark.asyncio
-async def test_convert_inline_group_creates_named_credential_and_links_deployments(client, test_app):
+async def test_convert_inline_group_creates_named_credential_and_links_deployments(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     named_repository = _FakeNamedCredentialRepository()
     model_repository = _FakeModelDeploymentRepository(
@@ -566,13 +649,16 @@ async def test_convert_inline_group_creates_named_credential_and_links_deploymen
     payload = response.json()
     assert payload["credential"]["name"] == "OpenAI Shared"
     assert payload["credential"]["connection_config"]["api_key"] == "***REDACTED***"
+    assert payload["warnings"] == []
     assert hot_reload.reloads == 1
     assert model_repository.records["dep-1"]["named_credential_id"] is not None
     assert "api_key" not in model_repository.records["dep-1"]["deltallm_params"]
 
 
 @pytest.mark.asyncio
-async def test_convert_inline_group_rolls_back_created_credential_on_non_transaction_failure(client, test_app):
+async def test_convert_inline_group_rolls_back_created_credential_on_non_transaction_failure(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     named_repository = _FakeNamedCredentialRepository()
     model_repository = _FailingModelDeploymentRepository(

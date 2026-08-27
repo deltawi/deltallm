@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ApiError } from '../src/lib/apiClient';
+import { ApiError } from '../src/lib/api/transport';
 import { organizationDeletion } from '../src/lib/organizationDeletion';
 
 

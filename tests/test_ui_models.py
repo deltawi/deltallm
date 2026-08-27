@@ -8,10 +8,18 @@ import pytest
 from src.db.named_credentials import NamedCredentialRecord
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
-from src.router import build_deployment_registry
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.providers.healthcheck import HealthProbeResult
+from src.router import (
+    BackgroundHealthChecker,
+    HealthCheckConfig,
+    HealthCheckInProgressError,
+    build_deployment_registry,
+)
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.callable_targets import CallableTarget
 from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
+from src.config_runtime.models import ModelMutationResult
 
 
 class _FakeOrganizationMetadataDB:
@@ -56,7 +64,9 @@ class _MutableCallableTargetBindingRepository:
         self.bindings = list(bindings)
         self._counter = len(bindings)
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -69,7 +79,11 @@ class _MutableCallableTargetBindingRepository:
 
     async def upsert_binding(self, *, callable_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         for index, item in enumerate(self.bindings):
-            if item.callable_key == callable_key and item.scope_type == scope_type and item.scope_id == scope_id:
+            if (
+                item.callable_key == callable_key
+                and item.scope_type == scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -120,7 +134,9 @@ class _MutableRouteGroupRepository:
             )
         ]
 
-    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if group_key:
             items = [item for item in items if item.group_key == group_key]
@@ -133,7 +149,11 @@ class _MutableRouteGroupRepository:
 
     async def upsert_binding(self, group_key: str, *, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         for index, item in enumerate(self.bindings):
-            if item.group_key == group_key and item.scope_type == scope_type and item.scope_id == scope_id:
+            if (
+                item.group_key == group_key
+                and item.scope_type == scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -183,7 +203,9 @@ async def test_list_models_returns_runtime_models(client, test_app):
 async def test_get_model_returns_health_block(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
-    response = await client.get("/ui/api/models/gpt-4o-mini-0", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/models/gpt-4o-mini-0", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -218,10 +240,11 @@ async def test_get_model_redacts_named_credential_backed_params(client, test_app
         ]
     }
     rebuilt = build_deployment_registry(test_app.state.model_registry)
-    test_app.state.router.deployment_registry.clear()
-    test_app.state.router.deployment_registry.update(rebuilt)
+    test_app.state.router.deployment_registry.replace(rebuilt)
 
-    response = await client.get("/ui/api/models/dep-named-1", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/models/dep-named-1", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -235,6 +258,56 @@ async def test_get_model_redacts_named_credential_backed_params(client, test_app
     assert payload["connection_summary"]["api_base"] == "https://api.openai.com/v1"
     assert payload["connection_summary"]["auth_header_name"] == "Authorization"
     assert payload["connection_summary"]["custom_auth_label"] == "Authorization (Token)"
+
+
+@pytest.mark.asyncio
+async def test_delete_model_maps_route_group_invariant_conflict_to_409(client, test_app):
+    class ConflictingHotReload:
+        async def remove_model(self, deployment_id: str, updated_by: str) -> bool:
+            del deployment_id, updated_by
+            raise RoutePolicyStateConflictError(
+                "model deployment change would invalidate route group 'support-route'"
+            )
+
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_hot_reload_manager = ConflictingHotReload()
+
+    response = await client.delete(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 409
+    assert "would invalidate route group" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_delete_model_returns_committed_refresh_warning(client, test_app):
+    class WarningHotReload:
+        async def remove_model(
+            self,
+            deployment_id: str,
+            updated_by: str,
+        ) -> ModelMutationResult[bool]:
+            del deployment_id, updated_by
+            return ModelMutationResult(
+                value=True,
+                warnings=("Mutation committed, but local routing runtime refresh failed",),
+            )
+
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_hot_reload_manager = WarningHotReload()
+
+    response = await client.delete(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "deleted": True,
+        "warnings": ["Mutation committed, but local routing runtime refresh failed"],
+    }
 
 
 @pytest.mark.asyncio
@@ -258,7 +331,10 @@ async def test_update_model_preserves_inline_api_key_when_omitted(client, test_a
     assert response.status_code == 200
     payload = response.json()
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
-    assert test_app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]["api_key"] == "provider-key"
+    assert (
+        test_app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]["api_key"]
+        == "provider-key"
+    )
 
 
 @pytest.mark.asyncio
@@ -368,6 +444,37 @@ async def test_create_model_response_redacts_inline_api_key(client, test_app):
     payload = response.json()
     assert payload["credential_source"] == "inline"
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+
+
+@pytest.mark.asyncio
+async def test_compat_model_create_replaces_complete_routing_generation(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    generation_store = test_app.state.routing_runtime_generation_store
+    previous = generation_store.require_snapshot()
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "deployment_id": "atomic-generation-deployment",
+            "model_name": "atomic-generation-model",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+                "api_key": "provider-key",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    replacement = generation_store.require_snapshot()
+    assert replacement is not previous
+    assert "atomic-generation-model" not in previous.deployment_registry
+    assert "atomic-generation-model" in replacement.deployment_registry
+    assert replacement.router is not previous.router
+    assert replacement.failover_manager.candidate_planner is replacement.router
 
 
 @pytest.mark.asyncio
@@ -550,7 +657,9 @@ async def test_create_model_rejects_invalid_access_groups(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_create_model_response_uses_effective_named_credential_custom_auth_summary(client, test_app):
+async def test_create_model_response_uses_effective_named_credential_custom_auth_summary(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
         [
@@ -592,7 +701,9 @@ async def test_create_model_response_uses_effective_named_credential_custom_auth
 
 
 @pytest.mark.asyncio
-async def test_create_model_accepts_custom_auth_headers_for_openai_compatible_provider(client, test_app):
+async def test_create_model_accepts_custom_auth_headers_for_openai_compatible_provider(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     response = await client.post(
@@ -702,7 +813,9 @@ async def test_update_model_response_redacts_inline_api_key(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_update_model_response_uses_effective_named_credential_custom_auth_summary(client, test_app):
+async def test_update_model_response_uses_effective_named_credential_custom_auth_summary(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
         [
@@ -752,13 +865,102 @@ async def test_model_health_check_uses_runtime_checker_when_available(client, te
 
     test_app.state.background_health_checker = SimpleNamespace(check_deployment_once=_check_once)
 
-    response = await client.post("/ui/api/models/gpt-4o-mini-0/health-check", headers={"Authorization": "Bearer mk-test"})
+    response = await client.post(
+        "/ui/api/models/gpt-4o-mini-0/health-check", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["deployment_id"] == "gpt-4o-mini-0"
     assert payload["status_code"] == 200
     assert payload["checked_at"] == 123
+
+
+@pytest.mark.asyncio
+async def test_model_health_check_recovers_expired_manual_cooldown(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    deployment_id = "gpt-4o-mini-0"
+
+    async def _healthy(_deployment):  # noqa: ANN001, ANN202
+        return HealthProbeResult(healthy=True, status_code=200, checked_at=456)
+
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    test_app.state.background_health_checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry={"gpt-4o-mini": [deployment]},
+        health_manager=test_app.state.cooldown_manager,
+        checker=_healthy,
+    )
+    await test_app.state.cooldown_manager.manual_cooldown(
+        deployment_id,
+        60,
+        "operator cooldown",
+    )
+    await test_app.state.redis.delete(
+        test_app.state.router_state_backend.keyspace.cooldown(deployment_id)
+    )
+
+    response = await client.post(
+        f"/ui/api/models/{deployment_id}/health-check",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["healthy"] is True
+    assert payload["health"]["in_cooldown"] is False
+    assert payload["message"] == "Health check passed"
+
+
+@pytest.mark.asyncio
+async def test_model_health_check_reports_provider_success_during_active_cooldown(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    deployment_id = "gpt-4o-mini-0"
+
+    async def _healthy(_deployment):  # noqa: ANN001, ANN202
+        return HealthProbeResult(healthy=True, status_code=200, checked_at=456)
+
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    test_app.state.background_health_checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry={"gpt-4o-mini": [deployment]},
+        health_manager=test_app.state.cooldown_manager,
+        checker=_healthy,
+    )
+    await test_app.state.cooldown_manager.manual_cooldown(
+        deployment_id,
+        60,
+        "operator cooldown",
+    )
+
+    response = await client.post(
+        f"/ui/api/models/{deployment_id}/health-check",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["healthy"] is False
+    assert payload["health"]["in_cooldown"] is True
+    assert payload["message"] == "Provider health check passed; deployment remains in cooldown"
+
+
+@pytest.mark.asyncio
+async def test_model_health_check_maps_owned_probe_to_conflict(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    async def _check_once(_deployment):  # noqa: ANN001, ANN202
+        raise HealthCheckInProgressError("A deployment health check is already in progress")
+
+    test_app.state.background_health_checker = SimpleNamespace(check_deployment_once=_check_once)
+
+    response = await client.post(
+        "/ui/api/models/gpt-4o-mini-0/health-check",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "A deployment health check is already in progress"}
 
 
 @pytest.mark.asyncio
@@ -809,10 +1011,19 @@ async def test_provider_health_summary_aggregates_provider_statuses(client, test
         ],
     }
 
-    await test_app.state.router_state_backend.set_health("dep-openai-2", False)
-    await test_app.state.router_state_backend.set_cooldown("dep-anthropic-1", 60, "test-cooldown")
+    await test_app.state.redis.hset(
+        test_app.state.router_state_backend.keyspace.health("dep-openai-2"),
+        mapping={"healthy": "false"},
+    )
+    await test_app.state.cooldown_manager.manual_cooldown(
+        "dep-anthropic-1",
+        60,
+        "test-cooldown",
+    )
 
-    response = await client.get("/ui/api/models/provider-health-summary", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/models/provider-health-summary", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -850,7 +1061,9 @@ async def test_provider_health_summary_counts_models_beyond_paginated_limit(clie
         ]
     }
 
-    response = await client.get("/ui/api/models/provider-health-summary", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/models/provider-health-summary", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -878,8 +1091,12 @@ async def test_model_dashboard_uses_explicit_provider_over_model_prefix(client, 
         ]
     }
 
-    models_response = await client.get("/ui/api/models", headers={"Authorization": "Bearer mk-test"})
-    health_response = await client.get("/ui/api/models/provider-health-summary", headers={"Authorization": "Bearer mk-test"})
+    models_response = await client.get(
+        "/ui/api/models", headers={"Authorization": "Bearer mk-test"}
+    )
+    health_response = await client.get(
+        "/ui/api/models/provider-health-summary", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert models_response.status_code == 200
     assert health_response.status_code == 200
@@ -991,9 +1208,9 @@ async def test_auto_follow_sync_prunes_stale_org_bindings() -> None:
     )
 
     assert changed == 2
-    assert {(item.scope_type, item.scope_id, item.callable_key) for item in binding_repository.bindings} == {
-        ("organization", "org-default", "gpt-4o-mini")
-    }
+    assert {
+        (item.scope_type, item.scope_id, item.callable_key) for item in binding_repository.bindings
+    } == {("organization", "org-default", "gpt-4o-mini")}
     assert route_group_repository.bindings == []
 
 

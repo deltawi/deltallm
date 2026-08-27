@@ -208,28 +208,42 @@ class _SpendQueryDB:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("path", "body", "expected_action"),
+    ("path", "body", "expected_action", "routing_mode"),
     [
         (
             "/v1/images/generations",
             {"model": "gpt-4o-mini", "prompt": "cat"},
             "IMAGE_GENERATION_REQUEST",
+            "image_generation",
         ),
         (
             "/v1/audio/speech",
             {"model": "gpt-4o-mini", "input": "hello", "voice": "alloy"},
             "AUDIO_SPEECH_REQUEST",
+            "audio_speech",
         ),
         (
             "/v1/rerank",
             {"model": "gpt-4o-mini", "query": "q", "documents": ["a", "b"]},
             "RERANK_REQUEST",
+            "rerank",
         ),
     ],
 )
-async def test_media_routes_emit_audit_success(client, test_app, path, body, expected_action):
+async def test_media_routes_emit_audit_success(
+    client,
+    test_app,
+    path,
+    body,
+    expected_action,
+    routing_mode,
+):
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = routing_mode
+    if routing_mode == "rerank":
+        deployment.deltallm_params["provider"] = "vllm"
 
     async def media_post(url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001, ANN201
         del headers, timeout
@@ -265,6 +279,8 @@ async def test_audio_transcriptions_emits_audit_success(client, test_app):
 
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info["mode"] = "audio_transcription"
 
     async def _noop_rate_limit():  # noqa: ANN202
         yield

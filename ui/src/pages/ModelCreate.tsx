@@ -5,9 +5,12 @@ import { modelDetailPath } from '../lib/modelRoutes';
 import ModelForm from '../components/ModelForm';
 import { EMPTY_FORM, type ModelPayload } from '../components/modelFormShared';
 import { ArrowLeft } from 'lucide-react';
+import { useToast } from '../components/ToastProvider';
+import { mutationOutcome } from '../lib/mutationOutcome';
 
 export default function ModelCreate() {
   const navigate = useNavigate();
+  const { pushToast } = useToast();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -16,14 +19,20 @@ export default function ModelCreate() {
     setSaving(true);
     try {
       const result = await models.create(payload);
-      const deploymentId = result?.deployment_id || result?.id;
+      const outcome = mutationOutcome('Model deployment was created.', result.warnings);
+      pushToast({
+        tone: outcome.tone,
+        title: outcome.tone === 'info' ? 'Model created with warning' : 'Model created',
+        message: outcome.message,
+      });
+      const deploymentId = result.deployment_id;
       if (deploymentId) {
         navigate(modelDetailPath(deploymentId));
       } else {
         navigate('/models');
       }
-    } catch (err: any) {
-      setError(err?.message || 'Failed to create model');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create model');
     } finally {
       setSaving(false);
     }

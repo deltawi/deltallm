@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.db.routing_runtime import RoutingRuntimeRevisionRepository
+
 
 def _parse_json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -42,8 +44,12 @@ class NamedCredentialRecord:
 
 
 class NamedCredentialRepository:
-    def __init__(self, prisma_client: Any | None = None) -> None:
+    def __init__(self, prisma_client: Any | None = None, *, use_transactions: bool = True) -> None:
         self.prisma = prisma_client
+        self._use_transactions = use_transactions
+
+    def with_db(self, prisma_client: Any) -> NamedCredentialRepository:
+        return NamedCredentialRepository(prisma_client, use_transactions=False)
 
     async def list_all(self, *, provider: str | None = None) -> list[NamedCredentialRecord]:
         if self.prisma is None:
@@ -83,7 +89,9 @@ class NamedCredentialRepository:
             """,
             *normalized_ids,
         )
-        return {record.credential_id: record for record in (self._record_from_row(row) for row in rows)}
+        return {
+            record.credential_id: record for record in (self._record_from_row(row) for row in rows)
+        }
 
     async def get_by_id(self, credential_id: str) -> NamedCredentialRecord | None:
         if self.prisma is None:
@@ -158,6 +166,15 @@ class NamedCredentialRepository:
     ) -> NamedCredentialRecord | None:
         if self.prisma is None:
             return None
+        if self._use_transactions and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).update(
+                    credential_id,
+                    name=name,
+                    provider=provider,
+                    connection_config=connection_config,
+                    metadata=metadata,
+                )
 
         rows = await self.prisma.query_raw(
             """
@@ -178,6 +195,8 @@ class NamedCredentialRepository:
         )
         if not rows:
             return None
+        if not self._use_transactions and await self.count_linked_deployments(credential_id) > 0:
+            await RoutingRuntimeRevisionRepository(self.prisma).bump_revision()
         return self._record_from_row(rows[0])
 
     async def delete(self, credential_id: str) -> bool:
@@ -226,7 +245,9 @@ class NamedCredentialRepository:
             if row.get("named_credential_id") is not None
         }
 
-    async def list_linked_deployments(self, credential_id: str, *, limit: int = 25) -> list[dict[str, str]]:
+    async def list_linked_deployments(
+        self, credential_id: str, *, limit: int = 25
+    ) -> list[dict[str, str]]:
         if self.prisma is None:
             return []
 
@@ -257,7 +278,9 @@ class NamedCredentialRepository:
             provider=str(row.get("provider") or ""),
             connection_config=_parse_json_object(row.get("connection_config")),
             metadata=_parse_json_object(row.get("metadata")) or None,
-            created_by_account_id=str(row.get("created_by_account_id")) if row.get("created_by_account_id") is not None else None,
+            created_by_account_id=str(row.get("created_by_account_id"))
+            if row.get("created_by_account_id") is not None
+            else None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
         )

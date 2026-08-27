@@ -9,6 +9,7 @@ from src.batch.backpressure import BatchModelGroupDeferral
 from src.batch.models import BatchModelBacklogRecord, BatchModelInFlightRecord
 from src.batch.scheduling import BatchModelCapacityConfig, BatchModelCapacityResolver
 from src.router.router import Deployment
+from src.router.health_state import HealthRefInput, coerce_health_ref
 
 
 class _Repository:
@@ -37,29 +38,45 @@ class _State:
         self,
         *,
         unhealthy: set[str] | None = None,
+        recoverable: set[str] | None = None,
         cooled_down: set[str] | None = None,
         usage: dict[str, dict[str, int]] | None = None,
     ) -> None:
         self.unhealthy = unhealthy or set()
+        self.recoverable = recoverable or set()
         self.cooled_down = cooled_down or set()
         self.usage = usage or {}
 
-    async def get_health_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, str]]:
+    async def get_health_batch(
+        self, health_refs: list[HealthRefInput]
+    ) -> dict[str, dict[str, str]]:
         return {
-            deployment_id: {"healthy": "false" if deployment_id in self.unhealthy else "true"}
-            for deployment_id in deployment_ids
+            ref.deployment_id: {
+                "healthy": "false"
+                if ref.deployment_id in self.unhealthy or ref.deployment_id in self.recoverable
+                else "true",
+                "recovery_required": "true" if ref.deployment_id in self.recoverable else "false",
+            }
+            for ref in (coerce_health_ref(item) for item in health_refs)
         }
 
-    async def get_cooldown_batch(self, deployment_ids: list[str]) -> dict[str, bool]:
-        return {deployment_id: deployment_id in self.cooled_down for deployment_id in deployment_ids}
+    async def get_cooldown_batch(self, health_refs: list[HealthRefInput]) -> dict[str, bool]:
+        return {
+            ref.deployment_id: ref.deployment_id in self.cooled_down
+            for ref in (coerce_health_ref(item) for item in health_refs)
+        }
 
     async def get_usage_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, int]]:
-        return {deployment_id: self.usage.get(deployment_id, {}) for deployment_id in deployment_ids}
+        return {
+            deployment_id: self.usage.get(deployment_id, {}) for deployment_id in deployment_ids
+        }
 
 
 class _FailingState(_State):
-    async def get_health_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, str]]:
-        del deployment_ids
+    async def get_health_batch(
+        self, health_refs: list[HealthRefInput]
+    ) -> dict[str, dict[str, str]]:
+        del health_refs
         raise RuntimeError("router state unavailable")
 
 
@@ -118,6 +135,29 @@ async def _snapshot(
         config=config or BatchModelCapacityConfig(enabled=True),
         router=router,
         backpressure=backpressure,
+    )
+    snapshots = await resolver.build_snapshots()
+    assert len(snapshots) == 1
+    return snapshots[0]
+
+
+async def _snapshot_for_deployments(
+    deployments: list[Deployment],
+    *,
+    state: _State,
+    in_flight: list[BatchModelInFlightRecord] | None = None,
+):
+    model_group = deployments[0].model_name
+    resolver = BatchModelCapacityResolver(
+        repository=_Repository(
+            backlog=[_backlog(model_group)],
+            in_flight=in_flight,
+        ),
+        config=BatchModelCapacityConfig(enabled=True),
+        router=SimpleNamespace(
+            deployment_registry={model_group: deployments},
+            state=state,
+        ),
     )
     snapshots = await resolver.build_snapshots()
     assert len(snapshots) == 1
@@ -324,6 +364,85 @@ async def test_no_healthy_deployments_returns_zero_availability() -> None:
 
 
 @pytest.mark.asyncio
+async def test_recoverable_deployment_contributes_one_half_open_slot() -> None:
+    snapshot = await _snapshot(
+        deployment=_deployment(
+            "dep-1",
+            model_group="embeddings-small",
+            model_info={
+                "batch_capacity": {
+                    "max_in_flight": 64,
+                    "max_claim_work_units": 128,
+                }
+            },
+        ),
+        state=_State(recoverable={"dep-1"}),
+    )
+
+    assert snapshot.max_in_flight_items == 1
+    assert snapshot.available_in_flight_items == 1
+    assert snapshot.max_claim_work_units == 128
+    assert snapshot.capacity_source == "router_recovery"
+    assert snapshot.reason is None
+
+
+@pytest.mark.asyncio
+async def test_recoverable_deployments_add_only_one_slot_each_to_healthy_capacity() -> None:
+    deployments = [
+        _deployment(
+            "healthy",
+            model_group="embeddings-small",
+            model_info={"batch_capacity": {"max_in_flight": 16}},
+        ),
+        _deployment(
+            "recoverable-a",
+            model_group="embeddings-small",
+            model_info={"batch_capacity": {"max_in_flight": 32}},
+        ),
+        _deployment(
+            "recoverable-b",
+            model_group="embeddings-small",
+            model_info={"batch_capacity": {"max_in_flight": 48}},
+        ),
+    ]
+
+    snapshot = await _snapshot_for_deployments(
+        deployments,
+        state=_State(recoverable={"recoverable-a", "recoverable-b"}),
+    )
+
+    assert snapshot.max_in_flight_items == 18
+    assert snapshot.available_in_flight_items == 18
+    assert snapshot.healthy_deployments == 3
+
+
+@pytest.mark.asyncio
+async def test_in_flight_half_open_item_exhausts_recovery_capacity() -> None:
+    deployment = _deployment(
+        "recoverable",
+        model_group="embeddings-small",
+        model_info={"batch_capacity": {"max_in_flight": 64}},
+    )
+
+    snapshot = await _snapshot_for_deployments(
+        [deployment],
+        state=_State(recoverable={"recoverable"}),
+        in_flight=[
+            BatchModelInFlightRecord(
+                model_group="embeddings-small",
+                service_tier="standard",
+                in_flight_items=1,
+                in_flight_work_units=1,
+            )
+        ],
+    )
+
+    assert snapshot.max_in_flight_items == 1
+    assert snapshot.available_in_flight_items == 0
+    assert snapshot.reason == "no_available_slots"
+
+
+@pytest.mark.asyncio
 async def test_backpressure_deferral_returns_zero_availability() -> None:
     snapshot = await _snapshot(
         deployment=_deployment(
@@ -369,10 +488,18 @@ async def test_select_model_group_skips_saturated_oldest_model() -> None:
     router = SimpleNamespace(
         deployment_registry={
             "model-a": [
-                _deployment("dep-a", model_group="model-a", model_info={"batch_capacity": {"max_in_flight": 1}})
+                _deployment(
+                    "dep-a",
+                    model_group="model-a",
+                    model_info={"batch_capacity": {"max_in_flight": 1}},
+                )
             ],
             "model-b": [
-                _deployment("dep-b", model_group="model-b", model_info={"batch_capacity": {"max_in_flight": 1}})
+                _deployment(
+                    "dep-b",
+                    model_group="model-b",
+                    model_info={"batch_capacity": {"max_in_flight": 1}},
+                )
             ],
         },
         state=_State(),
@@ -405,13 +532,25 @@ async def test_select_model_groups_returns_all_eligible_models_in_fifo_order() -
     router = SimpleNamespace(
         deployment_registry={
             "model-a": [
-                _deployment("dep-a", model_group="model-a", model_info={"batch_capacity": {"max_in_flight": 4}})
+                _deployment(
+                    "dep-a",
+                    model_group="model-a",
+                    model_info={"batch_capacity": {"max_in_flight": 4}},
+                )
             ],
             "model-b": [
-                _deployment("dep-b", model_group="model-b", model_info={"batch_capacity": {"max_in_flight": 4}})
+                _deployment(
+                    "dep-b",
+                    model_group="model-b",
+                    model_info={"batch_capacity": {"max_in_flight": 4}},
+                )
             ],
             "model-c": [
-                _deployment("dep-c", model_group="model-c", model_info={"batch_capacity": {"max_in_flight": 4}})
+                _deployment(
+                    "dep-c",
+                    model_group="model-c",
+                    model_info={"batch_capacity": {"max_in_flight": 4}},
+                )
             ],
         },
         state=_State(),
@@ -441,7 +580,9 @@ async def test_select_model_groups_uses_quota_capped_limits() -> None:
                 _deployment(
                     "dep-a",
                     model_group="model-a",
-                    model_info={"batch_capacity": {"max_in_flight": 16, "max_claim_work_units": 64}},
+                    model_info={
+                        "batch_capacity": {"max_in_flight": 16, "max_claim_work_units": 64}
+                    },
                     rpm_limit=10,
                     tpm_limit=100,
                 )
@@ -468,7 +609,11 @@ async def test_build_snapshots_uses_refresh_cache_but_selection_forces_refresh()
     router = SimpleNamespace(
         deployment_registry={
             "model-a": [
-                _deployment("dep-a", model_group="model-a", model_info={"batch_capacity": {"max_in_flight": 4}})
+                _deployment(
+                    "dep-a",
+                    model_group="model-a",
+                    model_info={"batch_capacity": {"max_in_flight": 4}},
+                )
             ]
         },
         state=_State(),

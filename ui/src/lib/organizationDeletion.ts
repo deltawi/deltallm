@@ -1,4 +1,4 @@
-import { apiFetch } from './apiClient';
+import { apiFetch } from './api/transport';
 
 export type OrganizationDeletionCounts = {
   teams: number;

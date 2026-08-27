@@ -15,6 +15,11 @@ The rewritten chart supports three concrete deployment shapes:
 
 Production batch workloads can additionally split batch workers into a dedicated Deployment so UI/API/gateway pods do not execute batch work.
 
+Upgrades introducing the router Redis v1 namespace require a one-time non-overlapping cutover. Read
+the [router Redis v1 schema cutover](router-state-schema-cutover.md) before upgrading from an older
+release; the chart intentionally blocks an ordinary rolling upgrade during this compatibility
+window.
+
 ## Prerequisites
 
 - Kubernetes 1.24+

@@ -46,11 +46,16 @@ With that in place, calls to `gpt-4o-mini` can be spread across both deployments
 For each request, DeltaLLM:
 
 1. Resolves the requested model name to a model group
-2. Removes unhealthy or cooled-down deployments
-3. Applies request tag filtering when `metadata.tags` is present
-4. Optionally skips deployments already above configured RPM or TPM limits
-5. Selects one deployment with the active routing strategy
-6. Retries or falls back if the call fails in a retryable way
+2. Rejects a route group whose declared workload mode does not match the gateway endpoint
+3. Removes unhealthy or cooled-down deployments
+4. Applies request tag filtering when `metadata.tags` is present
+5. Optionally skips deployments already above configured RPM or TPM limits
+6. Selects one deployment with the active routing strategy
+7. Retries or falls back if the call fails in a retryable way
+
+Workload-mode rejection uses the in-memory route snapshot and adds no database or Redis round trip.
+The same check applies to fallback groups, so a different-workload group cannot be reached after a
+primary failure.
 
 ## Pick A Strategy Fast
 
@@ -78,7 +83,7 @@ Set the global default in `router_settings.routing_strategy`, or override it wit
 | `cost-based-routing` | Prefers the lowest estimated unit cost for the request mode | You want the cheapest acceptable path |
 | `usage-based-routing` | Prefers the deployment with the lowest current RPM/TPM utilization | You share quota across providers or keys |
 | `rate-limit-aware` | Avoids deployments near configured RPM/TPM limits | You need to stay away from provider caps |
-| `tag-based-routing` | Uses the same tag-filtered eligible pool as other strategies, then applies weighted choice | You want a route group that is explicitly tag-driven |
+| `tag-based-routing` | Deprecated compatibility alias for weighted choice after the common tag filter | Existing configuration still uses the legacy value; migrate it to `weighted` |
 
 ### Strategy Details
 
@@ -293,13 +298,15 @@ router_settings:
 
 #### `tag-based-routing`
 
-What it does:
-- Uses the same request-tag eligibility filtering that DeltaLLM already applies before strategy selection
-- Then uses weighted choice across the remaining tag-matched pool
+Compatibility behavior:
+- Existing configuration remains valid
+- It uses the same weighted implementation as `weighted`
+- Request-tag eligibility filtering still runs first, as it does for every strategy
 
 Important:
 - DeltaLLM already respects `metadata.tags` as a general eligibility filter before strategy selection
-- Choose `tag-based-routing` when you want the route-group policy itself to communicate that tags are the main routing signal
+- Do not select `tag-based-routing` for new configuration; use `weighted` and attach request tags
+- The Admin UI shows the legacy value only while editing a configuration that already uses it
 
 Use it when:
 - You route by region, tenant tier, compliance boundary, or capability tag
@@ -308,9 +315,12 @@ Use it when:
 Required deployment metadata:
 - `model_info.tags`
 
-Setup:
+Migration setup:
 
 ```yaml
+router_settings:
+  routing_strategy: weighted
+
 model_list:
   - model_name: gpt-4o-mini
     deployment_id: eu
@@ -338,7 +348,7 @@ Use these deployment fields when you need more control:
 
 - `model_info.weight` for `weighted`
 - `model_info.priority` for `priority-based-routing`
-- `model_info.tags` for tag-aware routing
+- `model_info.tags` for the common request-tag eligibility filter
 - `model_info.rpm_limit` and `model_info.tpm_limit` for usage-aware and rate-limit-aware routing
 - `model_info.image_pm_limit` for image-generation quota-aware routing
 - `model_info.audio_seconds_pm_limit` and `model_info.char_pm_limit` for audio quota-aware routing
@@ -364,6 +374,67 @@ router_settings:
 - `cooldown_time`: how long a failing deployment stays out of rotation
 - `allowed_fails`: how many failures are allowed before cooldown starts
 
+Failover owns health bookkeeping for routed provider attempts. Each health-affecting attempt is
+recorded once against the deployment that was actually called; authentication, policy, budget,
+guardrail, local gateway-capacity, and cancellation failures do not penalize a provider.
+
+Cooldown expiry moves an unhealthy deployment into bounded recovery instead of leaving it
+permanently excluded. Shared Redis admits one owner-scoped half-open request at a time. A success
+clears the cooldown and failure state; a failed half-open request immediately starts a new
+cooldown. This request-driven recovery works even when background health checks are disabled.
+When background checks are enabled, duplicate registry members are probed once per interval and
+the probe claim is coordinated across gateway replicas. Operator-issued manual cooldowns remain
+authoritative until their TTL expires. After any automatic or manual cooldown, only the
+owner-scoped half-open request or probe may restore health; stale in-flight successes and failures
+cannot override that recovery decision. Manual health checks use a separate short-lived probe claim
+but contend for the same recovery token, so they can run on demand without racing an active
+background or request-driven recovery. A concurrent manual recovery returns HTTP `409`.
+
+Streaming attempts keep the same single health owner, but once response bytes have been emitted a
+router-health persistence failure cannot replace the stream or suppress usage, spend, audit, and
+cleanup finalization. Those update failures are logged and counted separately for reconciliation.
+
+All router keys are built as `deltallm:<app_env>:v1:<router-capability>:<identifiers>`. Mutable
+provider-health keys also include an opaque deployment generation; active admission, usage, and
+latency remain deployment-ID scoped. Separate environments sharing a Redis service therefore share
+neither routing state nor claim ownership. Generation values are digests and never expose provider
+credentials. This changes no hot-path call count: attempt admission and health transitions remain
+one Lua round trip each, and batch reads remain one pipeline or `MGET`.
+
+Health hashes have a rolling 30-day retention period. Each health transition refreshes that TTL,
+and a cooldown longer than 30 days extends retention through the cooldown plus the failure window.
+Adding or removing a deployment ID, changing that ID's model/provider parameters, or recreating it
+publishes a new immutable registry generation with isolated health, failure, cooldown, recovery,
+and probe keys. In-flight attempts and probes retain the retired generation, so their late outcomes
+cannot affect the replacement. Exact deletion of retired health keys is bounded best-effort cleanup
+after publication; cleanup failure is observable but cannot corrupt or fail the new configuration,
+and retained keys expire by TTL. Changes limited to `model_info`, such as weight or priority,
+preserve health history. Admission owners, active counts, usage, and latency are not generation
+scoped or deleted.
+
+This namespace is a schema cutover from the earlier raw router keys. Drain replicas running the old
+binary before namespaced replicas accept traffic, and use the same drain procedure for rollback;
+mixed binaries would otherwise maintain separate admission and cooldown state. The
+[router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md) documents the guarded
+Helm upgrade and rollback sequence.
+
+During a Redis outage, `redis_degraded_mode: fail_open` uses bounded process-local health state and
+reports the router backend as degraded; it does not claim that state is cluster-wide. After Redis
+reconnects, shared Redis becomes authoritative and the temporary local health evidence is dropped.
+With `fail_closed`, health transitions fail with service unavailable while Redis is unavailable.
+
+### Internal health API migration
+
+`BackgroundHealthChecker` now takes `health_manager=CooldownManager(state_backend)` so all health
+transitions pass through the same fenced owner. The former positional or keyword `state_backend`
+constructor form remains accepted with a deprecation warning for one migration window.
+
+`PassiveHealthTracker` was removed from the `src.router` and `src.domain.routing` compatibility
+namespaces, and `CooldownRecoveryMonitor` was removed from `src.router`. Do not recreate them beside
+the current router: `FailoverManager` owns request-result health accounting, while request half-open
+admission and the optional `BackgroundHealthChecker` own recovery. Running the legacy helpers as
+well would duplicate health writes and could let an unfenced success override cooldown recovery.
+
 Tip: verify the effective `allowed_fails` value in the config your environment actually applies. In practice that usually means your mounted `config.yaml`, your Helm `values.yaml`, or the rendered ConfigMap in the cluster.
 
 When you publish a route-group policy, that group can override timeout and retry behavior without changing the global config.
@@ -388,6 +459,45 @@ deltallm_settings:
 - `fallbacks`: used for general failures such as timeouts, rate limits, and provider errors
 - `context_window_fallbacks`: used when the input is too large for the first model
 - `content_policy_fallbacks`: used when a provider rejects the content for policy reasons
+
+The provider adapter classifies context-window and content-policy failures from documented provider
+error fields before the error reaches the router. The same adapter classifiers are used by chat,
+embeddings, images, rerank, speech, and transcription. OpenAI-compatible and Azure OpenAI response
+envelopes and stream events with `finish_reason: content_filter` are treated as content-policy
+failures rather than successful empty responses. The router does not infer either condition from
+arbitrary exception text or an unstructured response body. Explicit custom providers use generic
+status mapping unless they are in the supported OpenAI-compatible provider set; the existing
+provider-omitted default remains OpenAI-compatible. HTTP status owns the public error type and
+deployment-health impact, while a trusted adapter classification owns specialized fallback
+selection. A recognized context or policy failure returned with a 5xx status therefore remains
+health-affecting and may try its specialized chain before the general chain. Unclassified 5xx
+responses use the general chain, and 429 remains rate-limit classified regardless of envelope text.
+Malformed JSON or response schemas behind a nominally successful provider status are also
+health-affecting general failures, and the upstream payload is never returned to the client. Empty
+chat choices, missing or mismatched embedding and rerank results, and empty speech audio are
+malformed successes. Unknown or malformed provider 4xx responses stop immediately and return a
+sanitized, stable gateway error. Anthropic `refusal` and `model_context_window_exceeded` success
+stop reasons select the content-policy and context-window chains respectively. Gemini policy
+terminal reasons select the content-policy chain; unsupported, malformed, and unknown terminal
+reasons fail closed through the general chain instead of becoming successful empty responses.
+Bedrock stream exception types retain their documented meaning even when their message contains a
+context or policy marker; only validation-like exceptions use those message allowlists.
+
+Streaming fallback is allowed only before the first downstream response frame. Provider role and
+metadata events are held in a bounded pre-commit buffer until output or a valid terminal event
+establishes a real response. OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock classified
+terminal events can therefore select a specialized fallback before output. Empty, terminal-only,
+and truncated pre-output streams are malformed successes and may use the general fallback chain.
+If a classified stop follows partial output, DeltaLLM completes that committed stream with
+`content_filter` or `length` instead of starting another provider attempt. Any other malformed
+committed stream is aborted, marked unhealthy, and never cached as a complete response.
+
+All three maps are immutable members of one routing-runtime generation. Each replica serializes the
+durable config load, subscriber application, generation publication, and rollback. Publication is
+fenced by the complete generation identity, so a slower reload cannot overwrite a newer grant or
+route snapshot even when both use the same route revision. A validation or subscriber failure leaves
+requests on the previous complete generation. A request that has already started remains pinned to
+the generation it acquired, including all of its fallback maps.
 
 ## Advanced Routing Controls
 

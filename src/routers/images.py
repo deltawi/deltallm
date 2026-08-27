@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from src.billing.cost import compute_billing_result
 from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
+from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import (
     _release_rate_limits,
@@ -26,11 +28,13 @@ from src.metrics import (
 )
 from src.models.errors import InvalidRequestError
 from src.models.requests import ImageGenerationRequest
+from src.providers.base import parse_provider_json_response, validate_provider_success_payload
 from src.providers.resolution import (
     normalize_openai_image_generation_payload,
     resolve_provider,
     resolve_upstream_model,
 )
+from src.router import ROUTING_MODE_CONTEXT_KEY
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
@@ -58,6 +62,23 @@ from src.services.model_visibility import (
 from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
 
 router = APIRouter(prefix="/v1", tags=["images"])
+
+
+def _is_valid_image_success_payload(data: Mapping[str, Any]) -> bool:
+    images = data.get("data")
+    if not isinstance(images, list) or not images:
+        return False
+    for item in images:
+        if not isinstance(item, Mapping):
+            return False
+        url = item.get("url")
+        encoded_image = item.get("b64_json")
+        if not (
+            (isinstance(url, str) and bool(url))
+            or (isinstance(encoded_image, str) and bool(encoded_image))
+        ):
+            return False
+    return True
 
 
 async def _execute_image_generation(
@@ -103,12 +124,14 @@ async def _execute_image_generation(
         ),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
+        status_error = httpx.HTTPStatusError(
             f"Upstream image generation failed with status {response.status_code}",
             request=httpx.Request("POST", f"{api_base}/images/generations"),
             response=response,
         )
-    data = response.json()
+        raise request.app.state.provider_error_mapper_registry.map_error(provider, status_error)
+    data = parse_provider_json_response(response)
+    validate_provider_success_payload(data, _is_valid_image_success_payload)
     data["_api_latency_ms"] = (perf_counter() - upstream_start) * 1000
     data["_api_base"] = api_base
     data["_deployment_model"] = params.get("model")
@@ -128,6 +151,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         audit_action=AuditAction.IMAGE_GENERATION_REQUEST,
     )
     auth = request.state.user_api_key
+    routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
     await acquire_preflight_capacity(request, auth=auth)
     ensure_model_allowed(
         auth,
@@ -135,6 +159,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         callable_target_grant_service=getattr(
             request.app.state, "callable_target_grant_service", None
         ),
+        callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),
@@ -162,9 +187,13 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
     finally:
         await release_preflight_capacity(request)
 
-    app_router = request.app.state.router
+    app_router = routing_runtime.router
     model_group = app_router.resolve_model_group(payload.model)
-    request_context = {"metadata": {}, "user_id": auth.user_id or auth.api_key}
+    request_context = {
+        "metadata": {},
+        "user_id": auth.user_id or auth.api_key,
+        ROUTING_MODE_CONTEXT_KEY: "image_generation",
+    }
     primary = app_router.require_deployment(
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
@@ -181,12 +210,13 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         capture_attempted_deployment(request, deployment)
 
     try:
-        data, served_deployment = await request.app.state.failover_manager.execute_with_failover(
+        data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_image_generation(request, payload, dep),
             return_deployment=True,
             on_attempt=track_attempt,
+            routing_context=request_context,
             **failover_kwargs,
         )
         update_served_route_decision(

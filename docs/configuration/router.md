@@ -34,6 +34,59 @@ Tip: check the effective `allowed_fails` value in the config your deployment act
 | `model_group_alias` | `{}` | Friendly names that map to real model groups |
 | `route_groups` | `[]` | File-defined route groups and membership |
 
+Each file-defined route group should declare one workload mode. For compatibility with older files,
+an omitted mode is inferred when all enabled, resolvable members have one deployment mode; an empty
+or unresolved legacy group falls back to `chat`. Mixed member modes are rejected. Declare `mode`
+explicitly for stable, warning-free configuration:
+
+```yaml
+router_settings:
+  route_groups:
+    - key: search-embeddings
+      mode: embedding
+      strategy: weighted
+      members:
+        - deployment_id: embeddings-primary
+          weight: 3
+        - deployment_id: embeddings-secondary
+          weight: 1
+```
+
+A request whose endpoint workload does not match the route group is rejected before shared
+routing-state reads. Invalid group/member combinations fail runtime snapshot validation and do not
+replace the last valid live registry.
+
+`allowed_fails: 0` starts cooldown on the first health-affecting provider failure. After
+`cooldown_time` expires, the router admits one shared-Redis half-open request for that deployment;
+successful recovery restores normal routing and failed recovery re-enters cooldown. Request-side
+validation, policy, budget, guardrail, cancellation, and local gateway-capacity failures are
+health-neutral. Background health checks are optional because request traffic can perform the
+bounded recovery transition.
+
+Operator-triggered health checks use a short-lived manual probe claim. After cooldown expiry they
+may own the same fenced recovery transition as request traffic or the background checker. During an
+active manual cooldown, a successful provider probe reports that the provider responded but does
+not restore routing health. A concurrent owned recovery returns HTTP `409` instead of running a
+second recovery probe.
+
+Health hashes use rolling 30-day retention, extended when a longer cooldown requires it. Mutable
+provider-health keys include an opaque deployment generation derived from the provider
+configuration and its durable incarnation. A late result from a retired provider configuration can
+therefore update only the retired generation. Runtime reload atomically publishes the new registry
+generation before attempting bounded, exact cleanup of retired health keys. Cleanup failure is
+reported as degraded maintenance and does not make a persisted model mutation fail. Metadata-only
+changes such as weight and priority retain the existing health generation and state.
+
+Router state currently targets the standalone Redis topology created by application bootstrap;
+Redis Cluster is not supported by its multi-key admission and health-transition scripts.
+Every router key is scoped as `deltallm:<app_env>:v1:<router-capability>:<identifiers>`. This is a
+schema cutover from the previous unscoped ephemeral router keys: drain replicas running the old
+binary before sending traffic to namespaced replicas, and use the same drain procedure for
+rollback. Do not run the two key schemas concurrently because admission and cooldown ownership
+would be split. Helm operators must follow the
+[router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md); chart upgrades are
+blocked until the drain is acknowledged and `strategy.type=Recreate` is selected.
+
 ## Supported Strategies
 
 These strategy names are valid today:
@@ -43,7 +96,7 @@ These strategy names are valid today:
 - `latency-based-routing`
 - `cost-based-routing`
 - `usage-based-routing`
-- `tag-based-routing`
+- `tag-based-routing` (deprecated compatibility alias for `weighted`)
 - `priority-based-routing`
 - `weighted`
 - `rate-limit-aware`
@@ -58,7 +111,8 @@ Short version:
 - `cost-based-routing`: use for lowest-cost routing
 - `usage-based-routing`: use to spread quota usage
 - `rate-limit-aware`: use to avoid hot deployments near RPM or TPM caps
-- `tag-based-routing`: use when tags decide eligibility and you want the route group to make that explicit
+- `tag-based-routing`: accepted for existing configuration only; migrate to `weighted` because tag
+  eligibility is applied before every strategy
 
 For non-text workloads, usage-aware routing can also use these deployment fields when they are configured:
 
@@ -73,19 +127,27 @@ See [Routing & Failover](../features/routing.md) for the full behavior and setup
 
 Route-group policies currently support:
 
-- `mode`
+- `mode` (deprecated input alias only)
 - `strategy`
 - `members`
 - `timeouts.global_ms` or `timeouts.global_seconds`
 - `retry.max_attempts`
 - `retry.retryable_error_classes`
 
-Helpful shortcut modes:
+Legacy mode aliases accepted on input:
 
 - `weighted` maps to `weighted`
 - `fallback` maps to `priority-based-routing`
 
 Do not treat `conditional` or `adaptive` as active runtime policy behaviors today.
+
+`strategy` is the canonical routing field. The policy `mode` field remains accepted as a deprecated
+input shortcut (`weighted` or `fallback`) and produces a warning; normalized new writes omit it. It
+is separate from the route group's workload `mode`. Existing policy history is not rewritten and
+remains readable and rollback-safe. When `members` is omitted, the policy inherits the group's
+enabled members. Newly saved policies treat an explicit list as authoritative. Policies created
+before this semantics version retain their legacy widening behavior, including when rolled back. A
+policy can disable an eligible member but cannot reactivate a group member disabled by an operator.
 
 ## Fallback Configuration
 
@@ -103,6 +165,41 @@ deltallm_settings:
     - gpt-4o:
         - claude-3-sonnet
 ```
+
+Provider adapters select the specialized context-window and content-policy maps from known error
+envelope fields for chat, embeddings, images, rerank, speech, and transcription. OpenAI-compatible
+and Azure OpenAI responses or stream events that end with `finish_reason: content_filter` are also
+content-policy failures. Raw exception text and malformed provider bodies never activate a
+specialized chain. Explicit custom providers use generic status mapping unless they are declared as
+one of the supported OpenAI-compatible providers; an omitted provider retains the existing implicit
+OpenAI-compatible behavior. HTTP status still owns the public error type and health impact. A
+recognized context or policy classification on a 5xx response remains health-affecting but may try
+its specialized chain first; an unclassified 5xx uses the general chain, and 429 remains a rate-limit
+failure regardless of envelope text. A malformed JSON or response schema behind a nominally
+successful provider status is a health-affecting provider failure and may use the general
+`fallbacks` map; its upstream payload is never returned to the client. This includes empty chat
+choices, missing or mismatched embedding and rerank results, and empty speech audio. Unknown or
+malformed 4xx responses stop with a sanitized gateway error. Anthropic Messages responses classify
+`refusal` as content policy and `model_context_window_exceeded` as context window before returning a
+nominal success. Gemini accepts only documented success terminal reasons; policy terminals use the
+content-policy chain and unsupported, malformed, or unknown terminal reasons fail closed through
+the general chain. For Bedrock streams, the documented exception type is authoritative: throttling
+and service exceptions cannot be reclassified by message text, while validation exceptions may use
+the bounded provider-specific context/content markers.
+
+No fallback starts after a streaming response frame has been sent. Provider role and metadata
+events are held in a bounded pre-commit buffer until output or a valid terminal event establishes a
+real response. This lets OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock classified terminal
+events select a specialized fallback when they arrive before output. Empty, terminal-only, and
+truncated pre-output streams are malformed successes and may use the general fallback chain. After
+partial output has committed a response, a classified stop terminates that stream with the compatible
+`content_filter` or `length` finish reason instead of starting another provider attempt. Any other
+malformed committed stream is aborted, marked unhealthy, and never cached as a complete response.
+
+Each replica serializes durable config loads, subscriber application, publication, and rollback.
+Runtime reloads publish all three immutable maps as one generation, and publication is fenced by
+the complete generation identity rather than only the route revision. A failed or superseded reload
+therefore cannot expose mixed fallback configuration or overwrite a newer authorization snapshot.
 
 ## Model Aliases
 

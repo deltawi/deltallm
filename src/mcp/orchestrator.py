@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from fastapi import Request
-
 from src.audit.actions import AuditAction
 from src.audit.delivery import AuditDeliveryClass
-from src.chat.audit import request_client_ip
+from src.guardrails.middleware import GuardrailMiddleware
 from src.models.errors import (
     InvalidRequestError,
     PermissionDeniedError,
@@ -23,6 +22,7 @@ from src.models.requests import (
     FunctionToolDefinition,
     MCPToolDefinition,
 )
+from src.models.responses import UserAPIKeyAuth
 from src.services.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
@@ -56,6 +56,21 @@ class ResolvedMCPTool:
     scope_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class MCPRequestContext:
+    request_headers: Mapping[str, str]
+    request_id: str | None
+    correlation_id: str | None
+    client_ip: str | None
+    user_agent: str | None
+
+
+MCPChatCall = Callable[
+    [ChatCompletionRequest],
+    Awaitable[tuple[dict[str, Any], float]],
+]
+
+
 def chat_request_has_mcp_tools(payload: ChatCompletionRequest) -> bool:
     return any(isinstance(tool, MCPToolDefinition) for tool in payload.tools or [])
 
@@ -76,7 +91,7 @@ class MCPChatOrchestrator:
 
     async def prepare_payload(
         self,
-        auth: Any,
+        auth: UserAPIKeyAuth,
         payload: ChatCompletionRequest,
     ) -> tuple[ChatCompletionRequest, dict[str, ResolvedMCPTool]]:
         requested_mcp_tools = [
@@ -150,11 +165,11 @@ class MCPChatOrchestrator:
     async def execute(
         self,
         *,
-        request: Request,
-        auth: Any,
+        request_context: MCPRequestContext,
+        auth: UserAPIKeyAuth,
         payload: ChatCompletionRequest,
-        execute_chat_call: Any,
-        guardrail_middleware: Any,
+        execute_chat_call: MCPChatCall,
+        guardrail_middleware: GuardrailMiddleware,
     ) -> tuple[dict[str, Any], float]:
         translated_payload, resolved_tools = await self.prepare_payload(auth, payload)
         if not resolved_tools:
@@ -197,7 +212,7 @@ class MCPChatOrchestrator:
                 tool_started = perf_counter()
                 tool_operation_id = str(uuid4())
                 await self._emit_tool_audit_attempt_event(
-                    request=request,
+                    request_context=request_context,
                     auth=auth,
                     namespaced_tool_name=tool_name,
                     server_key=resolved.server_key,
@@ -211,13 +226,13 @@ class MCPChatOrchestrator:
                         auth,
                         namespaced_tool_name=tool_name,
                         arguments=guarded_arguments,
-                        request_headers=dict(request.headers),
-                        request_id=request.headers.get("x-request-id"),
-                        correlation_id=request.headers.get("x-request-id"),
+                        request_headers=dict(request_context.request_headers),
+                        request_id=request_context.request_id,
+                        correlation_id=request_context.correlation_id,
                     )
                 except MCPToolNotFoundError as exc:
                     await self._emit_tool_audit_failure_event(
-                        request=request,
+                        request_context=request_context,
                         auth=auth,
                         namespaced_tool_name=tool_name,
                         server_key=resolved.server_key,
@@ -231,7 +246,7 @@ class MCPChatOrchestrator:
                     raise InvalidRequestError(message=str(exc)) from exc
                 except MCPApprovalRequiredError as exc:
                     await self._emit_tool_audit_failure_event(
-                        request=request,
+                        request_context=request_context,
                         auth=auth,
                         namespaced_tool_name=tool_name,
                         server_key=resolved.server_key,
@@ -250,7 +265,7 @@ class MCPChatOrchestrator:
                     ) from exc
                 except (MCPAccessDeniedError, MCPPolicyDeniedError) as exc:
                     await self._emit_tool_audit_failure_event(
-                        request=request,
+                        request_context=request_context,
                         auth=auth,
                         namespaced_tool_name=tool_name,
                         server_key=resolved.server_key,
@@ -264,7 +279,7 @@ class MCPChatOrchestrator:
                     raise PermissionDeniedError(message=str(exc)) from exc
                 except MCPRateLimitError as exc:
                     await self._emit_tool_audit_failure_event(
-                        request=request,
+                        request_context=request_context,
                         auth=auth,
                         namespaced_tool_name=tool_name,
                         server_key=resolved.server_key,
@@ -283,7 +298,7 @@ class MCPChatOrchestrator:
                     MCPError,
                 ) as exc:
                     await self._emit_tool_audit_failure_event(
-                        request=request,
+                        request_context=request_context,
                         auth=auth,
                         namespaced_tool_name=tool_name,
                         server_key=resolved.server_key,
@@ -304,7 +319,7 @@ class MCPChatOrchestrator:
                     result=result,
                 )
                 await self._emit_tool_audit_event(
-                    request=request,
+                    request_context=request_context,
                     auth=auth,
                     namespaced_tool_name=tool_name,
                     server_key=resolved.server_key,
@@ -399,8 +414,8 @@ class MCPChatOrchestrator:
     async def _run_tool_input_guardrails(
         self,
         *,
-        guardrail_middleware: Any,
-        auth: Any,
+        guardrail_middleware: GuardrailMiddleware,
+        auth: UserAPIKeyAuth,
         server_key: str,
         tool_name: str,
         arguments: dict[str, Any],
@@ -426,8 +441,8 @@ class MCPChatOrchestrator:
     async def _run_tool_output_guardrails(
         self,
         *,
-        guardrail_middleware: Any,
-        auth: Any,
+        guardrail_middleware: GuardrailMiddleware,
+        auth: UserAPIKeyAuth,
         server_key: str,
         tool_name: str,
         result: Any,
@@ -467,8 +482,8 @@ class MCPChatOrchestrator:
     async def _emit_tool_audit_event(
         self,
         *,
-        request: Request,
-        auth: Any,
+        request_context: MCPRequestContext,
+        auth: UserAPIKeyAuth,
         namespaced_tool_name: str,
         server_key: str,
         scope_type: str | None,
@@ -481,7 +496,7 @@ class MCPChatOrchestrator:
         audit_service = self.audit_service
         if audit_service is None:
             return
-        request_id = request.headers.get("x-request-id")
+        request_id = request_context.request_id
         await enqueue_audit_event(
             audit_service,
             AuditEventInput(
@@ -493,9 +508,9 @@ class MCPChatOrchestrator:
                 resource_type="mcp_tool",
                 resource_id=namespaced_tool_name,
                 request_id=request_id,
-                correlation_id=request_id,
-                ip=request_client_ip(request),
-                user_agent=request.headers.get("user-agent"),
+                correlation_id=request_context.correlation_id,
+                ip=request_context.client_ip,
+                user_agent=request_context.user_agent,
                 status="error" if bool(result_payload.get("is_error")) else "success",
                 latency_ms=int((perf_counter() - request_start) * 1000),
                 metadata={
@@ -518,8 +533,8 @@ class MCPChatOrchestrator:
     async def _emit_tool_audit_failure_event(
         self,
         *,
-        request: Request,
-        auth: Any,
+        request_context: MCPRequestContext,
+        auth: UserAPIKeyAuth,
         namespaced_tool_name: str,
         server_key: str,
         scope_type: str | None,
@@ -532,7 +547,7 @@ class MCPChatOrchestrator:
         audit_service = self.audit_service
         if audit_service is None:
             return
-        request_id = request.headers.get("x-request-id")
+        request_id = request_context.request_id
         await enqueue_audit_event(
             audit_service,
             AuditEventInput(
@@ -544,9 +559,9 @@ class MCPChatOrchestrator:
                 resource_type="mcp_tool",
                 resource_id=namespaced_tool_name,
                 request_id=request_id,
-                correlation_id=request_id,
-                ip=request_client_ip(request),
-                user_agent=request.headers.get("user-agent"),
+                correlation_id=request_context.correlation_id,
+                ip=request_context.client_ip,
+                user_agent=request_context.user_agent,
                 status="error",
                 latency_ms=int((perf_counter() - request_start) * 1000),
                 error_type=error.__class__.__name__,
@@ -567,8 +582,8 @@ class MCPChatOrchestrator:
     async def _emit_tool_audit_attempt_event(
         self,
         *,
-        request: Request,
-        auth: Any,
+        request_context: MCPRequestContext,
+        auth: UserAPIKeyAuth,
         namespaced_tool_name: str,
         server_key: str,
         scope_type: str | None,
@@ -577,7 +592,7 @@ class MCPChatOrchestrator:
         operation_id: str,
     ) -> None:
         audit_service = require_audit_service(self.audit_service)
-        request_id = request.headers.get("x-request-id")
+        request_id = request_context.request_id
         await enqueue_audit_event(
             audit_service,
             AuditEventInput(
@@ -589,9 +604,9 @@ class MCPChatOrchestrator:
                 resource_type="mcp_tool",
                 resource_id=namespaced_tool_name,
                 request_id=request_id,
-                correlation_id=request_id,
-                ip=request_client_ip(request),
-                user_agent=request.headers.get("user-agent"),
+                correlation_id=request_context.correlation_id,
+                ip=request_context.client_ip,
+                user_agent=request_context.user_agent,
                 status="attempted",
                 metadata={
                     "operation_id": operation_id,

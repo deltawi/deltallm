@@ -9,6 +9,7 @@ import httpx
 from fastapi import Request
 
 from src.audio.transcription_formats import render_srt, render_vtt
+from src.providers.base import parse_provider_json_response, validate_provider_success_payload
 from src.providers.resolution import resolve_upstream_model
 from src.router.router import Deployment
 from src.upstream_http import build_upstream_request_timeout_for_request
@@ -27,6 +28,22 @@ ELEVENLABS_STT_FORM_DEFAULT_KEYS = {
 ELEVENLABS_STT_QUERY_DEFAULT_KEYS = {"enable_logging"}
 
 
+def _is_valid_elevenlabs_stt_success_payload(data: Mapping[str, Any]) -> bool:
+    transcripts = data.get("transcripts")
+    if transcripts is not None:
+        return (
+            isinstance(transcripts, list)
+            and bool(transcripts)
+            and all(
+                isinstance(transcript, Mapping)
+                and "text" in transcript
+                and isinstance(transcript.get("text"), str)
+                for transcript in transcripts
+            )
+        )
+    return "text" in data and isinstance(data.get("text"), str)
+
+
 async def execute_elevenlabs_stt(
     *,
     request: Request,
@@ -43,7 +60,9 @@ async def execute_elevenlabs_stt(
     timeout_seconds: float,
 ) -> dict[str, Any]:
     defaults = _model_default_params(deployment.model_info)
-    upstream_model = resolve_upstream_model(deployment.deltallm_params, fallback_model=model) or model
+    upstream_model = (
+        resolve_upstream_model(deployment.deltallm_params, fallback_model=model) or model
+    )
     form_data = _build_elevenlabs_stt_form_data(
         model_id=upstream_model,
         language=language,
@@ -64,26 +83,18 @@ async def execute_elevenlabs_stt(
         timeout=build_upstream_request_timeout_for_request(request, timeout_seconds),
     )
     if response.status_code >= 400:
-        raise httpx.HTTPStatusError(
-            _format_elevenlabs_stt_error(response),
+        status_error = httpx.HTTPStatusError(
+            f"Upstream ElevenLabs STT call failed with status {response.status_code}",
             request=httpx.Request("POST", endpoint),
             response=response,
         )
+        raise request.app.state.provider_error_mapper_registry.map_error("elevenlabs", status_error)
 
-    try:
-        parsed_response = response.json()
-    except ValueError as exc:
-        error_request = httpx.Request("POST", endpoint)
-        error_response = httpx.Response(
-            502,
-            text="Upstream ElevenLabs STT call returned invalid JSON",
-            request=error_request,
-        )
-        raise httpx.HTTPStatusError(
-            "Upstream ElevenLabs STT call returned invalid JSON",
-            request=error_request,
-            response=error_response,
-        ) from exc
+    parsed_response = parse_provider_json_response(response)
+    validate_provider_success_payload(
+        parsed_response,
+        _is_valid_elevenlabs_stt_success_payload,
+    )
 
     data, billing_payload = _reshape_elevenlabs_transcription_response(
         requested_response_format=response_format,
@@ -211,7 +222,11 @@ def _normalize_elevenlabs_transcript_payload(response_payload: dict[str, Any]) -
         segments.extend(_elevenlabs_words_to_segments(words))
 
     if not text_parts and all_words:
-        text_parts.append(_join_elevenlabs_tokens(str(word.get("text") or word.get("word") or "") for word in all_words))
+        text_parts.append(
+            _join_elevenlabs_tokens(
+                str(word.get("text") or word.get("word") or "") for word in all_words
+            )
+        )
 
     normalized: dict[str, Any] = {"text": "\n".join(text_parts)}
     if language:
@@ -407,25 +422,6 @@ def _join_elevenlabs_tokens(tokens: Any) -> str:
         else:
             text = f"{text} {value}"
     return text
-
-
-def _format_elevenlabs_stt_error(response: httpx.Response) -> str:
-    upstream_msg = response.text
-    try:
-        upstream_body = response.json()
-    except Exception:
-        upstream_body = None
-
-    if isinstance(upstream_body, Mapping):
-        detail = upstream_body.get("detail")
-        if isinstance(detail, Mapping):
-            upstream_msg = str(detail.get("message") or detail.get("detail") or upstream_msg)
-        elif detail:
-            upstream_msg = str(detail)
-        else:
-            upstream_msg = str(upstream_body.get("message") or upstream_msg)
-
-    return f"Upstream ElevenLabs STT call failed with status {response.status_code}: {upstream_msg}"
 
 
 def _float_or_none(value: Any) -> float | None:

@@ -554,6 +554,10 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_scheduler_max_candidate_jobs_per_flow` | `50` | Bound candidate job reads per active flow |
 | `embeddings_batch_small_job_fast_lane_enabled` | `false` | Leave disabled unless rank-based `smart_v1` scheduling is not enough |
 
+The scheduler counts a healthy deployment's configured capacity normally. An unhealthy deployment
+whose cooldown has expired contributes exactly one temporary slot for the shared half-open recovery
+attempt; it does not expose its full configured capacity until that attempt succeeds.
+
 #### Lease and heartbeat
 
 The worker holds leases on jobs and items to prevent duplicate work across instances.

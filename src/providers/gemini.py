@@ -2,15 +2,127 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from typing import Any, AsyncIterator
 
 import httpx
 
-from src.models.errors import InvalidRequestError
+from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
-from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.base import (
+    ProviderAdapter,
+    ProviderErrorDetails,
+    classify_provider_failure,
+    invalid_provider_response_error,
+    is_valid_provider_token_count,
+    map_standard_provider_error,
+    map_standard_provider_status_error,
+    provider_error_details,
+    validate_provider_success_payload,
+)
 from src.providers.healthcheck import is_provider_healthy
+
+_CONTEXT_IDENTIFIERS = frozenset(
+    {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "input_too_long",
+    }
+)
+_CONTENT_IDENTIFIERS = frozenset(
+    {
+        "blocklist",
+        "content_blocked",
+        "escalation",
+        "image_prohibited_content",
+        "image_recitation",
+        "image_safety",
+        "prohibited_content",
+        "recitation",
+        "safety",
+        "spii",
+    }
+)
+_CONTEXT_MESSAGE_MARKERS = ("input context is too long", "prompt is too long")
+_CONTENT_MESSAGE_MARKERS = ("blocked due to safety", "prohibited content")
+_SUCCESS_FINISH_REASONS = frozenset({"max_tokens", "stop"})
+
+
+def _classify_gemini_failure(
+    details: ProviderErrorDetails,
+) -> FailureClassification | None:
+    return classify_provider_failure(
+        details,
+        context_identifiers=_CONTEXT_IDENTIFIERS,
+        content_identifiers=_CONTENT_IDENTIFIERS,
+        context_message_markers=_CONTEXT_MESSAGE_MARKERS,
+        content_message_markers=_CONTENT_MESSAGE_MARKERS,
+    )
+
+
+def _gemini_response_failure(data: dict[str, Any]) -> ProxyError | None:
+    identifiers: set[str] = set()
+    block_reason: str | None = None
+    prompt_feedback = data.get("promptFeedback")
+    if isinstance(prompt_feedback, dict):
+        raw_block_reason = prompt_feedback.get("blockReason")
+        if isinstance(raw_block_reason, str) and raw_block_reason.strip():
+            block_reason = raw_block_reason.strip().lower()
+            identifiers.add(block_reason)
+
+    finish_reason: str | None = None
+    candidates = data.get("candidates")
+    if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict):
+        raw_finish_reason = candidates[0].get("finishReason")
+        if isinstance(raw_finish_reason, str) and raw_finish_reason.strip():
+            finish_reason = raw_finish_reason.strip().lower()
+            identifiers.add(finish_reason)
+
+    classification = _classify_gemini_failure(
+        ProviderErrorDetails(status_code=400, identifiers=frozenset(identifiers))
+    )
+    if classification is not None:
+        return map_standard_provider_status_error(
+            400,
+            failure_classification=classification,
+        )
+    if block_reason is not None or (
+        finish_reason is not None and finish_reason not in _SUCCESS_FINISH_REASONS
+    ):
+        return invalid_provider_response_error()
+    return None
+
+
+def reject_gemini_failure_response(data: dict[str, Any]) -> None:
+    """Reject documented nominal-success envelopes that represent failure."""
+
+    if failure := _gemini_response_failure(data):
+        raise failure
+
+
+def _is_valid_gemini_success_payload(data: Mapping[str, Any]) -> bool:
+    candidates = data.get("candidates")
+    usage = data.get("usageMetadata")
+    if (
+        not isinstance(candidates, list)
+        or not candidates
+        or not isinstance(candidates[0], Mapping)
+        or not isinstance(usage, Mapping)
+    ):
+        return False
+    first = candidates[0]
+    content = first.get("content")
+    parts = content.get("parts") if isinstance(content, Mapping) else None
+    return (
+        isinstance(first.get("finishReason"), str)
+        and bool(str(first["finishReason"]).strip())
+        and isinstance(parts, list)
+        and all(isinstance(part, Mapping) for part in parts)
+        and is_valid_provider_token_count(usage.get("promptTokenCount"))
+        and is_valid_provider_token_count(usage.get("candidatesTokenCount"))
+        and is_valid_provider_token_count(usage.get("totalTokenCount"))
+    )
 
 
 class GeminiAdapter(ProviderAdapter):
@@ -30,7 +142,10 @@ class GeminiAdapter(ProviderAdapter):
             role = message.role
             content = message.content
             if isinstance(content, list):
-                text = "\n".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content)
+                text = "\n".join(
+                    str(part.get("text", "")) if isinstance(part, dict) else str(part)
+                    for part in content
+                )
             else:
                 text = str(content)
             if role == "system":
@@ -40,7 +155,9 @@ class GeminiAdapter(ProviderAdapter):
             gemini_role = "model" if role == "assistant" else "user"
             contents.append({"role": gemini_role, "parts": [{"text": text}]})
 
-        payload: dict[str, Any] = {"contents": contents or [{"role": "user", "parts": [{"text": ""}]}]}
+        payload: dict[str, Any] = {
+            "contents": contents or [{"role": "user", "parts": [{"text": ""}]}]
+        }
         if system_parts:
             payload["systemInstruction"] = {"parts": system_parts}
 
@@ -52,26 +169,34 @@ class GeminiAdapter(ProviderAdapter):
         if canonical_request.max_tokens is not None:
             generation_config["maxOutputTokens"] = canonical_request.max_tokens
         if canonical_request.stop:
-            generation_config["stopSequences"] = canonical_request.stop if isinstance(canonical_request.stop, list) else [canonical_request.stop]
+            generation_config["stopSequences"] = (
+                canonical_request.stop
+                if isinstance(canonical_request.stop, list)
+                else [canonical_request.stop]
+            )
         if generation_config:
             payload["generationConfig"] = generation_config
 
         return payload
 
-    async def translate_response(self, provider_response: Any, model_name: str) -> ChatCompletionResponse:
-        data = provider_response if isinstance(provider_response, dict) else json.loads(provider_response)
+    async def translate_response(
+        self, provider_response: Any, model_name: str
+    ) -> ChatCompletionResponse:
+        data = (
+            provider_response
+            if isinstance(provider_response, dict)
+            else json.loads(provider_response)
+        )
+        reject_gemini_failure_response(data)
+        validate_provider_success_payload(data, _is_valid_gemini_success_payload)
         candidates = data.get("candidates") or []
         first = candidates[0] if candidates else {}
         content = first.get("content") or {}
         parts = content.get("parts") or []
         text = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
-        finish_reason_map = {
-            "STOP": "stop",
-            "MAX_TOKENS": "length",
-            "SAFETY": "content_filter",
-            "RECITATION": "content_filter",
-        }
-        finish_reason = finish_reason_map.get(str(first.get("finishReason") or "STOP"), "stop")
+        finish_reason = (
+            "length" if first["finishReason"].strip().lower() == "max_tokens" else "stop"
+        )
 
         usage = data.get("usageMetadata") or {}
         prompt_tokens = int(usage.get("promptTokenCount") or 0)
@@ -109,12 +234,16 @@ class GeminiAdapter(ProviderAdapter):
             yield ""
         raise InvalidRequestError(message="Gemini streaming is not supported yet")
 
-    def map_error(self, provider_error: Exception) -> Exception:
-        status = provider_error.response.status_code if isinstance(provider_error, httpx.HTTPStatusError) else None
+    def map_error(
+        self,
+        provider_error: Exception,
+        *,
+        details: ProviderErrorDetails | None = None,
+    ) -> ProxyError:
+        classification = _classify_gemini_failure(details or provider_error_details(provider_error))
         return map_standard_provider_error(
             provider_error,
-            invalid_request_message=f"Provider rejected request: {status}",
-            rate_limit_message=f"Provider rate limited request: {status}",
+            failure_classification=classification,
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:

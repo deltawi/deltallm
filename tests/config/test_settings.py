@@ -824,6 +824,12 @@ def test_route_group_config_normalizes_access_groups():
     assert group.model_dump()["access_groups"] == ["beta", "support"]
 
 
+def test_route_group_config_preserves_omitted_legacy_workload_mode():
+    group = RouteGroupConfig.model_validate({"key": "support-fast"})
+
+    assert group.mode is None
+
+
 @pytest.mark.parametrize(
     "value",
     [

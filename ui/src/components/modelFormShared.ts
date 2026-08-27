@@ -7,7 +7,7 @@ import {
   Volume2,
   type LucideIcon,
 } from 'lucide-react';
-import type { ModelDeploymentDetail } from '../lib/api';
+import type { ModelDeploymentDetail, ModelWritePayload } from '../lib/api';
 import { normalizeProvider, supportsCustomUpstreamAuthProvider } from '../lib/providers';
 
 export type ModelMode =
@@ -99,12 +99,7 @@ export interface ModelFormValues {
   batch_output_cost_per_token: string;
 }
 
-export interface ModelPayload {
-  model_name: string;
-  named_credential_id?: string | null;
-  deltallm_params: Record<string, unknown>;
-  model_info: Record<string, unknown>;
-}
+export type ModelPayload = ModelWritePayload;
 
 export const EMPTY_FORM: ModelFormValues = {
   mode: 'chat',

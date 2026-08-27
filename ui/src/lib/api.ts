@@ -1,6 +1,7 @@
-import { apiFetch } from './apiClient';
-export { ApiError, structuredApiErrorDetail } from './apiClient';
-export type { StructuredApiErrorDetail } from './apiClient';
+import { apiFetch, withQuery } from './api/transport';
+
+export { ApiError, structuredApiErrorDetail } from './api/transport';
+export type { StructuredApiErrorDetail } from './api/transport';
 
 export function reportingRequestInit(signal: AbortSignal, forceRefresh = false): RequestInit {
   return forceRefresh
@@ -30,6 +31,12 @@ export interface SpendLogsPagination {
 export interface Paginated<T> {
   data: T[];
   pagination: Pagination;
+}
+
+export interface HealthResponse {
+  liveliness?: string;
+  readiness?: { status?: string };
+  [key: string]: unknown;
 }
 
 export interface InvitationAcceptResult {
@@ -155,26 +162,6 @@ export interface SpendFeatureStatus {
   cache_enabled: boolean;
   reporting_api_version?: number;
   capabilities?: SpendCapabilities;
-}
-
-export type ProviderHealthStatus = 'healthy' | 'degraded' | 'down';
-
-export interface ProviderHealthSummaryRow {
-  provider: string;
-  models: number;
-  healthy_models: number;
-  unhealthy_models: number;
-  status: ProviderHealthStatus;
-}
-
-export interface ProviderHealthSummary {
-  total_models: number;
-  providers: ProviderHealthSummaryRow[];
-  summary: {
-    total_providers: number;
-    active_providers: number;
-    down_providers: number;
-  };
 }
 
 export interface ServiceAccount {
@@ -585,13 +572,6 @@ type ScopedAssetAccessParams = AssetAccessGroupPageParams & {
   include_targets?: boolean;
 };
 
-export interface ProviderPreset {
-  provider: string;
-  api_base: string | null;
-  compat: string;
-  supported_modes: string[];
-}
-
 export interface NamedCredential {
   credential_id: string;
   name: string;
@@ -604,6 +584,7 @@ export interface NamedCredential {
   updated_at?: string | null;
   usage_count?: number;
   linked_deployments?: Array<{ deployment_id: string; model_name: string }>;
+  warnings?: string[];
 }
 
 export interface InlineCredentialGroup {
@@ -615,74 +596,18 @@ export interface InlineCredentialGroup {
   deployments: Array<{ deployment_id: string; model_name: string }>;
 }
 
-export interface ProviderModelOption {
-  id: string;
-  label: string;
-  provider: string;
-  source: 'catalog' | 'provider_api' | 'catalog+provider_api';
-  supported_modes: string[];
-  known_metadata: Record<string, number | null> | null;
-}
-
-export interface ProviderModelDiscoveryPayload {
-  provider: string;
-  mode?: string | null;
-  named_credential_id?: string | null;
-  api_key?: string | null;
-  api_base?: string | null;
-  api_version?: string | null;
-  auth_header_name?: string | null;
-  auth_header_format?: string | null;
-}
-
-export interface ProviderModelDiscoveryResponse {
-  data: ProviderModelOption[];
-  warnings: string[];
-}
-
-export interface DeploymentHealth {
-  healthy: boolean;
-  in_cooldown: boolean;
-  consecutive_failures: number;
-  last_error: string | null;
-  last_error_at: number | null;
-  last_success_at: number | null;
-}
-
-export interface ModelDeploymentDetail {
-  deployment_id: string;
-  model_name: string;
-  provider: string;
-  mode?: string;
-  credential_source?: 'inline' | 'named';
-  named_credential_id?: string | null;
-  named_credential_name?: string | null;
-  inline_credentials_present?: boolean;
-  connection_summary?: {
-    api_base?: string | null;
-    api_version?: string | null;
-    region?: string | null;
-    auth_header_name?: string | null;
-    custom_auth_label?: string | null;
-  };
-  healthy?: boolean;
-  health?: DeploymentHealth;
-  deltallm_params: Record<string, any>;
-  model_info: Record<string, any>;
-}
-
 export const callableTargets = {
   list: (params?: { search?: string; target_type?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<CallableTargetListItem>>(withQuery('/ui/api/callable-targets', params as any)),
+    apiFetch<Paginated<CallableTargetListItem>>(withQuery('/ui/api/callable-targets', params)),
   listAccessGroups: (params?: { search?: string; include_members?: boolean; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<CallableTargetAccessGroupListItem>>(withQuery('/ui/api/callable-target-access-groups', params as any)),
+    apiFetch<Paginated<CallableTargetAccessGroupListItem>>(withQuery('/ui/api/callable-target-access-groups', params)),
   listAll: async (params?: { search?: string; target_type?: string }) => {
     const limit = 500;
     let offset = 0;
     let items: CallableTargetListItem[] = [];
     while (true) {
       const page = await apiFetch<Paginated<CallableTargetListItem>>(
-        withQuery('/ui/api/callable-targets', { ...(params || {}), limit, offset } as any),
+        withQuery('/ui/api/callable-targets', { ...(params || {}), limit, offset }),
       );
       items = items.concat(page.data || []);
       if (!page.pagination?.has_more) {
@@ -739,21 +664,8 @@ export interface AuditListResponse {
   pagination: Pagination;
 }
 
-function withQuery(path: string, params?: Record<string, unknown>): string {
-  if (!params) return path;
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === null) continue;
-    const s = String(v);
-    if (!s.trim()) continue;
-    qs.set(k, s);
-  }
-  const suffix = qs.toString();
-  return suffix ? `${path}?${suffix}` : path;
-}
-
 export const health = {
-  check: () => apiFetch<any>('/health'),
+  check: () => apiFetch<HealthResponse>('/health'),
 };
 
 export const spend = {
@@ -795,7 +707,7 @@ export const spend = {
     const qs = new URLSearchParams({ group_by });
     if (start_date) qs.set('start_date', start_date);
     if (end_date) qs.set('end_date', end_date);
-    return apiFetch<any>(`/ui/api/spend/report?${qs.toString()}`, opts);
+    return apiFetch<unknown>(`/ui/api/spend/report?${qs.toString()}`, opts);
   },
   groupedReport: (
     group_by: SpendGroupBy,
@@ -843,28 +755,28 @@ export const audit = {
   exportUrl: (params?: Record<string, unknown>) => withQuery('/ui/api/audit/export', params),
 };
 
-export const models = {
-  list: (params?: { search?: string; provider?: string; mode?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<any>>(withQuery('/ui/api/models', params as any)),
-  providerHealthSummary: () => apiFetch<ProviderHealthSummary>('/ui/api/models/provider-health-summary'),
-  providerPresets: () => apiFetch<{ data: ProviderPreset[] }>('/ui/api/provider-presets'),
-  discoverProviderModels: (payload: ProviderModelDiscoveryPayload) =>
-    apiFetch<ProviderModelDiscoveryResponse>('/ui/api/provider-models/discover', { method: 'POST', json: payload }),
-  get: (deploymentId: string) => apiFetch<ModelDeploymentDetail>(`/ui/api/models/${encodeURIComponent(deploymentId)}`),
-  checkHealth: (deploymentId: string) =>
-    apiFetch<{ deployment_id: string; healthy: boolean; health: DeploymentHealth; message: string; status_code?: number | null; checked_at: number }>(
-      `/ui/api/models/${encodeURIComponent(deploymentId)}/health-check`,
-      { method: 'POST' },
-    ),
-  create: (payload: any) => apiFetch<any>('/ui/api/models', { method: 'POST', json: payload }),
-  update: (deploymentId: string, payload: any) =>
-    apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`, { method: 'PUT', json: payload }),
-  delete: (deploymentId: string) => apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`, { method: 'DELETE' }),
-};
+export { models } from './api/models';
+export type {
+  DeploymentHealth,
+  ModelDeleteResponse,
+  ModelDeploymentDetail,
+  ModelInfo,
+  ModelListResponse,
+  ModelMutationResponse,
+  ModelRuntimeParams,
+  ModelWritePayload,
+  ProviderHealthStatus,
+  ProviderHealthSummary,
+  ProviderHealthSummaryRow,
+  ProviderModelDiscoveryPayload,
+  ProviderModelDiscoveryResponse,
+  ProviderModelOption,
+  ProviderPreset,
+} from './api/models';
 
 export const namedCredentials = {
   list: (params?: { provider?: string }) =>
-    apiFetch<{ data: NamedCredential[] }>(withQuery('/ui/api/named-credentials', params as any)),
+    apiFetch<{ data: NamedCredential[] }>(withQuery('/ui/api/named-credentials', params)),
   get: (credentialId: string) =>
     apiFetch<NamedCredential>(`/ui/api/named-credentials/${encodeURIComponent(credentialId)}`),
   create: (payload: {
@@ -892,93 +804,32 @@ export const namedCredentials = {
   }) => apiFetch<{
     credential: NamedCredential;
     converted_deployments: Array<{ deployment_id: string; model_name: string }>;
+    warnings: string[];
   }>('/ui/api/named-credentials/convert-inline-group', { method: 'POST', json: payload }),
 };
 
-export interface RouteGroup {
-  route_group_id: string;
-  group_key: string;
-  name: string | null;
-  mode: string;
-  routing_strategy: string | null;
-  enabled: boolean;
-  member_count: number;
-  metadata: Record<string, unknown> | null;
-  default_prompt?: { template_key: string; label?: string | null } | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface RouteGroupMember {
-  membership_id: string;
-  route_group_id: string;
-  deployment_id: string;
-  enabled: boolean;
-  weight: number | null;
-  priority: number | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface RouteGroupMemberDetail extends RouteGroupMember {
-  model_name?: string | null;
-  provider?: string | null;
-  mode?: string | null;
-  healthy?: boolean | null;
-}
-
-export interface RoutePolicy {
-  route_policy_id: string;
-  route_group_id: string;
-  version: number;
-  status: string;
-  policy_json: Record<string, unknown>;
-  published_at: string | null;
-  published_by: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export const routeGroups = {
-  list: (params?: { search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<RouteGroup>>(withQuery('/ui/api/route-groups', params as any)),
-  get: (groupKey: string) =>
-    apiFetch<{ group: RouteGroup; members: RouteGroupMemberDetail[]; policy: RoutePolicy | null }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`),
-  create: (payload: any) => apiFetch<RouteGroup>('/ui/api/route-groups', { method: 'POST', json: payload }),
-  update: (groupKey: string, payload: any) =>
-    apiFetch<RouteGroup>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, { method: 'PUT', json: payload }),
-  delete: (groupKey: string) => apiFetch<{ deleted: boolean }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, { method: 'DELETE' }),
-  members: (groupKey: string) =>
-    apiFetch<RouteGroupMember[]>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/members`),
-  upsertMember: (groupKey: string, payload: any) =>
-    apiFetch<RouteGroupMember>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/members`, { method: 'POST', json: payload }),
-  removeMember: (groupKey: string, deploymentId: string) =>
-    apiFetch<{ deleted: boolean }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/members/${encodeURIComponent(deploymentId)}`, { method: 'DELETE' }),
-  getPolicy: (groupKey: string) =>
-    apiFetch<{ group_key: string; policy: RoutePolicy | null }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy`),
-  listPolicies: (groupKey: string) =>
-    apiFetch<{ group_key: string; policies: RoutePolicy[] }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/policies`),
-  validatePolicy: (groupKey: string, payload: any) =>
-    apiFetch<{ group_key: string; valid: boolean; policy: Record<string, unknown>; warnings: string[] }>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/validate`,
-      { method: 'POST', json: payload }
-    ),
-  savePolicyDraft: (groupKey: string, payload: any) =>
-    apiFetch<{ group_key: string; policy: RoutePolicy; warnings: string[] }>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/draft`,
-      { method: 'POST', json: payload }
-    ),
-  publishPolicy: (groupKey: string, payload?: any) =>
-    apiFetch<{ group_key: string; policy: RoutePolicy; warnings: string[] }>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/publish`,
-      { method: 'POST', json: payload ?? {} }
-    ),
-  rollbackPolicy: (groupKey: string, version: number) =>
-    apiFetch<{ group_key: string; policy: RoutePolicy; rolled_back_from_version: number }>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/rollback`,
-      { method: 'POST', json: { version } }
-  ),
-};
+export { routeGroups } from './api/routeGroups';
+export type {
+  DeleteRouteGroupResponse,
+  MutationWarnings,
+  RollbackRoutePolicyResponse,
+  RouteGroup,
+  RouteGroupBinding,
+  RouteGroupListResponse,
+  RouteGroupMember,
+  RouteGroupMemberDetail,
+  RouteGroupMemberMutationResponse,
+  RouteGroupMemberWritePayload,
+  RouteGroupMutationResponse,
+  RouteGroupWritePayload,
+  RoutePolicy,
+  RoutePolicyMutationResponse,
+  RoutePolicySimulationAttempt,
+  RoutePolicySimulationOutcome,
+  RoutePolicySimulationRequest,
+  RoutePolicySimulationResponse,
+  RoutePolicySimulationSelection,
+} from './api/routeGroups';
 
 export interface PromptTemplate {
   prompt_template_id: string;
@@ -1036,20 +887,25 @@ export interface PromptBinding {
   updated_at?: string | null;
 }
 
+export interface PromptResolutionCandidate {
+  template_key?: string;
+  [key: string]: unknown;
+}
+
 export const promptRegistry = {
   listTemplates: (params?: { search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<PromptTemplate>>(withQuery('/ui/api/prompt-registry/templates', params as any)),
+    apiFetch<Paginated<PromptTemplate>>(withQuery('/ui/api/prompt-registry/templates', params)),
   getTemplate: (templateKey: string) =>
     apiFetch<{ template: PromptTemplate; versions: PromptVersion[]; labels: PromptLabel[]; bindings: PromptBinding[] }>(
       `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`
     ),
-  createTemplate: (payload: any) =>
+  createTemplate: (payload: object) =>
     apiFetch<PromptTemplate>('/ui/api/prompt-registry/templates', { method: 'POST', json: payload }),
-  updateTemplate: (templateKey: string, payload: any) =>
+  updateTemplate: (templateKey: string, payload: object) =>
     apiFetch<PromptTemplate>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'PUT', json: payload }),
   deleteTemplate: (templateKey: string) =>
     apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'DELETE' }),
-  createVersion: (templateKey: string, payload: any) =>
+  createVersion: (templateKey: string, payload: object) =>
     apiFetch<PromptVersion>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/versions`, { method: 'POST', json: payload }),
   publishVersion: (templateKey: string, version: number) =>
     apiFetch<PromptVersion>(
@@ -1058,7 +914,7 @@ export const promptRegistry = {
     ),
   listLabels: (templateKey: string) =>
     apiFetch<PromptLabel[]>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`),
-  assignLabel: (templateKey: string, payload: any) =>
+  assignLabel: (templateKey: string, payload: object) =>
     apiFetch<PromptLabel>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`, { method: 'POST', json: payload }),
   deleteLabel: (templateKey: string, label: string) =>
     apiFetch<{ deleted: boolean }>(
@@ -1066,15 +922,18 @@ export const promptRegistry = {
       { method: 'DELETE' }
     ),
   listBindings: (params?: { scope_type?: string; scope_id?: string; template_key?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<PromptBinding>>(withQuery('/ui/api/prompt-registry/bindings', params as any)),
-  upsertBinding: (payload: any) =>
+    apiFetch<Paginated<PromptBinding>>(withQuery('/ui/api/prompt-registry/bindings', params)),
+  upsertBinding: (payload: object) =>
     apiFetch<PromptBinding>('/ui/api/prompt-registry/bindings', { method: 'POST', json: payload }),
   deleteBinding: (bindingId: string) =>
     apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE' }),
-  dryRunRender: (payload: any) =>
-    apiFetch<any>('/ui/api/prompt-registry/render', { method: 'POST', json: payload }),
-  previewResolution: (payload: any) =>
-    apiFetch<{ winner: any; candidates: any[] }>('/ui/api/prompt-registry/preview-resolution', { method: 'POST', json: payload }),
+  dryRunRender: (payload: object) =>
+    apiFetch<Record<string, unknown>>('/ui/api/prompt-registry/render', { method: 'POST', json: payload }),
+  previewResolution: (payload: object) =>
+    apiFetch<{
+      winner: PromptResolutionCandidate | null;
+      candidates: PromptResolutionCandidate[];
+    }>('/ui/api/prompt-registry/preview-resolution', { method: 'POST', json: payload }),
 };
 
 export interface Tier {
@@ -1413,6 +1272,30 @@ export interface OrganizationCreatePayload {
   callable_target_bindings?: Array<{ callable_key: string }>;
 }
 
+export interface TeamRecord {
+  team_id: string;
+  team_alias?: string | null;
+  organization_id?: string | null;
+  max_budget?: number | null;
+  spend?: number | null;
+  rpm_limit?: number | null;
+  tpm_limit?: number | null;
+  rph_limit?: number | null;
+  rpd_limit?: number | null;
+  tpd_limit?: number | null;
+  blocked?: boolean;
+  member_count?: number;
+  self_service_keys_enabled?: boolean;
+  self_service_max_keys_per_user?: number | null;
+  self_service_budget_ceiling?: number | null;
+  self_service_require_expiry?: boolean;
+  self_service_max_expiry_days?: number | null;
+  capabilities?: Record<string, boolean>;
+  created_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+}
+
 export interface TierPolicySnapshotInfo {
   etag: string;
   generated_at: string;
@@ -1653,9 +1536,37 @@ export interface TierCapacityBoostPayload {
   reason?: string | null;
 }
 
+export interface SettingsResponse {
+  router_settings?: {
+    routing_strategy?: string;
+    num_retries?: number;
+    timeout?: number;
+    cooldown_time?: number;
+    retry_after?: number;
+    allowed_fails?: number;
+  };
+  general_settings?: {
+    instance_name?: string;
+    cache_enabled?: boolean;
+    cache_backend?: string;
+    cache_ttl?: number;
+    background_health_checks?: boolean;
+    health_check_interval?: number;
+    log_level?: string;
+    tier_policy_mode?: string;
+    ui_branding?: Partial<UIBrandingResponse>;
+  };
+  deltallm_settings?: {
+    fallbacks?: Array<Record<string, string[]>>;
+    context_window_fallbacks?: Array<Record<string, string[]>>;
+    content_policy_fallbacks?: Array<Record<string, string[]>>;
+  };
+}
+
 export const settings = {
-  get: () => apiFetch<any>('/ui/api/settings'),
-  update: (payload: any) => apiFetch<any>('/ui/api/settings', { method: 'PUT', json: payload }),
+  get: () => apiFetch<SettingsResponse>('/ui/api/settings'),
+  update: (payload: object) =>
+    apiFetch<SettingsResponse>('/ui/api/settings', { method: 'PUT', json: payload }),
 };
 
 export interface UIBrandingResponse {
@@ -1869,24 +1780,24 @@ export const tiers = {
 
 export const organizations = {
   list: (params?: { search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<OrganizationRecord>>(withQuery('/ui/api/organizations', params as any)),
+    apiFetch<Paginated<OrganizationRecord>>(withQuery('/ui/api/organizations', params)),
   get: (orgId: string) => apiFetch<OrganizationRecord>(`/ui/api/organizations/${encodeURIComponent(orgId)}`),
   create: (payload: OrganizationCreatePayload) =>
     apiFetch<OrganizationRecord>('/ui/api/organizations', { method: 'POST', json: payload }),
-  update: (orgId: string, payload: any) =>
-    apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}`, { method: 'PUT', json: payload }),
-  members: (orgId: string) => apiFetch<any[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`),
+  update: (orgId: string, payload: object) =>
+    apiFetch<OrganizationRecord>(`/ui/api/organizations/${encodeURIComponent(orgId)}`, { method: 'PUT', json: payload }),
+  members: (orgId: string) => apiFetch<Record<string, unknown>[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`),
   memberCandidates: (orgId: string, params?: { search?: string; limit?: number }) =>
-    apiFetch<any[]>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/member-candidates`, params as any)),
-  addMember: (orgId: string, payload: any) =>
-    apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`, { method: 'POST', json: payload }),
+    apiFetch<Record<string, unknown>[]>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/member-candidates`, params)),
+  addMember: (orgId: string, payload: object) =>
+    apiFetch<Record<string, unknown>>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`, { method: 'POST', json: payload }),
   removeMember: (orgId: string, membershipId: string) =>
-    apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
-  teams: (orgId: string) => apiFetch<any[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/teams`),
+    apiFetch<{ deleted: boolean }>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
+  teams: (orgId: string) => apiFetch<TeamRecord[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/teams`),
   assetVisibility: (orgId: string, params?: AssetVisibilityParams) =>
-    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-visibility`, params as any)),
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-visibility`, params)),
   assetAccess: (orgId: string, params?: ScopedAssetAccessParams) =>
-    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, params as any)),
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, params)),
   updateAssetAccess: (orgId: string, payload: { mode?: string; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, { method: 'PUT', json: payload }),
   tierAssignments: (orgId: string, params?: { enabled?: boolean | string }) =>
@@ -1913,10 +1824,10 @@ export interface SelfServicePolicy {
 
 export const teams = {
   list: (params?: { search?: string; organization_id?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<any>>(withQuery('/ui/api/teams', params as any)),
-  get: (teamId: string) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`),
+    apiFetch<Paginated<TeamRecord>>(withQuery('/ui/api/teams', params)),
+  get: (teamId: string) => apiFetch<TeamRecord>(`/ui/api/teams/${encodeURIComponent(teamId)}`),
   getSelfServicePolicy: async (teamId: string): Promise<SelfServicePolicy> => {
-    const t = await apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`);
+    const t = await apiFetch<TeamRecord>(`/ui/api/teams/${encodeURIComponent(teamId)}`);
     return {
       self_service_keys_enabled: !!t.self_service_keys_enabled,
       self_service_max_keys_per_user: t.self_service_max_keys_per_user ?? null,
@@ -1925,38 +1836,38 @@ export const teams = {
       self_service_max_expiry_days: t.self_service_max_expiry_days ?? null,
     };
   },
-  create: (payload: any) => apiFetch<any>('/ui/api/teams', { method: 'POST', json: payload }),
-  update: (teamId: string, payload: any) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'PUT', json: payload }),
-  delete: (teamId: string) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'DELETE' }),
-  members: (teamId: string) => apiFetch<any[]>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`),
+  create: (payload: object) => apiFetch<TeamRecord>('/ui/api/teams', { method: 'POST', json: payload }),
+  update: (teamId: string, payload: object) => apiFetch<TeamRecord>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'PUT', json: payload }),
+  delete: (teamId: string) => apiFetch<{ deleted: boolean }>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'DELETE' }),
+  members: (teamId: string) => apiFetch<Record<string, unknown>[]>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`),
   memberCandidates: (teamId: string, params?: { search?: string; limit?: number }) =>
-    apiFetch<any[]>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/member-candidates`, params as any)),
-  addMember: (teamId: string, payload: any) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`, { method: 'POST', json: payload }),
+    apiFetch<Record<string, unknown>[]>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/member-candidates`, params)),
+  addMember: (teamId: string, payload: object) => apiFetch<Record<string, unknown>>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`, { method: 'POST', json: payload }),
   removeMember: (teamId: string, userId: string) =>
-    apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+    apiFetch<{ deleted: boolean }>(`/ui/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
   assetVisibility: (teamId: string, params?: AssetVisibilityParams) =>
-    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-visibility`, params as any)),
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-visibility`, params)),
   assetAccess: (teamId: string, params?: ScopedAssetAccessParams) =>
-    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, params as any)),
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, params)),
   updateAssetAccess: (teamId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
 export const serviceAccounts = {
   list: (params?: { team_id?: string; search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<ServiceAccount>>(withQuery('/ui/api/service-accounts', params as any)),
+    apiFetch<Paginated<ServiceAccount>>(withQuery('/ui/api/service-accounts', params)),
   create: (payload: { team_id: string; name: string; description?: string }) =>
     apiFetch<ServiceAccount>('/ui/api/service-accounts', { method: 'POST', json: payload }),
 };
 
 export const mcpServers = {
   list: (params?: { search?: string; enabled?: boolean; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<MCPServer>>(withQuery('/ui/api/mcp-servers', params as any)),
+    apiFetch<Paginated<MCPServer>>(withQuery('/ui/api/mcp-servers', params)),
   get: (serverId: string) => apiFetch<MCPServerDetail>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`),
   operations: (serverId: string, params?: { window_hours?: number; top_tools_limit?: number; failures_limit?: number }) =>
-    apiFetch<MCPServerOperations>(withQuery(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}/operations`, params as any)),
-  create: (payload: any) => apiFetch<MCPServer>('/ui/api/mcp-servers', { method: 'POST', json: payload }),
-  update: (serverId: string, payload: any) =>
+    apiFetch<MCPServerOperations>(withQuery(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}/operations`, params)),
+  create: (payload: object) => apiFetch<MCPServer>('/ui/api/mcp-servers', { method: 'POST', json: payload }),
+  update: (serverId: string, payload: object) =>
     apiFetch<MCPServer>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`, { method: 'PATCH', json: payload }),
   delete: (serverId: string) =>
     apiFetch<{ deleted: boolean; mcp_server_id: string }>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`, { method: 'DELETE' }),
@@ -1971,44 +1882,44 @@ export const mcpServers = {
       { method: 'POST' }
     ),
   listBindings: (params?: { server_id?: string; scope_type?: string; scope_id?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<MCPBinding>>(withQuery('/ui/api/mcp-bindings', params as any)),
-  upsertBinding: (payload: any) => apiFetch<MCPBinding>('/ui/api/mcp-bindings', { method: 'POST', json: payload }),
+    apiFetch<Paginated<MCPBinding>>(withQuery('/ui/api/mcp-bindings', params)),
+  upsertBinding: (payload: object) => apiFetch<MCPBinding>('/ui/api/mcp-bindings', { method: 'POST', json: payload }),
   deleteBinding: (bindingId: string) =>
     apiFetch<{ deleted: boolean; mcp_binding_id: string }>(`/ui/api/mcp-bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE' }),
   listToolPolicies: (params?: { server_id?: string; scope_type?: string; scope_id?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<MCPToolPolicy>>(withQuery('/ui/api/mcp-tool-policies', params as any)),
-  upsertToolPolicy: (payload: any) =>
+    apiFetch<Paginated<MCPToolPolicy>>(withQuery('/ui/api/mcp-tool-policies', params)),
+  upsertToolPolicy: (payload: object) =>
     apiFetch<MCPToolPolicy>('/ui/api/mcp-tool-policies', { method: 'POST', json: payload }),
   deleteToolPolicy: (policyId: string) =>
     apiFetch<{ deleted: boolean; mcp_tool_policy_id: string }>(`/ui/api/mcp-tool-policies/${encodeURIComponent(policyId)}`, { method: 'DELETE' }),
   listApprovalRequests: (params?: { server_id?: string; status?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<MCPApprovalRequest>>(withQuery('/ui/api/mcp-approval-requests', params as any)),
+    apiFetch<Paginated<MCPApprovalRequest>>(withQuery('/ui/api/mcp-approval-requests', params)),
   decideApprovalRequest: (approvalRequestId: string, payload: { status: 'approved' | 'rejected'; decision_comment?: string }) =>
     apiFetch<MCPApprovalRequest>(`/ui/api/mcp-approval-requests/${encodeURIComponent(approvalRequestId)}/decision`, { method: 'POST', json: payload }),
 };
 
 export const keys = {
   list: (params?: { search?: string; team_id?: string; my_keys?: boolean; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params as any)),
-  create: (payload: any) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload }),
-  update: (tokenHash: string, payload: any) =>
+    apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params)),
+  create: (payload: object) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload }),
+  update: (tokenHash: string, payload: object) =>
     apiFetch<ApiKey>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'PUT', json: payload }),
   regenerate: (tokenHash: string) => apiFetch<{ token: string; raw_key: string }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/regenerate`, { method: 'POST' }),
   revoke: (tokenHash: string) => apiFetch<{ revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
   delete: (tokenHash: string) => apiFetch<{ deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
   assetVisibility: (tokenHash: string, params?: AssetVisibilityParams) =>
-    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-visibility`, params as any)),
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-visibility`, params)),
   assetAccess: (tokenHash: string, params?: ScopedAssetAccessParams) =>
-    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, params as any)),
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, params)),
   updateAssetAccess: (tokenHash: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
 export const users = {
   assetVisibility: (userId: string, params?: Omit<AssetVisibilityParams, 'user_id'>) =>
-    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-visibility`, params as any)),
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-visibility`, params)),
   assetAccess: (userId: string, params?: ScopedAssetAccessParams) =>
-    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, params as any)),
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, params)),
   updateAssetAccess: (userId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, { method: 'PUT', json: payload }),
 };
@@ -2016,10 +1927,10 @@ export const users = {
 export const batches = {
   featureStatus: () => apiFetch<BatchFeatureStatus>('/ui/api/batches/feature-status'),
   list: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<BatchJobListItem>>(withQuery('/ui/api/batches', params as any)),
+    apiFetch<Paginated<BatchJobListItem>>(withQuery('/ui/api/batches', params)),
   summary: () => apiFetch<BatchJobSummary>('/ui/api/batches/summary'),
   get: (batchId: string, params?: { items_limit?: number; items_offset?: number; after_line_number?: number | null }) =>
-    apiFetch<BatchJobDetail>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params as any)),
+    apiFetch<BatchJobDetail>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params)),
   webhookDeliveries: (batchId: string) =>
     apiFetch<BatchWebhookDeliveryList>(
       `/ui/api/batches/${encodeURIComponent(batchId)}/webhook-deliveries`,
@@ -2108,6 +2019,15 @@ export interface GuardrailCatalog {
   };
 }
 
+export interface ScopedGuardrailResponse {
+  guardrails_config?: {
+    mode?: 'inherit' | 'override';
+    include?: string[];
+    exclude?: string[];
+  } | null;
+  available_guardrails?: string[];
+}
+
 export const guardrails = {
   list: async () => {
     const res = await apiFetch<{ guardrails: GuardrailRecord[] }>('/ui/api/guardrails');
@@ -2119,11 +2039,11 @@ export const guardrails = {
     return res.guardrails || [];
   },
   getScoped: (scope: 'organization' | 'team' | 'key', entityId: string) =>
-    apiFetch<any>(`/ui/api/guardrails/scope/${encodeURIComponent(scope)}/${encodeURIComponent(entityId)}`),
-  updateScoped: (scope: 'organization' | 'team' | 'key', entityId: string, payload: any) =>
-    apiFetch<any>(`/ui/api/guardrails/scope/${encodeURIComponent(scope)}/${encodeURIComponent(entityId)}`, { method: 'PUT', json: payload }),
+    apiFetch<ScopedGuardrailResponse>(`/ui/api/guardrails/scope/${encodeURIComponent(scope)}/${encodeURIComponent(entityId)}`),
+  updateScoped: (scope: 'organization' | 'team' | 'key', entityId: string, payload: object) =>
+    apiFetch<ScopedGuardrailResponse>(`/ui/api/guardrails/scope/${encodeURIComponent(scope)}/${encodeURIComponent(entityId)}`, { method: 'PUT', json: payload }),
   deleteScoped: (scope: 'organization' | 'team' | 'key', entityId: string) =>
-    apiFetch<any>(`/ui/api/guardrails/scope/${encodeURIComponent(scope)}/${encodeURIComponent(entityId)}`, { method: 'DELETE' }),
+    apiFetch<{ deleted: boolean }>(`/ui/api/guardrails/scope/${encodeURIComponent(scope)}/${encodeURIComponent(entityId)}`, { method: 'DELETE' }),
 };
 
 export interface RBACAccount {
@@ -2248,13 +2168,13 @@ export interface PrincipalSummary {
 export const rbac = {
   principals: {
     list: (params?: { search?: string; limit?: number; offset?: number }) =>
-      apiFetch<Paginated<Principal>>(withQuery('/ui/api/principals', params as any)),
+      apiFetch<Paginated<Principal>>(withQuery('/ui/api/principals', params)),
     summary: () => apiFetch<PrincipalSummary>('/ui/api/principals/summary'),
   },
   accounts: {
-    upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/accounts', { method: 'POST', json: payload }),
+    upsert: (payload: object) => apiFetch<unknown>('/ui/api/rbac/accounts', { method: 'POST', json: payload }),
     delete: (accountId: string) =>
-      apiFetch<any>(`/ui/api/rbac/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),
+      apiFetch<unknown>(`/ui/api/rbac/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),
   },
   provisionPerson: (payload: {
     email: string;
@@ -2269,21 +2189,21 @@ export const rbac = {
   }) => apiFetch<ProvisionPersonResponse>('/ui/api/rbac/provision', { method: 'POST', json: payload }),
   orgMemberships: {
     list: () => apiFetch<OrgMembership[]>('/ui/api/rbac/organization-memberships'),
-    upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/organization-memberships', { method: 'POST', json: payload }),
+    upsert: (payload: object) => apiFetch<unknown>('/ui/api/rbac/organization-memberships', { method: 'POST', json: payload }),
     delete: (membershipId: string) =>
-      apiFetch<any>(`/ui/api/rbac/organization-memberships/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
+      apiFetch<unknown>(`/ui/api/rbac/organization-memberships/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
   },
   teamMemberships: {
     list: () => apiFetch<TeamMembership[]>('/ui/api/rbac/team-memberships'),
-    upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/team-memberships', { method: 'POST', json: payload }),
+    upsert: (payload: object) => apiFetch<unknown>('/ui/api/rbac/team-memberships', { method: 'POST', json: payload }),
     delete: (membershipId: string) =>
-      apiFetch<any>(`/ui/api/rbac/team-memberships/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
+      apiFetch<unknown>(`/ui/api/rbac/team-memberships/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
   },
 };
 
 export const invitations = {
   list: (params?: { status?: Invitation['status'] | 'active'; search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<Invitation>>(withQuery('/ui/api/invitations', params as any)),
+    apiFetch<Paginated<Invitation>>(withQuery('/ui/api/invitations', params)),
   create: (payload: {
     email: string;
     organization_id?: string;
@@ -2312,19 +2232,19 @@ export interface AuthSsoConfig {
 export const auth = {
   me: () => apiFetch<unknown>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
   internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
-    apiFetch<any>('/auth/internal/login', { method: 'POST', json: payload }),
+    apiFetch<unknown>('/auth/internal/login', { method: 'POST', json: payload }),
   masterLogin: (masterKey: string) =>
-    apiFetch<any>('/auth/master/login', { method: 'POST', json: { master_key: masterKey } }),
-  internalLogout: () => apiFetch<any>('/auth/internal/logout', { method: 'POST' }),
+    apiFetch<unknown>('/auth/master/login', { method: 'POST', json: { master_key: masterKey } }),
+  internalLogout: () => apiFetch<unknown>('/auth/internal/logout', { method: 'POST' }),
   changePassword: (current_password: string | null, new_password: string) =>
-    apiFetch<any>('/auth/internal/change-password', { method: 'POST', json: { current_password, new_password } }),
-  invitation: (token: string) => apiFetch<any>(`/auth/invitations/${encodeURIComponent(token)}`),
+    apiFetch<unknown>('/auth/internal/change-password', { method: 'POST', json: { current_password, new_password } }),
+  invitation: (token: string) => apiFetch<unknown>(`/auth/invitations/${encodeURIComponent(token)}`),
   acceptInvitation: (payload: { token: string; password?: string | null }) =>
     apiFetch<InvitationAcceptResult>('/auth/invitations/accept', { method: 'POST', json: payload }),
   forgotPassword: (email: string) =>
     apiFetch<{ requested: boolean }>('/auth/internal/forgot-password', { method: 'POST', json: { email } }),
   validateResetPasswordToken: (token: string) =>
-    apiFetch<any>(`/auth/internal/reset-password/${encodeURIComponent(token)}`),
+    apiFetch<{ valid: boolean; email?: string }>(`/auth/internal/reset-password/${encodeURIComponent(token)}`),
   resetPassword: (token: string, new_password: string) =>
     apiFetch<{ changed: boolean }>('/auth/internal/reset-password', { method: 'POST', json: { token, new_password } }),
   ssoConfig: () => apiFetch<AuthSsoConfig>('/auth/sso-config'),

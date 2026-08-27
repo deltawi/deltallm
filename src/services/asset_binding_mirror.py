@@ -10,6 +10,10 @@ from src.db.callable_target_access_groups import (
 )
 from src.db.callable_targets import CallableTargetBindingRecord, CallableTargetBindingRepository
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRepository
+from src.router.runtime_generation import (
+    RoutingRuntimeGenerationStore,
+    with_authorization_snapshot,
+)
 from src.services.callable_targets import CallableTarget
 
 
@@ -20,7 +24,9 @@ def callable_target_binding_repository(request: Request) -> CallableTargetBindin
     return None
 
 
-def callable_target_access_group_binding_repository(request: Request) -> CallableTargetAccessGroupBindingRepository | None:
+def callable_target_access_group_binding_repository(
+    request: Request,
+) -> CallableTargetAccessGroupBindingRepository | None:
     repository = getattr(request.app.state, "callable_target_access_group_repository", None)
     if repository is not None and callable(getattr(repository, "list_bindings", None)):
         return repository
@@ -56,6 +62,21 @@ async def reload_callable_target_grants_for_app(app: Any, *, notify: bool = True
     if service is None or not callable(getattr(service, "reload", None)):
         return
     await service.reload()
+    generation_store = getattr(app.state, "routing_runtime_generation_store", None)
+    snapshot = getattr(service, "snapshot", None)
+    if isinstance(generation_store, RoutingRuntimeGenerationStore) and callable(snapshot):
+        generation = generation_store.require_snapshot()
+        generation_store.replace(
+            with_authorization_snapshot(
+                generation,
+                snapshot(),
+                callable_target_catalog=getattr(
+                    app.state,
+                    "callable_target_catalog",
+                    generation.callable_target_catalog,
+                ),
+            )
+        )
 
 
 async def list_all_callable_target_bindings(
@@ -186,7 +207,9 @@ async def delete_callable_target_binding_mirror(
     return deleted
 
 
-async def delete_all_callable_target_bindings_for_key(request: Request, *, callable_key: str) -> int:
+async def delete_all_callable_target_bindings_for_key(
+    request: Request, *, callable_key: str
+) -> int:
     repository = callable_target_binding_repository(request)
     if repository is None:
         return 0

@@ -99,6 +99,8 @@ Model create and update payloads also accept these metadata fields:
 
 `model_info.access_groups` must be an array of valid group keys. Keys are normalized to lowercase, must start with a letter or digit, and may contain lowercase letters, digits, `.`, `_`, or `-`. Access groups expand to the public `model_name`, not to a single deployment. When several deployments share the same `model_name`, keep their access groups identical so group expansion remains deterministic.
 
+Successful model create, update, and delete responses include a `warnings` array. A durable database mutation remains successful if its immediate local routing refresh fails; in that case the response contains a post-commit warning and background revision reconciliation repairs the replica. Re-read the deployment before retrying the mutation.
+
 Example inline model create payload:
 
 ```json
@@ -176,7 +178,7 @@ For the same OpenAI-compatible providers listed above, named-credential `connect
 - `auth_header_name`
 - `auth_header_format`
 
-Read responses always redact secret-bearing fields. Updating an in-use named credential triggers a runtime reload so linked deployments pick up the new connection settings. The raw secret value is never readable back out of the admin API.
+Read responses always redact secret-bearing fields. Updating an in-use named credential triggers a runtime reload so linked deployments pick up the new connection settings. If that post-commit refresh fails, the mutation still succeeds and returns a `warnings` entry while durable revision polling reconciles the runtime. The raw secret value is never readable back out of the admin API.
 
 For full UI and `curl` examples, see [Admin UI: Named Credentials](../admin-ui/named-credentials.md).
 
@@ -192,6 +194,10 @@ For full UI and `curl` examples, see [Admin UI: Named Credentials](../admin-ui/n
 | `GET` | `/ui/api/route-groups/{group_key}/members` | List group members |
 | `POST` | `/ui/api/route-groups/{group_key}/members` | Add a member |
 | `DELETE` | `/ui/api/route-groups/{group_key}/members/{deployment_id}` | Remove a member |
+
+An enabled route group owns a colliding callable key even when it has no enabled members. Deleting
+the group preserves callable-target bindings when a same-named model deployment exists; otherwise
+the group and its callable-target bindings are removed transactionally.
 
 ### Callable Target Governance
 
@@ -243,7 +249,46 @@ Access-group binding upserts use this payload:
 | `POST` | `/ui/api/route-groups/{group_key}/policy/publish` | Publish a policy |
 | `POST` | `/ui/api/route-groups/{group_key}/policy/rollback` | Roll back to an earlier policy |
 | `POST` | `/ui/api/route-groups/{group_key}/policy/simulate` | Simulate routing behavior |
-| `PUT` | `/ui/api/route-groups/{group_key}/policy` | Replace the active policy |
+| `PUT` | `/ui/api/route-groups/{group_key}/policy` | Deprecated compatibility endpoint for direct publication |
+
+Use `POST /ui/api/route-groups/{group_key}/policy/publish` for new integrations. A non-empty body
+publishes that document; an omitted or empty body publishes the latest draft. The legacy `PUT`
+endpoint always treats its body as an explicit document and returns a `Link` header identifying the
+POST successor.
+
+`strategy` is the canonical policy routing field. Legacy `mode: "weighted"` and
+`mode: "fallback"` inputs remain accepted with deprecation warnings and normalize to `weighted` and
+`priority-based-routing`, respectively.
+
+Policy simulation accepts a bounded scenario (1–5000 iterations):
+
+```json
+{
+  "iterations": 100,
+  "policy": {
+    "strategy": "priority-based-routing",
+    "members": [
+      {"deployment_id": "primary", "priority": 0},
+      {"deployment_id": "standby", "priority": 1}
+    ],
+    "retry": {"max_attempts": 1, "retryable_error_classes": ["timeout"]}
+  },
+  "metadata": {"tags": ["vip"]},
+  "outcomes": [
+    {"deployment_id": "primary", "outcome": "timeout"}
+  ]
+}
+```
+
+Supported assumed outcomes are `success`, `timeout`, `rate_limit`, and `unavailable`. Omitted
+deployments default to `success`. The response includes initial `selections`,
+`served_deployments`, `terminal_outcomes`, aggregate retry/fallback counts, eligibility
+`reason_counts`, and a bounded `sample_attempts` trace. `basis` is `live_state_dry_run`: the server
+pins one runtime generation and snapshots routing state before iterating, calls no provider, and
+does not mutate live routing state. When `policy` is present, it is the complete client-owned policy
+document rather than a patch: omitted `members` inherit the group's enabled membership, omitted
+`retry` and `timeouts` clear published overrides, and omitted `strategy` falls back to the route
+group's configured strategy.
 
 ### Prompt Registry
 

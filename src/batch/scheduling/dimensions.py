@@ -16,8 +16,7 @@ TENANT_SCOPE_TYPES = (*DEFAULT_TENANT_SCOPE_PREFERENCE, "anonymous")
 
 
 class ModelGroupResolver(Protocol):
-    def resolve_model_group(self, model_name: str) -> str:
-        ...
+    def resolve_model_group(self, model_name: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +109,9 @@ def resolve_tenant_scope(
     return BatchTenantScope(scope_type="anonymous", scope_id="anonymous")
 
 
-def normalize_tenant_scope_preference(scope_preference: Sequence[str] | None = None) -> tuple[str, ...]:
+def normalize_tenant_scope_preference(
+    scope_preference: Sequence[str] | None = None,
+) -> tuple[str, ...]:
     seen: set[str] = set()
     parsed: list[str] = []
     for scope_type in scope_preference or DEFAULT_TENANT_SCOPE_PREFERENCE:
@@ -122,7 +123,9 @@ def normalize_tenant_scope_preference(scope_preference: Sequence[str] | None = N
     return tuple(parsed) or DEFAULT_TENANT_SCOPE_PREFERENCE
 
 
-def resolve_model_group(model: str | None, resolver: ModelGroupResolver | None = None) -> str | None:
+def resolve_model_group(
+    model: str | None, resolver: ModelGroupResolver | None = None
+) -> str | None:
     normalized = _normalize_optional(model)
     if normalized is None:
         return None
@@ -133,6 +136,17 @@ def resolve_model_group(model: str | None, resolver: ModelGroupResolver | None =
     except Exception:
         return normalized
     return _normalize_optional(resolved) or normalized
+
+
+def pin_model_group_resolver(
+    resolver: ModelGroupResolver | None,
+) -> ModelGroupResolver | None:
+    """Pin a dynamic routing resolver before an asynchronous batch operation."""
+
+    snapshot = getattr(resolver, "snapshot", None)
+    if callable(snapshot):
+        return snapshot()
+    return resolver
 
 
 def build_scheduling_dimensions(

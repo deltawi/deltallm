@@ -19,6 +19,8 @@ const testSources = [
   'tests/authRedirect.test.ts',
   'tests/authSession.test.ts',
   'tests/modelFormShared.test.ts',
+  'tests/modelsApi.test.ts',
+  'tests/namedCredentialsApi.test.ts',
   'tests/batchDetailResource.test.ts',
   'tests/organizationPolicy.test.ts',
   'tests/organizationDeletion.test.ts',
@@ -29,7 +31,12 @@ const testSources = [
   'tests/reportingRangeControl.test.ts',
   'tests/reportingRequest.test.ts',
   'tests/reportingRefresh.test.ts',
+  'tests/routeGroupsApi.test.ts',
+  'tests/routeGroupsPolicy.test.ts',
+  'tests/routeGroupPolicySimulationPanel.test.ts',
   'tests/usageBreakdown.test.ts',
+  'tests/useApi.test.ts',
+  'tests/useRoutePolicySimulation.test.ts',
 ];
 
 await rm(outputDir, { recursive: true, force: true });

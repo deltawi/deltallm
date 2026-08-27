@@ -19,12 +19,15 @@ from src.models.errors import (
     parse_retry_after_header,
 )
 from src.guardrails.exceptions import GuardrailViolationError
+from src.router.execution import get_failover_original_error
 
 _NO_HEALTHY_DEPLOYMENTS_MARKER = "no healthy deployments available"
 
 
 class BatchResponseShapeError(ValueError):
     """Raised when an upstream microbatch response violates the expected contract."""
+
+    affects_deployment_health = True
 
 
 class BatchRetryCategory(StrEnum):
@@ -58,6 +61,10 @@ class BatchRetryDecision:
 
 
 def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
+    original_error = get_failover_original_error(exc)
+    if original_error is not None:
+        return classify_batch_retry(original_error)
+
     if isinstance(exc, BatchModelGroupDeferred):
         return BatchRetryDecision(
             retryable=True,
@@ -83,7 +90,9 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
 
     if isinstance(exc, ServiceUnavailableError):
         if getattr(exc, "code", None) == NO_HEALTHY_DEPLOYMENTS_CODE:
-            return BatchRetryDecision(retryable=True, category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS)
+            return BatchRetryDecision(
+                retryable=True, category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS
+            )
         return BatchRetryDecision(retryable=True, category=BatchRetryCategory.SERVICE_UNAVAILABLE)
 
     if isinstance(exc, BudgetExceededError):
@@ -123,7 +132,9 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
 
     if isinstance(exc, ModelNotFoundError):
         if _has_no_healthy_deployments_message(exc):
-            return BatchRetryDecision(retryable=True, category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS)
+            return BatchRetryDecision(
+                retryable=True, category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS
+            )
         return BatchRetryDecision(
             retryable=False,
             category=BatchRetryCategory.MISSING_MODEL,

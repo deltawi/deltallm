@@ -18,9 +18,20 @@ from src.batch.embedding_microbatch import (
 )
 from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_for_batch_endpoint
 from src.batch.policy import record_batch_policy_failure, run_batch_request_preflight
-from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, BatchRetryDecision, classify_batch_retry
+from src.batch.retry import (
+    BatchResponseShapeError,
+    BatchRetryCategory,
+    BatchRetryDecision,
+    classify_batch_retry,
+)
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
-from src.batch.worker_types import BatchItemLeaseLostError, _PreparedEmbeddingItem, _RequestShim
+from src.batch.worker_types import (
+    BatchItemLeaseLostError,
+    _PreparedEmbeddingItem,
+    _RequestShim,
+    capture_batch_routing_runtime,
+    routing_generation_batch_key,
+)
 from src.metrics import (
     increment_batch_microbatch_ineligible_item,
     increment_batch_microbatch_inputs,
@@ -33,6 +44,8 @@ from src.metrics import (
 )
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider
+from src.router import ROUTING_MODE_CONTEXT_KEY
+from src.router.execution import get_failover_original_error
 from src.routers.routing_decision import route_failover_kwargs
 
 logger = logging.getLogger(__name__)
@@ -42,17 +55,23 @@ class EmbeddingWorkerExecutionMixin:
     async def prepare_embedding_item_for_execution(self, job, item) -> _PreparedEmbeddingItem:  # noqa: ANN001
         started_at_monotonic = perf_counter()
         embedding_request = EmbeddingRequest.model_validate(item.request_body)
+        routing_generation = capture_batch_routing_runtime(self.app.state)
         preflight = await run_batch_request_preflight(
             app=self.app,
             job=job,
             payload=embedding_request,
             request_data=embedding_request.model_dump(exclude_none=True),
             call_type="embedding",
+            routing_runtime=routing_generation,
         )
         embedding_request = preflight.payload
 
-        request_context: dict[str, Any] = {"metadata": {}, "user_id": preflight.auth.user_id or preflight.auth.api_key}
-        app_router = self.app.state.router
+        request_context: dict[str, Any] = {
+            "metadata": {},
+            "user_id": preflight.auth.user_id or preflight.auth.api_key,
+            ROUTING_MODE_CONTEXT_KEY: "embedding",
+        }
+        app_router = routing_generation.router
         model_group = app_router.resolve_model_group(embedding_request.model)
         await self._raise_if_model_group_deferred(model_group)
 
@@ -60,8 +79,8 @@ class EmbeddingWorkerExecutionMixin:
             model_group=model_group,
             deployment=await app_router.select_deployment(model_group, request_context),
         )
-        input_kind, microbatch_eligible, microbatch_ineligible_reason = classify_embedding_microbatch_request(
-            embedding_request
+        input_kind, microbatch_eligible, microbatch_ineligible_reason = (
+            classify_embedding_microbatch_request(embedding_request)
         )
         primary_deployment_id = str(getattr(primary_deployment, "deployment_id", None) or "")
         effective_upstream_max_batch_inputs = resolve_effective_upstream_max_batch_inputs(
@@ -69,7 +88,9 @@ class EmbeddingWorkerExecutionMixin:
         )
         metadata_max_inputs = self._microbatch_next_max_inputs(item.error_body)
         if metadata_max_inputs is not None:
-            effective_upstream_max_batch_inputs = min(effective_upstream_max_batch_inputs, metadata_max_inputs)
+            effective_upstream_max_batch_inputs = min(
+                effective_upstream_max_batch_inputs, metadata_max_inputs
+            )
         return _PreparedEmbeddingItem(
             item=item,
             started_at_monotonic=started_at_monotonic,
@@ -80,10 +101,13 @@ class EmbeddingWorkerExecutionMixin:
             request_context=request_context,
             failover_kwargs=route_failover_kwargs(request_context),
             request_shim=_RequestShim(app=self.app),
+            routing_generation=routing_generation,
             effective_upstream_max_batch_inputs=effective_upstream_max_batch_inputs,
             microbatch_eligible=microbatch_eligible,
             microbatch_ineligible_reason=microbatch_ineligible_reason,
-            microbatch_weight=estimate_embedding_microbatch_weight(embedding_request) if microbatch_eligible else None,
+            microbatch_weight=estimate_embedding_microbatch_weight(embedding_request)
+            if microbatch_eligible
+            else None,
             execution_signature=build_embedding_execution_signature(
                 payload=embedding_request,
                 model_group=model_group,
@@ -93,7 +117,9 @@ class EmbeddingWorkerExecutionMixin:
             policy_auth=preflight.auth,
         )
 
-    def _sanitize_embedding_response(self, data: dict[str, Any]) -> tuple[dict[str, Any], str | None, str | None]:
+    def _sanitize_embedding_response(
+        self, data: dict[str, Any]
+    ) -> tuple[dict[str, Any], str | None, str | None]:
         response_body = dict(data)
         response_body.pop("_api_latency_ms", None)
         api_base = response_body.pop("_api_base", None)
@@ -137,23 +163,33 @@ class EmbeddingWorkerExecutionMixin:
         normalized_rows: list[dict[str, Any] | None] = [None] * expected_count
         for row_number, row in enumerate(data_rows):
             if not isinstance(row, dict):
-                raise BatchResponseShapeError(f"microbatch response item {row_number} is not an object")
+                raise BatchResponseShapeError(
+                    f"microbatch response item {row_number} is not an object"
+                )
             if "embedding" not in row:
-                raise BatchResponseShapeError(f"microbatch response item {row_number} is missing embedding")
+                raise BatchResponseShapeError(
+                    f"microbatch response item {row_number} is missing embedding"
+                )
 
             response_index = row.get("index")
             if type(response_index) is not int:
-                raise BatchResponseShapeError(f"microbatch response item {row_number} has invalid index")
+                raise BatchResponseShapeError(
+                    f"microbatch response item {row_number} has invalid index"
+                )
             if response_index < 0 or response_index >= expected_count:
                 raise BatchResponseShapeError(
                     f"microbatch response item {row_number} index out of range index={response_index}"
                 )
             if normalized_rows[response_index] is not None:
-                raise BatchResponseShapeError(f"microbatch response contains duplicate index={response_index}")
+                raise BatchResponseShapeError(
+                    f"microbatch response contains duplicate index={response_index}"
+                )
             normalized_rows[response_index] = dict(row)
 
         if any(row is None for row in normalized_rows):
-            raise BatchResponseShapeError("microbatch response is missing one or more expected indexes")
+            raise BatchResponseShapeError(
+                "microbatch response is missing one or more expected indexes"
+            )
 
         return [row for row in normalized_rows if row is not None]
 
@@ -164,8 +200,9 @@ class EmbeddingWorkerExecutionMixin:
         request_data["input"] = [prepared.payload.input for prepared in prepared_items]
         return EmbeddingRequest.model_validate(request_data)
 
-    def _microbatch_group_key(self, prepared: _PreparedEmbeddingItem) -> tuple[Any, str]:
+    def _microbatch_group_key(self, prepared: _PreparedEmbeddingItem) -> tuple[str, Any, str]:
         return (
+            routing_generation_batch_key(prepared.routing_generation),
             prepared.execution_signature,
             json.dumps(prepared.failover_kwargs, sort_keys=True, default=str),
         )
@@ -248,7 +285,9 @@ class EmbeddingWorkerExecutionMixin:
         try:
             increment_batch_microbatch_requeue(category=category_value, result=result)
             if retry_delay_seconds is not None and result in {"scheduled", "reduced"}:
-                observe_batch_microbatch_retry_delay(category=category_value, delay_seconds=retry_delay_seconds)
+                observe_batch_microbatch_retry_delay(
+                    category=category_value, delay_seconds=retry_delay_seconds
+                )
         except Exception as exc:
             logger.warning(
                 "batch embedding microbatch retry metric publish failed category=%s result=%s error=%s",
@@ -308,9 +347,13 @@ class EmbeddingWorkerExecutionMixin:
                 return False
 
         chunk_size = len(prepared_items)
-        retry_count = max(
-            self._microbatch_retry_count(prepared.item.error_body) for prepared in prepared_items
-        ) + 1
+        retry_count = (
+            max(
+                self._microbatch_retry_count(prepared.item.error_body)
+                for prepared in prepared_items
+            )
+            + 1
+        )
         original_size = max(
             self._microbatch_original_size(error_body=prepared.item.error_body, fallback=chunk_size)
             for prepared in prepared_items
@@ -345,8 +388,7 @@ class EmbeddingWorkerExecutionMixin:
                 error_body=error_body,
                 last_error=str(exc),
                 item_claim_epochs={
-                    prepared.item.item_id: prepared.item.claim_epoch
-                    for prepared in prepared_items
+                    prepared.item.item_id: prepared.item.claim_epoch for prepared in prepared_items
                 },
             )
         except Exception as release_exc:
@@ -402,7 +444,9 @@ class EmbeddingWorkerExecutionMixin:
         try:
             await self._acquire_prepared_policy_lease(prepared=prepared)
         except Exception as exc:
-            record_batch_policy_failure(endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc)
+            record_batch_policy_failure(
+                endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc
+            )
             await self._mark_item_failed(
                 job=job,
                 item=prepared.item,
@@ -424,23 +468,39 @@ class EmbeddingWorkerExecutionMixin:
                 label=f"item:{prepared.item.item_id}",
                 lease_lost_event=item_lease_lost,
             )
-            data, served_deployment = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+
+            async def _execute_for_deployment(
+                deployment: Any,
+            ) -> tuple[dict[str, Any], str | None, str | None]:
+                data = await self._execute_embedding(
+                    prepared.request_shim, prepared.payload, deployment
+                )
+                return self._sanitize_embedding_response(data)
+
+            (
+                (response_body, api_base, deployment_model),
+                served_deployment,
+            ) = await self._await_with_lease_loss_cancellation(
+                prepared.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=prepared.primary_deployment,
                     model_group=prepared.model_group,
-                    execute=lambda dep: self._execute_embedding(prepared.request_shim, prepared.payload, dep),
+                    execute=_execute_for_deployment,
                     return_deployment=True,
+                    routing_context=prepared.request_context,
                     **prepared.failover_kwargs,
                 ),
                 lease_lost_event=item_lease_lost,
                 label=f"item:{prepared.item.item_id}",
             )
-            response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
-            usage_allocations = allocate_embedding_usage(response_body.get("usage"), item_weights=[1])
+            usage_allocations = allocate_embedding_usage(
+                response_body.get("usage"), item_weights=[1]
+            )
             usage = dict(usage_allocations[0] if usage_allocations else {})
             api_provider = resolve_provider(served_deployment.deltallm_params)
             api_base = api_base or served_deployment.deltallm_params.get("api_base")
-            deployment_model = deployment_model or (str(served_deployment.deltallm_params.get("model") or "") or None)
+            deployment_model = deployment_model or (
+                str(served_deployment.deltallm_params.get("model") or "") or None
+            )
             response_body = self._normalize_persisted_embedding_response_body(
                 response_body=response_body,
                 usage=usage,
@@ -506,12 +566,8 @@ class EmbeddingWorkerExecutionMixin:
                                 provider_cost=provider_cost,
                                 billing=customer_billing.billing,
                                 provider_billing=provider_billing.billing,
-                                effective_pricing_sources=(
-                                    customer_billing.pricing_sources_used
-                                ),
-                                missing_pricing_fields=(
-                                    customer_billing.missing_pricing_fields
-                                ),
+                                effective_pricing_sources=(customer_billing.pricing_sources_used),
+                                missing_pricing_fields=(customer_billing.missing_pricing_fields),
                                 pricing_tier="batch",
                             ),
                         ),
@@ -542,7 +598,8 @@ class EmbeddingWorkerExecutionMixin:
                 item=prepared.item,
                 model_name=prepared.model_name,
                 exc=exc,
-                deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "") or None,
+                deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "")
+                or None,
                 started_at_monotonic=prepared.started_at_monotonic,
             )
             return
@@ -558,7 +615,9 @@ class EmbeddingWorkerExecutionMixin:
         *,
         process_item: Callable[[Any, Any], Awaitable[None]],
     ) -> None:
-        prepared_items = await self._acquire_embedding_policy_leases_for_chunk(job=job, prepared_items=prepared_items)
+        prepared_items = await self._acquire_embedding_policy_leases_for_chunk(
+            job=job, prepared_items=prepared_items
+        )
         if not prepared_items:
             return
         if len(prepared_items) <= 1:
@@ -576,12 +635,13 @@ class EmbeddingWorkerExecutionMixin:
         try:
             for prepared in prepared_items:
                 item_heartbeats[prepared.item.item_id] = self._start_heartbeat_fn(
-                    renew=lambda item_id=prepared.item.item_id,
-                    claim_epoch=prepared.item.claim_epoch: self.repository.renew_item_lease(
-                        item_id=item_id,
-                        worker_id=self.config.worker_id,
-                        lease_seconds=self.config.item_lease_seconds,
-                        claim_epoch=claim_epoch,
+                    renew=lambda item_id=prepared.item.item_id, claim_epoch=prepared.item.claim_epoch: (
+                        self.repository.renew_item_lease(
+                            item_id=item_id,
+                            worker_id=self.config.worker_id,
+                            lease_seconds=self.config.item_lease_seconds,
+                            claim_epoch=claim_epoch,
+                        )
                     ),
                     label=f"item:{prepared.item.item_id}",
                     lease_lost_event=item_lease_lost,
@@ -597,21 +657,34 @@ class EmbeddingWorkerExecutionMixin:
             increment_batch_microbatch_requests()
             increment_batch_microbatch_inputs(count=chunk_size)
             observe_batch_microbatch_size(batch_size=chunk_size)
-            data, served_deployment = await self._await_with_lease_loss_cancellation(
-                self.app.state.failover_manager.execute_with_failover(
+
+            async def _execute_for_deployment(
+                deployment: Any,
+            ) -> tuple[dict[str, Any], str | None, str | None, list[dict[str, Any]]]:
+                data = await self._execute_embedding(
+                    first_item.request_shim, chunk_payload, deployment
+                )
+                response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
+                item_responses = self._validate_embedding_microbatch_response(
+                    response_body=response_body,
+                    expected_count=chunk_size,
+                )
+                return response_body, api_base, deployment_model, item_responses
+
+            (
+                (response_body, api_base, deployment_model, item_responses),
+                served_deployment,
+            ) = await self._await_with_lease_loss_cancellation(
+                first_item.routing_generation.failover_manager.execute_with_failover(
                     primary_deployment=first_item.primary_deployment,
                     model_group=first_item.model_group,
-                    execute=lambda dep: self._execute_embedding(first_item.request_shim, chunk_payload, dep),
+                    execute=_execute_for_deployment,
                     return_deployment=True,
+                    routing_context=first_item.request_context,
                     **first_item.failover_kwargs,
                 ),
                 lease_lost_event=item_lease_lost,
                 label=f"microbatch:{batch_id}:{item_ids[0]}:{chunk_size}",
-            )
-            response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
-            item_responses = self._validate_embedding_microbatch_response(
-                response_body=response_body,
-                expected_count=chunk_size,
             )
             usage_allocations = allocate_embedding_usage(
                 response_body.get("usage"),
@@ -630,24 +703,16 @@ class EmbeddingWorkerExecutionMixin:
             item_heartbeats.clear()
             return
         except Exception as exc:
-            await self._record_upstream_failure_runtime_hook(
-                batch_id=batch_id,
-                deployment_id=str(
-                    getattr(served_deployment, "deployment_id", None)
-                    or getattr(first_item.primary_deployment, "deployment_id", None)
-                    or ""
-                )
-                or None,
-                exc=exc,
-                reference=",".join(item_ids),
-            )
-            if isinstance(exc, BatchResponseShapeError):
+            original_error = get_failover_original_error(exc)
+            if isinstance(original_error, BatchResponseShapeError):
                 logger.warning(
                     "batch embedding microbatch response mismatch batch_id=%s deployment_id=%s size=%s error=%s",
                     batch_id,
-                    getattr(served_deployment or first_item.primary_deployment, "deployment_id", None),
+                    getattr(
+                        served_deployment or first_item.primary_deployment, "deployment_id", None
+                    ),
                     chunk_size,
-                    exc,
+                    original_error,
                 )
             else:
                 retry_decision = classify_batch_retry(exc)
@@ -681,7 +746,9 @@ class EmbeddingWorkerExecutionMixin:
         try:
             api_provider = resolve_provider(served_deployment.deltallm_params)
             api_base = api_base or served_deployment.deltallm_params.get("api_base")
-            deployment_model = deployment_model or (str(served_deployment.deltallm_params.get("model") or "") or None)
+            deployment_model = deployment_model or (
+                str(served_deployment.deltallm_params.get("model") or "") or None
+            )
             served_deployment_id = str(
                 getattr(served_deployment, "deployment_id", None)
                 or getattr(first_item.primary_deployment, "deployment_id", None)
@@ -695,7 +762,9 @@ class EmbeddingWorkerExecutionMixin:
                 reference=",".join(item_ids),
             )
             completion_rows: list[dict[str, Any]] = []
-            for prepared, item_response, usage in zip(prepared_items, item_responses, usage_allocations, strict=False):
+            for prepared, item_response, usage in zip(
+                prepared_items, item_responses, usage_allocations, strict=False
+            ):
                 normalized_response_body = self._build_single_item_embedding_response_body(
                     chunk_response=response_body,
                     item_response=item_response,
@@ -724,12 +793,8 @@ class EmbeddingWorkerExecutionMixin:
                             provider_cost=provider_cost,
                             billing=customer_billing.billing,
                             provider_billing=provider_billing.billing,
-                            effective_pricing_sources=(
-                                customer_billing.pricing_sources_used
-                            ),
-                            missing_pricing_fields=(
-                                customer_billing.missing_pricing_fields
-                            ),
+                            effective_pricing_sources=(customer_billing.pricing_sources_used),
+                            missing_pricing_fields=(customer_billing.missing_pricing_fields),
                             pricing_tier="batch",
                         ),
                     }
@@ -815,7 +880,9 @@ class EmbeddingWorkerExecutionMixin:
             try:
                 await self._acquire_prepared_policy_lease(prepared=prepared)
             except Exception as exc:
-                record_batch_policy_failure(endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc)
+                record_batch_policy_failure(
+                    endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc
+                )
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
@@ -865,22 +932,29 @@ class EmbeddingWorkerExecutionMixin:
             prepared_candidates: list[_PreparedEmbeddingItem] = []
             grouped_candidates: list[Any] = []
             for candidate in candidates:
-                if candidate.microbatch_eligible and candidate.effective_upstream_max_batch_inputs > 1:
+                if (
+                    candidate.microbatch_eligible
+                    and candidate.effective_upstream_max_batch_inputs > 1
+                ):
                     grouped_candidates.append(candidate.item)
                 else:
                     prepared_candidates.append(candidate)
             _requeue_prepared_candidates(prepared_candidates)
             _requeue_grouped_raw_items(grouped_candidates)
 
-        def _queue_preparation_failure(item, model_name: str, exc: Exception, started_at_monotonic: float) -> None:
+        def _queue_preparation_failure(
+            item, model_name: str, exc: Exception, started_at_monotonic: float
+        ) -> None:
             planned_work_units.append(
-                lambda item=item, model_name=model_name, exc=exc, started_at_monotonic=started_at_monotonic: self._mark_item_failed(
-                    job=job,
-                    item=item,
-                    model_name=model_name,
-                    exc=exc,
-                    deployment_id=None,
-                    started_at_monotonic=started_at_monotonic,
+                lambda item=item, model_name=model_name, exc=exc, started_at_monotonic=started_at_monotonic: (
+                    self._mark_item_failed(
+                        job=job,
+                        item=item,
+                        model_name=model_name,
+                        exc=exc,
+                        deployment_id=None,
+                        started_at_monotonic=started_at_monotonic,
+                    )
                 )
             )
 
@@ -894,7 +968,9 @@ class EmbeddingWorkerExecutionMixin:
                 _queue_preparation_failure(item, model_name, exc, started_at_monotonic)
                 return None
             if not prepared.microbatch_eligible:
-                increment_batch_microbatch_ineligible_item(reason=prepared.microbatch_ineligible_reason or "unknown")
+                increment_batch_microbatch_ineligible_item(
+                    reason=prepared.microbatch_ineligible_reason or "unknown"
+                )
             return prepared
 
         def _raw_item_looks_groupable(item) -> bool:  # noqa: ANN001
@@ -902,7 +978,9 @@ class EmbeddingWorkerExecutionMixin:
             _, microbatch_eligible, _ = classify_embedding_microbatch_request(payload)
             return microbatch_eligible
 
-        async def _pop_next_candidate(*, allow_grouped_chunks: bool) -> _PreparedEmbeddingItem | object | None:
+        async def _pop_next_candidate(
+            *, allow_grouped_chunks: bool
+        ) -> _PreparedEmbeddingItem | object | None:
             while True:
                 if allow_grouped_chunks and deferred_grouped_raw_items:
                     prepared = await _prepare_candidate_item(deferred_grouped_raw_items.popleft())
@@ -933,7 +1011,10 @@ class EmbeddingWorkerExecutionMixin:
                 prepared = await _prepare_candidate_item(item)
                 if prepared is None:
                     continue
-                grouped_chunk_candidate = prepared.microbatch_eligible and prepared.effective_upstream_max_batch_inputs > 1
+                grouped_chunk_candidate = (
+                    prepared.microbatch_eligible
+                    and prepared.effective_upstream_max_batch_inputs > 1
+                )
                 if grouped_chunk_candidate and not allow_grouped_chunks:
                     deferred_grouped_raw_items.append(prepared.item)
                     continue
@@ -986,7 +1067,8 @@ class EmbeddingWorkerExecutionMixin:
                     candidate_matches_chunk = (
                         candidate.microbatch_eligible
                         and candidate.effective_upstream_max_batch_inputs > 1
-                        and candidate.effective_upstream_max_batch_inputs == seed.effective_upstream_max_batch_inputs
+                        and candidate.effective_upstream_max_batch_inputs
+                        == seed.effective_upstream_max_batch_inputs
                         and self._microbatch_group_key(candidate) == chunk_key
                     )
                     if candidate_matches_chunk:

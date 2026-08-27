@@ -502,7 +502,6 @@ async def get_routing(request: Request) -> dict[str, Any]:
             "latency-based-routing",
             "cost-based-routing",
             "usage-based-routing",
-            "tag-based-routing",
             "priority-based-routing",
             "weighted",
             "rate-limit-aware",

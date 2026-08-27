@@ -34,6 +34,11 @@ from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.types import NotificationChannel
 from src.notifications.webhook import close_shared_client
 from src.services.callable_target_grants import CallableTargetGrantService
+from src.services.routing_authorization import RoutingAuthorizationReconciler
+from src.router.runtime_generation import (
+    RoutingRuntimeGenerationStore,
+    with_authorization_snapshot,
+)
 from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.key_notifications import KeyNotificationService
 from src.services.notification_recipients import NotificationRecipientResolver
@@ -85,6 +90,29 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         callable_target_catalog_getter=lambda: getattr(app.state, "callable_target_catalog", None),
     )
     await app.state.callable_target_grant_service.reload()
+    generation_store = getattr(app.state, "routing_runtime_generation_store", None)
+    if isinstance(generation_store, RoutingRuntimeGenerationStore):
+        generation_store.replace(
+            with_authorization_snapshot(
+                generation_store.require_snapshot(),
+                app.state.callable_target_grant_service.snapshot(),
+            )
+        )
+    app.state.routing_authorization_reconciler = RoutingAuthorizationReconciler(
+        db=getattr(getattr(app.state, "prisma_manager", None), "client", None),
+        callable_target_bindings=getattr(
+            app.state,
+            "callable_target_binding_repository",
+            None,
+        ),
+        route_groups=getattr(app.state, "route_group_repository", None),
+        callable_target_grants=app.state.callable_target_grant_service,
+    )
+    model_hot_reload_manager = getattr(app.state, "model_hot_reload_manager", None)
+    if model_hot_reload_manager is not None:
+        model_hot_reload_manager.set_routing_authorization_reconciler(
+            app.state.routing_authorization_reconciler
+        )
     general_settings = getattr(cfg, "general_settings", None)
     settings = getattr(app.state, "settings", None)
     tier_policy_mode = str(
@@ -237,7 +265,18 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         prompt_registry_service=app.state.prompt_registry_service,
         route_group_reload=getattr(
             getattr(app.state, "model_hot_reload_manager", None),
-            "reload_runtime",
+            "reload_route_groups",
+            None,
+        ),
+        route_group_revision_source=getattr(app.state, "route_group_repository", None),
+        route_group_applied_revision=getattr(
+            getattr(app.state, "model_hot_reload_manager", None),
+            "get_applied_route_revision",
+            None,
+        ),
+        routing_applied_state=getattr(
+            getattr(app.state, "model_hot_reload_manager", None),
+            "get_applied_routing_state",
             None,
         ),
     )

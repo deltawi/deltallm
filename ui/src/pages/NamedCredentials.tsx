@@ -27,6 +27,10 @@ function connectionSummary(credential: NamedCredential): string {
   return credential.credentials_present ? 'Credentials configured' : 'No connection data';
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 export default function NamedCredentials() {
   const { pushToast } = useToast();
   const [providerFilter, setProviderFilter] = useState('');
@@ -42,7 +46,7 @@ export default function NamedCredentials() {
   const [converting, setConverting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const { data: presetsResponse } = useApi(() => models.providerPresets(), []);
+  const { data: presetsResponse } = useApi((signal) => models.providerPresets(signal), []);
   const { data: credentialsResponse, loading, refetch } = useApi(
     () => namedCredentials.list({ provider: providerFilter || undefined }),
     [providerFilter],
@@ -62,11 +66,10 @@ export default function NamedCredentials() {
   }, [searchInput]);
 
   const providerPresets = presetsResponse?.data || [];
-  const items = credentialsResponse?.data || [];
   const inlineGroups = inlineReportResponse?.data || [];
   const filteredItems = useMemo(
     () =>
-      items.filter((item) => {
+      (credentialsResponse?.data || []).filter((item) => {
         if (!search) return true;
         return (
           item.name.toLowerCase().includes(search)
@@ -74,7 +77,7 @@ export default function NamedCredentials() {
           || connectionSummary(item).toLowerCase().includes(search)
         );
       }),
-    [items, search],
+    [credentialsResponse?.data, search],
   );
 
   const usageCount = filteredItems.reduce((total, item) => total + Number(item.usage_count || 0), 0);
@@ -86,10 +89,10 @@ export default function NamedCredentials() {
       await namedCredentials.create(payload);
       pushToast({ tone: 'success', title: 'Credential created', message: `"${payload.name}" is ready to use.` });
       setCreateOpen(false);
-      await refetch();
-      await refetchInlineReport();
-    } catch (error: any) {
-      setFormError(error?.message || 'Failed to create named credential.');
+      refetch();
+      refetchInlineReport();
+    } catch (error: unknown) {
+      setFormError(errorMessage(error, 'Failed to create named credential.'));
     } finally {
       setSaving(false);
     }
@@ -100,13 +103,20 @@ export default function NamedCredentials() {
     setSaving(true);
     setFormError(null);
     try {
-      await namedCredentials.update(editingCredential.credential_id, payload);
-      pushToast({ tone: 'success', title: 'Credential updated', message: `"${payload.name}" was updated.` });
+      const result = await namedCredentials.update(editingCredential.credential_id, payload);
+      const warnings = result.warnings || [];
+      pushToast({
+        tone: warnings.length > 0 ? 'info' : 'success',
+        title: warnings.length > 0 ? 'Credential updated with warning' : 'Credential updated',
+        message: warnings.length > 0
+          ? `"${payload.name}" was updated. Runtime warning: ${warnings.join(' ')}`
+          : `"${payload.name}" was updated.`,
+      });
       setEditingCredential(null);
-      await refetch();
-      await refetchInlineReport();
-    } catch (error: any) {
-      setFormError(error?.message || 'Failed to update named credential.');
+      refetch();
+      refetchInlineReport();
+    } catch (error: unknown) {
+      setFormError(errorMessage(error, 'Failed to update named credential.'));
     } finally {
       setSaving(false);
     }
@@ -119,10 +129,14 @@ export default function NamedCredentials() {
       await namedCredentials.delete(deleteTarget.credential_id);
       pushToast({ tone: 'success', title: 'Credential deleted', message: `"${deleteTarget.name}" was removed.` });
       setDeleteTarget(null);
-      await refetch();
-      await refetchInlineReport();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete named credential.' });
+      refetch();
+      refetchInlineReport();
+    } catch (error: unknown) {
+      pushToast({
+        tone: 'error',
+        title: 'Delete failed',
+        message: errorMessage(error, 'Failed to delete named credential.'),
+      });
     } finally {
       setDeleting(false);
     }
@@ -132,23 +146,30 @@ export default function NamedCredentials() {
     if (!convertTarget || !conversionName.trim()) return;
     setConverting(true);
     try {
-      await namedCredentials.convertInlineGroup({
+      const result = await namedCredentials.convertInlineGroup({
         fingerprint: convertTarget.fingerprint,
         name: conversionName.trim(),
         provider: convertTarget.provider,
         deployment_ids: convertTarget.deployments.map((deployment) => deployment.deployment_id),
       });
+      const warnings = result.warnings || [];
       pushToast({
-        tone: 'success',
-        title: 'Inline credentials converted',
-        message: `"${conversionName.trim()}" now backs ${convertTarget.deployment_count} deployment${convertTarget.deployment_count === 1 ? '' : 's'}.`,
+        tone: warnings.length > 0 ? 'info' : 'success',
+        title: warnings.length > 0
+          ? 'Inline credentials converted with warning'
+          : 'Inline credentials converted',
+        message: `"${conversionName.trim()}" now backs ${convertTarget.deployment_count} deployment${convertTarget.deployment_count === 1 ? '' : 's'}.${warnings.length > 0 ? ` Runtime warning: ${warnings.join(' ')}` : ''}`,
       });
       setConvertTarget(null);
       setConversionName('');
-      await refetch();
-      await refetchInlineReport();
-    } catch (error: any) {
-      pushToast({ tone: 'error', title: 'Conversion failed', message: error?.message || 'Failed to convert inline credentials.' });
+      refetch();
+      refetchInlineReport();
+    } catch (error: unknown) {
+      pushToast({
+        tone: 'error',
+        title: 'Conversion failed',
+        message: errorMessage(error, 'Failed to convert inline credentials.'),
+      });
     } finally {
       setConverting(false);
     }

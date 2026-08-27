@@ -1,4 +1,4 @@
-import { apiFetch } from './apiClient';
+import { apiFetch } from './api/transport';
 import type { UIBranding } from './branding';
 
 export type UIBrandingResetResponse = UIBranding & {

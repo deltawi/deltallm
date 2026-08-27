@@ -16,9 +16,12 @@ from src.models.errors import (
     ServiceUnavailableError,
     TimeoutError,
 )
+from src.router.execution import attach_failover_original_error
 
 
-def _http_status_error(status_code: int, *, retry_after: str | None = None) -> httpx.HTTPStatusError:
+def _http_status_error(
+    status_code: int, *, retry_after: str | None = None
+) -> httpx.HTTPStatusError:
     request = httpx.Request("POST", "https://example.com/v1/embeddings")
     headers = {"Retry-After": retry_after} if retry_after is not None else {}
     response = httpx.Response(status_code, headers=headers, request=request)
@@ -28,7 +31,12 @@ def _http_status_error(status_code: int, *, retry_after: str | None = None) -> h
 @pytest.mark.parametrize(
     ("exc", "category", "retryable", "retry_after"),
     [
-        (RateLimitError(message="rate limited", retry_after=30), BatchRetryCategory.RATE_LIMIT, True, 30),
+        (
+            RateLimitError(message="rate limited", retry_after=30),
+            BatchRetryCategory.RATE_LIMIT,
+            True,
+            30,
+        ),
         (_http_status_error(429, retry_after="17"), BatchRetryCategory.RATE_LIMIT, True, 17),
         (_http_status_error(408), BatchRetryCategory.TIMEOUT, True, None),
         (_http_status_error(500), BatchRetryCategory.UPSTREAM_5XX, True, None),
@@ -36,7 +44,12 @@ def _http_status_error(status_code: int, *, retry_after: str | None = None) -> h
         (httpx.ReadTimeout("slow upstream"), BatchRetryCategory.TIMEOUT, True, None),
         (httpx.ReadError("connection reset"), BatchRetryCategory.TRANSPORT, True, None),
         (TimeoutError(message="request timeout"), BatchRetryCategory.TIMEOUT, True, None),
-        (ServiceUnavailableError(message="overloaded"), BatchRetryCategory.SERVICE_UNAVAILABLE, True, None),
+        (
+            ServiceUnavailableError(message="overloaded"),
+            BatchRetryCategory.SERVICE_UNAVAILABLE,
+            True,
+            None,
+        ),
         (
             ServiceUnavailableError(
                 message="No healthy deployments available for model 'text-embedding-3-small'",
@@ -47,7 +60,9 @@ def _http_status_error(status_code: int, *, retry_after: str | None = None) -> h
             None,
         ),
         (
-            ModelNotFoundError(message="No healthy deployments available for model 'text-embedding-3-small'"),
+            ModelNotFoundError(
+                message="No healthy deployments available for model 'text-embedding-3-small'"
+            ),
             BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS,
             True,
             None,
@@ -63,10 +78,25 @@ def _http_status_error(status_code: int, *, retry_after: str | None = None) -> h
             12,
         ),
         (BudgetExceededError(message="Budget exceeded"), BatchRetryCategory.BUDGET, False, None),
-        (InvalidRequestError(message="bad request"), BatchRetryCategory.INVALID_REQUEST, False, None),
+        (
+            InvalidRequestError(message="bad request"),
+            BatchRetryCategory.INVALID_REQUEST,
+            False,
+            None,
+        ),
         (PermissionDeniedError(message="forbidden"), BatchRetryCategory.PERMISSION, False, None),
-        (ModelNotFoundError(message="Model 'missing' is not configured"), BatchRetryCategory.MISSING_MODEL, False, None),
-        (BatchResponseShapeError("microbatch response length mismatch"), BatchRetryCategory.RESPONSE_SHAPE, False, None),
+        (
+            ModelNotFoundError(message="Model 'missing' is not configured"),
+            BatchRetryCategory.MISSING_MODEL,
+            False,
+            None,
+        ),
+        (
+            BatchResponseShapeError("microbatch response length mismatch"),
+            BatchRetryCategory.RESPONSE_SHAPE,
+            False,
+            None,
+        ),
         (RuntimeError("local bug"), BatchRetryCategory.UNKNOWN, False, None),
     ],
 )
@@ -98,15 +128,46 @@ def test_classify_batch_retry_does_not_treat_plain_value_error_as_response_shape
 
     assert decision.retryable is False
     assert decision.category is BatchRetryCategory.UNKNOWN
+
+
+def test_classify_batch_retry_uses_typed_original_error_from_failover() -> None:
+    sanitized = ServiceUnavailableError(
+        "microbatch response length mismatch",
+        affects_deployment_health=True,
+    )
+    attach_failover_original_error(
+        sanitized,
+        BatchResponseShapeError("microbatch response length mismatch"),
+    )
+
+    decision = classify_batch_retry(sanitized)
+
+    assert decision.retryable is False
+    assert decision.category is BatchRetryCategory.RESPONSE_SHAPE
     assert decision.terminal_reason == "not_retryable"
 
 
 @pytest.mark.parametrize(
     ("raw_error", "category", "retryable", "retry_after"),
     [
-        ({"status_code": 429, "message": "limited", "retry_after": 3}, BatchRetryCategory.RATE_LIMIT, True, 3),
-        ({"status": 503, "message": "provider unavailable"}, BatchRetryCategory.SERVICE_UNAVAILABLE, True, None),
-        ({"status_code": 400, "message": "bad request"}, BatchRetryCategory.INVALID_REQUEST, False, None),
+        (
+            {"status_code": 429, "message": "limited", "retry_after": 3},
+            BatchRetryCategory.RATE_LIMIT,
+            True,
+            3,
+        ),
+        (
+            {"status": 503, "message": "provider unavailable"},
+            BatchRetryCategory.SERVICE_UNAVAILABLE,
+            True,
+            None,
+        ),
+        (
+            {"status_code": 400, "message": "bad request"},
+            BatchRetryCategory.INVALID_REQUEST,
+            False,
+            None,
+        ),
         (
             {"error": {"status_code": 429, "message": "nested limited", "retry_after": 5}},
             BatchRetryCategory.RATE_LIMIT,
@@ -208,4 +269,6 @@ def test_chat_microbatch_results_reject_ambiguous_or_invalid_identity(
     match: str,
 ) -> None:
     with pytest.raises(BatchResponseShapeError, match=match):
-        normalize_chat_microbatch_results(raw_results, expected_count=expected_count, custom_ids=custom_ids)
+        normalize_chat_microbatch_results(
+            raw_results, expected_count=expected_count, custom_ids=custom_ids
+        )

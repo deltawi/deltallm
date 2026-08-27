@@ -11,14 +11,16 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 5. Set the pod termination grace period above both `telemetry_shutdown_drain_timeout_seconds` and, when email is enabled, `email_worker_shutdown_drain_timeout_seconds` (the Helm default is 30 seconds for both 20-second deadlines) so cancellation and connection cleanup can finish before `SIGKILL`.
 6. Keep both ingestion modes on `legacy` until every API and worker replica runs a version that acquires telemetry admission locks in a lock-only transaction statement and reads capacity or content policy in the following statement. An older waiter can retain a pre-lock PostgreSQL snapshot, so outbox mode is not safe during a mixed-version rollout.
 
-Before merging a migration-sensitive change, verify both supported database paths. The verifier creates uniquely named disposable databases, seeds the last-release database, checks additive-column defaults and retained data, and drops both databases on exit:
+Before merging a migration-sensitive change, verify every supported database path. The verifier creates uniquely named disposable databases, checks a fresh install, seeds and upgrades the last release, upgrades the already-shared route-policy migration, and drops every database on exit:
 
 ```bash
 MIGRATION_TEST_ADMIN_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres \
-  uv run python scripts/verify_migration_paths.py --base-ref v0.1.34
+  uv run python scripts/verify_migration_paths.py
 ```
 
-CI runs the same command. Advance `--base-ref` when the supported upgrade floor changes.
+CI runs the same command. The verifier selects the newest stable release tag reachable from
+`origin/main` and prints the selected upgrade base. Set `MIGRATION_TEST_BASE_REF` only when a
+specific supported release floor must be verified deliberately.
 
 ## Audit and prompt-render rollout
 

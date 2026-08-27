@@ -76,6 +76,14 @@ After the initial seed, set `model_deployment_bootstrap_from_config` back to `fa
 | `model_info.mode` | Optional | Runtime workload type such as `chat`, `embedding`, or `rerank` |
 | `model_info.access_groups` | Optional | Authorization groups attached to the public callable target |
 | `model_info.tags` | No | Routing tags for deployment selection; not authorization |
+| `routing_state_incarnation` | Server-managed | Stable opaque identity used to fence provider-health generations; admin-created config deployments populate it automatically |
+
+Database-backed deployments derive their routing-state incarnation from the immutable creation
+timestamp. For `config_only` deployments created through the admin API, DeltaLLM persists an opaque
+incarnation and preserves it across ordinary updates. Existing hand-authored entries without the
+field use their deployment ID as a compatibility incarnation. If an operator manually deletes and
+later recreates an otherwise identical config-only deployment with the same ID, set a new opaque
+`routing_state_incarnation`; do not change it for metadata-only edits.
 
 ## Custom Upstream Auth Headers
 
@@ -434,12 +442,12 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | Gemini | Y | N | N | N | N | N |
 | AWS Bedrock | Y | N | N | N | N | N |
 | ElevenLabs | N | N | N | Y | Y | N |
-| vLLM | Y | Y | Y | Y | Y | N |
+| vLLM | Y | Y | Y | Y | Y | Y |
 | LM Studio | Y | Y | N | N | N | N |
 | Ollama | Y | Y | N | N | N | N |
 
 !!! note
-    `rerank` exists as a DeltaLLM mode, but no provider is currently marked as rerank-capable in the backend capability matrix.
+    vLLM rerank deployments use the OpenAI-compatible `/rerank` endpoint. Providers not marked as rerank-capable are excluded before routing attempts.
 
 ## Related Pages
 

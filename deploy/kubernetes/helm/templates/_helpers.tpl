@@ -2,6 +2,24 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "deltallm.validateRouterStateSchemaCutover" -}}
+{{- $installedRouterSchema := "" -}}
+{{- if .Release.IsUpgrade -}}
+{{- $configName := printf "%s-config" (include "deltallm.fullname" .) -}}
+{{- $installedConfig := lookup "v1" "ConfigMap" .Release.Namespace $configName | default dict -}}
+{{- $annotations := dig "metadata" "annotations" (dict) $installedConfig -}}
+{{- $installedRouterSchema = get $annotations "deltallm.ai/router-state-schema" | default "" -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.routerStateSchemaCutover.enabled (ne $installedRouterSchema "v1") -}}
+{{- if not .Values.routerStateSchemaCutover.acknowledged -}}
+{{- fail "router Redis v1 schema cutover requires draining and stopping every old API and batch-worker pod, then setting routerStateSchemaCutover.acknowledged=true" -}}
+{{- end -}}
+{{- if ne .Values.strategy.type "Recreate" -}}
+{{- fail "router Redis v1 schema cutover requires strategy.type=Recreate; RollingUpdate would split admission and cooldown ownership" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deltallm.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}

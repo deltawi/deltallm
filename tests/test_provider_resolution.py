@@ -36,6 +36,10 @@ def test_elevenlabs_supports_audio_modes_only() -> None:
     assert provider_supports_mode("elevenlabs", "rerank") is False
 
 
+def test_vllm_rerank_capability_matches_supported_provider_endpoint() -> None:
+    assert provider_supports_mode("vllm", "rerank") is True
+
+
 def test_resolve_upstream_model_preserves_slash_prefixed_ids_for_groq() -> None:
     params = {"provider": "groq", "model": "openai/gpt-oss-120b"}
     assert resolve_upstream_model(params) == "openai/gpt-oss-120b"
