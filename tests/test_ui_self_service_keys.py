@@ -37,6 +37,18 @@ class _FakeKeyDB:
     ) -> None:
         self.keys = dict(keys)
         self.teams = dict(teams or {})
+        self.organization_states = {
+            str(team.get("organization_id")): "active"
+            for team in self.teams.values()
+            if team.get("organization_id")
+        }
+        self.organization_states.update(
+            {
+                str(key.get("organization_id")): "active"
+                for key in self.keys.values()
+                if key.get("organization_id")
+            }
+        )
         self.users = dict(users or {})
         self.account_ids = set(account_ids or set())
         self.advisory_locks: list[int] = []
@@ -57,18 +69,29 @@ class _FakeKeyDB:
         return params[index]
 
     def _in_values(self, params: tuple[Any, ...], placeholders: str) -> set[str]:
-        return {str(self._param_value(params, placeholder) or "") for placeholder in re.findall(r"\$\d+", placeholders)}
+        return {
+            str(self._param_value(params, placeholder) or "")
+            for placeholder in re.findall(r"\$\d+", placeholders)
+        }
 
-    def _list_key_rows(self, normalized_query: str, params: tuple[Any, ...]) -> list[tuple[str, dict[str, Any]]]:
+    def _list_key_rows(
+        self, normalized_query: str, params: tuple[Any, ...]
+    ) -> list[tuple[str, dict[str, Any]]]:
         owner_scoped_orgs: list[tuple[str, set[str]]] = []
         owner_scoped_teams: list[tuple[str, set[str]]] = []
 
-        owner_org_pattern = r"\(t\.organization_id in \(([^)]*)\) and vt\.owner_account_id = \$(\d+)\)"
+        owner_org_pattern = (
+            r"\(t\.organization_id in \(([^)]*)\) and vt\.owner_account_id = \$(\d+)\)"
+        )
         owner_team_pattern = r"\(vt\.team_id in \(([^)]*)\) and vt\.owner_account_id = \$(\d+)\)"
         for placeholders, owner_index in re.findall(owner_org_pattern, normalized_query):
-            owner_scoped_orgs.append((str(params[int(owner_index) - 1] or ""), self._in_values(params, placeholders)))
+            owner_scoped_orgs.append(
+                (str(params[int(owner_index) - 1] or ""), self._in_values(params, placeholders))
+            )
         for placeholders, owner_index in re.findall(owner_team_pattern, normalized_query):
-            owner_scoped_teams.append((str(params[int(owner_index) - 1] or ""), self._in_values(params, placeholders)))
+            owner_scoped_teams.append(
+                (str(params[int(owner_index) - 1] or ""), self._in_values(params, placeholders))
+            )
 
         full_scope_query = re.sub(owner_org_pattern, "", normalized_query)
         full_scope_query = re.sub(owner_team_pattern, "", full_scope_query)
@@ -80,15 +103,23 @@ class _FakeKeyDB:
             full_teams.update(self._in_values(params, placeholders))
 
         global_owner_match = re.search(r"where vt\.owner_account_id = \$(\d+)", normalized_query)
-        global_owner_id = str(params[int(global_owner_match.group(1)) - 1] or "") if global_owner_match else None
+        global_owner_id = (
+            str(params[int(global_owner_match.group(1)) - 1] or "") if global_owner_match else None
+        )
         exact_team_match = re.search(r"(?:where| and) vt\.team_id = \$(\d+)", normalized_query)
-        exact_team_id = str(params[int(exact_team_match.group(1)) - 1] or "") if exact_team_match else None
-        search_match = re.search(r"\(vt\.key_name ilike \$(\d+) or vt\.token ilike \$\d+\)", normalized_query)
+        exact_team_id = (
+            str(params[int(exact_team_match.group(1)) - 1] or "") if exact_team_match else None
+        )
+        search_match = re.search(
+            r"\(vt\.key_name ilike \$(\d+) or vt\.token ilike \$\d+\)", normalized_query
+        )
         search_term = None
         if search_match:
             search_term = str(params[int(search_match.group(1)) - 1] or "").strip("%").lower()
 
-        has_scope_predicate = bool(full_orgs or full_teams or owner_scoped_orgs or owner_scoped_teams)
+        has_scope_predicate = bool(
+            full_orgs or full_teams or owner_scoped_orgs or owner_scoped_teams
+        )
 
         def _row_org(row: dict[str, Any]) -> str:
             team = self.teams.get(str(row.get("team_id") or ""), {})
@@ -112,11 +143,18 @@ class _FakeKeyDB:
 
         rows: list[tuple[str, dict[str, Any]]] = []
         for token_hash, row in self.keys.items():
-            if global_owner_id is not None and str(row.get("owner_account_id") or "") != global_owner_id:
+            if (
+                global_owner_id is not None
+                and str(row.get("owner_account_id") or "") != global_owner_id
+            ):
                 continue
             if exact_team_id is not None and str(row.get("team_id") or "") != exact_team_id:
                 continue
-            if search_term and search_term not in str(row.get("key_name") or "").lower() and search_term not in token_hash.lower():
+            if (
+                search_term
+                and search_term not in str(row.get("key_name") or "").lower()
+                and search_term not in token_hash.lower()
+            ):
                 continue
             if _scope_matches(row):
                 rows.append((token_hash, row))
@@ -126,7 +164,18 @@ class _FakeKeyDB:
         normalized = " ".join(query.lower().split())
         token_hash = str(params[0]) if params else ""
 
-        if "from deltallm_verificationtoken vt" in normalized and "left join deltallm_platformaccount" in normalized:
+        if "from deltallm_organizationtable" in normalized and "for share" in normalized:
+            lifecycle_state = self.organization_states.get(token_hash)
+            return (
+                [{"organization_id": token_hash, "lifecycle_state": lifecycle_state}]
+                if lifecycle_state is not None
+                else []
+            )
+
+        if (
+            "from deltallm_verificationtoken vt" in normalized
+            and "left join deltallm_platformaccount" in normalized
+        ):
             rows = self._list_key_rows(normalized, params)
             if normalized.startswith("select count(*) as total"):
                 return [{"total": len(rows)}]
@@ -160,7 +209,10 @@ class _FakeKeyDB:
                 )
             return response_rows
 
-        if "from deltallm_verificationtoken vt" in normalized and "left join deltallm_usertable" in normalized:
+        if (
+            "from deltallm_verificationtoken vt" in normalized
+            and "left join deltallm_usertable" in normalized
+        ):
             row = self.keys.get(token_hash)
             if row is None:
                 return []
@@ -181,7 +233,8 @@ class _FakeKeyDB:
             return [{"owner_account_id": row.get("owner_account_id")}]
 
         if (
-            "select vt.token, vt.key_name, vt.team_id, t.team_alias, t.organization_id," in normalized
+            "select vt.token, vt.key_name, vt.team_id, t.team_alias, t.organization_id,"
+            in normalized
             and "from deltallm_verificationtoken vt" in normalized
         ):
             row = self.keys.get(token_hash)
@@ -215,12 +268,16 @@ class _FakeKeyDB:
             row = self.teams.get(team_id)
             return [dict(row)] if row is not None else []
 
-        if normalized.startswith("select rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit from deltallm_teamtable"):
+        if normalized.startswith(
+            "select rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit from deltallm_teamtable"
+        ):
             team_id = token_hash
             row = self.teams.get(team_id)
             return [dict(row)] if row is not None else []
 
-        if normalized.startswith("select user_id from deltallm_usertable where user_id = $1 and team_id = $2"):
+        if normalized.startswith(
+            "select user_id from deltallm_usertable where user_id = $1 and team_id = $2"
+        ):
             self._record_event("resolve_runtime_user")
             account_id = str(params[0])
             team_id = str(params[1])
@@ -229,7 +286,9 @@ class _FakeKeyDB:
                 return [{"user_id": row.get("user_id", account_id)}]
             return []
 
-        if normalized.startswith("select user_id from deltallm_usertable where lower(user_email) = lower($1)"):
+        if normalized.startswith(
+            "select user_id from deltallm_usertable where lower(user_email) = lower($1)"
+        ):
             self._record_event("resolve_runtime_user")
             email = str(params[0] or "").strip().lower()
             team_id = str(params[1])
@@ -240,7 +299,9 @@ class _FakeKeyDB:
                     return [{"user_id": candidate_user_id}]
             return []
 
-        if normalized.startswith("select count(*) as cnt from deltallm_verificationtoken where team_id = $1 and owner_account_id = $2"):
+        if normalized.startswith(
+            "select count(*) as cnt from deltallm_verificationtoken where team_id = $1 and owner_account_id = $2"
+        ):
             self._record_event("count_active_keys")
             team_id = str(params[0])
             owner_account_id = str(params[1])
@@ -306,7 +367,9 @@ class _FakeKeyDB:
                 "expires": expires,
             }
             return 1
-        if normalized.startswith("update deltallm_verificationtoken set token = $1, updated_at = now() where token = $2"):
+        if normalized.startswith(
+            "update deltallm_verificationtoken set token = $1, updated_at = now() where token = $2"
+        ):
             new_hash = str(params[0])
             old_hash = str(params[1])
             row = self.keys.pop(old_hash, None)
@@ -323,9 +386,13 @@ class _FakeKeyDBWithoutTransactions(_FakeKeyDB):
 
 
 def _set_auth_context(monkeypatch: pytest.MonkeyPatch, context: PlatformAuthContext | None) -> None:
-    monkeypatch.setattr("src.middleware.platform_auth.get_platform_auth_context", lambda request: context)
+    monkeypatch.setattr(
+        "src.middleware.platform_auth.get_platform_auth_context", lambda request: context
+    )
     monkeypatch.setattr("src.middleware.admin.get_platform_auth_context", lambda request: context)
-    monkeypatch.setattr("src.api.admin.endpoints.keys.get_platform_auth_context", lambda request: context)
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.keys.get_platform_auth_context", lambda request: context
+    )
 
 
 def _is_active_key(row: dict[str, Any]) -> bool:
@@ -425,12 +492,16 @@ def _install_key_asset_read_stubs(monkeypatch: pytest.MonkeyPatch) -> list[dict[
         calls.append(call)
         return call
 
-    monkeypatch.setattr("src.api.admin.endpoints.keys.build_asset_visibility_preview", fake_visibility)
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.keys.build_asset_visibility_preview", fake_visibility
+    )
     monkeypatch.setattr("src.api.admin.endpoints.keys.build_scope_asset_access", fake_access)
     return calls
 
 
-def test_get_auth_scope_tracks_effective_permissions_beyond_endpoint_permissions(monkeypatch: pytest.MonkeyPatch):
+def test_get_auth_scope_tracks_effective_permissions_beyond_endpoint_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+):
     context = _make_context(
         account_id="acct-admin",
         org_memberships=[{"organization_id": "org-1", "role": OrganizationRole.ADMIN}],
@@ -471,7 +542,9 @@ def test_get_auth_scope_keeps_permissions_separated_by_team(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_org_admin_can_revoke_non_owned_key_within_org_scope(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_org_admin_can_revoke_non_owned_key_within_org_scope(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -497,7 +570,9 @@ async def test_org_admin_can_revoke_non_owned_key_within_org_scope(client, test_
 
 
 @pytest.mark.asyncio
-async def test_self_service_user_cannot_revoke_owned_key_outside_team_scope(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_user_cannot_revoke_owned_key_outside_team_scope(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -523,7 +598,9 @@ async def test_self_service_user_cannot_revoke_owned_key_outside_team_scope(clie
 
 
 @pytest.mark.asyncio
-async def test_self_service_user_can_revoke_owned_key_within_team_scope(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_user_can_revoke_owned_key_within_team_scope(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -549,7 +626,9 @@ async def test_self_service_user_can_revoke_owned_key_within_team_scope(client, 
 
 
 @pytest.mark.asyncio
-async def test_mixed_role_user_cannot_revoke_non_owned_key_in_self_service_team(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_mixed_role_user_cannot_revoke_non_owned_key_in_self_service_team(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -578,7 +657,9 @@ async def test_mixed_role_user_cannot_revoke_non_owned_key_in_self_service_team(
 
 
 @pytest.mark.asyncio
-async def test_mixed_role_user_can_revoke_non_owned_key_in_admin_team(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_mixed_role_user_can_revoke_non_owned_key_in_admin_team(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -642,9 +723,21 @@ async def test_mixed_role_user_lists_all_admin_team_keys_and_only_owned_develope
             },
         },
         teams={
-            "team-admin": {"team_id": "team-admin", "team_alias": "Admin Team", "organization_id": "org-admin"},
-            "team-dev": {"team_id": "team-dev", "team_alias": "Developer Team", "organization_id": "org-dev"},
-            "team-outside": {"team_id": "team-outside", "team_alias": "Outside Team", "organization_id": "org-outside"},
+            "team-admin": {
+                "team_id": "team-admin",
+                "team_alias": "Admin Team",
+                "organization_id": "org-admin",
+            },
+            "team-dev": {
+                "team_id": "team-dev",
+                "team_alias": "Developer Team",
+                "organization_id": "org-dev",
+            },
+            "team-outside": {
+                "team_id": "team-outside",
+                "team_alias": "Outside Team",
+                "organization_id": "org-outside",
+            },
         },
     )
     _set_auth_context(
@@ -665,7 +758,9 @@ async def test_mixed_role_user_lists_all_admin_team_keys_and_only_owned_develope
 
 
 @pytest.mark.asyncio
-async def test_mixed_role_my_keys_lists_only_owned_keys_in_authorized_scopes(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_mixed_role_my_keys_lists_only_owned_keys_in_authorized_scopes(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -691,9 +786,21 @@ async def test_mixed_role_my_keys_lists_only_owned_keys_in_authorized_scopes(cli
             },
         },
         teams={
-            "team-admin": {"team_id": "team-admin", "team_alias": "Admin Team", "organization_id": "org-admin"},
-            "team-dev": {"team_id": "team-dev", "team_alias": "Developer Team", "organization_id": "org-dev"},
-            "team-outside": {"team_id": "team-outside", "team_alias": "Outside Team", "organization_id": "org-outside"},
+            "team-admin": {
+                "team_id": "team-admin",
+                "team_alias": "Admin Team",
+                "organization_id": "org-admin",
+            },
+            "team-dev": {
+                "team_id": "team-dev",
+                "team_alias": "Developer Team",
+                "organization_id": "org-dev",
+            },
+            "team-outside": {
+                "team_id": "team-outside",
+                "team_alias": "Outside Team",
+                "organization_id": "org-outside",
+            },
         },
     )
     _set_auth_context(
@@ -714,7 +821,9 @@ async def test_mixed_role_my_keys_lists_only_owned_keys_in_authorized_scopes(cli
 
 
 @pytest.mark.asyncio
-async def test_self_service_developer_lists_only_owned_team_keys(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_developer_lists_only_owned_team_keys(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -735,8 +844,16 @@ async def test_self_service_developer_lists_only_owned_team_keys(client, test_ap
             },
         },
         teams={
-            "team-dev": {"team_id": "team-dev", "team_alias": "Developer Team", "organization_id": "org-dev"},
-            "team-outside": {"team_id": "team-outside", "team_alias": "Outside Team", "organization_id": "org-outside"},
+            "team-dev": {
+                "team_id": "team-dev",
+                "team_alias": "Developer Team",
+                "organization_id": "org-dev",
+            },
+            "team-outside": {
+                "team_id": "team-outside",
+                "team_alias": "Outside Team",
+                "organization_id": "org-outside",
+            },
         },
     )
     _set_auth_context(
@@ -755,7 +872,9 @@ async def test_self_service_developer_lists_only_owned_team_keys(client, test_ap
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("org_role", [OrganizationRole.BILLING, OrganizationRole.AUDITOR])
-async def test_read_only_org_role_lists_scoped_keys(client, test_app, monkeypatch: pytest.MonkeyPatch, org_role: str):
+async def test_read_only_org_role_lists_scoped_keys(
+    client, test_app, monkeypatch: pytest.MonkeyPatch, org_role: str
+):
     _install_key_db(
         test_app,
         {
@@ -778,7 +897,11 @@ async def test_read_only_org_role_lists_scoped_keys(client, test_app, monkeypatc
         teams={
             "team-1": {"team_id": "team-1", "team_alias": "Team One", "organization_id": "org-1"},
             "team-2": {"team_id": "team-2", "team_alias": "Team Two", "organization_id": "org-1"},
-            "team-outside": {"team_id": "team-outside", "team_alias": "Outside Team", "organization_id": "org-2"},
+            "team-outside": {
+                "team_id": "team-outside",
+                "team_alias": "Outside Team",
+                "organization_id": "org-2",
+            },
         },
     )
     _set_auth_context(
@@ -969,7 +1092,9 @@ async def test_mixed_role_user_key_asset_read_is_full_in_admin_team_and_owner_on
 
 
 @pytest.mark.asyncio
-async def test_mixed_role_user_can_create_self_service_key_in_developer_team(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_mixed_role_user_can_create_self_service_key_in_developer_team(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {},
@@ -1027,7 +1152,9 @@ async def test_mixed_role_user_can_create_self_service_key_in_developer_team(cli
 
 
 @pytest.mark.asyncio
-async def test_self_registered_user_self_service_key_binds_runtime_user(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_registered_user_self_service_key_binds_runtime_user(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     expires = (datetime.now(tz=UTC) + timedelta(days=7)).isoformat()
     db = _install_key_db(
         test_app,
@@ -1077,7 +1204,9 @@ async def test_self_registered_user_self_service_key_binds_runtime_user(client, 
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_resolves_runtime_user_by_email(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_resolves_runtime_user_by_email(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     expires = (datetime.now(tz=UTC) + timedelta(days=7)).isoformat()
     db = _install_key_db(
         test_app,
@@ -1116,7 +1245,9 @@ async def test_self_service_key_creation_resolves_runtime_user_by_email(client, 
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_stores_normalized_utc_expiry(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_stores_normalized_utc_expiry(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     utc_expiry = datetime.now(tz=UTC).replace(microsecond=0) + timedelta(days=7)
     offset_expiry = utc_expiry.astimezone(timezone(timedelta(hours=3)))
     expected_expiry = offset_expiry.astimezone(UTC).isoformat()
@@ -1124,7 +1255,13 @@ async def test_self_service_key_creation_stores_normalized_utc_expiry(client, te
         test_app,
         {},
         teams={"team-sandbox": _self_service_team()},
-        users={"acct-dev": {"user_id": "acct-dev", "user_email": "acct-dev@example.com", "team_id": "team-sandbox"}},
+        users={
+            "acct-dev": {
+                "user_id": "acct-dev",
+                "user_email": "acct-dev@example.com",
+                "team_id": "team-sandbox",
+            }
+        },
     )
     _set_auth_context(
         monkeypatch,
@@ -1151,7 +1288,9 @@ async def test_self_service_key_creation_stores_normalized_utc_expiry(client, te
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_requires_runtime_user(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_requires_runtime_user(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {},
@@ -1176,16 +1315,27 @@ async def test_self_service_key_creation_requires_runtime_user(client, test_app,
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Self-service key creation requires a runtime user in this team"
+    assert (
+        response.json()["detail"]
+        == "Self-service key creation requires a runtime user in this team"
+    )
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_requires_transaction_support(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_requires_transaction_support(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {},
         teams={"team-sandbox": _self_service_team()},
-        users={"acct-dev": {"user_id": "acct-dev", "user_email": "acct-dev@example.com", "team_id": "team-sandbox"}},
+        users={
+            "acct-dev": {
+                "user_id": "acct-dev",
+                "user_email": "acct-dev@example.com",
+                "team_id": "team-sandbox",
+            }
+        },
         db_cls=_FakeKeyDBWithoutTransactions,
     )
     _set_auth_context(
@@ -1207,11 +1357,16 @@ async def test_self_service_key_creation_requires_transaction_support(client, te
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "Database transactions are required for self-service key creation"
+    assert (
+        response.json()["detail"]
+        == "Database transactions are required for self-service key creation"
+    )
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_enforces_max_active_keys(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_enforces_max_active_keys(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {
@@ -1248,7 +1403,9 @@ async def test_self_service_key_creation_enforces_max_active_keys(client, test_a
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_enforces_budget_ceiling(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_enforces_budget_ceiling(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {},
@@ -1278,7 +1435,9 @@ async def test_self_service_key_creation_enforces_budget_ceiling(client, test_ap
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_requires_budget_when_ceiling_configured(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_requires_budget_when_ceiling_configured(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {},
@@ -1307,7 +1466,9 @@ async def test_self_service_key_creation_requires_budget_when_ceiling_configured
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_rejects_negative_budget_without_ceiling(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_rejects_negative_budget_without_ceiling(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {},
@@ -1388,7 +1549,9 @@ async def test_self_service_key_creation_enforces_expiry_policy(
 
 
 @pytest.mark.asyncio
-async def test_self_service_key_creation_rejects_limits_above_team_limits(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_key_creation_rejects_limits_above_team_limits(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {},
@@ -1419,7 +1582,9 @@ async def test_self_service_key_creation_rejects_limits_above_team_limits(client
 
 
 @pytest.mark.asyncio
-async def test_self_service_user_cannot_update_key_asset_access(client, test_app, monkeypatch: pytest.MonkeyPatch):
+async def test_self_service_user_cannot_update_key_asset_access(
+    client, test_app, monkeypatch: pytest.MonkeyPatch
+):
     _install_key_db(
         test_app,
         {

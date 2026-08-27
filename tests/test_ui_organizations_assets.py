@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -18,6 +19,10 @@ from src.services.asset_ownership import owner_scope_from_metadata
 class _FakeAdminDB:
     def __init__(self) -> None:
         self.organizations: dict[str, dict[str, Any]] = {}
+
+    @asynccontextmanager
+    async def tx(self):
+        yield self
 
     async def execute_raw(self, query: str, *params):
         if "INSERT INTO deltallm_organizationtable" in query:
@@ -52,8 +57,12 @@ class _FakeAdminDB:
                         "organization_name": organization_name,
                         "max_budget": max_budget,
                         "soft_budget": soft_budget,
-                        "budget_duration": budget_duration if reset_fields_provided else row.get("budget_duration"),
-                        "budget_reset_at": budget_reset_at if reset_fields_provided else row.get("budget_reset_at"),
+                        "budget_duration": budget_duration
+                        if reset_fields_provided
+                        else row.get("budget_duration"),
+                        "budget_reset_at": budget_reset_at
+                        if reset_fields_provided
+                        else row.get("budget_reset_at"),
                         "rpm_limit": rpm_limit,
                         "tpm_limit": tpm_limit,
                         "rph_limit": rph_limit,
@@ -85,6 +94,9 @@ class _FakeAdminDB:
                 "model_tpm_limit": model_tpm_limit,
                 "audit_content_storage_enabled": bool(audit_content_storage_enabled),
                 "metadata": metadata or {},
+                "lifecycle_state": "active",
+                "deletion_requested_at": None,
+                "deletion_not_before_at": None,
                 "created_at": datetime.now(tz=UTC),
                 "updated_at": datetime.now(tz=UTC),
             }
@@ -171,9 +183,7 @@ class _TransactionalAdminDB(_FakeAdminDB):
                     "weight": record.weight,
                     "tier_key": record.tier_key,
                     "tier_name": record.tier_name,
-                    "effective_tier_version_id": (
-                        record.tier_version_id or "tier-version-active"
-                    ),
+                    "effective_tier_version_id": (record.tier_version_id or "tier-version-active"),
                     "tier_version_number": record.tier_version_number or 1,
                 }
                 for record in self.tier_assignments.values()
@@ -331,7 +341,9 @@ class _FakeRouteGroupRepository:
         items = list(self.groups.values())[offset : offset + limit]
         return items, len(self.groups)
 
-    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=500, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, group_key=None, scope_type=None, scope_id=None, limit=500, offset=0
+    ):  # noqa: ANN001, ANN201
         items = [binding for bindings in self.bindings.values() for binding in bindings]
         if group_key:
             items = [binding for binding in items if binding.group_key == group_key]
@@ -379,7 +391,9 @@ class _FakeCallableTargetBindingRepository:
         self.bindings: list[CallableTargetBindingRecord] = []
         self._counter = 0
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=500, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=500, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -392,7 +406,11 @@ class _FakeCallableTargetBindingRepository:
 
     async def upsert_binding(self, *, callable_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         for index, item in enumerate(self.bindings):
-            if item.callable_key == callable_key and item.scope_type == scope_type and item.scope_id == scope_id:
+            if (
+                item.callable_key == callable_key
+                and item.scope_type == scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -556,9 +574,10 @@ async def test_create_tier_managed_organization_mirrors_tier_access_in_shadow_mo
     assert payload["service_policy"]["source"] == "tier"
     assert payload["service_policy"]["runtime_source"] == "legacy"
     assert payload["service_policy"]["tier_authoritative"] is False
-    assert {
-        item["callable_key"] for item in payload["callable_target_bindings"]
-    } == {"gpt-4o-mini", "llama-fast"}
+    assert {item["callable_key"] for item in payload["callable_target_bindings"]} == {
+        "gpt-4o-mini",
+        "llama-fast",
+    }
     assert all(
         item["metadata"]["source"] == "tier_shadow_mirror"
         for item in payload["callable_target_bindings"]
@@ -841,7 +860,10 @@ async def test_create_organization_applies_route_group_bootstrap_bindings(client
     assert response.status_code == 200
     payload = response.json()
     assert len(payload["route_group_bindings"]) == 2
-    assert {item["group_key"] for item in payload["route_group_bindings"]} == {"support-route", "sales-route"}
+    assert {item["group_key"] for item in payload["route_group_bindings"]} == {
+        "support-route",
+        "sales-route",
+    }
     assert all(item["scope_type"] == "organization" for item in payload["route_group_bindings"])
     assert all(item["scope_id"] == "org-asset" for item in payload["route_group_bindings"])
     assert {item["callable_key"] for item in payload["callable_target_bindings"]} == {
@@ -856,12 +878,16 @@ async def test_create_organization_applies_route_group_bootstrap_bindings(client
     assert len(detail.json()["route_group_bindings"]) == 2
     assert len(detail.json()["callable_target_bindings"]) == 3
 
-    visibility = await client.get("/ui/api/organizations/org-asset/asset-visibility", headers=headers)
+    visibility = await client.get(
+        "/ui/api/organizations/org-asset/asset-visibility", headers=headers
+    )
     assert visibility.status_code == 200
     visibility_payload = visibility.json()
     assert visibility_payload["route_groups"]["total"] == 2
     assert visibility_payload["callable_targets"]["total"] == 3
-    assert {item["visibility_source"] for item in visibility_payload["route_groups"]["items"]} == {"granted"}
+    assert {item["visibility_source"] for item in visibility_payload["route_groups"]["items"]} == {
+        "granted"
+    }
 
 
 @pytest.mark.asyncio
@@ -922,7 +948,9 @@ async def test_create_organization_persists_monthly_budget_reset(client, test_ap
     assert payload["budget_duration"] == "1mo"
     assert payload["budget_reset_at"] == "2099-05-01T00:00:00Z"
     assert fake_db.organizations["org-reset"]["budget_reset_at"] == datetime(2099, 5, 1)
-    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 1
+    assert (
+        fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 1
+    )
 
     detail = await client.get("/ui/api/organizations/org-reset", headers=headers)
     assert detail.status_code == 200
@@ -1046,7 +1074,9 @@ async def test_create_organization_normalizes_budget_reset_to_utc(client, test_a
     assert response.status_code == 200
     assert response.json()["budget_reset_at"] == "2099-04-30T22:30:00Z"
     assert fake_db.organizations["org-reset"]["budget_reset_at"] == datetime(2099, 4, 30, 22, 30)
-    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+    assert (
+        fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+    )
 
 
 @pytest.mark.asyncio
@@ -1180,7 +1210,9 @@ async def test_update_organization_persists_and_clears_monthly_budget_reset(clie
     update_payload = update.json()
     assert update_payload["budget_duration"] == "1mo"
     assert update_payload["budget_reset_at"] == "2099-06-01T00:00:00Z"
-    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 1
+    assert (
+        fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 1
+    )
 
     cleared = await client.put(
         "/ui/api/organizations/org-reset",
@@ -1196,7 +1228,9 @@ async def test_update_organization_persists_and_clears_monthly_budget_reset(clie
 
 
 @pytest.mark.asyncio
-async def test_update_organization_preserves_monthly_anchor_when_reset_fields_are_omitted(client, test_app):
+async def test_update_organization_preserves_monthly_anchor_when_reset_fields_are_omitted(
+    client, test_app
+):
     fake_db = _FakeAdminDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     test_app.state.route_group_repository = _FakeRouteGroupRepository()
@@ -1223,7 +1257,9 @@ async def test_update_organization_preserves_monthly_anchor_when_reset_fields_ar
 
     assert response.status_code == 200
     assert response.json()["budget_reset_at"] == "2099-01-30T00:00:00Z"
-    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+    assert (
+        fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+    )
 
 
 @pytest.mark.asyncio
@@ -1261,7 +1297,9 @@ async def test_update_organization_preserves_budget_reset_when_fields_are_omitte
 
 
 @pytest.mark.asyncio
-async def test_update_organization_preserves_custom_month_reset_when_fields_are_omitted(client, test_app):
+async def test_update_organization_preserves_custom_month_reset_when_fields_are_omitted(
+    client, test_app
+):
     fake_db = _FakeAdminDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     test_app.state.route_group_repository = _FakeRouteGroupRepository()
@@ -1292,7 +1330,9 @@ async def test_update_organization_preserves_custom_month_reset_when_fields_are_
     assert payload["organization_name"] == "Renamed Org Reset"
     assert payload["budget_duration"] == "3mo"
     assert payload["budget_reset_at"].startswith("2099-05-31T00:00:00")
-    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 31
+    assert (
+        fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 31
+    )
 
 
 @pytest.mark.asyncio
@@ -1359,13 +1399,25 @@ async def test_create_organization_rejects_invalid_budget_reset_fields(client, t
     )
 
     assert invalid_duration.status_code == 400
-    assert invalid_duration.json()["detail"] == "budget_duration must be a positive integer up to 10000 followed by h, d, or mo"
+    assert (
+        invalid_duration.json()["detail"]
+        == "budget_duration must be a positive integer up to 10000 followed by h, d, or mo"
+    )
     assert out_of_range_duration.status_code == 400
-    assert out_of_range_duration.json()["detail"] == "budget_duration must be a positive integer up to 10000 followed by h, d, or mo"
+    assert (
+        out_of_range_duration.json()["detail"]
+        == "budget_duration must be a positive integer up to 10000 followed by h, d, or mo"
+    )
     assert missing_reset_at.status_code == 400
-    assert missing_reset_at.json()["detail"] == "budget_reset_at is required when budget_duration is set"
+    assert (
+        missing_reset_at.json()["detail"]
+        == "budget_reset_at is required when budget_duration is set"
+    )
     assert missing_duration.status_code == 400
-    assert missing_duration.json()["detail"] == "budget_duration is required when budget_reset_at is set"
+    assert (
+        missing_duration.json()["detail"]
+        == "budget_duration is required when budget_reset_at is set"
+    )
 
 
 @pytest.mark.asyncio
@@ -1379,7 +1431,9 @@ async def test_organization_asset_visibility_includes_owned_route_groups(client,
         mode="chat",
         routing_strategy="weighted",
         enabled=True,
-        metadata={"_asset_governance": {"owner_scope_type": "organization", "owner_scope_id": "org-asset"}},
+        metadata={
+            "_asset_governance": {"owner_scope_type": "organization", "owner_scope_id": "org-asset"}
+        },
     )
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     test_app.state.route_group_repository = route_groups
@@ -1394,7 +1448,9 @@ async def test_organization_asset_visibility_includes_owned_route_groups(client,
         json={"organization_id": "org-asset"},
     )
 
-    visibility = await client.get("/ui/api/organizations/org-asset/asset-visibility", headers=headers)
+    visibility = await client.get(
+        "/ui/api/organizations/org-asset/asset-visibility", headers=headers
+    )
 
     assert visibility.status_code == 200
     route_groups_payload = visibility.json()["route_groups"]["items"]
@@ -1434,7 +1490,9 @@ async def test_create_organization_rejects_unknown_callable_target_binding(clien
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     test_app.state.route_group_repository = route_groups
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_catalog = {"gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model")}
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model")
+    }
     setattr(test_app.state.settings, "master_key", "mk-test")
     headers = {"Authorization": "Bearer mk-test"}
 
@@ -1453,13 +1511,17 @@ async def test_create_organization_rejects_unknown_callable_target_binding(clien
 
 
 @pytest.mark.asyncio
-async def test_update_organization_rejects_invalid_bindings_without_persisting_changes(client, test_app):
+async def test_update_organization_rejects_invalid_bindings_without_persisting_changes(
+    client, test_app
+):
     fake_db = _FakeAdminDB()
     route_groups = _FakeRouteGroupRepository()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     test_app.state.route_group_repository = route_groups
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_catalog = {"gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model")}
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model")
+    }
     setattr(test_app.state.settings, "master_key", "mk-test")
     headers = {"Authorization": "Bearer mk-test"}
 

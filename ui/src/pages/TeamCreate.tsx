@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { teams, organizations } from '../lib/api';
+import {
+  teams,
+  organizations,
+  type OrganizationRecord,
+  type TeamRecord,
+} from '../lib/api';
 import {
   assetAccessLoadErrorMessage,
   buildParentScopedAssetTargets,
@@ -10,12 +15,14 @@ import {
 } from '../lib/assetAccess';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import TeamSelfServicePolicySection from '../components/admin/TeamSelfServicePolicySection';
+import OrganizationTeamSelector from '../components/admin/OrganizationTeamSelector';
+import { OrganizationLifecycleBadge } from '../components/admin/OrganizationLifecycleStatus';
 import ToggleSwitch from '../components/ToggleSwitch';
 import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
 import {
   Users, X, DollarSign, Gauge, TrendingUp, Info,
-  ChevronRight, Check, AlertCircle, Building2,
+  ChevronRight, Check, AlertCircle,
   Shield, Lock, Unlock, AlertOctagon, Clock, CalendarDays,
 } from 'lucide-react';
 
@@ -51,7 +58,7 @@ function InheritBadge({ value, unit }: { value: number | null | undefined; unit:
 
 /* ─────────────── faded background list ─────────────── */
 
-function BgList({ items }: { items: any[] }) {
+function BgList({ items }: { items: TeamRecord[] }) {
   return (
     <div className="flex-1 bg-gray-50 overflow-hidden pointer-events-none select-none">
       <div className="bg-white border-b border-gray-200 px-6 py-4">
@@ -80,7 +87,7 @@ function BgList({ items }: { items: any[] }) {
               </tr>
             </thead>
             <tbody>
-              {(items.length > 0 ? items : Array.from({ length: 5 })).map((t: any, i: number) => {
+              {(items.length > 0 ? items : Array.from({ length: 5 }, () => null)).map((t, i) => {
                 const name = t?.team_alias || t?.team_id || '—';
                 const orgName = t?.organization_name || t?.organization_id || '—';
                 const pct = t?.max_budget ? Math.min(100, ((t.spend || 0) / t.max_budget) * 100) : null;
@@ -127,24 +134,16 @@ export default function TeamCreate() {
 
   /* background teams list */
   const { data: teamsResult } = useApi(
-    () => uiAccess.team_create
-      ? teams.list({ limit: 8, offset: 0 })
+    (signal) => uiAccess.team_create
+      ? teams.list({ limit: 8, offset: 0 }, signal)
       : Promise.resolve({ data: [], pagination: { total: 0, limit: 8, offset: 0, has_more: false } }),
     [uiAccess.team_create],
   );
-  const bgItems: any[] = teamsResult?.data || [];
-
-  /* org list for selector */
-  const { data: orgResult } = useApi(
-    () => uiAccess.team_create
-      ? organizations.list({ limit: 500 })
-      : Promise.resolve({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } }),
-    [uiAccess.team_create],
-  );
-  const orgList: any[] = orgResult?.data || [];
+  const bgItems: TeamRecord[] = teamsResult?.data || [];
 
   /* form state */
   const [selectedOrgId, setSelectedOrgId] = useState(preselectedOrgId);
+  const [selectedOrg, setSelectedOrg] = useState<OrganizationRecord | null>(null);
   const [teamName, setTeamName] = useState('');
   const [nameError, setNameError] = useState(false);
   const [budgetEnabled, setBudgetEnabled] = useState(false);
@@ -174,7 +173,6 @@ export default function TeamCreate() {
   const [blocked, setBlocked] = useState(false);
 
   /* selected org details */
-  const selectedOrg = orgList.find((o) => o.organization_id === selectedOrgId) || null;
   const remainingBudget = selectedOrg?.max_budget != null
     ? Math.max(0, selectedOrg.max_budget - (selectedOrg.spend || 0))
     : null;
@@ -200,13 +198,13 @@ export default function TeamCreate() {
 
   /* org asset visibility for restrict mode */
   const { data: orgAssetVisibility, error: orgAssetVisibilityError, loading: orgAssetVisibilityLoading } = useApi(
-    () => (assetMode === 'restrict' && selectedOrgId
+    (signal) => (assetMode === 'restrict' && selectedOrgId
       ? organizations.assetVisibility(selectedOrgId, {
           include_access_groups: true,
           access_group_search: assetSearch || undefined,
           access_group_limit: accessGroupPageSize,
           access_group_offset: accessGroupPageOffset,
-        })
+        }, signal)
       : Promise.resolve(null)),
     [assetMode, selectedOrgId, assetSearch, accessGroupPageOffset],
   );
@@ -236,7 +234,9 @@ export default function TeamCreate() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isReady = teamName.trim().length > 0 && selectedOrgId.length > 0;
+  const isReady = teamName.trim().length > 0
+    && selectedOrgId.length > 0
+    && selectedOrg?.capabilities.add_team === true;
 
   const resetSelfServicePolicy = () => {
     setSelfServiceMaxKeysPerUser('');
@@ -248,6 +248,10 @@ export default function TeamCreate() {
   const handleCreate = async () => {
     if (!teamName.trim()) { setNameError(true); return; }
     if (!selectedOrgId) { setError('Please select an organization.'); return; }
+    if (!selectedOrg || !selectedOrg.capabilities.add_team) {
+      setError('Teams cannot be added while the selected organization is not active.');
+      return;
+    }
     if (assetAccessLoading) {
       setError('Wait for asset access options to finish loading before creating the team.');
       return;
@@ -259,7 +263,7 @@ export default function TeamCreate() {
     setError(null);
     setSaving(true);
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         team_alias: teamName.trim(),
         organization_id: selectedOrgId,
         max_budget: budgetEnabled && budgetValue ? Number(budgetValue) : undefined,
@@ -296,16 +300,18 @@ export default function TeamCreate() {
             selected_callable_keys: selectedKeys,
             selected_access_group_keys: selectedAccessGroupKeys,
           });
-        } catch (err: any) {
-          pageWarning = err?.message || 'Team created, but restricted asset access could not be applied.';
+        } catch (err: unknown) {
+          pageWarning = err instanceof Error && err.message
+            ? err.message
+            : 'Team created, but restricted asset access could not be applied.';
         }
       }
 
       navigate(`/teams/${created.team_id}`, {
         state: pageWarning ? { pageWarning } : undefined,
       });
-    } catch (err: any) {
-      setError(err?.message || 'Failed to create team');
+    } catch (err: unknown) {
+      setError(err instanceof Error && err.message ? err.message : 'Failed to create team');
     } finally {
       setSaving(false);
     }
@@ -369,25 +375,17 @@ export default function TeamCreate() {
               {/* Org selector */}
               <div>
                 <FieldLabel label="Organization" required />
-                <div className="relative">
-                  <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-                  <select
-                    value={selectedOrgId}
-                    onChange={(e) => handleOrgChange(e.target.value)}
-                    disabled={saving}
-                    className="w-full pl-8 pr-4 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary appearance-none disabled:opacity-50"
-                  >
-                    <option value="">Select an organization…</option>
-                    {orgList.map((o: any) => (
-                      <option key={o.organization_id} value={o.organization_id}>
-                        {o.organization_name || o.organization_id}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <OrganizationTeamSelector
+                  value={selectedOrgId}
+                  disabled={saving}
+                  enabled={uiAccess.team_create}
+                  onChange={handleOrgChange}
+                  onSelectedOrganizationChange={setSelectedOrg}
+                />
                 {selectedOrg && (
                   <div className="mt-2 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-700">
                     <span className="font-semibold">{selectedOrg.organization_name || selectedOrg.organization_id}</span>
+                    <OrganizationLifecycleBadge state={selectedOrg.lifecycle_state} />
                     <span className="text-indigo-300">·</span>
                     <span>
                       Budget:{' '}
@@ -427,6 +425,11 @@ export default function TeamCreate() {
                     )}
                   </div>
                 )}
+                {selectedOrg && !selectedOrg.capabilities.add_team ? (
+                  <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                    Teams cannot be added because this organization is not active.
+                  </p>
+                ) : null}
               </div>
 
               {/* Team name */}

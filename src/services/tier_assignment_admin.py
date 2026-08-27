@@ -25,6 +25,12 @@ from src.services.tier_assignment_cache_invalidation import (
     enqueue_org_tier_assignment_cache_invalidation,
 )
 from src.services.tier_assignment_admin_serialization import serialize_tier_assignment
+from src.services.organization_mutation_policy import (
+    OrganizationMutationError,
+    OrganizationMutationInactiveError,
+    OrganizationMutationNotFoundError,
+    OrganizationMutationPolicy,
+)
 
 
 class TierAssignmentAdminService:
@@ -59,10 +65,10 @@ class TierAssignmentAdminService:
         payload: Mapping[str, Any],
     ) -> TierAssignmentCreateResult:
         organization_id = self._normalize_organization_id(organization_id)
-        await self._require_organization(organization_id)
         try:
             fields = normalize_assignment_create(payload)
             async with self._transaction() as tx:
+                await OrganizationMutationPolicy.for_database(tx).require_active(organization_id)
                 repository = self._repository_for_transaction(tx)
                 record = await repository.upsert_org_assignment_in_current_transaction(
                     organization_id=organization_id,
@@ -77,6 +83,8 @@ class TierAssignmentAdminService:
                     metadata={"assignment_id": record.assignment_id},
                     max_attempts=self.cache_invalidation_max_attempts,
                 )
+        except OrganizationMutationError as exc:
+            raise _organization_mutation_admin_error(exc) from exc
         except ValueError as exc:
             raise _assignment_admin_error(exc) from exc
         except TierAdminError:
@@ -107,9 +115,9 @@ class TierAssignmentAdminService:
     ) -> TierAssignmentUpdateResult:
         organization_id = self._normalize_organization_id(organization_id)
         assignment_id = self._normalize_assignment_id(assignment_id)
-        await self._require_organization(organization_id)
         try:
             async with self._transaction() as tx:
+                await OrganizationMutationPolicy.for_database(tx).require_active(organization_id)
                 repository = self._repository_for_transaction(tx)
                 before = await repository.get_org_assignment_for_update(
                     assignment_id=assignment_id,
@@ -132,6 +140,8 @@ class TierAssignmentAdminService:
                     metadata={"assignment_id": assignment_id},
                     max_attempts=self.cache_invalidation_max_attempts,
                 )
+        except OrganizationMutationError as exc:
+            raise _organization_mutation_admin_error(exc) from exc
         except ValueError as exc:
             raise _assignment_admin_error(exc) from exc
         except TierAdminError:
@@ -162,9 +172,9 @@ class TierAssignmentAdminService:
     ) -> TierAssignmentDeleteResult:
         organization_id = self._normalize_organization_id(organization_id)
         assignment_id = self._normalize_assignment_id(assignment_id)
-        await self._require_organization(organization_id)
         try:
             async with self._transaction() as tx:
+                await OrganizationMutationPolicy.for_database(tx).require_active(organization_id)
                 repository = self._repository_for_transaction(tx)
                 before = await repository.get_org_assignment_for_update(
                     assignment_id=assignment_id,
@@ -185,6 +195,8 @@ class TierAssignmentAdminService:
                     metadata={"assignment_id": assignment_id},
                     max_attempts=self.cache_invalidation_max_attempts,
                 )
+        except OrganizationMutationError as exc:
+            raise _organization_mutation_admin_error(exc) from exc
         except TierAdminError:
             raise
         except Exception as exc:
@@ -274,6 +286,14 @@ def _assignment_admin_error(exc: ValueError) -> TierAdminError:
     if "existing tier" in lowered or "existing tier version" in lowered:
         return TierAdminNotFoundError(detail)
     return TierAdminValidationError(detail)
+
+
+def _organization_mutation_admin_error(exc: OrganizationMutationError) -> TierAdminError:
+    if isinstance(exc, OrganizationMutationInactiveError):
+        return TierAdminConflictError(exc.detail())
+    if isinstance(exc, OrganizationMutationNotFoundError):
+        return TierAdminNotFoundError("Organization not found")
+    return TierAdminUnavailableError("Organization lifecycle state could not be checked")
 
 
 def _assignment_storage_error(exc: Exception) -> TierAdminError | None:

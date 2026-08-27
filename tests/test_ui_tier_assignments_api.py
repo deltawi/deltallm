@@ -76,6 +76,7 @@ class _RecordingGovernanceInvalidationService:
 class _FakeTierAssignmentRepository:
     def __init__(self) -> None:
         self.organizations = {"org-1"}
+        self.organization_lifecycle_states = {"org-1": "active"}
         self.assignments: dict[str, OrganizationTierAssignmentRecord] = {}
         self.upsert_error: str | None = None
         self.upsert_exception: Exception | None = None
@@ -262,6 +263,19 @@ class _FakeTierAssignmentRepository:
         return True
 
     async def query_raw(self, sql: str, *params: object) -> list[dict[str, object]]:
+        if "FROM deltallm_organizationtable" in sql:
+            organization_id = str(params[0])
+            lifecycle_state = self.organization_lifecycle_states.get(organization_id)
+            return (
+                [
+                    {
+                        "organization_id": organization_id,
+                        "lifecycle_state": lifecycle_state,
+                    }
+                ]
+                if lifecycle_state is not None
+                else []
+            )
         if "INSERT INTO deltallm_cacheinvalidationoutbox" not in sql:
             return []
         if self.cache_enqueue_fail:
@@ -307,6 +321,7 @@ class _FakeTierAssignmentTxContext:
         self.root.tx_started += 1
         tx = _FakeTierAssignmentRepository()
         tx.organizations = set(self.root.organizations)
+        tx.organization_lifecycle_states = dict(self.root.organization_lifecycle_states)
         tx.assignments = dict(self.root.assignments)
         tx.upsert_error = self.root.upsert_error
         tx.upsert_exception = self.root.upsert_exception
@@ -730,9 +745,7 @@ async def test_org_tier_assignment_disabled_tier_conflict_returns_409(client, te
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "enabled tier assignments require an enabled tier"
-    )
+    assert response.json()["detail"] == ("enabled tier assignments require an enabled tier")
     assert key_service.org_invalidation_attempts == []
     assert test_app.state.cache_invalidation_outbox_repository.enqueues == []
     assert audit.sync_calls == []
@@ -744,9 +757,7 @@ async def test_org_tier_assignment_disabled_tier_database_race_returns_409(
     test_app,
 ) -> None:
     repository = _FakeTierAssignmentRepository()
-    repository.upsert_exception = RuntimeError(
-        "enabled tier assignments require an enabled tier"
-    )
+    repository.upsert_exception = RuntimeError("enabled tier assignments require an enabled tier")
     audit, key_service = _install_assignment_services(test_app, repository)
 
     response = await client.post(
@@ -756,9 +767,7 @@ async def test_org_tier_assignment_disabled_tier_database_race_returns_409(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "enabled tier assignments require an enabled tier"
-    )
+    assert response.json()["detail"] == ("enabled tier assignments require an enabled tier")
     assert key_service.org_invalidation_attempts == []
     assert test_app.state.cache_invalidation_outbox_repository.enqueues == []
     assert audit.sync_calls == []

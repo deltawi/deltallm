@@ -30,6 +30,15 @@ Platform administrators see a **Danger zone** on the organization overview. **De
 
 The same panel shows cleanup progress, restore while the operation remains reversible, and retry if automatic cleanup exhausts its attempts. Organization owners and organization administrators cannot use these controls. See [Organization Deletion](../features/organization-deletion.md) for retained history and operational behavior.
 
+The organization header and list show the authoritative lifecycle state:
+
+- **Active** — runtime access and administrative changes are available according to the viewer's permissions.
+- **Deletion pending** — access and administrative changes are disabled immediately. The displayed “no earlier than” time is the beginning of permanent cleanup, not the time at which access is disabled. A platform administrator can restore the organization while cleanup remains reversible.
+- **Purging** — irreversible permanent cleanup has started and restore is no longer available.
+- **Deletion failed** — access remains disabled and a platform administrator must retry cleanup from the Danger zone.
+
+Mutation controls such as Edit, Add Team, Add Member, Asset Access, and tier assignment changes are unavailable whenever the lifecycle state is not **Active**.
+
 ## Rate limit fields
 
 | Field | Description |

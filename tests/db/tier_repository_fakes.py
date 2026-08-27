@@ -20,6 +20,7 @@ class _FakePrisma:
         next_transition_at: object = None,
         assignment_rows: dict[str, dict[str, object]] | None = None,
         organization_exists: bool = True,
+        organization_lifecycle_state: str = "active",
     ) -> None:
         self.calls: list[tuple[str, tuple[object, ...]]] = []
         self.executions: list[tuple[str, tuple[object, ...]]] = []
@@ -38,6 +39,7 @@ class _FakePrisma:
         self.next_transition_at = next_transition_at
         self.assignment_rows = dict(assignment_rows or {})
         self.organization_exists = organization_exists
+        self.organization_lifecycle_state = organization_lifecycle_state
         self.tx_clients: list[_FakePrisma] = []
         self.tx_started = 0
         self.tx_committed = 0
@@ -67,7 +69,16 @@ class _FakePrisma:
                 else []
             )
         if "FROM deltallm_organizationtable" in sql and "WHERE organization_id = $1" in sql:
-            return [{"organization_id": params[0]}] if self.organization_exists else []
+            return (
+                [
+                    {
+                        "organization_id": params[0],
+                        "lifecycle_state": self.organization_lifecycle_state,
+                    }
+                ]
+                if self.organization_exists
+                else []
+            )
         if "MIN(transition_at) AS next_transition_at" in sql:
             return [{"next_transition_at": self.next_transition_at}]
         if "resolved_version.tier_version_id AS effective_tier_version_id" in sql:
@@ -297,7 +308,10 @@ class _FakePrisma:
                 return []
             if "a.organization_id = $2" in sql:
                 organization_id = str(params[1])
-                if fields is not None and str(fields.get("organization_id") or "") != organization_id:
+                if (
+                    fields is not None
+                    and str(fields.get("organization_id") or "") != organization_id
+                ):
                     return []
             return [
                 _assignment_row(
@@ -338,6 +352,7 @@ class _FakeTxContext:
             next_transition_at=self.root.next_transition_at,
             assignment_rows=self.root.assignment_rows,
             organization_exists=self.root.organization_exists,
+            organization_lifecycle_state=self.root.organization_lifecycle_state,
         )
         self.root.tx_clients.append(self.client)
         return self.client

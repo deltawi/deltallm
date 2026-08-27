@@ -1,4 +1,7 @@
 import { apiFetch } from './api/transport';
+import type { KnownOrganizationLifecycleState } from './organizationLifecycle';
+
+export type { OrganizationLifecycleState } from './organizationLifecycle';
 
 export type OrganizationDeletionCounts = {
   teams: number;
@@ -28,12 +31,6 @@ export type OrganizationDeletionCounts = {
   retained_batch_files: number;
 };
 
-export type OrganizationLifecycleState =
-  | 'active'
-  | 'deletion_pending'
-  | 'purging'
-  | 'deletion_failed';
-
 export type OrganizationDeletionPhase =
   | 'cancel_pending'
   | 'cancel_batches'
@@ -50,7 +47,7 @@ export type OrganizationDeletionPhase =
 export type OrganizationDeletionPlan = {
   organization_id: string;
   organization_name: string | null;
-  lifecycle_state: OrganizationLifecycleState;
+  lifecycle_state: KnownOrganizationLifecycleState;
   lifecycle_version: number;
   deletion_job_id: string | null;
   deletion_requested_at: string | null;

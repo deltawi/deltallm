@@ -190,7 +190,7 @@ class OrganizationAdminRepository:
     async def get(self, organization_id: str) -> dict[str, object] | None:
         rows = await self.db.query_raw(
             """
-            SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+            SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, lifecycle_state, deletion_requested_at, deletion_not_before_at, created_at, updated_at
             FROM deltallm_organizationtable
             WHERE organization_id = $1
             LIMIT 1

@@ -1,7 +1,21 @@
 import { apiFetch, withQuery } from './api/transport';
+import {
+  organizationRecordsApi,
+  type OrganizationTierAssignment,
+  type OrganizationTierAssignmentPayload,
+} from './api/organizations';
 
 export { ApiError, structuredApiErrorDetail } from './api/transport';
 export type { StructuredApiErrorDetail } from './api/transport';
+export type {
+  OrganizationCapabilities,
+  OrganizationCreatePayload,
+  OrganizationPrimaryTierSummary,
+  OrganizationRecord,
+  OrganizationServicePolicy,
+  OrganizationTierAssignment,
+  OrganizationTierAssignmentPayload,
+} from './api/organizations';
 
 export function reportingRequestInit(signal: AbortSignal, forceRefresh = false): RequestInit {
   return forceRefresh
@@ -1172,110 +1186,12 @@ export interface TierActivationPreview {
   can_activate: boolean;
 }
 
-export interface OrganizationTierAssignment {
-  assignment_id: string;
-  organization_id: string;
-  tier_id: string;
-  tier_key?: string | null;
-  tier_name?: string | null;
-  tier_version_id?: string | null;
-  tier_version_number?: number | null;
-  tier_version_status?: string | null;
-  assignment_type: 'primary' | 'addon' | 'override' | string;
-  enabled: boolean;
-  weight: number;
-  starts_at?: string | null;
-  ends_at?: string | null;
-  metadata?: Record<string, unknown> | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface OrganizationTierAssignmentPayload {
-  tier_id: string;
-  tier_version_id?: string | null;
-  assignment_type: string;
-  enabled?: boolean;
-  weight?: number;
-  starts_at?: string | null;
-  ends_at?: string | null;
-  metadata?: Record<string, unknown> | null;
-}
-
-export interface OrganizationPrimaryTierSummary {
-  assignment_id?: string | null;
-  tier_id?: string | null;
-  tier_key?: string | null;
-  tier_name?: string | null;
-  tier_version_id?: string | null;
-  tier_version_number?: number | null;
-  follows_active_version: boolean;
-}
-
-export interface OrganizationServicePolicy {
-  source: 'tier' | 'legacy';
-  runtime_source: 'tier' | 'legacy';
-  tier_authoritative: boolean;
-  tier_policy_mode: 'disabled' | 'shadow' | 'enforce' | string;
-  primary_tier: OrganizationPrimaryTierSummary | null;
-  active_assignment_count: number;
-  overlay_count: number;
-  hard_caps_configured: boolean;
-  organization_hard_caps: Partial<Record<'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit', number>>;
-  legacy_model_limits_configured: boolean;
-}
-
-export interface OrganizationRecord {
-  organization_id: string;
-  organization_name?: string | null;
-  max_budget?: number | null;
-  soft_budget?: number | null;
-  spend?: number | null;
-  budget_duration?: string | null;
-  budget_reset_at?: string | null;
-  rpm_limit?: number | null;
-  tpm_limit?: number | null;
-  rph_limit?: number | null;
-  rpd_limit?: number | null;
-  tpd_limit?: number | null;
-  model_rpm_limit?: Record<string, number> | null;
-  model_tpm_limit?: Record<string, number> | null;
-  audit_content_storage_enabled?: boolean | null;
-  service_policy: OrganizationServicePolicy;
-  primary_tier_assignment?: OrganizationTierAssignment;
-  capabilities?: Record<string, boolean>;
-  team_count?: number;
-  member_count?: number;
-  user_count?: number;
-  created_at?: string | null;
-  updated_at?: string | null;
-  [key: string]: unknown;
-}
-
-export interface OrganizationCreatePayload {
-  organization_name: string;
-  legacy_policy_exception?: boolean;
-  primary_tier?: {
-    tier_id: string;
-    tier_version_id?: string | null;
-  };
-  max_budget?: number;
-  soft_budget?: number;
-  budget_duration?: string;
-  budget_reset_at?: string;
-  rpm_limit?: number;
-  tpm_limit?: number;
-  rph_limit?: number;
-  rpd_limit?: number;
-  tpd_limit?: number;
-  audit_content_storage_enabled?: boolean;
-  callable_target_bindings?: Array<{ callable_key: string }>;
-}
-
 export interface TeamRecord {
   team_id: string;
   team_alias?: string | null;
   organization_id?: string | null;
+  organization_name?: string | null;
+  organization_lifecycle_state?: string | null;
   max_budget?: number | null;
   spend?: number | null;
   rpm_limit?: number | null;
@@ -1779,37 +1695,64 @@ export const tiers = {
 };
 
 export const organizations = {
-  list: (params?: { search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<OrganizationRecord>>(withQuery('/ui/api/organizations', params)),
-  get: (orgId: string) => apiFetch<OrganizationRecord>(`/ui/api/organizations/${encodeURIComponent(orgId)}`),
-  create: (payload: OrganizationCreatePayload) =>
-    apiFetch<OrganizationRecord>('/ui/api/organizations', { method: 'POST', json: payload }),
-  update: (orgId: string, payload: object) =>
-    apiFetch<OrganizationRecord>(`/ui/api/organizations/${encodeURIComponent(orgId)}`, { method: 'PUT', json: payload }),
-  members: (orgId: string) => apiFetch<Record<string, unknown>[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`),
-  memberCandidates: (orgId: string, params?: { search?: string; limit?: number }) =>
-    apiFetch<Record<string, unknown>[]>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/member-candidates`, params)),
+  ...organizationRecordsApi,
+  members: (orgId: string, signal?: AbortSignal) => apiFetch<Record<string, unknown>[]>(
+    `/ui/api/organizations/${encodeURIComponent(orgId)}/members`,
+    { signal },
+  ),
+  memberCandidates: (
+    orgId: string,
+    params?: { search?: string; limit?: number },
+    signal?: AbortSignal,
+  ) => apiFetch<Record<string, unknown>[]>(
+    withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/member-candidates`, params),
+    { signal },
+  ),
   addMember: (orgId: string, payload: object) =>
     apiFetch<Record<string, unknown>>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`, { method: 'POST', json: payload }),
   removeMember: (orgId: string, membershipId: string) =>
     apiFetch<{ deleted: boolean }>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
-  teams: (orgId: string) => apiFetch<TeamRecord[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/teams`),
-  assetVisibility: (orgId: string, params?: AssetVisibilityParams) =>
-    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-visibility`, params)),
-  assetAccess: (orgId: string, params?: ScopedAssetAccessParams) =>
-    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, params)),
+  teams: (orgId: string, signal?: AbortSignal) => apiFetch<TeamRecord[]>(
+    `/ui/api/organizations/${encodeURIComponent(orgId)}/teams`,
+    { signal },
+  ),
+  assetVisibility: (
+    orgId: string,
+    params?: AssetVisibilityParams,
+    signal?: AbortSignal,
+  ) => apiFetch<AssetVisibilityResponse>(
+    withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-visibility`, params),
+    { signal },
+  ),
+  assetAccess: (
+    orgId: string,
+    params?: ScopedAssetAccessParams,
+    signal?: AbortSignal,
+  ) => apiFetch<ScopedAssetAccess>(
+    withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, params),
+    { signal },
+  ),
   updateAssetAccess: (orgId: string, payload: { mode?: string; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, { method: 'PUT', json: payload }),
-  tierAssignments: (orgId: string, params?: { enabled?: boolean | string }) =>
-    apiFetch<{ data: OrganizationTierAssignment[] }>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments`, params)),
+  tierAssignments: (
+    orgId: string,
+    params?: { enabled?: boolean | string },
+    signal?: AbortSignal,
+  ) => apiFetch<{ data: OrganizationTierAssignment[] }>(
+    withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments`, params),
+    { signal },
+  ),
   createTierAssignment: (orgId: string, payload: OrganizationTierAssignmentPayload) =>
     apiFetch<OrganizationTierAssignment>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments`, { method: 'POST', json: payload }),
   updateTierAssignment: (orgId: string, assignmentId: string, payload: Partial<OrganizationTierAssignmentPayload>) =>
     apiFetch<OrganizationTierAssignment>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments/${encodeURIComponent(assignmentId)}`, { method: 'PATCH', json: payload }),
   deleteTierAssignment: (orgId: string, assignmentId: string) =>
     apiFetch<{ deleted: boolean; assignment_id: string; organization_id: string }>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments/${encodeURIComponent(assignmentId)}`, { method: 'DELETE' }),
-  tierPolicyPreview: (orgId: string) =>
-    apiFetch<OrganizationTierPolicyPreview>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-policy-preview`),
+  tierPolicyPreview: (orgId: string, signal?: AbortSignal) =>
+    apiFetch<OrganizationTierPolicyPreview>(
+      `/ui/api/organizations/${encodeURIComponent(orgId)}/tier-policy-preview`,
+      { signal },
+    ),
   simulateTierPolicy: (orgId: string, payload: TierPolicySimulationPayload) =>
     apiFetch<TierPolicySimulation>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-policy/simulate`, { method: 'POST', json: payload }),
 };
@@ -1823,9 +1766,14 @@ export interface SelfServicePolicy {
 }
 
 export const teams = {
-  list: (params?: { search?: string; organization_id?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<TeamRecord>>(withQuery('/ui/api/teams', params)),
-  get: (teamId: string) => apiFetch<TeamRecord>(`/ui/api/teams/${encodeURIComponent(teamId)}`),
+  list: (
+    params?: { search?: string; organization_id?: string; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ) => apiFetch<Paginated<TeamRecord>>(withQuery('/ui/api/teams', params), { signal }),
+  get: (teamId: string, signal?: AbortSignal) => apiFetch<TeamRecord>(
+    `/ui/api/teams/${encodeURIComponent(teamId)}`,
+    { signal },
+  ),
   getSelfServicePolicy: async (teamId: string): Promise<SelfServicePolicy> => {
     const t = await apiFetch<TeamRecord>(`/ui/api/teams/${encodeURIComponent(teamId)}`);
     return {

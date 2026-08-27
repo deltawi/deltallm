@@ -5,13 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.models.organization_lifecycle import OrganizationLifecycleState
 
-OrganizationLifecycleState = Literal[
-    "active",
-    "deletion_pending",
-    "purging",
-    "deletion_failed",
-]
 OrganizationDeletionStatus = Literal[
     "pending",
     "processing",

@@ -6,8 +6,11 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
+from src.api.admin.organization_mutations import organization_mutation_http_error
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission, validate_organization_role, validate_team_role
+from src.services.organization_mutation_policy import OrganizationMutationError
+
 router = APIRouter(tags=["Admin Invitations"])
 
 
@@ -36,21 +39,33 @@ def _can_manage_invitation(scope, invitation: dict[str, Any]) -> bool:  # noqa: 
     metadata = invitation.get("metadata")
     org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
     team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
-    organization_invites = [item for item in list((metadata or {}).get("organization_invites") or []) if isinstance(item, dict)]
-    team_invites = [item for item in list((metadata or {}).get("team_invites") or []) if isinstance(item, dict)]
+    organization_invites = [
+        item
+        for item in list((metadata or {}).get("organization_invites") or [])
+        if isinstance(item, dict)
+    ]
+    team_invites = [
+        item for item in list((metadata or {}).get("team_invites") or []) if isinstance(item, dict)
+    ]
     if not organization_invites and not team_invites:
         return False
 
     for item in organization_invites:
         organization_id = str(item.get("organization_id") or "")
-        if not organization_id or Permission.ORG_UPDATE not in org_permissions.get(organization_id, set()):
+        if not organization_id or Permission.ORG_UPDATE not in org_permissions.get(
+            organization_id, set()
+        ):
             return False
 
     for item in team_invites:
         team_id = str(item.get("team_id") or "")
         organization_id = str(item.get("organization_id") or "")
-        team_allowed = bool(team_id and Permission.TEAM_UPDATE in team_permissions.get(team_id, set()))
-        org_allowed = bool(organization_id and Permission.ORG_UPDATE in org_permissions.get(organization_id, set()))
+        team_allowed = bool(
+            team_id and Permission.TEAM_UPDATE in team_permissions.get(team_id, set())
+        )
+        org_allowed = bool(
+            organization_id and Permission.ORG_UPDATE in org_permissions.get(organization_id, set())
+        )
         if not (team_allowed or org_allowed):
             return False
     return True
@@ -81,12 +96,18 @@ async def list_invitations(
     scope = get_auth_scope(request, authorization, x_master_key)
     service = getattr(request.app.state, "invitation_service", None)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable"
+        )
     normalized_status = None if status_filter == "active" else status_filter
     invitations = await service.list_invitations(status=normalized_status, search=search)
     if status_filter == "active":
         invitations = [item for item in invitations if item.get("status") in {"pending", "sent"}]
-    visible = invitations if scope.is_platform_admin else [item for item in invitations if _can_manage_invitation(scope, item)]
+    visible = (
+        invitations
+        if scope.is_platform_admin
+        else [item for item in invitations if _can_manage_invitation(scope, item)]
+    )
     page = visible[offset : offset + limit]
     return {
         "data": page,
@@ -111,18 +132,24 @@ async def create_invitation(
     service = getattr(request.app.state, "invitation_service", None)
     db = getattr(getattr(request.app.state, "prisma_manager", None), "client", None)
     if service is None or db is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable"
+        )
 
     organization_id = str(payload.get("organization_id") or "").strip() or None
     team_id = str(payload.get("team_id") or "").strip() or None
     try:
         organization_role = (
-            validate_organization_role(str(payload.get("organization_role") or payload.get("role") or "org_member"))
+            validate_organization_role(
+                str(payload.get("organization_role") or payload.get("role") or "org_member")
+            )
             if organization_id
             else "org_member"
         )
         team_role = (
-            validate_team_role(str(payload.get("team_role") or payload.get("role") or "team_viewer"))
+            validate_team_role(
+                str(payload.get("team_role") or payload.get("role") or "team_viewer")
+            )
             if team_id
             else "team_viewer"
         )
@@ -133,18 +160,29 @@ async def create_invitation(
     if team_id and not team_org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team not found")
     if organization_id and team_org_id and team_org_id != organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id does not belong to organization_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="team_id does not belong to organization_id",
+        )
 
     if not scope.is_platform_admin:
         org_permissions = scope.org_permissions_by_id or {}
         team_permissions = scope.team_permissions_by_id or {}
-        if organization_id and Permission.ORG_UPDATE not in org_permissions.get(organization_id, set()):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        if organization_id and Permission.ORG_UPDATE not in org_permissions.get(
+            organization_id, set()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+            )
         if team_id:
             team_allowed = Permission.TEAM_UPDATE in team_permissions.get(team_id, set())
-            org_allowed = bool(team_org_id and Permission.ORG_UPDATE in org_permissions.get(team_org_id, set()))
+            org_allowed = bool(
+                team_org_id and Permission.ORG_UPDATE in org_permissions.get(team_org_id, set())
+            )
             if not (team_allowed or org_allowed):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+                )
 
     try:
         response = await service.create_invitation(
@@ -155,9 +193,13 @@ async def create_invitation(
             team_id=team_id,
             team_role=team_role,
         )
+    except OrganizationMutationError as exc:
+        raise organization_mutation_http_error(exc) from exc
     except ValueError as exc:
         detail = str(exc)
-        status_code = status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        status_code = (
+            status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        )
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
     await emit_admin_mutation_audit(
@@ -184,19 +226,29 @@ async def resend_invitation(
     scope = get_auth_scope(request, authorization, x_master_key)
     service = getattr(request.app.state, "invitation_service", None)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable"
+        )
 
     invitation = await service.get_invitation(invitation_id)
     if invitation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="invitation not found")
     if not _can_manage_invitation(scope, invitation):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
 
     try:
-        response = await service.resend_invitation(invitation_id=invitation_id, invited_by_account_id=scope.account_id)
+        response = await service.resend_invitation(
+            invitation_id=invitation_id, invited_by_account_id=scope.account_id
+        )
+    except OrganizationMutationError as exc:
+        raise organization_mutation_http_error(exc) from exc
     except ValueError as exc:
         detail = str(exc)
-        status_code = status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        status_code = (
+            status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        )
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
     await emit_admin_mutation_audit(
@@ -222,19 +274,27 @@ async def cancel_invitation(
     scope = get_auth_scope(request, authorization, x_master_key)
     service = getattr(request.app.state, "invitation_service", None)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable"
+        )
 
     invitation = await service.get_invitation(invitation_id)
     if invitation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="invitation not found")
     if not _can_manage_invitation(scope, invitation):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
 
     try:
         cancelled = await service.cancel_invitation(invitation_id=invitation_id)
+    except OrganizationMutationError as exc:
+        raise organization_mutation_http_error(exc) from exc
     except ValueError as exc:
         detail = str(exc)
-        status_code = status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        status_code = (
+            status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        )
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
     response = {"cancelled": cancelled, "invitation_id": invitation_id}

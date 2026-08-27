@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
 from src.models.platform_auth import PlatformAuthContext
-from src.services.ui_authorization import build_batch_create_session_capabilities
+from src.services.ui_authorization import (
+    build_batch_create_session_capabilities,
+    build_organization_capabilities,
+    build_team_capabilities,
+)
 
 
 class FakeAuthorizationDB:
@@ -30,6 +34,9 @@ class FakeAuthorizationDB:
                 "model_tpm_limit": None,
                 "audit_content_storage_enabled": False,
                 "metadata": {},
+                "lifecycle_state": "active",
+                "deletion_requested_at": None,
+                "deletion_not_before_at": None,
                 "created_at": now,
                 "updated_at": now,
             },
@@ -39,6 +46,7 @@ class FakeAuthorizationDB:
                 "team_id": "team-1",
                 "team_alias": "Team One",
                 "organization_id": "org-1",
+                "organization_lifecycle_state": "active",
                 "max_budget": None,
                 "spend": 0.0,
                 "rpm_limit": None,
@@ -143,18 +151,36 @@ class FakeAuthorizationDB:
             return [row] if row else []
         if "COUNT(*) AS total FROM deltallm_batch_job j" in query:
             return [{"total": 1}]
-        if "COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress" in query:
-            return [{"total": 1, "queued": 0, "in_progress": 1, "completed": 0, "failed": 0, "cancelled": 0}]
-        if "FROM deltallm_batch_job" in query and "WHERE batch_id = $1" in query and "LEFT JOIN" not in query:
+        if (
+            "COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress"
+            in query
+        ):
+            return [
+                {
+                    "total": 1,
+                    "queued": 0,
+                    "in_progress": 1,
+                    "completed": 0,
+                    "failed": 0,
+                    "cancelled": 0,
+                }
+            ]
+        if (
+            "FROM deltallm_batch_job" in query
+            and "WHERE batch_id = $1" in query
+            and "LEFT JOIN" not in query
+        ):
             row = self.batches.get(str(params[0]))
             if not row:
                 return []
-            return [{
-                "batch_id": row["batch_id"],
-                "status": row["status"],
-                "created_by_team_id": row["created_by_team_id"],
-                "created_by_organization_id": row["created_by_organization_id"],
-            }]
+            return [
+                {
+                    "batch_id": row["batch_id"],
+                    "status": row["status"],
+                    "created_by_team_id": row["created_by_team_id"],
+                    "created_by_organization_id": row["created_by_organization_id"],
+                }
+            ]
         if "FROM deltallm_batch_job j" in query and "LEFT JOIN deltallm_teamtable t" in query:
             if "WHERE j.batch_id = $1" in query:
                 row = self.batches.get(str(params[0]))
@@ -164,10 +190,12 @@ class FakeAuthorizationDB:
             batch = self.batches.get(str(params[0]))
             if not batch:
                 return []
-            return [{
-                "total_provider_cost": batch["total_provider_cost"],
-                "total_billed_cost": batch["total_billed_cost"],
-            }]
+            return [
+                {
+                    "total_provider_cost": batch["total_provider_cost"],
+                    "total_billed_cost": batch["total_billed_cost"],
+                }
+            ]
         if "SELECT COUNT(*) AS total FROM deltallm_batch_item" in query:
             return [{"total": len(self.batch_items)}]
         if "FROM deltallm_batch_item" in query:
@@ -182,9 +210,7 @@ class FakeAuthorizationDB:
                 for row in rows:
                     error_body = row.pop("error_body", None)
                     row["_has_error_body"] = error_body is not None
-                    row["_error_retry_category"] = (error_body or {}).get(
-                        "retry_category"
-                    )
+                    row["_error_retry_category"] = (error_body or {}).get("retry_category")
                 return rows
             if "request_body IS NOT NULL AS has_request_body" in query:
                 if "line_number > $2" in query:
@@ -209,9 +235,9 @@ class FakeAuthorizationDB:
                         "provider_cost": item["provider_cost"],
                         "billed_cost": item["billed_cost"],
                         "last_error": item["last_error"],
-                        "_error_retry_category": (
-                            item.get("error_body") or {}
-                        ).get("retry_category"),
+                        "_error_retry_category": (item.get("error_body") or {}).get(
+                            "retry_category"
+                        ),
                         "has_request_body": item.get("request_body") is not None,
                         "has_response_body": item.get("response_body") is not None,
                         "has_error_body": item.get("error_body") is not None,
@@ -221,6 +247,24 @@ class FakeAuthorizationDB:
                 ]
             return list(self.batch_items)
         return []
+
+
+def test_organization_capabilities_require_an_explicit_active_lifecycle() -> None:
+    scope = AuthScope(is_platform_admin=True, org_ids=["org-1"])
+
+    active = build_organization_capabilities(
+        scope,
+        {"organization_id": "org-1", "lifecycle_state": "active"},
+    )
+    missing = build_organization_capabilities(scope, {"organization_id": "org-1"})
+
+    assert active["manage_assets"] is True
+    assert active["manage_service_policy"] is True
+    assert missing["edit"] is False
+    assert missing["add_team"] is False
+    assert missing["manage_members"] is False
+    assert missing["manage_assets"] is False
+    assert missing["manage_service_policy"] is False
 
 
 @pytest.mark.asyncio
@@ -341,7 +385,9 @@ async def test_batch_feature_status_returns_embeddings_batch_flag(client, test_a
     setattr(test_app.state.settings, "master_key", "mk-test")
     setattr(test_app.state.app_config.general_settings, "embeddings_batch_enabled", enabled)
 
-    response = await client.get("/ui/api/batches/feature-status", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/batches/feature-status", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     assert response.json() == {"embeddings_batch_enabled": enabled}
@@ -367,13 +413,51 @@ async def test_batch_feature_status_requires_batch_page_permission(client, test_
 
     test_app.state.platform_identity_service = StubIdentityService()
 
-    response = await client.get("/ui/api/batches/feature-status", cookies={"deltallm_session": "session-token"})
+    response = await client.get(
+        "/ui/api/batches/feature-status", cookies={"deltallm_session": "session-token"}
+    )
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Insufficient permissions"
 
 
-def test_build_batch_create_session_capabilities_disables_admin_actions_when_runtime_unavailable() -> None:
+@pytest.mark.parametrize(
+    "state",
+    ["deletion_pending", "purging", "deletion_failed", "future_state", None],
+)
+def test_build_team_capabilities_fails_closed_for_inactive_or_unknown_org(
+    state: str | None,
+) -> None:
+    scope = AuthScope(
+        is_platform_admin=True,
+        team_ids=["team-1"],
+        team_permissions_by_id={"team-1": {Permission.TEAM_UPDATE, Permission.KEY_CREATE_SELF}},
+    )
+
+    capabilities = build_team_capabilities(
+        scope,
+        {
+            "team_id": "team-1",
+            "organization_id": "org-1",
+            "organization_lifecycle_state": state,
+            "self_service_keys_enabled": True,
+        },
+    )
+
+    assert capabilities == {
+        "view": True,
+        "edit": False,
+        "delete": False,
+        "manage_members": False,
+        "manage_assets": False,
+        "manage_self_service_policy": False,
+        "create_self_key": False,
+    }
+
+
+def test_build_batch_create_session_capabilities_disables_admin_actions_when_runtime_unavailable() -> (
+    None
+):
     scope = AuthScope(
         is_platform_admin=False,
         team_ids=["team-1"],
@@ -456,27 +540,89 @@ async def test_get_organization_returns_capabilities(client, test_app, monkeypat
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=False,
             org_ids=["org-1"],
-            org_permissions_by_id={"org-1": {Permission.ORG_READ, Permission.ORG_UPDATE, Permission.TEAM_UPDATE}},
+            org_permissions_by_id={
+                "org-1": {Permission.ORG_READ, Permission.ORG_UPDATE, Permission.TEAM_UPDATE}
+            },
         ),
     )
 
-    response = await client.get("/ui/api/organizations/org-1", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/organizations/org-1", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["organization_id"] == "org-1"
+    assert payload["lifecycle_state"] == "active"
+    assert payload["deletion_requested_at"] is None
+    assert payload["deletion_not_before_at"] is None
     assert payload["capabilities"] == {
         "view": True,
         "edit": True,
         "add_team": True,
         "manage_members": True,
         "manage_assets": False,
+        "manage_service_policy": False,
         "view_usage": False,
     }
 
 
 @pytest.mark.asyncio
-async def test_list_batches_keeps_developer_read_access_and_hides_cancel(client, test_app, monkeypatch):
+async def test_get_inactive_organization_disables_mutation_capabilities(
+    client, test_app, monkeypatch
+):
+    fake_db = FakeAuthorizationDB()
+    deletion_requested_at = datetime.now(tz=UTC)
+    deletion_not_before_at = deletion_requested_at + timedelta(days=1)
+    fake_db.organizations["org-1"].update(
+        {
+            "lifecycle_state": "deletion_pending",
+            "deletion_requested_at": deletion_requested_at,
+            "deletion_not_before_at": deletion_not_before_at,
+        }
+    )
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.organizations.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=True,
+            org_ids=["org-1"],
+            org_permissions_by_id={
+                "org-1": {
+                    Permission.ORG_READ,
+                    Permission.ORG_UPDATE,
+                    Permission.TEAM_UPDATE,
+                }
+            },
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/organizations/org-1", headers={"Authorization": "Bearer mk-test"}
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lifecycle_state"] == "deletion_pending"
+    assert payload["deletion_requested_at"] == deletion_requested_at.isoformat()
+    assert payload["deletion_not_before_at"] == deletion_not_before_at.isoformat()
+    assert payload["capabilities"] == {
+        "view": True,
+        "edit": False,
+        "add_team": False,
+        "manage_members": False,
+        "manage_assets": False,
+        "manage_service_policy": False,
+        "view_usage": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_batches_keeps_developer_read_access_and_hides_cancel(
+    client, test_app, monkeypatch
+):
     fake_db = FakeAuthorizationDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -487,7 +633,9 @@ async def test_list_batches_keeps_developer_read_access_and_hides_cancel(client,
             is_platform_admin=False,
             org_ids=[],
             team_ids=["team-1"],
-            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_CREATE_SELF}},
+            team_permissions_by_id={
+                "team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_CREATE_SELF}
+            },
         ),
     )
 
@@ -507,7 +655,9 @@ async def test_list_batches_keeps_developer_read_access_and_hides_cancel(client,
 
 
 @pytest.mark.asyncio
-async def test_list_batches_exposes_repair_capabilities_for_updating_scope(client, test_app, monkeypatch):
+async def test_list_batches_exposes_repair_capabilities_for_updating_scope(
+    client, test_app, monkeypatch
+):
     fake_db = FakeAuthorizationDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -518,7 +668,9 @@ async def test_list_batches_exposes_repair_capabilities_for_updating_scope(clien
             is_platform_admin=False,
             org_ids=[],
             team_ids=["team-1"],
-            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_UPDATE}},
+            team_permissions_by_id={
+                "team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_UPDATE}
+            },
         ),
     )
 
@@ -578,7 +730,9 @@ async def test_get_batch_detail_returns_skinny_paginated_items(client, test_app,
     assert "metadata" not in payload
     assert "total_billed_cost" not in payload
     assert "total_provider_cost" not in payload
-    assert not any("COUNT(*) AS total FROM deltallm_batch_item" in query for query, _ in fake_db.queries)
+    assert not any(
+        "COUNT(*) AS total FROM deltallm_batch_item" in query for query, _ in fake_db.queries
+    )
     assert not any("SUM(provider_cost)" in query for query, _ in fake_db.queries)
 
 
@@ -748,11 +902,13 @@ async def test_batch_ui_endpoints_sanitize_historical_provider_errors(
         ("in_progress", "batch-in-progress"),
     ],
 )
-async def test_list_batches_status_filter_uses_enum_query(client, test_app, monkeypatch, status_filter, expected_batch_id):
+async def test_list_batches_status_filter_uses_enum_query(
+    client, test_app, monkeypatch, status_filter, expected_batch_id
+):
     class FilteredBatchDB(FakeAuthorizationDB):
         async def query_raw(self, query: str, *params):
-            if 'COUNT(*) AS total FROM deltallm_batch_job j' in query:
-                if 'j.status = $' in query:
+            if "COUNT(*) AS total FROM deltallm_batch_job j" in query:
+                if "j.status = $" in query:
                     assert '::"DeltaLLM_BatchJobStatus"' in query
                     assert "j.status::text =" not in query
                     return [{"total": 1 if status_filter in params else 0}]
@@ -761,16 +917,26 @@ async def test_list_batches_status_filter_uses_enum_query(client, test_app, monk
                 if "WHERE j.batch_id = $1" in query:
                     row = self.batches.get(str(params[0]))
                     return [row] if row else []
-                if 'j.status = $' in query:
+                if "j.status = $" in query:
                     assert '::"DeltaLLM_BatchJobStatus"' in query
                     assert "j.status::text =" not in query
-                    return [{
-                        **self.batches["batch-1"],
-                        "batch_id": expected_batch_id,
-                        "status": status_filter,
-                        "in_progress_items": 0 if status_filter == "queued" else self.batches["batch-1"]["in_progress_items"],
-                        "completed_items": 0 if status_filter == "queued" else self.batches["batch-1"]["completed_items"],
-                    }] if status_filter in params else []
+                    return (
+                        [
+                            {
+                                **self.batches["batch-1"],
+                                "batch_id": expected_batch_id,
+                                "status": status_filter,
+                                "in_progress_items": 0
+                                if status_filter == "queued"
+                                else self.batches["batch-1"]["in_progress_items"],
+                                "completed_items": 0
+                                if status_filter == "queued"
+                                else self.batches["batch-1"]["completed_items"],
+                            }
+                        ]
+                        if status_filter in params
+                        else []
+                    )
                 return [self.batches["batch-1"]]
             return await super().query_raw(query, *params)
 
@@ -788,7 +954,9 @@ async def test_list_batches_status_filter_uses_enum_query(client, test_app, monk
         ),
     )
 
-    response = await client.get(f"/ui/api/batches?status={status_filter}", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        f"/ui/api/batches?status={status_filter}", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -798,7 +966,9 @@ async def test_list_batches_status_filter_uses_enum_query(client, test_app, monk
 
 
 @pytest.mark.asyncio
-async def test_list_batches_includes_org_owned_batches_when_scope_has_team_and_org_memberships(client, test_app, monkeypatch):
+async def test_list_batches_includes_org_owned_batches_when_scope_has_team_and_org_memberships(
+    client, test_app, monkeypatch
+):
     class MixedScopeBatchDB(FakeAuthorizationDB):
         def __init__(self) -> None:
             super().__init__()
@@ -880,14 +1050,18 @@ async def test_batch_summary_counts_finalizing_as_in_progress(client, test_app, 
         ),
     )
 
-    response = await client.get("/ui/api/batches/summary", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/batches/summary", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     assert response.json()["in_progress"] == 1
 
 
 @pytest.mark.asyncio
-async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_org_memberships(client, test_app, monkeypatch):
+async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_org_memberships(
+    client, test_app, monkeypatch
+):
     class MixedScopeBatchDB(FakeAuthorizationDB):
         def __init__(self) -> None:
             super().__init__()
@@ -905,20 +1079,29 @@ async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_
             }
 
         async def query_raw(self, query: str, *params):
-            if "COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress" in query:
+            if (
+                "COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress"
+                in query
+            ):
                 completed = sum(1 for row in self.batches.values() if row["status"] == "completed")
                 failed = sum(1 for row in self.batches.values() if row["status"] == "failed")
                 cancelled = sum(1 for row in self.batches.values() if row["status"] == "cancelled")
                 queued = sum(1 for row in self.batches.values() if row["status"] == "queued")
-                in_progress = sum(1 for row in self.batches.values() if row["status"] in {"in_progress", "finalizing"})
-                return [{
-                    "total": len(self.batches),
-                    "queued": queued,
-                    "in_progress": in_progress,
-                    "completed": completed,
-                    "failed": failed,
-                    "cancelled": cancelled,
-                }]
+                in_progress = sum(
+                    1
+                    for row in self.batches.values()
+                    if row["status"] in {"in_progress", "finalizing"}
+                )
+                return [
+                    {
+                        "total": len(self.batches),
+                        "queued": queued,
+                        "in_progress": in_progress,
+                        "completed": completed,
+                        "failed": failed,
+                        "cancelled": cancelled,
+                    }
+                ]
             return await super().query_raw(query, *params)
 
     fake_db = MixedScopeBatchDB()
@@ -936,7 +1119,9 @@ async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_
         ),
     )
 
-    response = await client.get("/ui/api/batches/summary", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/batches/summary", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -950,7 +1135,9 @@ async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_
 
 
 @pytest.mark.asyncio
-async def test_list_batch_create_sessions_exposes_session_capabilities_for_updating_scope(client, test_app, monkeypatch):
+async def test_list_batch_create_sessions_exposes_session_capabilities_for_updating_scope(
+    client, test_app, monkeypatch
+):
     class SessionDB(FakeAuthorizationDB):
         def __init__(self) -> None:
             super().__init__()
@@ -984,7 +1171,10 @@ async def test_list_batch_create_sessions_exposes_session_capabilities_for_updat
         async def query_raw(self, query: str, *params):
             if "COUNT(*) AS total" in query and "FROM deltallm_batch_create_session s" in query:
                 return [{"total": len(self.sessions)}]
-            if "FROM deltallm_batch_create_session s" in query and "LEFT JOIN deltallm_teamtable t" in query:
+            if (
+                "FROM deltallm_batch_create_session s" in query
+                and "LEFT JOIN deltallm_teamtable t" in query
+            ):
                 if "WHERE s.session_id = $1" in query:
                     return [self.sessions[0]]
                 return list(self.sessions)
@@ -1001,11 +1191,15 @@ async def test_list_batch_create_sessions_exposes_session_capabilities_for_updat
             is_platform_admin=False,
             org_ids=[],
             team_ids=["team-1"],
-            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_UPDATE}},
+            team_permissions_by_id={
+                "team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_UPDATE}
+            },
         ),
     )
 
-    response = await client.get("/ui/api/batch-create-sessions", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/batch-create-sessions", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()

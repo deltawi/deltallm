@@ -14,16 +14,12 @@ import Models from './pages/Models';
 import Tiers from './pages/Tiers';
 import TierDetail from './pages/TierDetail';
 import ApiKeys from './pages/ApiKeys';
-import Organizations from './pages/Organizations';
 import Teams from './pages/Teams';
 import UsersPage from './pages/UsersPage';
 import Usage from './pages/Usage';
 import Guardrails from './pages/Guardrails';
 import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
-import OrganizationDetail from './pages/OrganizationDetail';
-import OrganizationCreate from './pages/OrganizationCreate';
-import TeamCreate from './pages/TeamCreate';
 import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
 import ModelEdit from './pages/ModelEdit';
@@ -45,6 +41,10 @@ import { defaultRouteForUiAccess, resolveUiAccess } from './lib/authorization';
 import { loginPathFor, returnToFromSearch } from './lib/authRedirect';
 
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const Organizations = lazy(() => import('./pages/Organizations'));
+const OrganizationDetail = lazy(() => import('./pages/OrganizationDetail'));
+const OrganizationCreate = lazy(() => import('./pages/OrganizationCreate'));
+const TeamCreate = lazy(() => import('./pages/TeamCreate'));
 
 class RouteChunkBoundary extends Component<
   { children: ReactNode },
@@ -65,7 +65,7 @@ class RouteChunkBoundary extends Component<
       return (
         <div className="flex min-h-64 items-center justify-center px-4">
           <div className="max-w-md rounded-xl border border-amber-200 bg-white p-6 text-center shadow-sm">
-            <h1 className="text-lg font-semibold text-gray-900">Unable to load settings</h1>
+            <h1 className="text-lg font-semibold text-gray-900">Unable to load this page</h1>
             <p className="mt-2 text-sm text-gray-600">
               Reload the application to retry loading this section.
             </p>
@@ -82,9 +82,19 @@ class RouteChunkBoundary extends Component<
 
 function RouteLoading() {
   return (
-    <div className="flex min-h-64 items-center justify-center" role="status" aria-label="Loading settings">
+    <div className="flex min-h-64 items-center justify-center" role="status" aria-label="Loading page">
       <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
     </div>
+  );
+}
+
+function ChunkedRoute({ children }: { children: ReactNode }) {
+  return (
+    <RouteChunkBoundary>
+      <Suspense fallback={<RouteLoading />}>
+        {children}
+      </Suspense>
+    </RouteChunkBoundary>
   );
 }
 
@@ -197,11 +207,11 @@ function AppRoutes() {
         <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <MCPServerDetail /> : <Navigate to="/" replace />} />
         <Route path="/mcp-approvals" element={uiAccess.mcp_approvals ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
         <Route path="/keys" element={uiAccess.keys ? <ApiKeys /> : <Navigate to="/" replace />} />
-        <Route path="/organizations" element={uiAccess.organizations ? <Organizations /> : <Navigate to="/" replace />} />
-        <Route path="/organizations/new" element={uiAccess.organization_create ? <OrganizationCreate /> : <Navigate to="/organizations" replace />} />
-        <Route path="/organizations/:orgId" element={uiAccess.organizations ? <OrganizationDetail /> : <Navigate to="/" replace />} />
+        <Route path="/organizations" element={uiAccess.organizations ? <ChunkedRoute><Organizations /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/organizations/new" element={uiAccess.organization_create ? <ChunkedRoute><OrganizationCreate /></ChunkedRoute> : <Navigate to="/organizations" replace />} />
+        <Route path="/organizations/:orgId" element={uiAccess.organizations ? <ChunkedRoute><OrganizationDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/teams" element={uiAccess.teams ? <Teams /> : <Navigate to="/" replace />} />
-        <Route path="/teams/new" element={uiAccess.team_create ? <TeamCreate /> : <Navigate to="/teams" replace />} />
+        <Route path="/teams/new" element={uiAccess.team_create ? <ChunkedRoute><TeamCreate /></ChunkedRoute> : <Navigate to="/teams" replace />} />
         <Route path="/teams/:teamId" element={uiAccess.teams ? <TeamDetail /> : <Navigate to="/" replace />} />
         <Route path="/users" element={uiAccess.people_access ? <UsersPage /> : <Navigate to="/" replace />} />
         <Route path="/audit" element={uiAccess.audit ? <AuditLogs /> : <Navigate to="/" replace />} />
@@ -213,11 +223,7 @@ function AppRoutes() {
         <Route
           path="/settings"
           element={uiAccess.settings ? (
-            <RouteChunkBoundary>
-              <Suspense fallback={<RouteLoading />}>
-                <SettingsPage />
-              </Suspense>
-            </RouteChunkBoundary>
+            <ChunkedRoute><SettingsPage /></ChunkedRoute>
           ) : <Navigate to="/" replace />}
         />
         <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : defaultRoute} replace />} />

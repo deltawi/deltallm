@@ -6,10 +6,25 @@ from typing import Any
 import pytest
 
 
+class _FakeTransaction:
+    def __init__(self, db: "FakeAdminDB") -> None:
+        self.db = db
+
+    async def __aenter__(self) -> "FakeAdminDB":
+        return self.db
+
+    async def __aexit__(self, exc_type, exc, traceback) -> bool:  # noqa: ANN001
+        del exc_type, exc, traceback
+        return False
+
+
 class FakeAdminDB:
     def __init__(self) -> None:
         self.organizations: dict[str, dict[str, Any]] = {}
         self.teams: dict[str, dict[str, Any]] = {}
+
+    def tx(self) -> _FakeTransaction:
+        return _FakeTransaction(self)
 
     async def execute_raw(self, query: str, *params):
         if "INSERT INTO deltallm_organizationtable" in query:
@@ -45,8 +60,13 @@ class FakeAdminDB:
                 "tpd_limit": tpd_limit,
                 "model_rpm_limit": model_rpm_limit,
                 "model_tpm_limit": model_tpm_limit,
-                "audit_content_storage_enabled": bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
+                "audit_content_storage_enabled": bool(audit_content_storage_enabled)
+                if audit_content_storage_enabled is not None
+                else False,
                 "metadata": metadata or {},
+                "lifecycle_state": "active",
+                "deletion_requested_at": None,
+                "deletion_not_before_at": None,
                 "created_at": datetime.now(tz=UTC),
                 "updated_at": datetime.now(tz=UTC),
             }
@@ -115,6 +135,7 @@ class FakeAdminDB:
                 "team_id": team_id,
                 "team_alias": team_alias,
                 "organization_id": organization_id,
+                "organization_lifecycle_state": "active",
                 "max_budget": max_budget,
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
@@ -216,7 +237,14 @@ async def test_ui_create_endpoints_accept_rate_limits(client, test_app):
     assert org.status_code == 200
     assert team.status_code == 200
     assert org.json()["rpm_limit"] == 40
+    assert org.json()["lifecycle_state"] == "active"
+    assert org.json()["capabilities"]["edit"] is True
     assert team.json()["tpm_limit"] == 3000
+
+    listed = await client.get("/ui/api/organizations", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["lifecycle_state"] == "active"
+    assert listed.json()["data"][0]["capabilities"]["add_team"] is True
 
 
 @pytest.mark.asyncio
@@ -305,3 +333,78 @@ async def test_ui_update_endpoints_persist_rate_limits(client, test_app):
     assert team.status_code == 200
     assert org.json()["rpm_limit"] == 99
     assert team.json()["tpm_limit"] == 8888
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("post", "/ui/api/organizations", {"organization_id": "org-1", "rpm_limit": 99}),
+        ("post", "/ui/api/teams", {"team_id": "team-blocked", "organization_id": "org-1"}),
+        ("put", "/ui/api/organizations/org-1", {"rpm_limit": 99}),
+        ("put", "/ui/api/teams/team-1", {"rpm_limit": 99}),
+    ],
+)
+async def test_inactive_organization_rejects_admin_mutations(
+    client,
+    test_app,
+    method: str,
+    path: str,
+    payload: dict[str, object],
+) -> None:
+    fake_db = FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={"organization_id": "org-1"},
+    )
+    await client.post(
+        "/ui/api/teams",
+        headers=headers,
+        json={"team_id": "team-1", "organization_id": "org-1"},
+    )
+    fake_db.organizations["org-1"]["lifecycle_state"] = "deletion_pending"
+
+    response = await client.request(method, path, headers=headers, json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "organization_inactive",
+        "message": "Organization administrative changes are disabled",
+        "lifecycle_state": "deletion_pending",
+    }
+
+
+@pytest.mark.asyncio
+async def test_inactive_organization_rejects_service_account_creation(
+    client,
+    test_app,
+) -> None:
+    fake_db = FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={"organization_id": "org-1"},
+    )
+    await client.post(
+        "/ui/api/teams",
+        headers=headers,
+        json={"team_id": "team-1", "organization_id": "org-1"},
+    )
+    fake_db.organizations["org-1"]["lifecycle_state"] = "deletion_pending"
+
+    response = await client.post(
+        "/ui/api/service-accounts",
+        headers=headers,
+        json={"team_id": "team-1", "name": "automation"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "organization_inactive"

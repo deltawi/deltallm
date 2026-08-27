@@ -6,6 +6,8 @@ import { resolveUiAccess } from '../lib/authorization';
 import {
   callableTargets,
   organizations,
+  type CallableTargetListItem,
+  type OrganizationRecord,
   type OrganizationServicePolicy,
 } from '../lib/api';
 import {
@@ -21,6 +23,7 @@ import {
 } from '../lib/format';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import { OrganizationLifecycleBadge } from '../components/admin/OrganizationLifecycleStatus';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
   Plus, Building2, Users, DollarSign,
@@ -30,8 +33,23 @@ import {
 
 /* ─────────────── sub-components ─────────────── */
 
-function BudgetRing({ spend, budget }: { spend: number; budget: number | null }) {
-  if (!budget) return <span className="text-xs text-gray-400 font-medium">Unlimited</span>;
+const BUDGET_STATUS: Record<string, { dot: string; label: string }> = {
+  healthy: { dot: 'bg-emerald-500', label: 'Budget healthy' },
+  warning: { dot: 'bg-amber-500', label: 'Budget near limit' },
+  over: { dot: 'bg-red-500', label: 'Budget over limit' },
+  idle: { dot: 'bg-gray-300', label: 'No spend' },
+};
+
+function BudgetRing({
+  spend,
+  budget,
+  status,
+}: {
+  spend: number;
+  budget: number | null;
+  status: string;
+}) {
+  if (!budget) return <span className="text-xs text-gray-500 font-medium">Budget unlimited</span>;
   const pct = Math.min(100, (spend / budget) * 100);
   const r = 18;
   const circ = 2 * Math.PI * r;
@@ -54,19 +72,13 @@ function BudgetRing({ spend, budget }: { spend: number; budget: number | null })
           ${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}
         </p>
         <p className="text-[10px] text-gray-400">of ${budget.toLocaleString()}</p>
+        <p className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-gray-500">
+          <span className={`h-1.5 w-1.5 rounded-full ${BUDGET_STATUS[status]?.dot ?? 'bg-gray-300'}`} />
+          {BUDGET_STATUS[status]?.label ?? 'Budget status unavailable'}
+        </p>
       </div>
     </div>
   );
-}
-
-function StatusDot({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    healthy: 'bg-emerald-500',
-    warning: 'bg-amber-500',
-    over: 'bg-red-500',
-    idle: 'bg-gray-300',
-  };
-  return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${map[status] ?? 'bg-gray-300'}`} />;
 }
 
 function ServicePolicySummary({ policy }: { policy?: OrganizationServicePolicy | null }) {
@@ -116,7 +128,7 @@ function ServicePolicySummary({ policy }: { policy?: OrganizationServicePolicy |
   );
 }
 
-function getStatus(row: any): string {
+function getStatus(row: Pick<OrganizationRecord, 'spend' | 'max_budget'>): string {
   const spend = row.spend || 0;
   const budget = row.max_budget ?? null;
   if (budget !== null && spend > budget) return 'over';
@@ -150,10 +162,10 @@ export default function Organizations() {
   }, [searchInput]);
 
   const { data: result, loading, refetch } = useApi(
-    () => organizations.list({ search, limit: pageSize, offset: pageOffset }),
+    (signal) => organizations.list({ search, limit: pageSize, offset: pageOffset }, signal),
     [search, pageOffset],
   );
-  const rawItems: any[] = result?.data || [];
+  const rawItems: OrganizationRecord[] = result?.data || [];
   const pagination = result?.pagination;
 
   /* client-side status filter (only filters the current page) */
@@ -191,7 +203,7 @@ export default function Organizations() {
   }, [assetSearchInput]);
 
   /* ── modal state ── */
-  const [editItem, setEditItem] = useState<any>(null);
+  const [editItem, setEditItem] = useState<OrganizationRecord | null>(null);
   const [form, setForm] = useState({
     organization_name: '',
     max_budget: '',
@@ -355,14 +367,14 @@ export default function Organizations() {
       setEditItem(null);
       resetForm();
       refetch();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save organization');
+    } catch (err: unknown) {
+      setError(err instanceof Error && err.message ? err.message : 'Failed to save organization');
     } finally {
       setSaving(false);
     }
   };
 
-  const openEdit = (row: any) => {
+  const openEdit = (row: OrganizationRecord) => {
     setPageError(null);
     setForm({
       organization_name: row.organization_name || '',
@@ -391,7 +403,7 @@ export default function Organizations() {
   };
 
   const assetTargets = buildCatalogAssetTargets(
-    (callableTargetPage?.data || []) as any[],
+    (callableTargetPage?.data || []) as CallableTargetListItem[],
     form.selected_callable_keys,
     currentEditAssetAccess?.selected_callable_keys || [],
   );
@@ -532,7 +544,7 @@ export default function Organizations() {
                   </td>
                 </tr>
               ) : (
-                items.map((row: any, i: number) => {
+                items.map((row, i) => {
                   const status = getStatus(row);
                   const name = row.organization_name || row.organization_id;
                   return (
@@ -552,7 +564,7 @@ export default function Organizations() {
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="font-semibold text-gray-900 text-sm">{name}</span>
-                              <StatusDot status={status} />
+                              <OrganizationLifecycleBadge state={row.lifecycle_state} />
                             </div>
                             <code className="text-[10px] text-gray-400 font-mono">{row.organization_id}</code>
                           </div>
@@ -561,7 +573,11 @@ export default function Organizations() {
 
                       {/* Budget ring */}
                       <td className="px-4 py-3.5">
-                        <BudgetRing spend={row.spend || 0} budget={row.max_budget ?? null} />
+                        <BudgetRing
+                          spend={row.spend || 0}
+                          budget={row.max_budget ?? null}
+                          status={status}
+                        />
                       </td>
 
                       {/* Service policy */}

@@ -8,7 +8,13 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
-from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, get_auth_scope, to_json_value
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    get_auth_scope,
+    to_json_value,
+)
+from src.api.admin.organization_mutations import require_active_organization_mutation
 from src.middleware.platform_auth import get_platform_auth_context
 
 router = APIRouter(tags=["Admin Service Accounts"])
@@ -33,7 +39,10 @@ async def _validate_team_access(scope: Any, db: Any, team_id: str) -> dict[str, 
 
     organization_id = str(team.get("organization_id") or "")
     if not organization_id or organization_id not in scope.org_ids:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage service accounts for teams in your organizations")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only manage service accounts for teams in your organizations",
+        )
     return team
 
 
@@ -47,7 +56,9 @@ async def list_service_accounts(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
 
     clauses: list[str] = []
@@ -59,7 +70,10 @@ async def list_service_accounts(
             params.extend(scope.org_ids)
             clauses.append(f"t.organization_id IN ({placeholders})")
         else:
-            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+            return {
+                "data": [],
+                "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+            }
 
     if team_id:
         params.append(team_id)
@@ -67,7 +81,9 @@ async def list_service_accounts(
 
     if search:
         params.append(f"%{search.strip()}%")
-        clauses.append(f"(sa.name ILIKE ${len(params)} OR sa.service_account_id ILIKE ${len(params)})")
+        clauses.append(
+            f"(sa.name ILIKE ${len(params)} OR sa.service_account_id ILIKE ${len(params)})"
+        )
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -107,7 +123,12 @@ async def list_service_accounts(
 
     return {
         "data": [to_json_value(dict(row)) for row in rows],
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -119,7 +140,9 @@ async def create_service_account(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE
+    )
     db = db_or_503(request)
 
     team_id = str(payload.get("team_id") or "").strip()
@@ -132,36 +155,51 @@ async def create_service_account(
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
 
-    team = await _validate_team_access(scope, db, team_id)
-    existing = await db.query_raw(
-        """
-        SELECT service_account_id
-        FROM deltallm_serviceaccount
-        WHERE team_id = $1 AND lower(name) = lower($2)
-        LIMIT 1
-        """,
-        team_id,
-        name,
-    )
-    if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A service account with this name already exists in the selected team")
-
     ctx = get_platform_auth_context(request)
     created_by_account_id = getattr(ctx, "account_id", None)
-
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_serviceaccount (
-            service_account_id, team_id, name, description, is_active, metadata, created_by_account_id, created_at, updated_at
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service-account mutation requires transaction support",
         )
-        VALUES ($1, $2, $3, $4, true, '{}'::jsonb, $5, NOW(), NOW())
-        """,
-        service_account_id,
-        team_id,
-        name,
-        description,
-        created_by_account_id,
-    )
+    async with db.tx() as tx:
+        team = await _validate_team_access(scope, tx, team_id)
+        organization_id = str(team.get("organization_id") or "").strip()
+        if not organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Team organization is not configured",
+            )
+        await require_active_organization_mutation(tx, organization_id)
+        existing = await tx.query_raw(
+            """
+            SELECT service_account_id
+            FROM deltallm_serviceaccount
+            WHERE team_id = $1 AND lower(name) = lower($2)
+            LIMIT 1
+            """,
+            team_id,
+            name,
+        )
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=("A service account with this name already exists in the selected team"),
+            )
+
+        await tx.execute_raw(
+            """
+            INSERT INTO deltallm_serviceaccount (
+                service_account_id, team_id, name, description, is_active, metadata, created_by_account_id, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, true, '{}'::jsonb, $5, NOW(), NOW())
+            """,
+            service_account_id,
+            team_id,
+            name,
+            description,
+            created_by_account_id,
+        )
 
     response = {
         "service_account_id": service_account_id,
