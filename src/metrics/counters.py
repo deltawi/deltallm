@@ -130,6 +130,13 @@ deltallm_router_health_update_failures_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_provider_error_body_discards_metric = Counter(
+    "deltallm_provider_error_body_discards_total",
+    "Provider error bodies discarded before classification by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_tier_capacity_fair_share_decisions_metric = Counter(
     "deltallm_tier_capacity_fair_share_decisions_total",
     "Tier capacity fair-share decisions",
@@ -163,6 +170,12 @@ def increment_request_failure(*, model: str, api_provider: str, error_type: str)
         api_provider=sanitize_label(api_provider),
         error_type=sanitize_label(error_type),
     ).inc()
+
+
+def increment_provider_error_body_discard(*, reason: str) -> None:
+    if reason not in {"encoded", "oversized"}:
+        raise ValueError("unsupported provider error body discard reason")
+    deltallm_provider_error_body_discards_metric.labels(reason=reason).inc()
 
 
 def increment_usage(

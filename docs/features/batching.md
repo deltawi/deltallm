@@ -716,7 +716,13 @@ The worker groups only after routing, and only when items share the same deploym
 
 Sync microbatch calls use the same deployment failover path as ordinary chat requests. Before sending a grouped request to any served deployment, the worker checks that deployment's own `chat_batching.mode`, chunk-size limit, token cap, and sync microbatch executor. If the primary deployment fails and a fallback deployment also supports the requested sync microbatch, the fallback response is persisted with the fallback deployment's provider, API base, and pricing metadata. If the served deployment cannot run the requested sync microbatch and no earlier retryable health-affecting microbatch failure occurred, the worker degrades to bounded per-item execution without marking that deployment unhealthy. If the primary deployment already failed with a retryable health-affecting error before failover reaches an unsupported deployment, the worker requeues the chunk using the primary failure so health and retry semantics are preserved.
 
-Successful microbatch results are persisted and billed per item. If a provider result is missing per-item usage, that item fails instead of using aggregate usage. Mixed success and failure results persist successful items and fail or retry only the affected failed items. Structured per-item provider errors with retryable status codes such as `429`, `408`, or `5xx` are classified by the normal batch retry policy; unstructured provider item errors remain terminal invalid-request failures.
+Successful microbatch results are persisted and billed per item. If a provider result is missing per-item usage, that item fails instead of using aggregate usage. Mixed success and failure results persist successful items and fail or retry only the affected failed items. Structured per-item provider errors with retryable status codes such as `429`, `408`, or `5xx` are classified by the normal batch retry policy; unstructured provider item errors remain terminal invalid-request failures. Provider-owned messages and nested payloads are discarded before persistence. Error artifacts and batch UI item responses are assembled from an allowlist of stable fields and messages, including for historical rows, so upstream bodies, credentials, URLs, and arbitrary exception text are not returned through `error_file_id` or the batch detail APIs.
+
+Operators can inspect and then irreversibly sanitize provider-owned text already stored on terminal
+batch items with `scripts/sanitize_batch_item_errors.py`. Supply the database URL through
+`--database-url-file`, run `inspect` first, then run `apply --confirm-sanitize` in bounded pages.
+When `has_more=true`, resume with the reported `next_after_item_id` as `--after-item-id`. Take a
+database backup before `apply`; the discarded historical text cannot be reconstructed by DeltaLLM.
 
 ## Monitoring
 

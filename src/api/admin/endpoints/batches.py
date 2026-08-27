@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value, get_auth_scope
 from src.audit.actions import AuditAction
+from src.batch.error_sanitization import sanitize_batch_item_error_fields
 from src.batch.repository import BatchRepository
 from src.batch.models import BATCH_JOB_STATUS_SET, encode_operator_failed_reason
 from src.batch.scheduling import (
@@ -1047,6 +1048,7 @@ async def get_batch(
             """
             SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
                    last_error,
+                   LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
                    request_body IS NOT NULL AS has_request_body,
                    response_body IS NOT NULL AS has_response_body,
                    error_body IS NOT NULL AS has_error_body,
@@ -1065,6 +1067,7 @@ async def get_batch(
             """
             SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
                    last_error,
+                   LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
                    request_body IS NOT NULL AS has_request_body,
                    response_body IS NOT NULL AS has_response_body,
                    error_body IS NOT NULL AS has_error_body,
@@ -1079,7 +1082,9 @@ async def get_batch(
             after_line_number,
             fetch_limit,
         )
-    item_rows_page = [dict(r) for r in item_rows[:items_limit]]
+    item_rows_page = [
+        sanitize_batch_item_error_fields(dict(r)) for r in item_rows[:items_limit]
+    ]
     has_more_items = len(item_rows) > items_limit
     next_after_line_number = (
         int(item_rows_page[-1].get("line_number"))
@@ -1184,7 +1189,10 @@ async def get_batch_item(
     rows = await db.query_raw(
         """
         SELECT item_id, batch_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
-               last_error, request_body, response_body, error_body, usage,
+               last_error, request_body, response_body,
+               error_body IS NOT NULL AS _has_error_body,
+               LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
+               usage,
                created_at, started_at, completed_at
         FROM deltallm_batch_item
         WHERE batch_id = $1 AND item_id = $2
@@ -1195,7 +1203,7 @@ async def get_batch_item(
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch item not found")
-    return to_json_value(dict(rows[0]))
+    return to_json_value(sanitize_batch_item_error_fields(dict(rows[0])))
 
 
 @router.post("/ui/api/batches/{batch_id}/cancel")

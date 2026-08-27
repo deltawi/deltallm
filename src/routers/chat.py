@@ -41,7 +41,7 @@ from src.mcp.orchestrator import (
     MCPRequestContext,
     chat_request_has_mcp_tools,
 )
-from src.models.errors import InvalidRequestError, ServiceUnavailableError
+from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
@@ -103,6 +103,7 @@ async def handle_chat_like_request(
     request_data: dict[str, Any] | None = None,
     response_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     stream_line_transform: Callable[[str], str | None] | None = None,
+    stream_error_transform: Callable[[ProxyError], str] | None = None,
     stream_response_object: str = "chat.completion.chunk",
     enable_stream_cache: bool = True,
 ):
@@ -254,8 +255,11 @@ async def handle_chat_like_request(
                         except StopAsyncIteration:
                             break
                         except Exception as exc:
-                            health_error = exc
-                            raise
+                            if isinstance(exc, ProxyError):
+                                health_error = exc
+                                raise
+                            health_error = opened_stream.adapter.map_error(exc)
+                            raise health_error from exc
                         if not line:
                             continue
 
@@ -288,8 +292,10 @@ async def handle_chat_like_request(
                     failure_exc = exc
                     raise
                 except Exception as exc:
-                    failure_exc = exc
-                    stream_error = exc
+                    stream_error = (
+                        exc if isinstance(exc, ProxyError) else health_error or ProxyError()
+                    )
+                    failure_exc = stream_error
                 finally:
                     if (
                         stream_id is not None
@@ -311,25 +317,34 @@ async def handle_chat_like_request(
                 if stream_error is not None:
                     failure_params = opened_stream.params
                     failure_api_base = opened_stream.api_base
-                    await emit_stream_failure(
-                        request=request,
-                        auth=auth,
-                        payload=payload,
-                        request_data=request_data,
-                        callback_manager=callback_manager,
-                        guardrail_middleware=guardrail_middleware,
-                        callback_start=callback_start,
-                        request_start=request_start,
-                        request_id=request_id,
-                        cache_hit=cache_hit,
-                        cache_key=cache_key,
-                        audit_action=audit_action,
-                        primary_deployment=primary,
-                        api_base=failure_api_base,
-                        params=failure_params,
-                        exc=stream_error,
-                    )
-                    raise stream_error
+                    try:
+                        await emit_stream_failure(
+                            request=request,
+                            auth=auth,
+                            payload=payload,
+                            request_data=request_data,
+                            callback_manager=callback_manager,
+                            guardrail_middleware=guardrail_middleware,
+                            callback_start=callback_start,
+                            request_start=request_start,
+                            request_id=request_id,
+                            cache_hit=cache_hit,
+                            cache_key=cache_key,
+                            audit_action=audit_action,
+                            primary_deployment=primary,
+                            api_base=failure_api_base,
+                            params=failure_params,
+                            exc=stream_error,
+                        )
+                    except Exception as reporting_error:
+                        logger.warning(
+                            "post-stream failure reporting failed deployment_id=%s error_type=%s",
+                            served_deployment.deployment_id,
+                            type(reporting_error).__name__,
+                        )
+                    if stream_error_transform is not None:
+                        yield f"{stream_error_transform(stream_error)}\n\n"
+                    return
 
                 if resolved_usage is None:
                     return
@@ -489,7 +504,8 @@ async def handle_chat_like_request(
             status_code=200, content=response_payload, headers=route_decision_headers(request)
         )
     except httpx.HTTPError as exc:
-        status_code = getattr(getattr(exc, "response", None), "status_code", 502)
+        provider_registry = request.app.state.provider_error_mapper_registry
+        mapped_error = provider_registry.map_error(api_provider, exc)
         await emit_nonstream_failure(
             request=request,
             auth=auth,
@@ -506,11 +522,10 @@ async def handle_chat_like_request(
             audit_action=audit_action,
             api_provider=api_provider,
             api_base=api_base,
-            exc=exc,
-            status_code=status_code,
+            exc=mapped_error,
+            status_code=mapped_error.status_code,
         )
-        adapter = request.app.state.openai_adapter
-        raise adapter.map_error(exc) from exc
+        raise mapped_error from exc
     except Exception as exc:
         status_code = int(getattr(exc, "status_code", 500) or 500)
         await emit_nonstream_failure(

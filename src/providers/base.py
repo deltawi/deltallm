@@ -13,6 +13,7 @@ from src.models.errors import (
     FailureClassification,
     GatewayCapacityError,
     InvalidRequestError,
+    NO_HEALTHY_DEPLOYMENTS_CODE,
     ProxyError,
     RateLimitError,
     ServiceUnavailableError,
@@ -21,10 +22,15 @@ from src.models.errors import (
 )
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.providers.error_body import (
+    MAX_PROVIDER_ERROR_BODY_BYTES,
+    PROVIDER_ERROR_BODY_TRUNCATED_EXTENSION as PROVIDER_ERROR_BODY_TRUNCATED_EXTENSION,
+    bound_provider_error_response_body as bound_provider_error_response_body,
+    provider_error_body_is_unavailable,
+)
 
 _MAX_CLASSIFICATION_MESSAGE_CHARS = 2048
 _PROVIDER_ERROR_READ_CHUNK_BYTES = 8192
-MAX_PROVIDER_ERROR_BODY_BYTES = 65_536
 INVALID_PROVIDER_RESPONSE_MESSAGE = "Provider returned an invalid response"
 
 ProviderSuccessValidator = Callable[[Mapping[str, Any]], bool]
@@ -117,6 +123,8 @@ def provider_error_details(provider_error: Exception) -> ProviderErrorDetails:
 
     response = getattr(provider_error, "response", None)
     status_code = getattr(response, "status_code", None)
+    if provider_error_body_is_unavailable(response):
+        return ProviderErrorDetails(status_code=status_code, identifiers=frozenset())
     try:
         payload = response.json() if response is not None else None
     except (AttributeError, httpx.ResponseNotRead, RecursionError, TypeError, ValueError):
@@ -148,6 +156,8 @@ async def read_streaming_provider_error_details(
     try:
         payload = json.loads(body) if body else None
     except (RecursionError, TypeError, ValueError):
+        payload = None
+    if provider_error_body_is_unavailable(response):
         payload = None
     return provider_error_details_from_payload(payload, status_code=status_code)
 
@@ -294,6 +304,11 @@ def map_standard_provider_status_error(
             affects_deployment_health=True,
             failure_classification=FailureClassification.RATE_LIMIT,
         )
+    if status_code == 408:
+        return TimeoutError(
+            affects_deployment_health=True,
+            failure_classification=FailureClassification.TIMEOUT,
+        )
     if status_code >= 500:
         return ServiceUnavailableError(
             message="Provider unavailable",
@@ -301,10 +316,68 @@ def map_standard_provider_status_error(
             failure_classification=(failure_classification or FailureClassification.GENERIC),
         )
     resolved_classification = failure_classification or FailureClassification.GENERIC
+    if status_code in {401, 403, 404} and failure_classification not in {
+        FailureClassification.CONTEXT_WINDOW,
+        FailureClassification.CONTENT_POLICY,
+    }:
+        return ServiceUnavailableError(
+            message="Provider unavailable",
+            affects_deployment_health=True,
+            failure_classification=resolved_classification,
+        )
     return InvalidRequestError(
         message="Provider rejected request",
         affects_deployment_health=False,
         failure_classification=resolved_classification,
+    )
+
+
+def sanitize_provider_proxy_error(provider_error: ProxyError) -> ProxyError:
+    """Remove provider-owned text while preserving trusted routing semantics."""
+
+    health_impact = provider_error.affects_deployment_health
+    classification = provider_error.failure_classification
+    if isinstance(provider_error, GatewayCapacityError):
+        return GatewayCapacityError(failure_classification=classification)
+    if isinstance(provider_error, RateLimitError):
+        retry_after = getattr(provider_error, "retry_after", None)
+        return RateLimitError(
+            message="Provider rate limited request",
+            retry_after=parse_retry_after_header(
+                str(retry_after) if retry_after is not None else None
+            ),
+            affects_deployment_health=health_impact,
+            failure_classification=classification,
+        )
+    if isinstance(provider_error, TimeoutError):
+        return TimeoutError(
+            affects_deployment_health=health_impact,
+            failure_classification=classification,
+        )
+    if isinstance(provider_error, ServiceUnavailableError):
+        if provider_error.code == NO_HEALTHY_DEPLOYMENTS_CODE:
+            return ServiceUnavailableError(
+                message="No healthy deployments available",
+                code=NO_HEALTHY_DEPLOYMENTS_CODE,
+                affects_deployment_health=health_impact,
+                failure_classification=classification,
+            )
+        return ServiceUnavailableError(
+            message="Provider unavailable",
+            affects_deployment_health=health_impact,
+            failure_classification=classification,
+        )
+    if isinstance(provider_error, InvalidRequestError):
+        return InvalidRequestError(
+            message="Provider rejected request",
+            affects_deployment_health=health_impact,
+            failure_classification=classification,
+        )
+    retry_after = getattr(provider_error, "retry_after", None)
+    return map_standard_provider_status_error(
+        provider_error.status_code,
+        retry_after_header=str(retry_after) if retry_after is not None else None,
+        failure_classification=classification,
     )
 
 

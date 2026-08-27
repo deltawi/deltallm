@@ -2480,8 +2480,11 @@ async def test_stream_failure_after_failover_uses_last_attempted_deployment(clie
         "stream": True,
     }
 
-    with pytest.raises(httpx.ReadError, match="fallback stream broke"):
-        await client.post("/v1/chat/completions", headers=headers, json=body)
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert "hi" in response.text
+    assert "data: [DONE]" not in response.text
 
     await asyncio.sleep(0.05)
     assert len(test_app.state.spend_tracking_service.events) == 1
@@ -2489,14 +2492,14 @@ async def test_stream_failure_after_failover_uses_last_attempted_deployment(clie
     metadata = last.get("metadata") or {}
     assert last["status"] == "error"
     assert last["call_type"] == "completion"
-    assert last["error_type"] == "ReadError"
+    assert last["error_type"] == "service_unavailable"
     assert metadata.get("api_base") == "https://fallback.example/v1"
     assert metadata.get("deployment_model") == "openai/gpt-4o-mini"
 
     primary_health = await test_app.state.router_state_backend.get_health(registry[0].deployment_id)
     fallback_health = await test_app.state.router_state_backend.get_health("gpt-4o-mini-fallback")
     assert primary_health.get("last_error") == "Provider unavailable"
-    assert fallback_health.get("last_error") == "fallback stream broke"
+    assert fallback_health.get("last_error") == "Provider unavailable"
     assert len(stream_contexts) == 2
     assert all(context.exited for context in stream_contexts)
     assert (

@@ -1579,7 +1579,7 @@ async def test_batch_worker_sync_microbatch_primary_failure_with_unsupported_fal
     release_call = repo.release_for_retry_calls[0]
     assert release_call["item_ids"] == [f"chat-{index}" for index in range(1, len(contents) + 1)]
     assert release_call["retry_delay_seconds"] == 5
-    assert release_call["last_error"] == "primary unavailable"
+    assert release_call["last_error"] == "Provider unavailable"
     assert release_call["error_body"]["retryable"] is True
     assert release_call["error_body"]["retry_category"] == "service_unavailable"
     assert release_call["error_body"]["microbatch"] == {
@@ -1598,6 +1598,7 @@ async def test_batch_worker_sync_microbatch_unsupported_fallback_respects_max_in
     active = 0
     max_active = 0
     fallback_reasons: list[tuple[str, int]] = []
+    primary_failure_codes: list[str | None] = []
 
     async def _fake_execute_chat(request, payload, deployment, *, record_usage: bool = True):
         del request, deployment, record_usage
@@ -1679,7 +1680,8 @@ async def test_batch_worker_sync_microbatch_unsupported_fallback_respects_max_in
             try:
                 data = await execute(primary_deployment)
                 served_deployment = primary_deployment
-            except ServiceUnavailableError:
+            except ServiceUnavailableError as exc:
+                primary_failure_codes.append(exc.code)
                 data = await execute(fallback)
                 served_deployment = fallback
             if return_deployment:
@@ -1731,6 +1733,7 @@ async def test_batch_worker_sync_microbatch_unsupported_fallback_respects_max_in
     assert len(repo.completed_calls) == 3
     assert repo.release_for_retry_calls == []
     assert fallback_reasons == [("mode=concurrent", 3)]
+    assert primary_failure_codes == ["chat_microbatch_unsupported"]
     assert max_active == 1
 
 
@@ -1862,7 +1865,10 @@ async def test_batch_worker_sync_microbatch_retryable_failure_requeues_chunk_and
     class _ChatMicrobatchExecutor:
         async def execute_chat_microbatch(self, *, requests, deployment, request_context):  # noqa: ANN001
             del requests, deployment, request_context
-            raise ServiceUnavailableError(message="provider down", affects_deployment_health=True)
+            raise ServiceUnavailableError(
+                message="provider api_key=sk-upstream-secret",
+                affects_deployment_health=True,
+            )
 
     repo = _FailureRepository()
     worker, _ = _build_chat_batch_worker(
@@ -1893,7 +1899,8 @@ async def test_batch_worker_sync_microbatch_retryable_failure_requeues_chunk_and
     release_call = repo.release_for_retry_calls[0]
     assert release_call["item_ids"] == ["chat-1", "chat-2"]
     assert release_call["retry_delay_seconds"] == 5
-    assert release_call["last_error"] == "provider down"
+    assert release_call["last_error"] == "Provider unavailable"
+    assert "sk-upstream-secret" not in str(release_call)
     assert release_call["error_body"]["retryable"] is True
     assert release_call["error_body"]["retry_category"] == "service_unavailable"
     assert release_call["error_body"]["microbatch"] == {
@@ -2210,6 +2217,8 @@ async def test_batch_worker_sync_microbatch_persists_mixed_success_and_failure_r
     assert len(repo.failed_calls) == 1
     assert repo.failed_calls[0]["item_id"] == "chat-2"
     assert repo.failed_calls[0]["error_body"]["type"] == "InvalidRequestError"
+    assert repo.failed_calls[0]["error_body"]["message"] == "Provider rejected request"
+    assert "provider rejected this item" not in str(repo.failed_calls[0])
     assert repo.failed_calls[0]["retryable"] is False
     assert worker.app.state.failover_manager.aggregate_health_errors == []
 
@@ -3086,7 +3095,10 @@ async def test_batch_worker_iter_error_lines_emit_openai_batch_error_rows():
                     status="failed",
                     request_body={},
                     response_body=None,
-                    error_body={"message": "boom"},
+                    error_body={
+                        "message": "provider api_key=sk-historical-secret",
+                        "provider_payload": {"url": "https://provider.internal/private"},
+                    },
                     usage=None,
                     provider_cost=0.0,
                     billed_cost=0.0,
@@ -3134,7 +3146,7 @@ async def test_batch_worker_iter_error_lines_emit_openai_batch_error_rows():
             "id": "batch_req_i1",
             "custom_id": "req-1",
             "response": None,
-            "error": {"message": "boom", "type": "BatchItemError"},
+            "error": {"message": "Batch request failed", "type": "BatchItemError"},
         },
         {
             "id": "batch_req_i2",
@@ -5324,7 +5336,7 @@ async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows(
             "id": "batch_req_i2",
             "custom_id": "req-2",
             "response": None,
-            "error": {"message": "boom", "type": "BatchItemError"},
+            "error": {"message": "Batch request failed", "type": "BatchItemError"},
         }
     ]
     assert repo.attach_calls == [

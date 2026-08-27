@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from src.providers.error_body import bound_provider_error_response_body
+
 
 DEFAULT_UPSTREAM_HTTP_CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_UPSTREAM_HTTP_READ_TIMEOUT_SECONDS = 300.0
@@ -93,6 +95,7 @@ def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=build_upstream_http_timeout(general_settings),
         limits=build_upstream_http_limits(general_settings),
+        event_hooks={"response": [bound_provider_error_response_body]},
     )
 
 

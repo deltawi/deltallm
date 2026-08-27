@@ -1429,7 +1429,11 @@ async def test_worker_requeues_retryable_grouped_http_failures_before_isolation(
     async def _fake_execute_embedding(request, payload, deployment):
         del request, deployment
         execute_inputs.append(payload.input)
-        raise httpx.HTTPStatusError("upstream unavailable", request=http_request, response=response)
+        raise httpx.HTTPStatusError(
+            "provider api_key=sk-upstream-secret",
+            request=http_request,
+            response=response,
+        )
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
@@ -1456,7 +1460,8 @@ async def test_worker_requeues_retryable_grouped_http_failures_before_isolation(
     assert release_call["item_ids"] == ["i1", "i2"]
     assert release_call["worker_id"] == "w1"
     assert release_call["retry_delay_seconds"] == 5
-    assert release_call["last_error"] == "upstream unavailable"
+    assert release_call["last_error"] == "Provider unavailable"
+    assert "sk-upstream-secret" not in str(release_call)
     assert release_call["error_body"]["retry_category"] == "upstream_5xx"
     assert release_call["error_body"]["microbatch"] == {
         "retry_count": 1,
