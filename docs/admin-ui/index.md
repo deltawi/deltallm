@@ -12,6 +12,10 @@ The DeltaLLM admin UI is the control plane for model deployments, route groups, 
 - **Master key login** gives platform-admin access for local operations
 - **SSO** appears automatically when an identity provider is configured
 
+The server calculates page visibility from the authenticated session, effective permissions, and
+tenant memberships. Read [Access requirements](access-requirements.md) before writing an operator
+procedure; browser navigation is not the authorization boundary and API endpoints re-check access.
+
 ## Navigation model
 
 The current UI is organized by operator intent:
@@ -19,6 +23,7 @@ The current UI is organized by operator intent:
 - **Dashboard**: health and spend overview
 - **API Keys**: credential issuance and limits
 - **AI Gateway**: [Models](models.md), [Tiers](tiers.md), [Named Credentials](named-credentials.md), [Route Groups](route-groups.md), [Prompt Registry](prompt-registry.md), and [MCP Servers](mcp.md)
+- **Playground**: [authenticated gateway testing](playground.md) for chat, text-to-speech, and speech-to-text
 - **Access**: [Organizations](organizations.md), [Teams](teams.md), and [People & Access](people-and-access.md)
 - **Operations**: [Usage & Spend](usage.md), [Audit Logs](audit-logs.md), [Batch Jobs](batch-jobs.md), [Guardrails](guardrails.md), and [Settings](settings.md)
 
@@ -51,5 +56,15 @@ Parent menu sections start collapsed by default and expand only when the operato
 | [Batch Jobs](batch-jobs.md) | Batch processing status and progress |
 | [Guardrails](guardrails.md) | Safety policy definitions and scoped assignment |
 | [Settings](settings.md) | Global runtime, fallback, and cache behavior |
+| [Playground](playground.md) | Test a scoped API key against configured chat and audio deployments |
 
 Runtime visibility for models and route groups is governed through callable-target bindings and scope policies. In the UI, organizations choose the allowed top-level asset set, teams and keys can inherit that set or narrow it further in their create/edit dialogs, and People & Access can narrow specific runtime users when required.
+
+## API and configuration contracts
+
+- [Admin endpoints](../api/admin.md) document the HTTP surfaces used by the UI.
+- [API conventions](../api/conventions.md) cover authentication, errors, pagination, and request IDs.
+- [Complete settings index](../configuration/general-settings-reference.md) is generated from the
+  runtime settings model.
+- [Operator journeys](../guides/operator-journeys.md) connect UI tasks to verification requests and
+  production controls.

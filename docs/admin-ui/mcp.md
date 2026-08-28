@@ -2,6 +2,10 @@
 
 The MCP Servers page is where operators register upstream MCP servers, decide who can use them, and govern how each tool executes.
 
+**Access:** `key.read` can expose read views; `org.update` is required for server, binding, and tool-
+policy mutations; `key.update` is required for approval decisions. Resource scope is still enforced
+by the API. See [Access requirements](access-requirements.md) and the [MCP API](../api/mcp.md).
+
 ## What This Page Is For
 
 Use this area when you need to:

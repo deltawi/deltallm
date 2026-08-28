@@ -1,106 +1,85 @@
-# Docker Deployment
+# Docker and Compose Boundaries
 
-See the [Getting Started: Docker](../getting-started/docker.md) guide for basic Docker setup.
+The repository's Docker Compose profiles are for local development, evaluation, demos, and
+single-host testing. Start with [Getting Started: Docker](../getting-started/docker.md) for the
+working commands.
 
-## Production Docker Compose
+## What the profiles provide
 
-A production-ready `docker-compose.yml`:
+| Profile | Purpose | Production status |
+| --- | --- | --- |
+| `single` | One API container with bundled PostgreSQL and Redis | Evaluation only |
+| `ha` | Two API containers behind Nginx on one host | Multi-instance behavior test; **not** high availability |
 
-```yaml
-version: "3.8"
+The `ha` profile demonstrates load balancing and shared state, but Nginx, PostgreSQL, Redis,
+storage, and both application containers still share one Docker host and failure domain. It
+uses plain HTTP and development-oriented service exposure. Each application container also
+runs the image's migration bootstrap before starting.
 
-services:
-  deltallm:
-    build: .
-    ports:
-      - "4002:4000"
-    environment:
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/deltallm
-      - REDIS_URL=redis://redis:6379/0
-      - DELTALLM_CONFIG_PATH=/app/config/config.yaml
-      - DELTALLM_MASTER_KEY=${DELTALLM_MASTER_KEY}
-      - DELTALLM_SALT_KEY=${DELTALLM_SALT_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - PLATFORM_BOOTSTRAP_ADMIN_EMAIL=${ADMIN_EMAIL}
-      - PLATFORM_BOOTSTRAP_ADMIN_PASSWORD=${ADMIN_PASSWORD}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./config.yaml:/app/config/config.yaml:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+## Why it is not a production reference
 
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: deltallm
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+The checked-in Compose stack does not establish:
 
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+- independent host or zone failure domains;
+- externally managed, authenticated, TLS-protected PostgreSQL and Redis;
+- one coordinated migration workflow before application rollout;
+- immutable signed image digests;
+- TLS and private operational endpoints;
+- non-root/read-only container hardening;
+- automated backup/restore verification;
+- controlled rolling deployment and rollback; or
+- deployment-wide capacity and alert ownership.
 
-volumes:
-  pgdata:
-  redisdata:
-```
+Do not copy the Compose file, add `restart: always`, and label the result production-ready.
 
-## Environment File
+## Safe evaluation setup
 
-Create a `.env` file alongside `docker-compose.yml`:
-
-```bash
-POSTGRES_PASSWORD=strong-random-password
-DELTALLM_MASTER_KEY=replace-me
-DELTALLM_SALT_KEY=replace-me
-OPENAI_API_KEY=sk-...
-ADMIN_EMAIL=admin@company.com
-ADMIN_PASSWORD=initial-admin-password
-```
-
-Generate working values for the master key and salt key with:
+Generate unique secrets and keep them in an uncommitted `.env` file:
 
 ```bash
 python3 -c 'import secrets; print("DELTALLM_MASTER_KEY=sk-" + secrets.token_hex(20) + "A1")'
 python3 -c 'import secrets; print("DELTALLM_SALT_KEY=" + secrets.token_hex(32))'
+docker compose --profile single up -d --build
 ```
 
-The generated master key always satisfies DeltaLLM's validator: it is longer than 32 characters and includes both letters and numbers.
-
-## Starting
+Verify only the process probe from the host:
 
 ```bash
-docker compose up -d
+curl http://localhost:4002/health/liveliness
 ```
 
-With this host mapping, the Docker deployment is reachable at `http://localhost:4002`.
+Detailed health and `/metrics` are unauthenticated in the application. Keep the evaluation
+stack on a trusted machine and do not bind it directly to an untrusted network.
 
-## Upgrading
+## Using the image outside Compose
 
-```bash
-docker compose pull
-docker compose up -d --build
-```
+The current image command runs `src.prisma_bootstrap` and then starts Uvicorn. That default is
+convenient for one-container evaluation. It is not the production multi-replica migration
+contract.
 
-The application container runs the shared database bootstrap script on startup before launching the API. The bootstrap runs strict `prisma migrate deploy` with database-connectivity retries; it does not run `prisma db push`.
+For a production orchestrator:
+
+1. Pin the image by immutable version or digest.
+2. Run the release's migration command once in a dedicated job.
+3. Wait for migration verification to succeed.
+4. Start API and worker replicas with an explicit command that launches the application without
+   the image's per-container bootstrap wrapper.
+
+See [Database migrations](database-migrations.md), the
+[production checklist](production-checklist.md), and [Kubernetes](kubernetes.md) for the
+supported operational shape.
+
+## Single-host acceptance
+
+If you intentionally operate DeltaLLM on one host, document that availability is limited to
+that host and independently provide:
+
+- a TLS reverse proxy;
+- firewall rules that expose only intended application paths;
+- remote encrypted PostgreSQL and object-storage backups;
+- Redis authentication and network restriction;
+- process supervision and disk monitoring; and
+- an exercised restore and upgrade procedure.
+
+That can be an acceptable small installation, but it remains a single failure domain rather
+than an HA deployment.

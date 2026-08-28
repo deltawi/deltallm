@@ -1,48 +1,94 @@
 # DeltaLLM
 
-**An open-source LLM gateway that provides a unified API for multiple LLM providers with enterprise-grade features.**
+DeltaLLM is a self-hosted LLM gateway and control plane. Applications send
+OpenAI-compatible requests to one endpoint while operators manage provider credentials,
+model routing, scoped access, budgets, guardrails, batches, MCP tools, and usage from one
+place.
 
-DeltaLLM acts as a proxy between your applications and LLM providers like OpenAI, Anthropic, Azure OpenAI, Groq, and more. It gives you a single OpenAI-compatible API while adding powerful features on top.
+[Get started with Docker](getting-started/docker.md){ .md-button .md-button--primary }
+[Understand the architecture](concepts/architecture.md){ .md-button }
 
----
+## Send one request
 
-## Key Features
+After completing the [Docker setup](getting-started/docker.md), point an OpenAI-compatible
+client at DeltaLLM:
 
-- **Unified API** — One OpenAI-compatible endpoint for 100+ LLM providers and models
-- **Virtual API Keys** — Issue scoped keys with budgets, rate limits, and model restrictions
-- **Routing & Failover** — Multiple routing strategies with automatic failover and retries
-- **MCP Gateway & Tooling** — Register external MCP servers, expose approved tools, and bridge them into chat flows
-- **Guardrails** — Built-in PII detection and prompt injection protection
-- **Spend Tracking** — Per-key, per-team, and per-model cost attribution
-- **Rate Limiting** — Hierarchical limits at organization, team, user, and key levels
-- **Caching** — Response caching with memory, Redis, or S3 backends
-- **Batch API** — Asynchronous embedding and chat workloads with production worker sizing guidance
-- **RBAC** — Role-based access control with platform, organization, and team scopes
-- **Authentication** — Session-based login, invitations, password recovery, MFA, and SSO (Microsoft Entra, Google, Okta, OIDC)
-- **Email Lifecycle** — Durable outbox-backed delivery for invitations, password reset, and operator test email
-- **Admin Dashboard** — Full-featured web UI for managing the gateway
-- **Observability** — Prometheus metrics, request logging, and spend analytics
+=== "curl"
 
-## How It Works
+    ```bash
+    curl http://localhost:4002/v1/chat/completions \
+      -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Hello from DeltaLLM"}]
+      }'
+    ```
 
+=== "Python"
+
+    ```python
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url="http://localhost:4002/v1",
+        api_key="YOUR_DELTALLM_KEY",
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello from DeltaLLM"}],
+    )
+    print(response.choices[0].message.content)
+    ```
+
+For JavaScript, streaming, embeddings, images, audio, files, and batches, continue to the
+[gateway quick start](getting-started/quickstart.md).
+
+## What you can do
+
+| Outcome | Start here |
+| --- | --- |
+| Connect models and provider credentials | [Model deployments](configuration/models.md) |
+| Route requests across deployments and fail over safely | [Routing and failover](features/routing.md) |
+| Give applications scoped keys and limits | [Authentication and SSO](features/authentication.md) |
+| Enforce budgets and hierarchical rate limits | [Budgets](features/budgets.md) and [rate limiting](features/rate-limiting.md) |
+| Apply PII and prompt-injection controls | [Guardrails](features/guardrails.md) |
+| Run asynchronous embeddings and chat workloads | [Batch API](features/batching.md) |
+| Connect governed external tools | [MCP gateway](features/mcp.md) |
+| Operate the gateway through a browser | [Admin UI](admin-ui/index.md) |
+| Integrate directly with the HTTP surfaces | [API reference](api/index.md) |
+
+## How DeltaLLM fits together
+
+```text
+Applications                  DeltaLLM                         External systems
+┌──────────────┐       ┌──────────────────────────┐       ┌──────────────────┐
+│ OpenAI SDKs  │──────▶│ Data plane               │──────▶│ LLM providers    │
+│ HTTP clients │◀──────│ auth · policy · routing  │◀──────│ MCP servers      │
+└──────────────┘       │ cache · usage · audit    │       │ webhooks         │
+                       ├──────────────────────────┤       └──────────────────┘
+┌──────────────┐       │ Control plane            │
+│ Operators    │──────▶│ Admin API and Admin UI   │
+└──────────────┘       └────────────┬─────────────┘
+                                   │
+                              PostgreSQL
+                         Redis coordination/cache
 ```
-┌──────────────┐     ┌──────────────────────────────────┐     ┌──────────────┐
-│              │     │           DeltaLLM                │     │   OpenAI     │
-│  Your App    │────▶│  Auth → Rate Limit → Guardrails   │────▶│   Anthropic  │
-│  (OpenAI SDK)│◀────│  Route → Cache → Provider Call    │◀────│   Azure      │
-│              │     │  Spend Track → Callbacks           │     │   Groq ...   │
-└──────────────┘     └──────────────────────────────────┘     └──────────────┘
-```
 
-Your applications use the standard OpenAI SDK — just change the `base_url` to point at DeltaLLM. The gateway handles authentication, routing, reliability, and cost tracking transparently.
+Read [Architecture](concepts/architecture.md) for component ownership and deployment
+boundaries, or [Life of a request](concepts/request-lifecycle.md) for the policy and routing
+sequence.
 
-## Quick Links
+## Before production
 
-- [Docker Compose](getting-started/docker.md) — Fastest way to run DeltaLLM locally
-- [Installation](getting-started/installation.md) — Full local setup for development and contribution
-- [Quick Start](getting-started/quickstart.md) — Use the gateway with curl, Python, and JavaScript
-- [MCP Quick Start](getting-started/mcp-quickstart.md) — Register a server, expose a tool, and test `/mcp`
-- [Configuration Reference](configuration/index.md) — Starter `config.yaml` and full settings reference
-- [Batch API & Production Setup](features/batching.md) — Async batch API usage, scheduler behavior, and production worker sizing
-- [API Reference](api/index.md) — OpenAI-compatible and admin API endpoints
-- [Admin UI Guide](admin-ui/index.md) — Managing the gateway through the web dashboard
+Docker Compose is the local evaluation path, not a production high-availability design.
+Production deployments need externally managed durable storage, restricted network access,
+coordinated database migrations before application rollout, multiple replicas, and monitored
+failure behavior. Begin with the [deployment overview](deployment/index.md) and
+[Kubernetes guide](deployment/kubernetes.md).
+
+## Get help and contribute
+
+- Report defects in [GitHub Issues](https://github.com/deltawi/deltallm/issues).
+- Discuss features in [GitHub Discussions](https://github.com/deltawi/deltallm/discussions).
+- Follow the [documentation contribution guide](https://github.com/deltawi/deltallm/blob/main/CONTRIBUTING_DOCS.md) when updating this site.

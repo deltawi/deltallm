@@ -30,6 +30,11 @@ dev = [
   "pytest-asyncio>=0.23,<1.0",
   "ruff>=0.2,<1.0",
 ]
+docs = [
+  "mkdocs>=1.6,<2.0",
+  "mkdocs-material>=9.5,<10.0",
+  "pymdown-extensions>=10.0,<11.0",
+]
 batch-s3 = [
   "boto3>=1.35,<2.0",
 ]

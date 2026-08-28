@@ -28,7 +28,14 @@ general_settings:
   key_lifecycle_notifications_enabled: false
 ```
 
-## Full Reference
+## Complete field reference
+
+This guide explains the settings operators most often need and the relationships among them.
+The generated [Complete General Settings Index](general-settings-reference.md) covers every
+field declared by `GeneralSettings`, including its type, default, validation constraints, and
+secret-handling classification.
+
+## Operational reference
 
 ```yaml
 general_settings:

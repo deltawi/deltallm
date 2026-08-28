@@ -11,6 +11,10 @@ Use them when you want to:
 
 This is especially useful for providers such as OpenAI-compatible gateways, Groq, Anthropic, Gemini, Azure OpenAI, Bedrock, and ElevenLabs.
 
+**Access:** platform admin. Secret values are write-only and read responses are redacted. See
+[Access requirements](access-requirements.md), the [named-credential API](../api/admin.md#named-credentials),
+and [production secret handling](../security/hardening.md#secret-lifecycle).
+
 ## What a Named Credential Contains
 
 A named credential stores:

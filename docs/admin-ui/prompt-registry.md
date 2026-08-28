@@ -8,6 +8,10 @@ Use it when you want prompts to be treated like managed configuration instead of
 
 ![Prompt Template Detail](images/prompt-template-detail.png)
 
+**Access:** platform admin. Templates, versions, labels, tests, and bindings are control-plane
+configuration. See [Access requirements](access-requirements.md) and the [Prompt Registry admin
+API](../api/admin.md#prompt-registry).
+
 ## Quick Success Workflow
 
 1. Create a prompt template

@@ -1,6 +1,12 @@
-# Features
+# Guides
 
-Use this section when DeltaLLM is already running and you want to turn on a capability, understand how it behaves, or decide which feature to use.
+Use these task-oriented guides when DeltaLLM is already running and you want to
+configure or operate a capability. For system behavior and design boundaries, start with
+[Concepts](../concepts/index.md). For field and endpoint contracts, use the
+[Configuration](../configuration/index.md) and [API](../api/index.md) references.
+
+For complete sequences that cross the Admin UI, API, configuration, and verification surfaces,
+start with [Operator Journeys](../guides/operator-journeys.md).
 
 ## Start With the Outcome You Want
 

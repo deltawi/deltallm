@@ -4,6 +4,10 @@ The Dashboard is the landing page for quick operational awareness.
 
 ![Dashboard](images/dashboard-overview.png)
 
+**Access:** platform admin or a role with `spend.read`. Dashboard totals follow the server's
+authorized spend scope. See [Access requirements](access-requirements.md) and the [Spend admin
+API](../api/admin.md#spend).
+
 ## What it summarizes
 
 - Total spend

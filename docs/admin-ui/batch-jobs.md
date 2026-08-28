@@ -6,6 +6,11 @@ The public batch API supports embeddings and non-streaming chat completion batch
 
 ![Batch Jobs](images/batch-jobs.png)
 
+**Access:** platform admin or `key.read` for authorized jobs. Cancel, retry, stale requeue, mark-
+failed, and webhook replay are enabled only when the caller has update capability in the batch's
+organization/team scope. See [Access requirements](access-requirements.md), the [Batch admin
+API](../api/admin.md#batches), and [Batch production setup](../features/batching.md).
+
 ## Quick Success Workflow
 
 1. Submit a batch through the API

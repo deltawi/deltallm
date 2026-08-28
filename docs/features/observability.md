@@ -6,16 +6,22 @@ DeltaLLM exposes health endpoints, Prometheus metrics, spend views, and callback
 
 For a practical first setup:
 
-1. Check `/health` after startup
-2. Scrape `/metrics` from Prometheus
-3. Use the [Usage & Spend](../admin-ui/usage.md) page for request and cost trends
-4. Add callback integrations only when you need external sinks such as S3, Langfuse, or OpenTelemetry
+1. Use `/health/liveliness` for the public process probe
+2. Check `/health/readiness` from a trusted operator network
+3. Scrape `/metrics` from Prometheus over the private service network
+4. Use the [Usage & Spend](../admin-ui/usage.md) page for request and cost trends
+5. Add callback integrations only when you need external sinks such as S3, Langfuse, or OpenTelemetry
 
 ![Usage & Spend](../admin-ui/images/usage-and-spend.png)
 
 ## Health Endpoints
 
 These endpoints are the fastest way to confirm the service is alive and dependencies are reachable.
+
+!!! danger "Operational endpoints are unauthenticated"
+    The application does not currently authenticate `/health/*` or `/metrics`. Expose only
+    coarse liveness outside the operator network. Restrict readiness, deployment diagnostics,
+    fallback events, and metrics with ingress, service-mesh, firewall, or network policy.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -44,9 +50,12 @@ scrape_configs:
   - job_name: deltallm
     scrape_interval: 15s
     static_configs:
-      - targets: ["localhost:8000"]
+      - targets: ["deltallm.deltallm.svc.cluster.local:4000"]
     metrics_path: /metrics
 ```
+
+The target above is an example private Kubernetes service address. Use the service discovery
+mechanism and port for your deployment; do not scrape through the public ingress.
 
 Core metrics include:
 

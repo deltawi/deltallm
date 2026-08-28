@@ -1,0 +1,57 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build public documentation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+
+      - name: Install frozen documentation dependencies
+        run: uv sync --frozen --extra docs --extra dev
+
+      - name: Generate Prisma client for application schema import
+        run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Verify generated references are current
+        run: |
+          uv run python scripts/docs/export_openapi.py --check
+          uv run python scripts/docs/generate_config_reference.py --check
+          uv run python scripts/docs/generate_provider_reference.py --check
+
+      - name: Check documentation structure and report health metrics
+        run: uv run python scripts/docs/report_health.py --check
+
+      - name: Run documentation tests
+        run: uv run pytest -q --confcutdir=tests/docs tests/docs
+
+      - name: Build documentation without warnings
+        run: uv run mkdocs build --strict --site-dir site
+
+      - name: Verify public artifact containment
+        run: uv run python scripts/docs/verify_public_site.py site

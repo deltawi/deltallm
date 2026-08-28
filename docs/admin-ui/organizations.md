@@ -4,6 +4,10 @@ Organizations are the top-level tenant and budget boundary in the admin UI.
 
 ![Organizations](images/organizations.png)
 
+**Access:** platform admin or `org.read` for authorized organizations. Creation and durable
+deletion are platform-admin actions; scoped edits require `org.update` for that organization. See
+[Access requirements](access-requirements.md) and [Tenancy and access](../concepts/tenancy-and-access.md).
+
 ## What this page manages
 
 - Organization identity and display name

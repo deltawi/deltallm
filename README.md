@@ -7,7 +7,7 @@
 </p>
 
 [![CI](https://github.com/deltawi/deltallm/actions/workflows/ci.yml/badge.svg)](https://github.com/deltawi/deltallm/actions/workflows/ci.yml)
-[![Documentation](https://img.shields.io/badge/docs-readthedocs-blue.svg)](https://deltallm.readthedocs.io/en/latest)
+[![Documentation](https://img.shields.io/badge/docs-docs.deltallm.io-blue.svg)](https://docs.deltallm.io/)
 [![Latest Release](https://img.shields.io/github/v/release/deltawi/deltallm.svg?sort=semver)](https://github.com/deltawi/deltallm/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -114,7 +114,9 @@ curl http://localhost:4002/v1/chat/completions \
 
 Open the Admin UI at `http://localhost:4002`.
 
-Full Docker setup, environment variables, HA Compose, and Dockerfile usage are covered in the [Docker guide](docs/getting-started/docker.md).
+Full Docker setup, environment variables, the multi-instance evaluation profile, and Dockerfile
+usage are covered in the [Docker guide](docs/getting-started/docker.md). Compose is not the
+production high-availability reference.
 
 ## Deployment Paths
 
@@ -135,12 +137,15 @@ Full Docker setup, environment variables, HA Compose, and Dockerfile usage are c
 - [Admin UI guide](docs/admin-ui/index.md)
 - [API reference](docs/api/index.md)
 - [Deployment guide](docs/deployment/index.md)
+- [Security model](docs/security/index.md)
 
 ## Contributing
 
 - [Report issues](https://github.com/deltawi/deltallm/issues)
 - [Request features](https://github.com/deltawi/deltallm/discussions)
+- [Report a vulnerability privately](SECURITY.md)
 - PRs are welcome. Start with the [local installation guide](docs/getting-started/installation.md).
+- Documentation changes follow the [documentation contribution guide](CONTRIBUTING_DOCS.md).
 
 ## License
 

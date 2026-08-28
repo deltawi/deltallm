@@ -10,11 +10,14 @@ build:
 
 python:
   install:
-    - requirements: docs/requirements.txt
+    - method: uv
+      command: sync
+      extras:
+        - docs
 
 mkdocs:
   configuration: mkdocs.yml
-  fail_on_warning: false
+  fail_on_warning: true
 
 # Optionally build your docs in additional formats such as PDF and ePub
 formats: []  # Disable extra formats for faster builds

@@ -11,6 +11,10 @@ A tier answers:
 
 Use tiers when you want to manage customer plans such as `starter`, `growth`, or `enterprise` without configuring every organization one by one.
 
+**Access:** platform admin. Tier, version, model-policy, capacity-pool, activation, and assignment
+operations are platform-wide administrative actions. See [Access requirements](access-requirements.md),
+the [tier API](../api/admin.md#organization-tiers), and the [tier rollout](../deployment/organization-tiers-rollout.md).
+
 ## Simple Mental Model
 
 Think of a tier as a plan.

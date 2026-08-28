@@ -13,6 +13,10 @@ Use a route group when one public model name should:
 
 ![Route Group Detail](images/route-group-detail.png)
 
+**Access:** platform admin for group, membership, policy, publication, simulation, and prompt-binding
+operations. See [Access requirements](access-requirements.md), the [route-group API](../api/admin.md#route-groups),
+and [Routing and Failover](../features/routing.md).
+
 ## Quick Success Workflow
 
 1. Create the route group shell

@@ -4,6 +4,10 @@ Guardrails are the policy surface for safety checks and scoped enforcement.
 
 ![Guardrails](images/guardrails.png)
 
+**Access:** platform admin in the current Admin UI. Scoped assignments affect organization, team,
+or key traffic but do not delegate the definition UI. See [Access requirements](access-requirements.md),
+the [Guardrails API](../api/admin.md#guardrails), and [Guardrails configuration](../features/guardrails.md).
+
 ## What this page does
 
 - Define reusable guardrail policies
