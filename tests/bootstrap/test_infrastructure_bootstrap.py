@@ -10,6 +10,7 @@ from src.bootstrap.infrastructure import (
     shutdown_infrastructure_runtime,
 )
 from src.config import GeneralSettings, Settings
+from src.providers.error_body import bound_provider_error_response_body
 
 
 def test_telemetry_startup_mode_uses_env_only_when_config_is_implicit() -> None:
@@ -65,9 +66,10 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.closed = True
 
     class FakeHTTPClient:
-        def __init__(self, *, timeout, limits) -> None:  # noqa: ANN001
+        def __init__(self, *, timeout, limits, event_hooks=None) -> None:  # noqa: ANN001
             self.timeout = timeout
             self.limits = limits
+            self.event_hooks = event_hooks
             self.closed = False
             created.setdefault("http_clients", []).append(self)
 
@@ -223,6 +225,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert runtime.http_client.limits.max_connections == 123
     assert runtime.http_client.limits.max_keepalive_connections == 45
     assert runtime.http_client.limits.keepalive_expiry == 12
+    assert runtime.http_client.event_hooks == {"response": [bound_provider_error_response_body]}
     assert app.state.control_http_client is runtime.control_http_client
     assert runtime.control_http_client is not runtime.http_client
     assert runtime.control_http_client.timeout.connect == 5
@@ -232,6 +235,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert runtime.control_http_client.limits.max_connections == 100
     assert runtime.control_http_client.limits.max_keepalive_connections == 20
     assert runtime.control_http_client.limits.keepalive_expiry == 30
+    assert runtime.control_http_client.event_hooks is None
     assert app.state.openai_adapter[0] == "openai"
     assert app.state.batch_repository == (
         "batch-repo",
