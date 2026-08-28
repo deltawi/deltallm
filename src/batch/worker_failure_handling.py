@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any
 
 from src.batch.backpressure import BatchModelGroupDeferred
+from src.batch.error_sanitization import persisted_batch_error_message
 from src.batch.models import BatchItemRecord, BatchJobRecord
 from src.batch.retry import (
     BatchRetryCategory,
@@ -78,11 +79,12 @@ class WorkerFailureHandlingMixin:
             retry_delay_seconds=retry_delay,
             terminal_reason=terminal_reason,
         )
+        safe_error_message = persisted_batch_error_message(exc, retry_decision)
         updated = await self.repository.mark_item_failed(
             item_id=item.item_id,
             worker_id=self.config.worker_id,
             error_body=error_payload,
-            last_error=str(exc),
+            last_error=safe_error_message,
             retryable=retryable,
             retry_delay_seconds=retry_delay,
             claim_epoch=item.claim_epoch,
@@ -103,7 +105,7 @@ class WorkerFailureHandlingMixin:
                 item_id=item.item_id,
                 worker_id=self.config.worker_id,
                 error_body=error_payload,
-                last_error=str(exc),
+                last_error=safe_error_message,
                 retryable=retryable,
                 retry_delay_seconds=retry_delay,
                 claim_epoch=item.claim_epoch,
@@ -151,7 +153,7 @@ class WorkerFailureHandlingMixin:
         terminal_reason: BatchRetryTerminalReason | None,
     ) -> dict[str, Any]:
         error_payload: dict[str, Any] = {
-            "message": str(exc),
+            "message": persisted_batch_error_message(exc, decision),
             "type": exc.__class__.__name__,
             "retryable": retryable,
             "retry_category": decision.category.value,

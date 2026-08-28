@@ -61,6 +61,13 @@ This is the main endpoint most applications should start with.
 
 Chat requests also support DeltaLLM-managed MCP tools through `tools: [{ "type": "mcp", ... }]` on non-streaming requests. See [MCP Gateway & Tooling](mcp.md).
 
+Provider error bodies are bounded and never returned verbatim. Encoded error bodies are kept opaque
+and classified from trusted status and `Retry-After` metadata instead of being decompressed; bounded
+identity bodies may also contribute provider-specific classifications. Before response commit,
+DeltaLLM uses the sanitized classification for retry and failover. After a streaming response has
+emitted content, it never retries: a provider failure closes the OpenAI-compatible stream without a
+`[DONE]` marker, so clients must treat a missing terminal marker as an incomplete response.
+
 ### Completions (Legacy)
 
 ```text

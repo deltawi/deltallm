@@ -12,7 +12,7 @@ from src.chat.stream_validation import validate_first_downstream_stream_frame
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.metrics import observe_request_phase
-from src.providers.base import read_streaming_provider_error_details
+from src.providers.base import ProviderAdapter, read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import is_openai_family_provider, resolve_provider
 from src.providers.signing import apply_request_signing
@@ -27,6 +27,7 @@ class OpenedStream:
     response: Any
     translated_stream: Any
     first_line: str
+    adapter: ProviderAdapter
     deployment: Deployment
     params: dict[str, Any]
     api_base: str
@@ -272,6 +273,7 @@ async def open_stream_with_first_chunk(
             response=response,
             translated_stream=translated_stream,
             first_line=first_line,
+            adapter=adapter,
             deployment=deployment,
             params=params,
             api_base=api_base,

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import gzip
 import json
 import struct
 from binascii import crc32
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,6 +14,7 @@ from src.models.errors import (
     InvalidRequestError,
     RateLimitError,
     ServiceUnavailableError,
+    TimeoutError,
 )
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic import AnthropicAdapter
@@ -20,12 +23,17 @@ from src.providers.bedrock import BedrockAdapter
 from src.providers.base import (
     INVALID_PROVIDER_RESPONSE_MESSAGE,
     MAX_PROVIDER_ERROR_BODY_BYTES,
+    PROVIDER_ERROR_BODY_TRUNCATED_EXTENSION,
+    bound_provider_error_response_body,
+    map_standard_provider_status_error,
     parse_provider_json_response,
     read_streaming_provider_error_details,
 )
+from src.providers.error_body import PROVIDER_ERROR_BODY_OPAQUE_EXTENSION
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
+from src.upstream_http import build_upstream_http_client
 
 
 async def _line_stream(lines: list[str]):
@@ -243,6 +251,119 @@ async def test_openai_adapter_sanitizes_unclassified_provider_error_message() ->
         assert "tool_choice" not in str(mapped)
     finally:
         await adapter.http_client.aclose()
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 404])
+def test_provider_configuration_statuses_are_retryable_deployment_failures(
+    status_code: int,
+) -> None:
+    mapped = map_standard_provider_status_error(status_code)
+
+    assert isinstance(mapped, ServiceUnavailableError)
+    assert str(mapped) == "Provider unavailable"
+    assert mapped.affects_deployment_health is True
+    assert mapped.failure_classification is FailureClassification.GENERIC
+
+
+def test_provider_request_timeout_is_retryable_deployment_failure() -> None:
+    mapped = map_standard_provider_status_error(408)
+
+    assert isinstance(mapped, TimeoutError)
+    assert mapped.affects_deployment_health is True
+    assert mapped.failure_classification is FailureClassification.TIMEOUT
+
+
+def test_classified_provider_403_remains_a_terminal_request_failure() -> None:
+    mapped = map_standard_provider_status_error(
+        403,
+        failure_classification=FailureClassification.CONTENT_POLICY,
+    )
+
+    assert isinstance(mapped, InvalidRequestError)
+    assert mapped.affects_deployment_health is False
+    assert mapped.failure_classification is FailureClassification.CONTENT_POLICY
+
+
+@pytest.mark.asyncio
+async def test_nonstream_provider_error_body_is_bounded_before_buffering() -> None:
+    sensitive = b"sk-upstream-secret"
+    response = httpx.Response(
+        500,
+        stream=_AsyncBytes(b'{"error":{"message":"' + sensitive + b'"}}' + b"x" * 70_000),
+        request=httpx.Request("POST", "https://internal.provider.example/v1/chat"),
+    )
+
+    await bound_provider_error_response_body(response)
+    body = await response.aread()
+
+    assert len(body) == MAX_PROVIDER_ERROR_BODY_BYTES
+    assert response.extensions[PROVIDER_ERROR_BODY_TRUNCATED_EXTENSION] is True
+    error = httpx.HTTPStatusError("provider failed", request=response.request, response=response)
+    async with httpx.AsyncClient() as client:
+        mapped = OpenAIAdapter(client).map_error(error)
+    assert isinstance(mapped, ServiceUnavailableError)
+    assert str(mapped) == "Provider unavailable"
+    assert sensitive.decode() not in str(mapped)
+
+
+@pytest.mark.asyncio
+async def test_shared_upstream_client_never_decompresses_encoded_error_body() -> None:
+    decoded_body = b"x" * (8 * 1024 * 1024)
+    encoded_body = gzip.compress(decoded_body)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            headers={"content-encoding": "gzip"},
+            stream=_AsyncBytes(encoded_body),
+            request=request,
+        )
+
+    configured_client = build_upstream_http_client(SimpleNamespace())
+    event_hooks = configured_client.event_hooks
+    await configured_client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        event_hooks=event_hooks,
+    ) as client:
+        response = await client.get("https://provider.example/v1/chat")
+
+    assert len(encoded_body) < MAX_PROVIDER_ERROR_BODY_BYTES
+    assert response.content == encoded_body
+    assert len(response.content) <= MAX_PROVIDER_ERROR_BODY_BYTES
+    assert response.headers.get("content-encoding") is None
+    assert response.extensions[PROVIDER_ERROR_BODY_OPAQUE_EXTENSION] is True
+    error = httpx.HTTPStatusError("provider failed", request=response.request, response=response)
+    async with httpx.AsyncClient() as adapter_client:
+        mapped = OpenAIAdapter(adapter_client).map_error(error)
+    assert isinstance(mapped, ServiceUnavailableError)
+    assert str(mapped) == "Provider unavailable"
+
+
+@pytest.mark.asyncio
+async def test_shared_upstream_client_still_decodes_success_body() -> None:
+    decoded_body = b'{"ok":true}'
+    encoded_body = gzip.compress(decoded_body)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            stream=_AsyncBytes(encoded_body),
+            request=request,
+        )
+
+    configured_client = build_upstream_http_client(SimpleNamespace())
+    event_hooks = configured_client.event_hooks
+    await configured_client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        event_hooks=event_hooks,
+    ) as client:
+        response = await client.get("https://provider.example/v1/chat")
+
+    assert response.content == decoded_body
+    assert PROVIDER_ERROR_BODY_OPAQUE_EXTENSION not in response.extensions
 
 
 def test_provider_success_json_parser_rejects_non_object_without_exposing_body() -> None:

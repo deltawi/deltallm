@@ -8,6 +8,7 @@ from src.batch.chat_batching import normalize_chat_microbatch_results
 from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, classify_batch_retry
 from src.models.errors import (
     BudgetExceededError,
+    GatewayCapacityError,
     InvalidRequestError,
     ModelNotFoundError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
@@ -16,6 +17,7 @@ from src.models.errors import (
     ServiceUnavailableError,
     TimeoutError,
 )
+from src.router.health_policy import affects_deployment_health
 from src.router.execution import attach_failover_original_error
 
 
@@ -199,6 +201,69 @@ def test_chat_microbatch_provider_item_errors_preserve_retry_classification(
     assert decision.category is category
     assert decision.retryable is retryable
     assert decision.retry_after_seconds == retry_after
+
+
+@pytest.mark.parametrize(
+    ("raw_error", "expected_message"),
+    [
+        (
+            {"status_code": 400, "message": "api_key=sk-provider-secret"},
+            "Provider rejected request",
+        ),
+        (
+            ServiceUnavailableError(message="internal provider URL https://provider.local"),
+            "Provider unavailable",
+        ),
+        (RuntimeError("provider api_key=sk-provider-secret"), "Provider rejected request"),
+    ],
+)
+def test_chat_microbatch_provider_item_errors_discard_raw_messages(
+    raw_error: object,
+    expected_message: str,
+) -> None:
+    result = normalize_chat_microbatch_results(
+        [{"index": 0, "error": raw_error}],
+        expected_count=1,
+        custom_ids=["item-1"],
+    )[0]
+
+    assert result.error is not None
+    assert str(result.error) == expected_message
+    assert "sk-provider-secret" not in str(result.error)
+    assert "provider.local" not in str(result.error)
+
+
+def test_chat_microbatch_provider_item_error_preserves_gateway_capacity_semantics() -> None:
+    result = normalize_chat_microbatch_results(
+        [{"index": 0, "error": GatewayCapacityError()}],
+        expected_count=1,
+        custom_ids=["item-1"],
+    )[0]
+
+    assert isinstance(result.error, GatewayCapacityError)
+    assert result.error.code == "upstream_pool_timeout"
+    assert affects_deployment_health(result.error) is False
+
+
+def test_chat_microbatch_provider_item_error_preserves_no_healthy_category() -> None:
+    result = normalize_chat_microbatch_results(
+        [
+            {
+                "index": 0,
+                "error": ServiceUnavailableError(
+                    message="No healthy deployments; api_key=sk-provider-secret",
+                    code=NO_HEALTHY_DEPLOYMENTS_CODE,
+                ),
+            }
+        ],
+        expected_count=1,
+        custom_ids=["item-1"],
+    )[0]
+
+    assert isinstance(result.error, ServiceUnavailableError)
+    assert result.error.code == NO_HEALTHY_DEPLOYMENTS_CODE
+    assert str(result.error) == "No healthy deployments available"
+    assert classify_batch_retry(result.error).category is BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS
 
 
 def _chat_microbatch_success_result(**identity: object) -> dict[str, object]:

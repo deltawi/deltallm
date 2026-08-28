@@ -6,17 +6,18 @@ import json
 import operator
 from typing import Any, Literal, Protocol
 
+import httpx
 from pydantic import ValidationError
 
 from src.batch.retry import BatchResponseShapeError
 from src.config import ChatBatchingConfig
-from src.models.errors import (
-    InvalidRequestError,
-    RateLimitError,
-    ServiceUnavailableError,
-    TimeoutError as GatewayTimeoutError,
-)
+from src.models.errors import InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest, MCPToolDefinition
+from src.providers.base import (
+    map_standard_provider_error,
+    map_standard_provider_status_error,
+    sanitize_provider_proxy_error,
+)
 from src.providers.resolution import resolve_provider
 
 ChatBatchingMode = Literal["disabled", "concurrent", "sync_microbatch"]
@@ -281,13 +282,16 @@ def _result_usage(
 def _normalize_result_error(raw_error: Any) -> Exception | None:
     if raw_error is None:
         return None
+    if isinstance(raw_error, ProxyError):
+        return sanitize_provider_proxy_error(raw_error)
+    if isinstance(raw_error, httpx.HTTPError):
+        return map_standard_provider_error(raw_error)
     if isinstance(raw_error, Exception):
-        return raw_error
+        return InvalidRequestError(message="Provider rejected request")
 
     if not isinstance(raw_error, Mapping):
-        return InvalidRequestError(message=str(raw_error))
+        return InvalidRequestError(message="Provider rejected request")
 
-    message = _error_message(raw_error)
     nested_error = _nested_error_mapping(raw_error)
     status_code = _first_optional_int(
         raw_error.get("status_code"),
@@ -308,19 +312,22 @@ def _normalize_result_error(raw_error: Any) -> Exception | None:
     )
 
     if status_code == 429 or "rate_limit" in error_kind or "rate limit" in error_kind:
-        return RateLimitError(
-            message=message,
-            retry_after=retry_after,
-            affects_deployment_health=True,
+        return map_standard_provider_status_error(
+            429,
+            retry_after_header=str(retry_after) if retry_after is not None else None,
         )
     if status_code == 408 or "timeout" in error_kind or "timed_out" in error_kind:
-        return GatewayTimeoutError(message=message)
+        return map_standard_provider_status_error(408)
     if (status_code is not None and status_code >= 500) or any(
         token in error_kind
         for token in ("service_unavailable", "server_error", "overload", "upstream_5xx")
     ):
-        return ServiceUnavailableError(message=message, affects_deployment_health=True)
-    return InvalidRequestError(message=message)
+        return map_standard_provider_status_error(status_code or 500)
+    if status_code in {401, 403, 404} or any(
+        token in error_kind for token in ("authentication", "permission", "not_found")
+    ):
+        return map_standard_provider_status_error(status_code or 503)
+    return map_standard_provider_status_error(status_code or 400)
 
 
 def _optional_float(value: Any) -> float | None:
@@ -347,15 +354,6 @@ def _first_optional_int(*values: Any) -> int | None:
         if parsed is not None:
             return parsed
     return None
-
-
-def _error_message(raw_error: Mapping[str, Any]) -> str:
-    nested = raw_error.get("error")
-    if isinstance(nested, Mapping):
-        message = nested.get("message") or nested.get("detail")
-    else:
-        message = raw_error.get("message") or raw_error.get("detail") or nested
-    return str(message or raw_error)
 
 
 def _nested_error_mapping(raw_error: Mapping[str, Any]) -> Mapping[str, Any] | None:

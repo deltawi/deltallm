@@ -174,11 +174,18 @@ class FakeAuthorizationDB:
             if "WHERE batch_id = $1 AND item_id = $2" in query:
                 batch_id = str(params[0])
                 item_id = str(params[1])
-                return [
-                    item
+                rows = [
+                    dict(item)
                     for item in self.batch_items
                     if item.get("item_id") == item_id and self.batches.get(batch_id)
                 ]
+                for row in rows:
+                    error_body = row.pop("error_body", None)
+                    row["_has_error_body"] = error_body is not None
+                    row["_error_retry_category"] = (error_body or {}).get(
+                        "retry_category"
+                    )
+                return rows
             if "request_body IS NOT NULL AS has_request_body" in query:
                 if "line_number > $2" in query:
                     after_line_number = int(params[1])
@@ -202,6 +209,9 @@ class FakeAuthorizationDB:
                         "provider_cost": item["provider_cost"],
                         "billed_cost": item["billed_cost"],
                         "last_error": item["last_error"],
+                        "_error_retry_category": (
+                            item.get("error_body") or {}
+                        ).get("retry_category"),
                         "has_request_body": item.get("request_body") is not None,
                         "has_response_body": item.get("response_body") is not None,
                         "has_error_body": item.get("error_body") is not None,
@@ -666,6 +676,68 @@ async def test_get_batch_item_returns_payload_on_demand(client, test_app, monkey
     assert payload["request_body"] == {"model": "gpt-4o-mini", "input": "large prompt"}
     assert payload["response_body"] == {"object": "embedding", "data": [{"embedding": [0.1]}]}
     assert payload["usage"] == {"prompt_tokens": 3, "total_tokens": 3}
+
+
+@pytest.mark.asyncio
+async def test_batch_ui_endpoints_sanitize_historical_provider_errors(
+    client, test_app, monkeypatch
+):
+    fake_db = FakeAuthorizationDB()
+    sensitive = "provider api_key=sk-historical-secret https://provider.internal/private"
+    fake_db.batch_items[0].update(
+        status="failed",
+        last_error=sensitive,
+        response_body=None,
+        error_body={
+            "message": sensitive,
+            "type": "HTTPStatusError",
+            "retry_category": "upstream_5xx",
+            "provider_payload": {"secret": sensitive},
+        },
+    )
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ}},
+        ),
+    )
+
+    headers = {"Authorization": "Bearer mk-test"}
+    list_response = await client.get(
+        "/ui/api/batches/batch-1?items_limit=1&items_offset=0",
+        headers=headers,
+    )
+    detail_response = await client.get(
+        "/ui/api/batches/batch-1/items/item-1",
+        headers=headers,
+    )
+
+    assert list_response.status_code == 200
+    assert detail_response.status_code == 200
+    list_item = list_response.json()["items"]["data"][0]
+    detail_item = detail_response.json()
+    assert list_item["last_error"] == "Provider unavailable"
+    assert detail_item["last_error"] == "Provider unavailable"
+    assert detail_item["error_body"] == {
+        "message": "Provider unavailable",
+        "type": "BatchItemError",
+        "retry_category": "upstream_5xx",
+    }
+    detail_query = next(
+        query
+        for query, _params in fake_db.queries
+        if "WHERE batch_id = $1 AND item_id = $2" in query
+    )
+    assert "error_body IS NOT NULL AS _has_error_body" in detail_query
+    assert "response_body, error_body" not in detail_query
+    assert sensitive not in list_response.text
+    assert sensitive not in detail_response.text
 
 
 @pytest.mark.asyncio

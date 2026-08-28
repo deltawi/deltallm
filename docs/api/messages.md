@@ -56,4 +56,18 @@ Errors use the Anthropic error envelope:
 }
 ```
 
-Gateway-level errors (rate limits, budget exhaustion, upstream failures) return the same status codes as the OpenAI-compatible endpoints.
+Every failure before the response starts—including authentication, request validation, rate
+limits, budget exhaustion, and upstream/provider failures—uses this envelope. Provider response
+bodies and messages are never forwarded. DeltaLLM maps the gateway status to the Anthropic error
+type (`authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`,
+`overloaded_error`, or `api_error`) and preserves a valid `Retry-After` header for rate limits.
+
+Gateway-level errors return the same HTTP status codes as the OpenAI-compatible endpoints. An
+unclassified upstream `401`, `403`, or `404` is treated as a deployment/configuration failure so
+another healthy deployment can be tried; if failover is exhausted, the client receives a sanitized
+`503 overloaded_error`. A trusted content-policy or context-window classification remains a
+terminal `400 invalid_request_error`.
+
+If a provider fails after a streaming `200` response has already emitted content, DeltaLLM does not
+retry or replace the response. It emits one sanitized Anthropic `event: error` frame and closes the
+stream without a `message_stop` event.

@@ -174,6 +174,7 @@ async def test_opened_stream_close_can_retry_after_interrupted_cleanup() -> None
         response=None,
         translated_stream=None,
         first_line="data: first",
+        adapter=None,  # type: ignore[arg-type]
         deployment=_deployment(),
         params={},
         api_base="https://example.test",

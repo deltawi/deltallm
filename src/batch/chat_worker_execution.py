@@ -16,6 +16,7 @@ from src.batch.chat_batching import (
     resolve_chat_batching_settings,
 )
 from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_for_batch_endpoint
+from src.batch.error_sanitization import persisted_batch_error_message
 from src.batch.policy import record_batch_policy_failure, run_batch_request_preflight
 from src.batch.retry import BatchResponseShapeError, BatchRetryDecision, classify_batch_retry
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
@@ -35,9 +36,10 @@ from src.metrics import (
     observe_batch_chat_provider_latency,
     set_batch_worker_saturation,
 )
-from src.models.errors import InvalidRequestError, ServiceUnavailableError
+from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailableError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, MCPToolDefinition
+from src.providers.base import map_standard_provider_error, sanitize_provider_proxy_error
 from src.providers.resolution import resolve_provider
 from src.router import ProviderAttemptResult, ROUTING_MODE_CONTEXT_KEY
 from src.router.execution import (
@@ -64,6 +66,23 @@ CHAT_MICROBATCH_UNSUPPORTED_REASONS = frozenset(
 
 
 class ChatWorkerExecutionMixin:
+    def _sanitize_chat_microbatch_executor_error(
+        self, deployment: Any, exc: Exception
+    ) -> ProxyError:
+        if self._is_chat_microbatch_unsupported_error(exc):
+            return self._chat_microbatch_unsupported_error(
+                deployment,
+                reason=self._chat_microbatch_unsupported_reason(exc),
+            )
+        if isinstance(exc, ProxyError):
+            return sanitize_provider_proxy_error(exc)
+        registry = getattr(self.app.state, "provider_error_mapper_registry", None)
+        if registry is not None:
+            mapped_error = registry.map_error(resolve_provider(deployment.deltallm_params), exc)
+        else:
+            mapped_error = map_standard_provider_error(exc)
+        return sanitize_provider_proxy_error(mapped_error)
+
     async def prepare_chat_item_for_execution(self, job, item) -> _PreparedChatItem:  # noqa: ANN001
         started_at_monotonic = perf_counter()
         chat_request = ChatCompletionRequest.model_validate(item.request_body)
@@ -513,7 +532,7 @@ class ChatWorkerExecutionMixin:
         failed_size: int,
     ) -> dict[str, Any]:
         return {
-            "message": str(exc),
+            "message": persisted_batch_error_message(exc, decision),
             "type": exc.__class__.__name__,
             "retryable": True,
             "retry_category": decision.category.value,
@@ -587,13 +606,14 @@ class ChatWorkerExecutionMixin:
             original_size=original_size,
             failed_size=chunk_size,
         )
+        safe_error_message = persisted_batch_error_message(exc, decision)
         try:
             released_item_ids = await self.repository.release_items_for_retry(
                 item_ids=item_ids,
                 worker_id=self.config.worker_id,
                 retry_delay_seconds=retry_delay,
                 error_body=error_body,
-                last_error=str(exc),
+                last_error=safe_error_message,
                 item_claim_epochs={
                     prepared.item.item_id: prepared.item.claim_epoch for prepared in prepared_items
                 },
@@ -698,33 +718,38 @@ class ChatWorkerExecutionMixin:
                     deployment=deployment,
                     request_context=request_context,
                 )
-                normalized_results = normalize_chat_microbatch_results(
-                    raw_results,
-                    expected_count=chunk_size,
-                    custom_ids=[prepared.item.custom_id for prepared in prepared_items],
-                )
-                health_errors = [
-                    result.error
-                    for result in normalized_results
-                    if result.error is not None and affects_deployment_health(result.error)
-                ]
-                if len(health_errors) == len(normalized_results):
-                    raise health_errors[0]
-                if health_errors:
-                    return ProviderAttemptResult(
-                        value=normalized_results,
-                        health_error=health_errors[0],
-                    )
-                return normalized_results
             except Exception as exc:
-                retry_decision = classify_batch_retry(exc)
+                mapped_error = self._sanitize_chat_microbatch_executor_error(deployment, exc)
+                retry_decision = classify_batch_retry(mapped_error)
                 if (
-                    not self._is_chat_microbatch_unsupported_error(exc)
+                    not self._is_chat_microbatch_unsupported_error(mapped_error)
                     and retry_decision.retryable
-                    and affects_deployment_health(exc)
+                    and affects_deployment_health(mapped_error)
                 ):
-                    last_retryable_microbatch_exc = exc
-                raise
+                    last_retryable_microbatch_exc = mapped_error
+                if mapped_error is exc:
+                    raise
+                raise mapped_error from exc
+
+            normalized_results = normalize_chat_microbatch_results(
+                raw_results,
+                expected_count=chunk_size,
+                custom_ids=[prepared.item.custom_id for prepared in prepared_items],
+            )
+            health_errors = [
+                result.error
+                for result in normalized_results
+                if result.error is not None and affects_deployment_health(result.error)
+            ]
+            if len(health_errors) == len(normalized_results):
+                last_retryable_microbatch_exc = health_errors[0]
+                raise health_errors[0]
+            if health_errors:
+                return ProviderAttemptResult(
+                    value=normalized_results,
+                    health_error=health_errors[0],
+                )
+            return normalized_results
 
         try:
             for prepared in prepared_items:

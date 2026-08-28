@@ -8,6 +8,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_EMBEDDINGS
+from src.batch.error_sanitization import sanitize_batch_artifact_error
 from src.batch.models import BatchJobStatus, is_operator_failed_reason
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
@@ -288,13 +289,10 @@ class BatchArtifactFinalizer:
         }
 
     def _serialize_failed_artifact_row(self, item) -> dict[str, Any]:  # noqa: ANN001
-        error_body = dict(item.error_body) if isinstance(item.error_body, dict) else {}
-        if not error_body.get("message"):
-            error_body["message"] = item.last_error or (
-                "Batch request cancelled" if item.status == "cancelled" else "Batch request failed"
-            )
-        if not error_body.get("type"):
-            error_body["type"] = "BatchItemCancelled" if item.status == "cancelled" else "BatchItemError"
+        error_body = sanitize_batch_artifact_error(
+            item.error_body if isinstance(item.error_body, dict) else None,
+            cancelled=item.status == "cancelled",
+        )
 
         return {
             "id": self._public_batch_row_id(item),

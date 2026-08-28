@@ -17,6 +17,7 @@ from src.batch.embedding_microbatch import (
     resolve_effective_upstream_max_batch_inputs,
 )
 from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_for_batch_endpoint
+from src.batch.error_sanitization import persisted_batch_error_message
 from src.batch.policy import record_batch_policy_failure, run_batch_request_preflight
 from src.batch.retry import (
     BatchResponseShapeError,
@@ -260,7 +261,7 @@ class EmbeddingWorkerExecutionMixin:
         result: str,
     ) -> dict[str, Any]:
         return {
-            "message": str(exc),
+            "message": persisted_batch_error_message(exc, decision),
             "type": exc.__class__.__name__,
             "retryable": True,
             "retry_category": decision.category.value,
@@ -380,13 +381,14 @@ class EmbeddingWorkerExecutionMixin:
             next_max_inputs=next_max_inputs,
             result=result,
         )
+        safe_error_message = persisted_batch_error_message(exc, decision)
         try:
             released_item_ids = await self.repository.release_items_for_retry(
                 item_ids=item_ids,
                 worker_id=self.config.worker_id,
                 retry_delay_seconds=retry_delay,
                 error_body=error_body,
-                last_error=str(exc),
+                last_error=safe_error_message,
                 item_claim_epochs={
                     prepared.item.item_id: prepared.item.claim_epoch for prepared in prepared_items
                 },

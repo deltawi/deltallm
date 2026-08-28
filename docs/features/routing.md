@@ -472,10 +472,14 @@ deployment-health impact, while a trusted adapter classification owns specialize
 selection. A recognized context or policy failure returned with a 5xx status therefore remains
 health-affecting and may try its specialized chain before the general chain. Unclassified 5xx
 responses use the general chain, and 429 remains rate-limit classified regardless of envelope text.
+Provider `408` responses use the timeout path. Unclassified provider `401`, `403`, and `404`
+responses indicate unhealthy deployment credentials, permissions, or model configuration and use
+the general fallback chain; a trusted context-window or content-policy classification still remains
+a terminal request failure.
 Malformed JSON or response schemas behind a nominally successful provider status are also
 health-affecting general failures, and the upstream payload is never returned to the client. Empty
 chat choices, missing or mismatched embedding and rerank results, and empty speech audio are
-malformed successes. Unknown or malformed provider 4xx responses stop immediately and return a
+malformed successes. Other unknown or malformed provider 4xx responses stop immediately and return a
 sanitized, stable gateway error. Anthropic `refusal` and `model_context_window_exceeded` success
 stop reasons select the content-policy and context-window chains respectively. Gemini policy
 terminal reasons select the content-policy chain; unsupported, malformed, and unknown terminal
@@ -490,7 +494,9 @@ terminal events can therefore select a specialized fallback before output. Empty
 and truncated pre-output streams are malformed successes and may use the general fallback chain.
 If a classified stop follows partial output, DeltaLLM completes that committed stream with
 `content_filter` or `length` instead of starting another provider attempt. Any other malformed
-committed stream is aborted, marked unhealthy, and never cached as a complete response.
+committed stream is marked unhealthy and never cached as a complete response. OpenAI-compatible
+streams close without `[DONE]`; Anthropic Messages streams emit one sanitized `event: error` frame.
+Neither path starts another provider attempt after commit.
 
 All three maps are immutable members of one routing-runtime generation. Each replica serializes the
 durable config load, subscriber application, generation publication, and rollback. Publication is

@@ -269,6 +269,47 @@ async def test_messages_stream_success(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_messages_stream_provider_failure_emits_sanitized_error_event(client, test_app):
+    sensitive = "provider stream api_key=sk-upstream-secret"
+
+    class _BrokenStream:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return None
+
+        async def aiter_lines(self):
+            yield (
+                'data: {"id":"chatcmpl-1","object":"chat.completion.chunk",'
+                '"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},'
+                '"finish_reason":null}]}'
+            )
+            raise httpx.ReadError(sensitive)
+
+    test_app.state.http_client.stream = lambda *args, **kwargs: _BrokenStream()
+    response = await client.post(
+        "/v1/messages",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert '"type":"overloaded_error"' in response.text
+    assert "Provider unavailable" in response.text
+    assert sensitive not in response.text
+    assert "event: message_stop" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_messages_tool_use_round_trip(client, test_app):
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del headers, timeout
@@ -542,3 +583,49 @@ async def test_messages_budget_exceeded_returns_429(client, test_app):
     response = await client.post("/v1/messages", headers=headers, json=body)
 
     assert response.status_code == 429
+    assert response.json()["type"] == "error"
+    assert response.json()["error"]["type"] == "rate_limit_error"
+    assert "budget exceeded" in response.json()["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_messages_provider_failure_returns_sanitized_anthropic_error(client, test_app):
+    sensitive = "provider api_key=sk-upstream-secret"
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, json, timeout
+        return httpx.Response(503, json={"error": {"message": sensitive}})
+
+    test_app.state.http_client.post = post
+    response = await client.post(
+        "/v1/messages",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "type": "error",
+        "error": {"type": "overloaded_error", "message": "Provider unavailable"},
+    }
+    assert sensitive not in response.text
+
+
+@pytest.mark.asyncio
+async def test_messages_auth_failure_uses_anthropic_error_envelope(client) -> None:
+    response = await client.post(
+        "/v1/messages",
+        json={
+            "model": "gpt-4o-mini",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["type"] == "error"
+    assert response.json()["error"]["type"] == "authentication_error"
