@@ -6,9 +6,19 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from src.auth.roles import Permission, PlatformRole, validate_organization_role, validate_platform_role, validate_team_role
+from src.auth.roles import (
+    Permission,
+    PlatformRole,
+    validate_organization_role,
+    validate_platform_role,
+    validate_team_role,
+)
 from src.audit import AuditAction
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
+from src.api.admin.organization_mutations import (
+    require_active_organization_mutation,
+    require_active_organization_mutations,
+)
 from src.middleware.admin import require_admin_permission
 from src.services.access_provisioning_service import AccessProvisioningService
 
@@ -44,12 +54,17 @@ def _self_registration_account_metadata(metadata: Any) -> dict[str, Any]:
     registration = metadata_obj.get(_ACCOUNT_SELF_REGISTRATION_METADATA_KEY)
     if not isinstance(registration, dict):
         return {}
-    if registration.get("source") != _SELF_REGISTRATION_SOURCE or registration.get("registered") is not True:
+    if (
+        registration.get("source") != _SELF_REGISTRATION_SOURCE
+        or registration.get("registered") is not True
+    ):
         return {}
     return registration
 
 
-def _empty_self_registration_payload(account_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+def _empty_self_registration_payload(
+    account_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     registration = account_metadata or {}
     return {
         "is_self_registered": bool(registration),
@@ -70,8 +85,10 @@ def _merge_account_self_registration(
 
     return {
         **runtime_payload,
-        "is_self_registered": bool(account_metadata) or bool(runtime_payload.get("is_self_registered")),
-        "sandbox_team_id": runtime_payload.get("sandbox_team_id") or account_metadata.get("default_team_id"),
+        "is_self_registered": bool(account_metadata)
+        or bool(runtime_payload.get("is_self_registered")),
+        "sandbox_team_id": runtime_payload.get("sandbox_team_id")
+        or account_metadata.get("default_team_id"),
         "sandbox_organization_id": runtime_payload.get("sandbox_organization_id")
         or account_metadata.get("default_organization_id"),
     }
@@ -133,13 +150,18 @@ def _runtime_user_context(row: dict[str, Any]) -> dict[str, Any]:
             "seeded_team": team_default,
             "seeded_organization": organization_default,
             "sandbox_team_id": item.get("team_id") if team_default else None,
-            "sandbox_organization_id": item.get("organization_id") if organization_default else None,
+            "sandbox_organization_id": item.get("organization_id")
+            if organization_default
+            else None,
         },
         "self_service_policy": _self_service_policy_payload(item),
     }
 
 
-@router.get("/ui/api/rbac/accounts", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/rbac/accounts",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def list_rbac_accounts(request: Request) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -152,7 +174,10 @@ async def list_rbac_accounts(request: Request) -> list[dict[str, Any]]:
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.get("/ui/api/principals", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/principals",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def list_principals(
     request: Request,
     search: str | None = Query(default=None),
@@ -164,7 +189,9 @@ async def list_principals(
     params: list[Any] = []
     if search and search.strip():
         params.append(f"%{search.strip()}%")
-        clauses.append(f"(email ILIKE ${len(params)} OR role ILIKE ${len(params)} OR account_id::text ILIKE ${len(params)})")
+        clauses.append(
+            f"(email ILIKE ${len(params)} OR role ILIKE ${len(params)} OR account_id::text ILIKE ${len(params)})"
+        )
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
     count_rows = await db.query_raw(
@@ -185,11 +212,18 @@ async def list_principals(
         """,
         *page_params,
     )
-    account_ids = [str(row.get("account_id") or "") for row in account_rows if row.get("account_id")]
+    account_ids = [
+        str(row.get("account_id") or "") for row in account_rows if row.get("account_id")
+    ]
     if not account_ids:
         return {
             "data": [],
-            "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+            "pagination": {
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + limit < total,
+            },
         }
 
     account_ph = ", ".join(f"${i + 1}" for i in range(len(account_ids)))
@@ -229,7 +263,9 @@ async def list_principals(
             continue
         placeholder_index = len(runtime_params) + 1
         runtime_params.extend([account_id, str(row.get("email") or "").strip().lower()])
-        runtime_account_values.append(f"(${placeholder_index}::text, ${placeholder_index + 1}::text)")
+        runtime_account_values.append(
+            f"(${placeholder_index}::text, ${placeholder_index + 1}::text)"
+        )
 
     runtime_user_rows = await db.query_raw(
         f"""
@@ -341,7 +377,9 @@ async def list_principals(
         principals.append(
             {
                 **base,
-                "runtime_user_id": runtime_user.get("user_id") if isinstance(runtime_user, dict) else None,
+                "runtime_user_id": runtime_user.get("user_id")
+                if isinstance(runtime_user, dict)
+                else None,
                 "runtime_user": runtime_user,
                 "self_registration": self_registration,
                 "self_service_policy": runtime_context.get("self_service_policy")
@@ -354,11 +392,19 @@ async def list_principals(
 
     return {
         "data": principals,
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
-@router.get("/ui/api/principals/summary", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/principals/summary",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def principals_summary(request: Request) -> dict[str, int]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -391,13 +437,18 @@ async def principals_summary(request: Request) -> dict[str, int]:
     }
 
 
-@router.post("/ui/api/rbac/accounts", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post(
+    "/ui/api/rbac/accounts",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
     service = getattr(request.app.state, "platform_identity_service", None)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+        )
 
     email = str(payload.get("email") or "").strip().lower()
     if not email:
@@ -436,11 +487,18 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
         )
         if rows:
             try:
-                updated = await service.admin_set_password(account_id=rows[0]["account_id"], new_password=password)
+                updated = await service.admin_set_password(
+                    account_id=rows[0]["account_id"], new_password=password
+                )
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
             if not updated:
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to set account password")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="failed to set account password",
+                )
 
     rows = await db.query_raw(
         """
@@ -452,7 +510,9 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
         email,
     )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="account upsert failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="account upsert failed"
+        )
     response = to_json_value(dict(rows[0]))
     await emit_admin_mutation_audit(
         request=request,
@@ -466,18 +526,26 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     return response
 
 
-@router.post("/ui/api/rbac/provision", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post(
+    "/ui/api/rbac/provision",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def provision_person(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
     identity_service = getattr(request.app.state, "platform_identity_service", None)
     invitation_service = getattr(request.app.state, "invitation_service", None)
     if identity_service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Provisioning service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Provisioning service unavailable",
+        )
 
     mode = str(payload.get("mode") or "").strip()
     if mode == "invite_email" and invitation_service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable"
+        )
 
     service = AccessProvisioningService(
         db_client=db,
@@ -489,26 +557,41 @@ async def provision_person(request: Request, payload: dict[str, Any]) -> dict[st
         response = await service.provision_person(
             email=str(payload.get("email") or ""),
             mode=mode,
-            platform_role=str(payload.get("platform_role") or payload.get("role") or PlatformRole.ORG_USER),
+            platform_role=str(
+                payload.get("platform_role") or payload.get("role") or PlatformRole.ORG_USER
+            ),
             password=str(payload.get("password") or "") or None,
             is_active=bool(payload.get("is_active", True)),
             organization_id=str(payload.get("organization_id") or "").strip() or None,
             organization_role=str(payload.get("organization_role") or "") or None,
             team_id=str(payload.get("team_id") or "").strip() or None,
             team_role=str(payload.get("team_role") or "") or None,
-            invited_by_account_id=getattr(getattr(request.state, "platform_auth", None), "account_id", None),
+            invited_by_account_id=getattr(
+                getattr(request.state, "platform_auth", None), "account_id", None
+            ),
         )
     except ValueError as exc:
         detail = str(exc)
-        status_code = status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        status_code = (
+            status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        )
         raise HTTPException(status_code=status_code, detail=detail) from exc
     except RuntimeError as exc:
         if "invitation service unavailable" in str(exc):
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable") from exc
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Provisioning failed") from exc
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Invitation service unavailable",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Provisioning failed"
+        ) from exc
 
     mode = str(response.get("mode") or "")
-    action = AuditAction.ADMIN_INVITATION_CREATE if mode == "invite_email" else AuditAction.ADMIN_RBAC_ACCOUNT_UPSERT
+    action = (
+        AuditAction.ADMIN_INVITATION_CREATE
+        if mode == "invite_email"
+        else AuditAction.ADMIN_RBAC_ACCOUNT_UPSERT
+    )
     resource_type = "invitation" if mode == "invite_email" else "platform_account"
     resource_id = str(response.get("invitation_id") or response.get("account_id") or "")
     await emit_admin_mutation_audit(
@@ -523,28 +606,69 @@ async def provision_person(request: Request, payload: dict[str, Any]) -> dict[st
     return response
 
 
-@router.delete("/ui/api/rbac/accounts/{account_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete(
+    "/ui/api/rbac/accounts/{account_id}",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def delete_rbac_account(request: Request, account_id: str) -> dict[str, bool]:
     request_start = perf_counter()
     db = db_or_503(request)
-    existing = await db.query_raw(
-        """
-        SELECT account_id, email, role, is_active
-        FROM deltallm_platformaccount
-        WHERE account_id = $1
-        LIMIT 1
-        """,
-        account_id,
-    )
-    if not existing:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RBAC mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        existing = await tx.query_raw(
+            """
+            SELECT account_id, email, role, is_active
+            FROM deltallm_platformaccount
+            WHERE account_id = $1
+            LIMIT 1
+            FOR UPDATE
+            """,
+            account_id,
+        )
+        if not existing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+        organization_rows = await tx.query_raw(
+            """
+            SELECT DISTINCT organization_id
+            FROM (
+                SELECT organization_id
+                FROM deltallm_organizationmembership
+                WHERE account_id = $1
+                UNION
+                SELECT t.organization_id
+                FROM deltallm_teammembership tm
+                JOIN deltallm_teamtable t ON t.team_id = tm.team_id
+                WHERE tm.account_id = $1
+            ) account_organizations
+            WHERE organization_id IS NOT NULL
+            """,
+            account_id,
+        )
+        await require_active_organization_mutations(
+            tx,
+            {str(row.get("organization_id") or "") for row in organization_rows},
+        )
 
-    # Manual delete order keeps behavior deterministic regardless of FK cascade configuration.
-    await db.execute_raw("DELETE FROM deltallm_teammembership WHERE account_id = $1", account_id)
-    await db.execute_raw("DELETE FROM deltallm_organizationmembership WHERE account_id = $1", account_id)
-    await db.execute_raw("DELETE FROM deltallm_platformsession WHERE account_id = $1", account_id)
-    await db.execute_raw("DELETE FROM deltallm_platformidentity WHERE account_id = $1", account_id)
-    deleted = await db.execute_raw("DELETE FROM deltallm_platformaccount WHERE account_id = $1", account_id)
+        # Manual delete order keeps behavior deterministic regardless of FK cascade configuration.
+        await tx.execute_raw(
+            "DELETE FROM deltallm_teammembership WHERE account_id = $1", account_id
+        )
+        await tx.execute_raw(
+            "DELETE FROM deltallm_organizationmembership WHERE account_id = $1", account_id
+        )
+        await tx.execute_raw(
+            "DELETE FROM deltallm_platformsession WHERE account_id = $1", account_id
+        )
+        await tx.execute_raw(
+            "DELETE FROM deltallm_platformidentity WHERE account_id = $1", account_id
+        )
+        deleted = await tx.execute_raw(
+            "DELETE FROM deltallm_platformaccount WHERE account_id = $1", account_id
+        )
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
@@ -558,8 +682,13 @@ async def delete_rbac_account(request: Request, account_id: str) -> dict[str, bo
     return response
 
 
-@router.get("/ui/api/rbac/organization-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def list_org_memberships(request: Request, account_id: str | None = None) -> list[dict[str, Any]]:
+@router.get(
+    "/ui/api/rbac/organization-memberships",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def list_org_memberships(
+    request: Request, account_id: str | None = None
+) -> list[dict[str, Any]]:
     db = db_or_503(request)
     if account_id:
         rows = await db.query_raw(
@@ -582,7 +711,10 @@ async def list_org_memberships(request: Request, account_id: str | None = None) 
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/rbac/organization-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post(
+    "/ui/api/rbac/organization-memberships",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
@@ -595,39 +727,55 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required"
+        )
 
     if not account_id and email:
-        rows = await db.query_raw("SELECT account_id FROM deltallm_platformaccount WHERE lower(email)=lower($1) LIMIT 1", email)
+        rows = await db.query_raw(
+            "SELECT account_id FROM deltallm_platformaccount WHERE lower(email)=lower($1) LIMIT 1",
+            email,
+        )
         if rows:
             account_id = rows[0].get("account_id")
     if not account_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="account_id or known email is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="account_id or known email is required"
+        )
 
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
-        VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-        ON CONFLICT (account_id, organization_id)
-        DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
-        """,
-        account_id,
-        organization_id,
-        role,
-    )
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization membership mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        await require_active_organization_mutation(tx, organization_id)
+        await tx.execute_raw(
+            """
+            INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+            ON CONFLICT (account_id, organization_id)
+            DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+            """,
+            account_id,
+            organization_id,
+            role,
+        )
 
-    rows = await db.query_raw(
-        """
-        SELECT membership_id, account_id, organization_id, role, created_at, updated_at
-        FROM deltallm_organizationmembership
-        WHERE account_id = $1 AND organization_id = $2
-        LIMIT 1
-        """,
-        account_id,
-        organization_id,
-    )
+        rows = await tx.query_raw(
+            """
+            SELECT membership_id, account_id, organization_id, role, created_at, updated_at
+            FROM deltallm_organizationmembership
+            WHERE account_id = $1 AND organization_id = $2
+            LIMIT 1
+            """,
+            account_id,
+            organization_id,
+        )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed"
+        )
     response = to_json_value(dict(rows[0]))
     await emit_admin_mutation_audit(
         request=request,
@@ -641,43 +789,56 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
     return response
 
 
-@router.delete("/ui/api/rbac/organization-memberships/{membership_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete(
+    "/ui/api/rbac/organization-memberships/{membership_id}",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def delete_org_membership(request: Request, membership_id: str) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
-    existing_rows = await db.query_raw(
-        """
-        SELECT membership_id, account_id, organization_id, role, created_at, updated_at
-        FROM deltallm_organizationmembership
-        WHERE membership_id = $1
-        LIMIT 1
-        """,
-        membership_id,
-    )
-    if not existing_rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization membership not found")
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization membership mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        existing_rows = await tx.query_raw(
+            """
+            SELECT membership_id, account_id, organization_id, role, created_at, updated_at
+            FROM deltallm_organizationmembership
+            WHERE membership_id = $1
+            LIMIT 1
+            FOR UPDATE
+            """,
+            membership_id,
+        )
+        if not existing_rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Organization membership not found"
+            )
 
-    existing = dict(existing_rows[0])
-    account_id = str(existing.get("account_id") or "")
-    organization_id = str(existing.get("organization_id") or "")
-    removed_team_memberships = await db.execute_raw(
-        """
-        DELETE FROM deltallm_teammembership
-        WHERE account_id = $1
-          AND team_id IN (
-            SELECT team_id
-            FROM deltallm_teamtable
-            WHERE organization_id = $2
-          )
-        """,
-        account_id,
-        organization_id,
-    )
+        existing = dict(existing_rows[0])
+        account_id = str(existing.get("account_id") or "")
+        organization_id = str(existing.get("organization_id") or "")
+        await require_active_organization_mutation(tx, organization_id)
+        removed_team_memberships = await tx.execute_raw(
+            """
+            DELETE FROM deltallm_teammembership
+            WHERE account_id = $1
+              AND team_id IN (
+                SELECT team_id
+                FROM deltallm_teamtable
+                WHERE organization_id = $2
+              )
+            """,
+            account_id,
+            organization_id,
+        )
 
-    deleted = await db.execute_raw(
-        "DELETE FROM deltallm_organizationmembership WHERE membership_id = $1",
-        membership_id,
-    )
+        deleted = await tx.execute_raw(
+            "DELETE FROM deltallm_organizationmembership WHERE membership_id = $1",
+            membership_id,
+        )
     response = {
         "deleted": int(deleted or 0) > 0,
         "team_memberships_removed": int(removed_team_memberships or 0),
@@ -694,8 +855,13 @@ async def delete_org_membership(request: Request, membership_id: str) -> dict[st
     return response
 
 
-@router.get("/ui/api/rbac/team-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def list_team_memberships(request: Request, account_id: str | None = None) -> list[dict[str, Any]]:
+@router.get(
+    "/ui/api/rbac/team-memberships",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def list_team_memberships(
+    request: Request, account_id: str | None = None
+) -> list[dict[str, Any]]:
     db = db_or_503(request)
     if account_id:
         rows = await db.query_raw(
@@ -718,7 +884,10 @@ async def list_team_memberships(request: Request, account_id: str | None = None)
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/rbac/team-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post(
+    "/ui/api/rbac/team-memberships",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
@@ -734,65 +903,82 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
 
     if not account_id and email:
-        rows = await db.query_raw("SELECT account_id FROM deltallm_platformaccount WHERE lower(email)=lower($1) LIMIT 1", email)
+        rows = await db.query_raw(
+            "SELECT account_id FROM deltallm_platformaccount WHERE lower(email)=lower($1) LIMIT 1",
+            email,
+        )
         if rows:
             account_id = rows[0].get("account_id")
     if not account_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="account_id or known email is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="account_id or known email is required"
+        )
 
-    account_rows = await db.query_raw(
-        "SELECT account_id FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
-        account_id,
-    )
-    if not account_rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team membership mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        account_rows = await tx.query_raw(
+            "SELECT account_id FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
+            account_id,
+        )
+        if not account_rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    team_rows = await db.query_raw(
-        "SELECT team_id, organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
-        team_id,
-    )
-    if not team_rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        team_rows = await tx.query_raw(
+            "SELECT team_id, organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1 FOR SHARE",
+            team_id,
+        )
+        if not team_rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-    organization_id = team_rows[0].get("organization_id")
-    if organization_id:
-        org_membership_rows = await db.query_raw(
+        organization_id = str(team_rows[0].get("organization_id") or "").strip()
+        if organization_id:
+            await require_active_organization_mutation(tx, organization_id)
+            org_membership_rows = await tx.query_raw(
+                """
+                SELECT membership_id
+                FROM deltallm_organizationmembership
+                WHERE account_id = $1 AND organization_id = $2
+                LIMIT 1
+                """,
+                account_id,
+                organization_id,
+            )
+            if not org_membership_rows:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Account must be a member of the team's organization",
+                )
+
+        await tx.execute_raw(
             """
-            SELECT membership_id
-            FROM deltallm_organizationmembership
-            WHERE account_id = $1 AND organization_id = $2
+            INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+            ON CONFLICT (account_id, team_id)
+            DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+            """,
+            account_id,
+            team_id,
+            role,
+        )
+
+        rows = await tx.query_raw(
+            """
+            SELECT membership_id, account_id, team_id, role, created_at, updated_at
+            FROM deltallm_teammembership
+            WHERE account_id = $1 AND team_id = $2
             LIMIT 1
             """,
             account_id,
-            organization_id,
+            team_id,
         )
-        if not org_membership_rows:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account must be a member of the team's organization")
-
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
-        VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-        ON CONFLICT (account_id, team_id)
-        DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
-        """,
-        account_id,
-        team_id,
-        role,
-    )
-
-    rows = await db.query_raw(
-        """
-        SELECT membership_id, account_id, team_id, role, created_at, updated_at
-        FROM deltallm_teammembership
-        WHERE account_id = $1 AND team_id = $2
-        LIMIT 1
-        """,
-        account_id,
-        team_id,
-    )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed"
+        )
     response = to_json_value(dict(rows[0]))
     await emit_admin_mutation_audit(
         request=request,
@@ -806,14 +992,41 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
     return response
 
 
-@router.delete("/ui/api/rbac/team-memberships/{membership_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete(
+    "/ui/api/rbac/team-memberships/{membership_id}",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def delete_team_membership(request: Request, membership_id: str) -> dict[str, bool]:
     request_start = perf_counter()
     db = db_or_503(request)
-    deleted = await db.execute_raw(
-        "DELETE FROM deltallm_teammembership WHERE membership_id = $1",
-        membership_id,
-    )
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team membership mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        existing_rows = await tx.query_raw(
+            """
+            SELECT tm.membership_id, t.organization_id
+            FROM deltallm_teammembership tm
+            JOIN deltallm_teamtable t ON t.team_id = tm.team_id
+            WHERE tm.membership_id = $1
+            FOR UPDATE OF tm
+            FOR SHARE OF t
+            """,
+            membership_id,
+        )
+        if existing_rows:
+            await require_active_organization_mutation(
+                tx,
+                str(existing_rows[0].get("organization_id") or ""),
+            )
+            deleted = await tx.execute_raw(
+                "DELETE FROM deltallm_teammembership WHERE membership_id = $1",
+                membership_id,
+            )
+        else:
+            deleted = 0
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,

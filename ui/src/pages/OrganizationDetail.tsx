@@ -1,6 +1,10 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
+import {
+  useOrganizationResource,
+  type OrganizationLifecycleTransition,
+} from '../lib/useOrganizationResource';
 import {
   callableTargets,
   organizations,
@@ -30,6 +34,10 @@ import {
   EntityDetailShell,
   TextTabs,
 } from '../components/admin/shells';
+import {
+  OrganizationLifecycleBadge,
+  OrganizationLifecycleNotice,
+} from '../components/admin/OrganizationLifecycleStatus';
 import {
   ArrowLeft, Building2, Users, DollarSign, Gauge, TrendingUp, Pencil, Plus,
   UserPlus, Trash2, ChevronRight, Shield, CheckCircle2, AlertTriangle,
@@ -158,28 +166,47 @@ export default function OrganizationDetail() {
   }, [isPlatformAdmin, location.hash]);
 
   /* ── data ── */
-  const { data: org, loading: orgLoading, refetch: refetchOrg } = useApi(
-    () => organizations.get(orgId!), [orgId],
-  );
+  const {
+    data: org,
+    initialError: orgInitialError,
+    initialLoading: orgLoading,
+    refreshing: orgRefreshing,
+    refreshError: orgRefreshError,
+    refresh: refetchOrg,
+    applyLifecycleTransition,
+  } = useOrganizationResource(orgId);
+  const handleLifecycleChange = useCallback(async (
+    transition: OrganizationLifecycleTransition,
+  ) => {
+    applyLifecycleTransition(transition);
+    await refetchOrg();
+  }, [applyLifecycleTransition, refetchOrg]);
+  const reconcileOrganizationAfterMutation = useCallback(async () => {
+    try {
+      await refetchOrg();
+    } catch {
+      // The mutation remains successful; the resource hook exposes refresh recovery.
+    }
+  }, [refetchOrg]);
   const servicePolicy = org?.service_policy;
   const hasTier = servicePolicy?.source === 'tier';
   const isTierAuthoritative = Boolean(servicePolicy?.tier_authoritative);
   const { data: orgTeams, loading: teamsLoading } = useApi(
-    () => organizations.teams(orgId!), [orgId],
+    (signal) => organizations.teams(orgId!, signal), [orgId],
   );
   const { data: orgMembers, loading: membersLoading, refetch: refetchMembers } = useApi(
-    () => organizations.members(orgId!), [orgId],
+    (signal) => organizations.members(orgId!, signal), [orgId],
   );
   const { data: orgAssetAccess, error: orgAssetAccessError, loading: orgAssetAccessLoading, refetch: refetchOrgAssetAccess } = useApi(
-    () => (isPlatformAdmin && !isTierAuthoritative
-      ? organizations.assetAccess(orgId!, { include_targets: false })
+    (signal) => (isPlatformAdmin && !isTierAuthoritative
+      ? organizations.assetAccess(orgId!, { include_targets: false }, signal)
       : Promise.resolve(null)),
     [orgId, isPlatformAdmin, isTierAuthoritative],
   );
   /* full targets: only loaded when assets tab is active */
   const { data: orgAssetTargetsFull, loading: orgAssetTargetsFullLoading } = useApi(
-    () => (tab === 'assets' && isPlatformAdmin && !isTierAuthoritative
-      ? organizations.assetAccess(orgId!, { include_targets: true })
+    (signal) => (tab === 'assets' && isPlatformAdmin && !isTierAuthoritative
+      ? organizations.assetAccess(orgId!, { include_targets: true }, signal)
       : Promise.resolve(null)),
     [orgId, isPlatformAdmin, isTierAuthoritative, tab],
   );
@@ -364,7 +391,7 @@ export default function OrganizationDetail() {
       }
       await organizations.update(orgId!, payload);
       setIsEditingSettings(false);
-      refetchOrg();
+      await reconcileOrganizationAfterMutation();
     } catch (err: unknown) {
       setOrgError(getErrorMessage(err, 'Failed to update organization'));
     } finally {
@@ -385,7 +412,7 @@ export default function OrganizationDetail() {
         model_rpm_limit: null,
         model_tpm_limit: null,
       });
-      refetchOrg();
+      await reconcileOrganizationAfterMutation();
     } catch (err: unknown) {
       setPageError(getErrorMessage(err, 'Failed to clear legacy per-model limits.'));
     } finally {
@@ -412,7 +439,7 @@ export default function OrganizationDetail() {
       });
       refetchOrgAssetAccess();
       setIsEditingAssets(false);
-      refetchOrg();
+      await reconcileOrganizationAfterMutation();
     } catch (err: unknown) {
       setOrgError(getErrorMessage(err, 'Failed to update asset access'));
     } finally {
@@ -434,7 +461,9 @@ export default function OrganizationDetail() {
   const [memberError, setMemberError] = useState<string | null>(null);
 
   const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
-    () => showAddMember ? organizations.memberCandidates(orgId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
+    (signal) => showAddMember
+      ? organizations.memberCandidates(orgId!, { search: memberSearch, limit: 50 }, signal)
+      : Promise.resolve([]),
     [orgId, showAddMember, memberSearch],
   );
 
@@ -480,11 +509,12 @@ export default function OrganizationDetail() {
   const teamList = (orgTeams || []) as OrganizationTeamRow[];
   const memberList = (orgMembers || []) as OrganizationMemberRow[];
   const memberCandidateList = (memberCandidates || []) as MemberCandidateOption[];
-  const orgCapabilities = org?.capabilities || {};
-  const canEditOrganization = Boolean(orgCapabilities.edit);
-  const canAddTeam = Boolean(orgCapabilities.add_team);
-  const canManageMembers = Boolean(orgCapabilities.manage_members);
-  const canManageAssets = Boolean(orgCapabilities.manage_assets) && !isTierAuthoritative;
+  const organizationIsActive = org?.lifecycle_state === 'active';
+  const canEditOrganization = Boolean(org?.capabilities?.edit);
+  const canAddTeam = Boolean(org?.capabilities?.add_team);
+  const canManageMembers = Boolean(org?.capabilities?.manage_members);
+  const canManageAssets = Boolean(org?.capabilities?.manage_assets) && !isTierAuthoritative;
+  const canManageServicePolicy = Boolean(org?.capabilities?.manage_service_policy);
   const spend = org?.spend || 0;
   const budget = org?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
@@ -514,6 +544,14 @@ export default function OrganizationDetail() {
       )
     : null;
 
+  useEffect(() => {
+    if (!org || organizationIsActive) return;
+    setIsEditingSettings(false);
+    setIsEditingAssets(false);
+    setShowAddMember(false);
+    if (tab === 'assets') setTab('overview');
+  }, [org, organizationIsActive, tab]);
+
   /* teams over 80% of budget = "warning" for alert card */
   const warningTeam = teamList.find(isBudgetWarningTeam);
 
@@ -529,7 +567,20 @@ export default function OrganizationDetail() {
   if (!org) {
     return (
       <div className="p-6">
-        <p className="text-gray-500">Organization not found.</p>
+        <p className="text-gray-500">
+          {orgInitialError
+            ? getErrorMessage(orgInitialError, 'Unable to load organization.')
+            : 'Organization not found.'}
+        </p>
+        {orgInitialError ? (
+          <button
+            type="button"
+            className="mt-3 text-sm font-medium text-brand-primary-ink"
+            onClick={() => void refetchOrg().catch(() => undefined)}
+          >
+            Try again
+          </button>
+        ) : null}
         <Link to="/organizations" className="text-brand-primary-ink text-sm mt-2 inline-block">Back to Organizations</Link>
       </div>
     );
@@ -550,9 +601,7 @@ export default function OrganizationDetail() {
       )}
       title={orgName}
       badges={(
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
-          <CheckCircle2 className="h-3.5 w-3.5" /> Active
-        </span>
+        <OrganizationLifecycleBadge state={org.lifecycle_state} />
       )}
       meta={(
         <div className="flex items-center gap-3">
@@ -649,8 +698,32 @@ export default function OrganizationDetail() {
           ]}
         />
       )}
-      notice={pageError ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{pageError}</div>
+      notice={!organizationIsActive || pageError || orgRefreshError ? (
+        <div className="space-y-3">
+          <OrganizationLifecycleNotice
+            state={org.lifecycle_state}
+            deletionNotBeforeAt={org.deletion_not_before_at}
+          />
+          {pageError ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{pageError}</div>
+          ) : null}
+          {orgRefreshError ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <p>
+                The last action succeeded, but the latest organization state could not be loaded.
+                Existing data is being kept until refresh succeeds.
+              </p>
+              <button
+                type="button"
+                className="mt-2 font-semibold text-brand-primary-ink disabled:opacity-50"
+                disabled={orgRefreshing}
+                onClick={() => void refetchOrg().catch(() => undefined)}
+              >
+                {orgRefreshing ? 'Refreshing…' : 'Retry refresh'}
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : undefined}
     >
       {tab === 'overview' && (
@@ -700,7 +773,7 @@ export default function OrganizationDetail() {
                             <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-relaxed text-red-800">
                               <p className="font-semibold">Legacy per-model RPM/TPM caps still apply</p>
                               <p className="mt-1">Move equivalent limits into the tier, then clear the legacy maps so the tier is the only per-model policy source.</p>
-                              {isPlatformAdmin && (
+                              {canManageServicePolicy && (
                                 <button
                                   type="button"
                                   onClick={handleClearLegacyModelLimits}
@@ -729,7 +802,9 @@ export default function OrganizationDetail() {
                       onClick={() => setTab('tiers')}
                       className="shrink-0 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
                     >
-                      {hasTier ? 'Manage policy' : 'Assign tier'}
+                      {canManageServicePolicy
+                        ? hasTier ? 'Manage policy' : 'Assign tier'
+                        : 'View policy'}
                     </button>
                   ) : (
                     <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white/80 px-3 py-1.5 text-xs font-medium text-gray-600">
@@ -1174,6 +1249,7 @@ export default function OrganizationDetail() {
                   <OrganizationDeletionPanel
                     organizationId={orgId}
                     organizationName={orgName}
+                    onLifecycleChange={handleLifecycleChange}
                   />
                 </Suspense>
               )}
@@ -1399,7 +1475,13 @@ export default function OrganizationDetail() {
 
         {/* ── ASSETS ── */}
         {tab === 'tiers' && isPlatformAdmin && (
-          <OrganizationTierPanel organizationId={orgId!} canManage={isPlatformAdmin} />
+          <OrganizationTierPanel
+            organizationId={orgId!}
+            canManage={canManageServicePolicy}
+            readOnlyReason={organizationIsActive
+              ? undefined
+              : 'Tier assignments cannot be changed while organization access is disabled.'}
+          />
         )}
 
         {tab === 'assets' && canManageAssets && (

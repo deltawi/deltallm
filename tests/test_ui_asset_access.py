@@ -18,7 +18,11 @@ from src.services.callable_targets import CallableTarget
 class _FakeScopeDB:
     def __init__(self) -> None:
         self.organizations = {
-            "org-1": {"organization_id": "org-1", "metadata": None},
+            "org-1": {
+                "organization_id": "org-1",
+                "lifecycle_state": "active",
+                "metadata": None,
+            },
         }
         self.teams = {
             "team-1": {
@@ -49,7 +53,9 @@ class _FakeScopeDB:
             return [row] if row else []
         if "FROM deltallm_organizationtable" in query:
             return list(self.organizations.values())
-        if "FROM deltallm_teamtable" in query and "WHERE team_id = $1" in query:
+        if "FROM deltallm_teamtable" in query and (
+            "WHERE team_id = $1" in query or "WHERE t.team_id = $1" in query
+        ):
             row = self.teams.get(str(params[0]))
             return [row] if row else []
         if "FROM deltallm_verificationtoken vt" in query and "WHERE vt.token = $1" in query:

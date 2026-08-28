@@ -28,6 +28,11 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     validate_runtime_user_scope,
 )
+from src.api.admin.endpoints.organization_schemas import (
+    OrganizationListResponse,
+    OrganizationResponse,
+)
+from src.api.admin.organization_mutations import require_active_organization_mutation
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.organization_admin import (
@@ -1006,7 +1011,7 @@ async def _build_org_asset_visibility_preview(
     return await build_asset_visibility_preview(request, organization_id=organization_id)
 
 
-@router.get("/ui/api/organizations")
+@router.get("/ui/api/organizations", response_model=OrganizationListResponse)
 async def list_organizations(
     request: Request,
     search: str | None = Query(default=None),
@@ -1045,7 +1050,9 @@ async def list_organizations(
     select_cols = """o.organization_id, o.organization_name, o.max_budget, o.soft_budget, o.spend, o.budget_duration, o.budget_reset_at, o.rpm_limit, o.tpm_limit,
                    o.rph_limit, o.rpd_limit, o.tpd_limit,
                    o.model_rpm_limit, o.model_tpm_limit,
-                   o.audit_content_storage_enabled, o.metadata, o.created_at, o.updated_at,
+                   o.audit_content_storage_enabled, o.metadata,
+                   o.lifecycle_state, o.deletion_requested_at, o.deletion_not_before_at,
+                   o.created_at, o.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count"""
 
     count_rows = await db.query_raw(
@@ -1095,6 +1102,7 @@ async def list_organizations(
 @router.get(
     "/ui/api/organizations/{organization_id}",
     dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
+    response_model=OrganizationResponse,
 )
 async def get_organization(
     request: Request,
@@ -1108,7 +1116,7 @@ async def get_organization(
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, lifecycle_state, deletion_requested_at, deletion_not_before_at, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -1265,6 +1273,7 @@ async def update_organization_asset_access(
         access_group_repository,
         route_repository,
     ) -> None:  # noqa: ANN001, ANN202
+        await require_active_organization_mutation(db_client, organization_id)
         asset_access_payload = {
             "scope_type": "organization",
             "scope_id": organization_id,
@@ -1288,24 +1297,21 @@ async def update_organization_asset_access(
             enabled=auto_follow_catalog,
         )
 
-    if hasattr(db, "tx"):
-        async with db.tx() as tx:
-            await _apply_asset_access(
-                tx,
-                callable_repository=_callable_target_binding_repository_for_request(
-                    request, db_client=tx
-                ),
-                access_group_repository=_callable_target_access_group_repository_for_request(
-                    request, db_client=tx
-                ),
-                route_repository=_route_group_repository_for_request(request, db_client=tx),
-            )
-    else:
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization asset-access mutation requires transaction support",
+        )
+    async with db.tx() as tx:
         await _apply_asset_access(
-            db,
-            callable_repository=_callable_target_binding_repository_for_request(request),
-            access_group_repository=_callable_target_access_group_repository_for_request(request),
-            route_repository=_route_group_repository_for_request(request),
+            tx,
+            callable_repository=_callable_target_binding_repository_for_request(
+                request, db_client=tx
+            ),
+            access_group_repository=_callable_target_access_group_repository_for_request(
+                request, db_client=tx
+            ),
+            route_repository=_route_group_repository_for_request(request, db_client=tx),
         )
     await reload_callable_target_grants(request)
     response = await build_scope_asset_access(
@@ -1333,10 +1339,22 @@ async def update_organization_asset_access(
 @router.post(
     "/ui/api/organizations",
     dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+    response_model=OrganizationResponse,
 )
-async def create_organization(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+async def create_organization(
+    request: Request,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.PLATFORM_ADMIN,
+    )
     tier_policy_mode = get_tier_policy_mode_from_app(request.app)
     organization_id = str(payload.get("organization_id") or "").strip()
     if not organization_id:
@@ -1442,7 +1460,6 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         )
     _validate_route_group_callable_target_overlap(route_group_bindings, callable_target_bindings)
     route_repo = _route_group_repository_for_request(request)
-    callable_binding_repo = _callable_target_binding_repository_for_request(request)
     catalog = callable_catalog(request)
     await _validate_org_route_group_binding_payloads(
         route_repo, binding_payloads=route_group_bindings
@@ -1465,6 +1482,17 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             )
 
     async def _apply_create(db_client: Any, *, route_repository, callable_repository):  # noqa: ANN001, ANN202
+        current_rows = await db_client.query_raw(
+            """
+            SELECT organization_id
+            FROM deltallm_organizationtable
+            WHERE organization_id = $1
+            LIMIT 1
+            """,
+            organization_id,
+        )
+        if current_rows:
+            await require_active_organization_mutation(db_client, organization_id)
         persisted_organization = await OrganizationAdminRepository(db_client).upsert(
             OrganizationPersistenceValues(
                 organization_id=organization_id,
@@ -1561,30 +1589,23 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         )
 
     try:
-        if hasattr(db, "tx"):
-            async with db.tx() as tx:
-                (
-                    response,
-                    primary_tier_assignment,
-                    scheduled_cache_invalidation,
-                    shadow_access_mirrored,
-                ) = await _apply_create(
-                    tx,
-                    route_repository=_route_group_repository_for_request(request, db_client=tx),
-                    callable_repository=_callable_target_binding_repository_for_request(
-                        request, db_client=tx
-                    ),
-                )
-        else:
+        if not hasattr(db, "tx"):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Organization mutation requires transaction support",
+            )
+        async with db.tx() as tx:
             (
                 response,
                 primary_tier_assignment,
                 scheduled_cache_invalidation,
                 shadow_access_mirrored,
             ) = await _apply_create(
-                db,
-                route_repository=route_repo,
-                callable_repository=callable_binding_repo,
+                tx,
+                route_repository=_route_group_repository_for_request(request, db_client=tx),
+                callable_repository=_callable_target_binding_repository_for_request(
+                    request, db_client=tx
+                ),
             )
     except ValueError as exc:
         if primary_tier_fields is not None:
@@ -1606,6 +1627,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         assignment_rows=[],
         tier_policy_mode=tier_policy_mode,
     )
+    response["capabilities"] = build_organization_capabilities(scope, response)
     if primary_tier_assignment is not None and scheduled_cache_invalidation is not None:
         cache_invalidation_service = getattr(request.app.state, "cache_invalidation_service", None)
         await apply_best_effort_org_cache_invalidation(
@@ -1664,6 +1686,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
 @router.put(
     "/ui/api/organizations/{organization_id}",
     dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))],
+    response_model=OrganizationResponse,
 )
 async def update_organization(
     request: Request,
@@ -1683,7 +1706,7 @@ async def update_organization(
     )
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, lifecycle_state, deletion_requested_at, deletion_not_before_at, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -1777,7 +1800,6 @@ async def update_organization(
             detail="Only platform admins can update asset bootstrap bindings",
         )
     route_repo = _route_group_repository_for_request(request)
-    callable_binding_repo = _callable_target_binding_repository_for_request(request)
     catalog = callable_catalog(request)
     if route_group_bindings is not None:
         await _validate_org_route_group_binding_payloads(
@@ -1804,6 +1826,7 @@ async def update_organization(
     )
 
     async def _apply_update(db_client: Any, *, route_repository, callable_repository):  # noqa: ANN001, ANN202
+        await require_active_organization_mutation(db_client, organization_id)
         updated_organization = await OrganizationAdminRepository(db_client).update(
             OrganizationPersistenceValues(
                 organization_id=organization_id,
@@ -1860,20 +1883,18 @@ async def update_organization(
             )
         return updated_payload
 
-    if hasattr(db, "tx"):
-        async with db.tx() as tx:
-            updated = await _apply_update(
-                tx,
-                route_repository=_route_group_repository_for_request(request, db_client=tx),
-                callable_repository=_callable_target_binding_repository_for_request(
-                    request, db_client=tx
-                ),
-            )
-    else:
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization mutation requires transaction support",
+        )
+    async with db.tx() as tx:
         updated = await _apply_update(
-            db,
-            route_repository=route_repo,
-            callable_repository=callable_binding_repo,
+            tx,
+            route_repository=_route_group_repository_for_request(request, db_client=tx),
+            callable_repository=_callable_target_binding_repository_for_request(
+                request, db_client=tx
+            ),
         )
     if route_group_bindings is not None or callable_target_bindings is not None:
         await reload_callable_target_grants(request)
@@ -2053,28 +2074,35 @@ async def add_organization_member(
     if not account_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
-        VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-        ON CONFLICT (account_id, organization_id)
-        DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
-        """,
-        account_id,
-        organization_id,
-        role,
-    )
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization membership mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        await require_active_organization_mutation(tx, organization_id)
+        await tx.execute_raw(
+            """
+            INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+            ON CONFLICT (account_id, organization_id)
+            DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+            """,
+            account_id,
+            organization_id,
+            role,
+        )
 
-    rows = await db.query_raw(
-        """
-        SELECT membership_id, account_id, organization_id, role, created_at, updated_at
-        FROM deltallm_organizationmembership
-        WHERE account_id = $1 AND organization_id = $2
-        LIMIT 1
-        """,
-        account_id,
-        organization_id,
-    )
+        rows = await tx.query_raw(
+            """
+            SELECT membership_id, account_id, organization_id, role, created_at, updated_at
+            FROM deltallm_organizationmembership
+            WHERE account_id = $1 AND organization_id = $2
+            LIMIT 1
+            """,
+            account_id,
+            organization_id,
+        )
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed"
@@ -2101,38 +2129,47 @@ async def remove_organization_member(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
-    rows = await db.query_raw(
-        """
-        SELECT membership_id, account_id
-        FROM deltallm_organizationmembership
-        WHERE membership_id = $1 AND organization_id = $2
-        LIMIT 1
-        """,
-        membership_id,
-        organization_id,
-    )
-    if not rows:
+    if not hasattr(db, "tx"):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Organization membership not found"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Organization membership mutation requires transaction support",
         )
-    account_id = rows[0].get("account_id")
-    removed_team_memberships = await db.execute_raw(
-        """
-        DELETE FROM deltallm_teammembership
-        WHERE account_id = $1
-          AND team_id IN (
-            SELECT team_id
-            FROM deltallm_teamtable
-            WHERE organization_id = $2
-          )
-        """,
-        account_id,
-        organization_id,
-    )
-    deleted = await db.execute_raw(
-        "DELETE FROM deltallm_organizationmembership WHERE membership_id = $1",
-        membership_id,
-    )
+    async with db.tx() as tx:
+        await require_active_organization_mutation(tx, organization_id)
+        rows = await tx.query_raw(
+            """
+            SELECT membership_id, account_id
+            FROM deltallm_organizationmembership
+            WHERE membership_id = $1 AND organization_id = $2
+            LIMIT 1
+            FOR UPDATE
+            """,
+            membership_id,
+            organization_id,
+        )
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organization membership not found",
+            )
+        account_id = rows[0].get("account_id")
+        removed_team_memberships = await tx.execute_raw(
+            """
+            DELETE FROM deltallm_teammembership
+            WHERE account_id = $1
+              AND team_id IN (
+                SELECT team_id
+                FROM deltallm_teamtable
+                WHERE organization_id = $2
+              )
+            """,
+            account_id,
+            organization_id,
+        )
+        deleted = await tx.execute_raw(
+            "DELETE FROM deltallm_organizationmembership WHERE membership_id = $1",
+            membership_id,
+        )
     response = {
         "deleted": int(deleted or 0) > 0,
         "team_memberships_removed": int(removed_team_memberships or 0),

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from src.auth.roles import ORG_ROLE_PERMISSIONS, PLATFORM_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, Permission
+from src.auth.roles import (
+    ORG_ROLE_PERMISSIONS,
+    PLATFORM_ROLE_PERMISSIONS,
+    TEAM_ROLE_PERMISSIONS,
+    Permission,
+)
 
 
 def effective_permissions_for_context(context: Any | None) -> list[str]:
@@ -38,7 +43,9 @@ def build_ui_access(
         or Permission.KEY_UPDATE in permissions
         or Permission.KEY_CREATE_SELF in permissions
     )
-    can_view_dashboard = authenticated and (is_platform_admin or Permission.SPEND_READ in permissions)
+    can_view_dashboard = authenticated and (
+        is_platform_admin or Permission.SPEND_READ in permissions
+    )
     can_create_team = is_platform_admin
     if not can_create_team:
         for membership in list(organization_memberships or []):
@@ -65,9 +72,11 @@ def build_ui_access(
         "route_groups": is_platform_admin,
         "prompts": is_platform_admin,
         "mcp_servers": authenticated and (is_platform_admin or Permission.KEY_READ in permissions),
-        "mcp_approvals": authenticated and (is_platform_admin or Permission.KEY_UPDATE in permissions),
+        "mcp_approvals": authenticated
+        and (is_platform_admin or Permission.KEY_UPDATE in permissions),
         "keys": authenticated and (is_platform_admin or can_read_keys),
-        "organizations": authenticated and (is_platform_admin or Permission.ORG_READ in permissions),
+        "organizations": authenticated
+        and (is_platform_admin or Permission.ORG_READ in permissions),
         "organization_create": is_platform_admin,
         "teams": authenticated and (is_platform_admin or Permission.TEAM_READ in permissions),
         "team_create": authenticated and can_create_team,
@@ -103,9 +112,14 @@ def _scope_has_team_permission(scope: Any, team_id: str | None, permission: str)
 
 def build_organization_capabilities(scope: Any, organization: dict[str, Any]) -> dict[str, bool]:
     organization_id = str(organization.get("organization_id") or "").strip()
-    can_edit = _scope_has_org_permission(scope, organization_id, Permission.ORG_UPDATE)
-    can_add_team = _scope_has_org_permission(scope, organization_id, Permission.TEAM_UPDATE)
-    can_manage_assets = bool(getattr(scope, "is_platform_admin", False))
+    is_active = str(organization.get("lifecycle_state") or "").strip().lower() == "active"
+    can_edit = is_active and _scope_has_org_permission(
+        scope, organization_id, Permission.ORG_UPDATE
+    )
+    can_add_team = is_active and _scope_has_org_permission(
+        scope, organization_id, Permission.TEAM_UPDATE
+    )
+    can_manage_assets = is_active and bool(getattr(scope, "is_platform_admin", False))
 
     return {
         "view": True,
@@ -113,6 +127,7 @@ def build_organization_capabilities(scope: Any, organization: dict[str, Any]) ->
         "add_team": can_add_team,
         "manage_members": can_edit,
         "manage_assets": can_manage_assets,
+        "manage_service_policy": can_manage_assets,
         "view_usage": _scope_has_org_permission(scope, organization_id, Permission.SPEND_READ),
     }
 
@@ -120,7 +135,8 @@ def build_organization_capabilities(scope: Any, organization: dict[str, Any]) ->
 def build_team_capabilities(scope: Any, team: dict[str, Any]) -> dict[str, bool]:
     team_id = str(team.get("team_id") or "").strip()
     organization_id = str(team.get("organization_id") or "").strip()
-    can_edit = (
+    is_active = str(team.get("organization_lifecycle_state") or "").strip().lower() == "active"
+    can_edit = is_active and (
         _scope_has_team_permission(scope, team_id, Permission.TEAM_UPDATE)
         or _scope_has_org_permission(scope, organization_id, Permission.TEAM_UPDATE)
     )
@@ -132,7 +148,9 @@ def build_team_capabilities(scope: Any, team: dict[str, Any]) -> dict[str, bool]
         "manage_members": can_edit,
         "manage_assets": can_edit,
         "manage_self_service_policy": can_edit,
-        "create_self_key": bool(team.get("self_service_keys_enabled")) and _scope_has_team_permission(
+        "create_self_key": is_active
+        and bool(team.get("self_service_keys_enabled"))
+        and _scope_has_team_permission(
             scope,
             team_id,
             Permission.KEY_CREATE_SELF,
@@ -149,10 +167,9 @@ def build_batch_capabilities(
     team_id = str(batch.get("created_by_team_id") or "").strip()
     organization_id = str(batch.get("organization_id") or "").strip()
     status = str(batch.get("status") or "").strip().lower()
-    can_update = (
-        _scope_has_team_permission(scope, team_id, Permission.KEY_UPDATE)
-        or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
-    )
+    can_update = _scope_has_team_permission(
+        scope, team_id, Permission.KEY_UPDATE
+    ) or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
 
     capabilities = {
         "view": True,
@@ -176,10 +193,9 @@ def build_archived_batch_webhook_capabilities(
 
     team_id = str(ownership.get("created_by_team_id") or "").strip()
     organization_id = str(ownership.get("organization_id") or "").strip()
-    can_update = (
-        _scope_has_team_permission(scope, team_id, Permission.KEY_UPDATE)
-        or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
-    )
+    can_update = _scope_has_team_permission(
+        scope, team_id, Permission.KEY_UPDATE
+    ) or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
     return {
         "view": True,
         "cancel": False,
@@ -199,13 +215,14 @@ def build_batch_create_session_capabilities(
     team_id = str(session.get("created_by_team_id") or "").strip()
     organization_id = str(session.get("organization_id") or "").strip()
     status = str(session.get("status") or "").strip().lower()
-    can_update = (
-        _scope_has_team_permission(scope, team_id, Permission.KEY_UPDATE)
-        or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
-    )
+    can_update = _scope_has_team_permission(
+        scope, team_id, Permission.KEY_UPDATE
+    ) or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
 
     return {
         "view": True,
         "retry": admin_actions_enabled and can_update and status in {"staged", "failed_retryable"},
-        "expire": admin_actions_enabled and can_update and status in {"staged", "failed_retryable", "failed_permanent"},
+        "expire": admin_actions_enabled
+        and can_update
+        and status in {"staged", "failed_retryable", "failed_permanent"},
     }

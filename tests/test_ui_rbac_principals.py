@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -59,6 +60,7 @@ class FakeDB:
             "org-1": {
                 "organization_id": "org-1",
                 "organization_name": "Sandbox Org",
+                "lifecycle_state": "active",
                 "metadata": {
                     "source": "self_registration",
                     "self_registration_default": "organization",
@@ -104,7 +106,29 @@ class FakeDB:
             }
         }
 
+    @asynccontextmanager
+    async def tx(self):
+        yield self
+
     async def query_raw(self, query: str, *params):
+        if "FROM deltallm_organizationtable" in query and "FOR SHARE" in query:
+            row = self.organizations.get(str(params[0]))
+            return [row] if row else []
+        if "SELECT DISTINCT organization_id" in query and "account_organizations" in query:
+            account_id = str(params[0])
+            organization_ids = {
+                str(row["organization_id"])
+                for row in self.org_memberships.values()
+                if row["account_id"] == account_id
+            }
+            organization_ids.update(
+                str(self.teams[row["team_id"]]["organization_id"])
+                for row in self.team_memberships.values()
+                if row["account_id"] == account_id
+                and row["team_id"] in self.teams
+                and self.teams[row["team_id"]].get("organization_id")
+            )
+            return [{"organization_id": value} for value in sorted(organization_ids)]
         if "SELECT COUNT(*) AS total FROM deltallm_platformaccount" in query:
             return [{"total": len(self.accounts)}]
         if "FROM deltallm_platformaccount" in query and "WHERE account_id = $1" in query:
@@ -119,7 +143,10 @@ class FakeDB:
         if "FROM deltallm_teamtable WHERE team_id = $1" in query:
             row = self.teams.get(str(params[0]))
             return [row] if row else []
-        if "FROM deltallm_organizationmembership" in query and "WHERE account_id = $1 AND organization_id = $2" in query:
+        if (
+            "FROM deltallm_organizationmembership" in query
+            and "WHERE account_id = $1 AND organization_id = $2" in query
+        ):
             account_id = str(params[0])
             organization_id = str(params[1])
             for row in self.org_memberships.values():
@@ -142,7 +169,9 @@ class FakeDB:
         if "FROM deltallm_organizationmembership" in query:
             rows = []
             for membership in self.org_memberships.values():
-                organization = self.organizations.get(str(membership.get("organization_id") or ""), {})
+                organization = self.organizations.get(
+                    str(membership.get("organization_id") or ""), {}
+                )
                 rows.append(
                     {
                         **membership,
@@ -151,6 +180,12 @@ class FakeDB:
                     }
                 )
             return rows
+        if "FROM deltallm_teammembership tm" in query and "WHERE tm.membership_id = $1" in query:
+            membership = self.team_memberships.get(str(params[0]))
+            if membership is None:
+                return []
+            team = self.teams.get(str(membership.get("team_id") or ""), {})
+            return [{**membership, "organization_id": team.get("organization_id")}]
         if "FROM deltallm_teammembership" in query:
             rows = []
             for membership in self.team_memberships.values():
@@ -161,7 +196,9 @@ class FakeDB:
                         "team_alias": team.get("team_alias"),
                         "organization_id": team.get("organization_id"),
                         "self_service_keys_enabled": team.get("self_service_keys_enabled"),
-                        "self_service_max_keys_per_user": team.get("self_service_max_keys_per_user"),
+                        "self_service_max_keys_per_user": team.get(
+                            "self_service_max_keys_per_user"
+                        ),
                         "self_service_budget_ceiling": team.get("self_service_budget_ceiling"),
                         "self_service_require_expiry": team.get("self_service_require_expiry"),
                         "self_service_max_expiry_days": team.get("self_service_max_expiry_days"),
@@ -228,21 +265,29 @@ class FakeDB:
             organization_id = str(params[1])
             if organization_id != "org-1":
                 return 0
-            to_delete = [k for k, v in self.team_memberships.items() if v["account_id"] == account_id and v["team_id"] == "team-1"]
+            to_delete = [
+                k
+                for k, v in self.team_memberships.items()
+                if v["account_id"] == account_id and v["team_id"] == "team-1"
+            ]
             for k in to_delete:
                 del self.team_memberships[k]
             return len(to_delete)
 
         if "DELETE FROM deltallm_teammembership WHERE account_id = $1" in query:
             account_id = str(params[0])
-            to_delete = [k for k, v in self.team_memberships.items() if v["account_id"] == account_id]
+            to_delete = [
+                k for k, v in self.team_memberships.items() if v["account_id"] == account_id
+            ]
             for k in to_delete:
                 del self.team_memberships[k]
             return len(to_delete)
 
         if "DELETE FROM deltallm_organizationmembership WHERE account_id = $1" in query:
             account_id = str(params[0])
-            to_delete = [k for k, v in self.org_memberships.items() if v["account_id"] == account_id]
+            to_delete = [
+                k for k, v in self.org_memberships.items() if v["account_id"] == account_id
+            ]
             for k in to_delete:
                 del self.org_memberships[k]
             return len(to_delete)
@@ -409,7 +454,9 @@ async def test_delete_org_membership_removes_org_and_team_memberships_in_org(cli
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
 
-    response = await client.delete("/ui/api/rbac/organization-memberships/om-1", headers={"Authorization": "Bearer mk-test"})
+    response = await client.delete(
+        "/ui/api/rbac/organization-memberships/om-1", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     assert response.json()["deleted"] is True
@@ -424,11 +471,41 @@ async def test_delete_team_membership_removes_membership(client, test_app):
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
 
-    response = await client.delete("/ui/api/rbac/team-memberships/tm-1", headers={"Authorization": "Bearer mk-test"})
+    response = await client.delete(
+        "/ui/api/rbac/team-memberships/tm-1", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     assert response.json()["deleted"] is True
     assert "tm-1" not in fake_db.team_memberships
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/ui/api/rbac/organization-memberships/om-1",
+        "/ui/api/rbac/team-memberships/tm-1",
+        "/ui/api/rbac/accounts/acct-1",
+    ],
+)
+async def test_rbac_deletes_reject_inactive_organization(client, test_app, path):
+    fake_db = FakeDB()
+    fake_db.organizations["org-1"]["lifecycle_state"] = "deletion_pending"
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.delete(path, headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "organization_inactive",
+        "message": "Organization administrative changes are disabled",
+        "lifecycle_state": "deletion_pending",
+    }
+    assert "acct-1" in fake_db.accounts
+    assert "om-1" in fake_db.org_memberships
+    assert "tm-1" in fake_db.team_memberships
 
 
 @pytest.mark.asyncio
@@ -437,7 +514,9 @@ async def test_delete_account_removes_memberships_sessions_identities(client, te
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
 
-    response = await client.delete("/ui/api/rbac/accounts/acct-1", headers={"Authorization": "Bearer mk-test"})
+    response = await client.delete(
+        "/ui/api/rbac/accounts/acct-1", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     assert response.json()["deleted"] is True

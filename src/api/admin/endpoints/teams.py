@@ -7,7 +7,13 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, TeamRole, validate_team_role
+from src.auth.roles import (
+    Permission,
+    ORG_ROLE_PERMISSIONS,
+    TEAM_ROLE_PERMISSIONS,
+    TeamRole,
+    validate_team_role,
+)
 from src.audit import AuditAction
 from src.api.admin.endpoints.common import (
     AuthScope,
@@ -18,15 +24,35 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     validate_runtime_user_scope,
 )
+from src.api.admin.organization_mutations import (
+    require_active_organization_mutation,
+    require_active_organization_mutations,
+)
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+from src.db.callable_target_policies import CallableTargetScopePolicyRepository
+from src.db.callable_targets import CallableTargetBindingRepository
+from src.db.route_groups import RouteGroupRepository
 from src.middleware.platform_auth import get_platform_auth_context
+from src.services.asset_binding_mirror import reload_callable_target_grants
 from src.services.asset_visibility_preview import build_asset_visibility_preview
-from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
+from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state
 from src.services.ui_authorization import build_team_capabilities
 
 router = APIRouter(tags=["Admin Teams"])
 
 
-def _team_response_payload(team: dict[str, Any], *, capabilities: dict[str, bool] | None = None) -> dict[str, Any]:
+def _transaction_repository(
+    request: Request, state_name: str, repository_type: type, db: Any
+) -> Any:
+    repository = getattr(request.app.state, state_name, None)
+    if isinstance(repository, repository_type):
+        return repository_type(db)
+    return repository
+
+
+def _team_response_payload(
+    team: dict[str, Any], *, capabilities: dict[str, bool] | None = None
+) -> dict[str, Any]:
     payload = to_json_value(dict(team))
     if isinstance(payload, dict):
         payload.pop("models", None)
@@ -54,13 +80,22 @@ def _validate_model_limit_dict(value: Any, field_name: str) -> dict[str, int] | 
     result: dict[str, int] = {}
     for k, v in value.items():
         if not isinstance(k, str) or not k.strip():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} keys must be non-empty strings")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} keys must be non-empty strings",
+            )
         try:
             int_val = int(v)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} values must be integers")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} values must be integers",
+            )
         if int_val < 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} values must be non-negative")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} values must be non-negative",
+            )
         result[k.strip()] = int_val
     return result if result else None
 
@@ -71,22 +106,40 @@ def _resolve_self_service_policy(
     existing_team: dict[str, Any] | None = None,
     default_enabled: bool,
 ) -> tuple[bool, int | None, float | None, bool, int | None]:
-    enabled_default = existing_team.get("self_service_keys_enabled", default_enabled) if existing_team is not None else default_enabled
-    max_keys_default = existing_team.get("self_service_max_keys_per_user") if existing_team is not None else None
-    budget_default = existing_team.get("self_service_budget_ceiling") if existing_team is not None else None
-    require_expiry_default = (
-        existing_team.get("self_service_require_expiry", False) if existing_team is not None else False
+    enabled_default = (
+        existing_team.get("self_service_keys_enabled", default_enabled)
+        if existing_team is not None
+        else default_enabled
     )
-    max_expiry_days_default = existing_team.get("self_service_max_expiry_days") if existing_team is not None else None
+    max_keys_default = (
+        existing_team.get("self_service_max_keys_per_user") if existing_team is not None else None
+    )
+    budget_default = (
+        existing_team.get("self_service_budget_ceiling") if existing_team is not None else None
+    )
+    require_expiry_default = (
+        existing_team.get("self_service_require_expiry", False)
+        if existing_team is not None
+        else False
+    )
+    max_expiry_days_default = (
+        existing_team.get("self_service_max_expiry_days") if existing_team is not None else None
+    )
 
     enabled = bool(payload.get("self_service_keys_enabled", enabled_default))
-    max_keys = optional_int(payload.get("self_service_max_keys_per_user", max_keys_default), "self_service_max_keys_per_user")
+    max_keys = optional_int(
+        payload.get("self_service_max_keys_per_user", max_keys_default),
+        "self_service_max_keys_per_user",
+    )
     budget_ceiling = payload.get("self_service_budget_ceiling", budget_default)
     if budget_ceiling is not None:
         try:
             budget_ceiling = float(budget_ceiling)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="self_service_budget_ceiling must be a number")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="self_service_budget_ceiling must be a number",
+            )
     require_expiry = bool(payload.get("self_service_require_expiry", require_expiry_default))
     max_expiry_days = optional_int(
         payload.get("self_service_max_expiry_days", max_expiry_days_default),
@@ -105,13 +158,16 @@ async def _require_team_access(
 ) -> dict[str, Any]:
     rows = await db.query_raw(
         """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit,
-               model_rpm_limit, model_tpm_limit, blocked,
-               self_service_keys_enabled, self_service_max_keys_per_user, self_service_budget_ceiling,
-               self_service_require_expiry, self_service_max_expiry_days,
-               created_at, updated_at
-        FROM deltallm_teamtable
-        WHERE team_id = $1
+        SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
+               t.rpm_limit, t.tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
+               t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+               t.self_service_keys_enabled, t.self_service_max_keys_per_user,
+               t.self_service_budget_ceiling, t.self_service_require_expiry,
+               t.self_service_max_expiry_days, o.lifecycle_state AS organization_lifecycle_state,
+               t.created_at, t.updated_at
+        FROM deltallm_teamtable t
+        LEFT JOIN deltallm_organizationtable o ON o.organization_id = t.organization_id
+        WHERE t.team_id = $1
         LIMIT 1
         """,
         team_id,
@@ -145,6 +201,26 @@ async def _require_team_access(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
+async def _lock_team_for_mutation(
+    request: Request,
+    scope: AuthScope,
+    db: Any,
+    team_id: str,
+) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT team_id
+        FROM deltallm_teamtable
+        WHERE team_id = $1
+        FOR UPDATE
+        """,
+        team_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    return await _require_team_access(request, scope, db, team_id, write=True)
+
+
 @router.get("/ui/api/teams")
 async def list_teams(
     request: Request,
@@ -155,7 +231,9 @@ async def list_teams(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.TEAM_READ
+    )
     db = db_or_503(request)
 
     clauses: list[str] = []
@@ -172,7 +250,10 @@ async def list_teams(
             params.extend(scope.team_ids)
             scope_clauses.append(f"t.team_id IN ({ph})")
         if not scope_clauses:
-            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+            return {
+                "data": [],
+                "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+            }
         clauses.append("(" + " OR ".join(scope_clauses) + ")")
 
     if search:
@@ -189,6 +270,7 @@ async def list_teams(
                    t.model_rpm_limit, t.model_tpm_limit, t.blocked,
                    t.self_service_keys_enabled, t.self_service_max_keys_per_user,
                    t.self_service_budget_ceiling, t.self_service_require_expiry, t.self_service_max_expiry_days,
+                   o.lifecycle_state AS organization_lifecycle_state,
                    t.created_at, t.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count"""
 
@@ -204,6 +286,7 @@ async def list_teams(
         f"""
         SELECT {select_cols}
         FROM deltallm_teamtable t
+        LEFT JOIN deltallm_organizationtable o ON o.organization_id = t.organization_id
         {where_sql}
         ORDER BY t.created_at DESC
         LIMIT ${len(params) - 1} OFFSET ${len(params)}
@@ -219,7 +302,12 @@ async def list_teams(
             )
             for row in rows
         ],
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -248,12 +336,16 @@ async def get_team_asset_visibility(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.TEAM_READ
+    )
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id)
     organization_id = str(team.get("organization_id") or "").strip()
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured"
+        )
     user_row = (
         await validate_runtime_user_scope(db, user_id, team_id=team_id)
         if user_id is not None and str(user_id).strip()
@@ -282,12 +374,16 @@ async def get_team_asset_access(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.TEAM_READ
+    )
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id)
     organization_id = str(team.get("organization_id") or "").strip()
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured"
+        )
     return await build_scope_asset_access(
         request,
         scope_type="team",
@@ -310,12 +406,16 @@ async def update_team_asset_access(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE
+    )
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id, write=True)
     organization_id = str(team.get("organization_id") or "").strip()
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured"
+        )
     asset_access_payload = {
         "scope_type": "team",
         "scope_id": team_id,
@@ -327,7 +427,69 @@ async def update_team_asset_access(
     }
     if "selected_access_group_keys" in payload:
         asset_access_payload["selected_access_group_keys"] = payload["selected_access_group_keys"]
-    response = await apply_scope_asset_access(request, **asset_access_payload)
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team asset-access mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        locked_rows = await tx.query_raw(
+            """
+            SELECT team_id, organization_id
+            FROM deltallm_teamtable
+            WHERE team_id = $1
+            FOR SHARE
+            """,
+            team_id,
+        )
+        if not locked_rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        locked_team = await _require_team_access(request, scope, tx, team_id, write=True)
+        locked_organization_id = str(locked_team.get("organization_id") or "").strip()
+        if not locked_organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Team organization is not configured",
+            )
+        await require_active_organization_mutation(tx, locked_organization_id)
+        asset_access_payload["organization_id"] = locked_organization_id
+        await sync_scope_asset_access_state(
+            request,
+            **asset_access_payload,
+            binding_repository=_transaction_repository(
+                request,
+                "callable_target_binding_repository",
+                CallableTargetBindingRepository,
+                tx,
+            ),
+            access_group_repository=_transaction_repository(
+                request,
+                "callable_target_access_group_repository",
+                CallableTargetAccessGroupBindingRepository,
+                tx,
+            ),
+            policy_repository=_transaction_repository(
+                request,
+                "callable_target_scope_policy_repository",
+                CallableTargetScopePolicyRepository,
+                tx,
+            ),
+            route_group_repository=_transaction_repository(
+                request,
+                "route_group_repository",
+                RouteGroupRepository,
+                tx,
+            ),
+            reload_after_write=False,
+        )
+    await reload_callable_target_grants(request)
+    response = await build_scope_asset_access(
+        request,
+        scope_type="team",
+        scope_id=team_id,
+        organization_id=locked_organization_id,
+        team_id=team_id,
+    )
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -350,13 +512,20 @@ async def create_team(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     _reject_legacy_models_field(payload)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE
+    )
     organization_id = payload.get("organization_id")
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required"
+        )
     if not scope.is_platform_admin:
         if organization_id not in scope.org_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create teams in your own organizations")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only create teams in your own organizations",
+            )
     db = db_or_503(request)
     team_id = str(payload.get("team_id") or f"team-{secrets.token_hex(6)}")
     team_alias = payload.get("team_alias")
@@ -368,40 +537,49 @@ async def create_team(
     tpd_limit = optional_int(payload.get("tpd_limit"), "tpd_limit")
     model_rpm_limit = _validate_model_limit_dict(payload.get("model_rpm_limit"), "model_rpm_limit")
     model_tpm_limit = _validate_model_limit_dict(payload.get("model_tpm_limit"), "model_tpm_limit")
-    ss_keys_enabled, ss_max_keys, ss_budget_ceiling, ss_require_expiry, ss_max_expiry_days = _resolve_self_service_policy(
-        payload,
-        default_enabled=True,
+    ss_keys_enabled, ss_max_keys, ss_budget_ceiling, ss_require_expiry, ss_max_expiry_days = (
+        _resolve_self_service_policy(
+            payload,
+            default_enabled=True,
+        )
     )
 
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_teamtable (
-            team_id, team_alias, organization_id, max_budget, spend,
-            rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit,
-            model_rpm_limit, model_tpm_limit, blocked,
-            self_service_keys_enabled, self_service_max_keys_per_user,
-            self_service_budget_ceiling, self_service_require_expiry, self_service_max_expiry_days,
-            created_at, updated_at
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team mutation requires transaction support",
         )
-        VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, false, $12, $13, $14, $15, $16, NOW(), NOW())
-        """,
-        team_id,
-        team_alias,
-        organization_id,
-        max_budget,
-        rpm_limit,
-        tpm_limit,
-        rph_limit,
-        rpd_limit,
-        tpd_limit,
-        json.dumps(model_rpm_limit) if model_rpm_limit else None,
-        json.dumps(model_tpm_limit) if model_tpm_limit else None,
-        ss_keys_enabled,
-        ss_max_keys,
-        ss_budget_ceiling,
-        ss_require_expiry,
-        ss_max_expiry_days,
-    )
+    async with db.tx() as tx:
+        await require_active_organization_mutation(tx, str(organization_id))
+        await tx.execute_raw(
+            """
+            INSERT INTO deltallm_teamtable (
+                team_id, team_alias, organization_id, max_budget, spend,
+                rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit,
+                model_rpm_limit, model_tpm_limit, blocked,
+                self_service_keys_enabled, self_service_max_keys_per_user,
+                self_service_budget_ceiling, self_service_require_expiry, self_service_max_expiry_days,
+                created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, false, $12, $13, $14, $15, $16, NOW(), NOW())
+            """,
+            team_id,
+            team_alias,
+            organization_id,
+            max_budget,
+            rpm_limit,
+            tpm_limit,
+            rph_limit,
+            rpd_limit,
+            tpd_limit,
+            json.dumps(model_rpm_limit) if model_rpm_limit else None,
+            json.dumps(model_tpm_limit) if model_tpm_limit else None,
+            ss_keys_enabled,
+            ss_max_keys,
+            ss_budget_ceiling,
+            ss_require_expiry,
+            ss_max_expiry_days,
+        )
 
     response = {
         "team_id": team_id,
@@ -421,6 +599,7 @@ async def create_team(
         "self_service_require_expiry": ss_require_expiry,
         "self_service_max_expiry_days": ss_max_expiry_days,
         "blocked": False,
+        "organization_lifecycle_state": "active",
     }
     response["capabilities"] = build_team_capabilities(scope, response)
     await emit_admin_mutation_audit(
@@ -453,9 +632,14 @@ async def update_team(
     team_alias = payload.get("team_alias", existing_team.get("team_alias"))
     organization_id = payload.get("organization_id", existing_team.get("organization_id"))
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required"
+        )
     if not scope.is_platform_admin and organization_id not in scope.org_ids:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot move team to an organization you don't manage")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot move team to an organization you don't manage",
+        )
     max_budget = payload.get("max_budget", existing_team.get("max_budget"))
     rpm_limit = optional_int(payload.get("rpm_limit", existing_team.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing_team.get("tpm_limit")), "tpm_limit")
@@ -468,63 +652,88 @@ async def update_team(
     model_tpm_limit = _validate_model_limit_dict(
         payload.get("model_tpm_limit", existing_team.get("model_tpm_limit")), "model_tpm_limit"
     )
-    ss_keys_enabled, ss_max_keys, ss_budget_ceiling, ss_require_expiry, ss_max_expiry_days = _resolve_self_service_policy(
-        payload,
-        existing_team=existing_team,
-        default_enabled=False,
+    ss_keys_enabled, ss_max_keys, ss_budget_ceiling, ss_require_expiry, ss_max_expiry_days = (
+        _resolve_self_service_policy(
+            payload,
+            existing_team=existing_team,
+            default_enabled=False,
+        )
     )
 
-    await db.execute_raw(
-        """
-        UPDATE deltallm_teamtable
-        SET team_alias = $1,
-            organization_id = $2,
-            max_budget = $3,
-            rpm_limit = $4,
-            tpm_limit = $5,
-            rph_limit = $6,
-            rpd_limit = $7,
-            tpd_limit = $8,
-            model_rpm_limit = $9::jsonb,
-            model_tpm_limit = $10::jsonb,
-            self_service_keys_enabled = $11,
-            self_service_max_keys_per_user = $12,
-            self_service_budget_ceiling = $13,
-            self_service_require_expiry = $14,
-            self_service_max_expiry_days = $15,
-            updated_at = NOW()
-        WHERE team_id = $16
-        """,
-        team_alias,
-        organization_id,
-        max_budget,
-        rpm_limit,
-        tpm_limit,
-        rph_limit,
-        rpd_limit,
-        tpd_limit,
-        json.dumps(model_rpm_limit) if model_rpm_limit else None,
-        json.dumps(model_tpm_limit) if model_tpm_limit else None,
-        ss_keys_enabled,
-        ss_max_keys,
-        ss_budget_ceiling,
-        ss_require_expiry,
-        ss_max_expiry_days,
-        team_id,
-    )
-    updated_rows = await db.query_raw(
-        """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit,
-               model_rpm_limit, model_tpm_limit, blocked,
-               self_service_keys_enabled, self_service_max_keys_per_user, self_service_budget_ceiling,
-               self_service_require_expiry, self_service_max_expiry_days,
-               created_at, updated_at
-        FROM deltallm_teamtable
-        WHERE team_id = $1
-        LIMIT 1
-        """,
-        team_id,
-    )
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        locked_existing_team = await _lock_team_for_mutation(
+            request,
+            scope,
+            tx,
+            team_id,
+        )
+        await require_active_organization_mutations(
+            tx,
+            {
+                str(locked_existing_team.get("organization_id") or ""),
+                str(organization_id),
+            },
+        )
+        await tx.execute_raw(
+            """
+            UPDATE deltallm_teamtable
+            SET team_alias = $1,
+                organization_id = $2,
+                max_budget = $3,
+                rpm_limit = $4,
+                tpm_limit = $5,
+                rph_limit = $6,
+                rpd_limit = $7,
+                tpd_limit = $8,
+                model_rpm_limit = $9::jsonb,
+                model_tpm_limit = $10::jsonb,
+                self_service_keys_enabled = $11,
+                self_service_max_keys_per_user = $12,
+                self_service_budget_ceiling = $13,
+                self_service_require_expiry = $14,
+                self_service_max_expiry_days = $15,
+                updated_at = NOW()
+            WHERE team_id = $16
+            """,
+            team_alias,
+            organization_id,
+            max_budget,
+            rpm_limit,
+            tpm_limit,
+            rph_limit,
+            rpd_limit,
+            tpd_limit,
+            json.dumps(model_rpm_limit) if model_rpm_limit else None,
+            json.dumps(model_tpm_limit) if model_tpm_limit else None,
+            ss_keys_enabled,
+            ss_max_keys,
+            ss_budget_ceiling,
+            ss_require_expiry,
+            ss_max_expiry_days,
+            team_id,
+        )
+        updated_rows = await tx.query_raw(
+            """
+            SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
+                   t.rpm_limit, t.tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
+                   t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+                   t.self_service_keys_enabled, t.self_service_max_keys_per_user,
+                   t.self_service_budget_ceiling, t.self_service_require_expiry,
+                   t.self_service_max_expiry_days,
+                   o.lifecycle_state AS organization_lifecycle_state,
+                   t.created_at, t.updated_at
+            FROM deltallm_teamtable t
+            LEFT JOIN deltallm_organizationtable o ON o.organization_id = t.organization_id
+            WHERE t.team_id = $1
+            LIMIT 1
+            """,
+            team_id,
+        )
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
     updated_team = dict(updated_rows[0])
@@ -593,7 +802,9 @@ async def list_team_member_candidates(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> list[dict[str, Any]]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.TEAM_READ
+    )
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id)
     organization_id = team.get("organization_id")
@@ -606,7 +817,9 @@ async def list_team_member_candidates(
     params: list[Any] = [organization_id, team_id]
     if search and search.strip():
         params.append(f"%{search.strip()}%")
-        clauses.append(f"(pa.email ILIKE ${len(params)} OR pa.account_id::text ILIKE ${len(params)})")
+        clauses.append(
+            f"(pa.email ILIKE ${len(params)} OR pa.account_id::text ILIKE ${len(params)})"
+        )
     params.append(limit)
 
     where_sql = " AND ".join(clauses)
@@ -656,7 +869,9 @@ async def add_team_member(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if not account_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="account_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="account_id is required"
+        )
 
     account_rows = await db.query_raw(
         "SELECT account_id, email FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
@@ -665,27 +880,43 @@ async def add_team_member(
     if not account_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    organization_id = team.get("organization_id")
-    if organization_id:
-        org_membership_rows = await db.query_raw(
+    organization_id = str(team.get("organization_id") or "").strip()
+    if not organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Team organization is not configured",
+        )
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team membership mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        locked_team = await _lock_team_for_mutation(request, scope, tx, team_id)
+        organization_id = str(locked_team.get("organization_id") or "").strip()
+        await require_active_organization_mutation(tx, organization_id)
+        org_membership_rows = await tx.query_raw(
             "SELECT membership_id FROM deltallm_organizationmembership WHERE organization_id = $1 AND account_id = $2 LIMIT 1",
             organization_id,
             account_id,
         )
         if not org_membership_rows:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account is not a member of this team's organization")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Account is not a member of this team's organization",
+            )
 
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
-        VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-        ON CONFLICT (account_id, team_id)
-        DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
-        """,
-        account_id,
-        team_id,
-        user_role,
-    )
+        await tx.execute_raw(
+            """
+            INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+            ON CONFLICT (account_id, team_id)
+            DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+            """,
+            account_id,
+            team_id,
+            user_role,
+        )
     response = {
         "user_id": account_id,
         "user_email": account_rows[0].get("email"),
@@ -715,25 +946,41 @@ async def delete_team(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    await _require_team_access(request, scope, db, team_id, write=True)
-    key_count = await db.query_raw(
-        "SELECT COUNT(*) AS cnt FROM deltallm_verificationtoken WHERE team_id = $1",
-        team_id,
-    )
-    if key_count and int(key_count[0].get("cnt", 0)) > 0:
-        raise HTTPException(status_code=409, detail=f"Cannot delete team: {key_count[0]['cnt']} API key(s) still assigned. Reassign or revoke them first.")
-    await db.execute_raw(
-        "DELETE FROM deltallm_teammembership WHERE team_id = $1",
-        team_id,
-    )
-    await db.execute_raw(
-        "UPDATE deltallm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1",
-        team_id,
-    )
-    deleted = await db.execute_raw(
-        "DELETE FROM deltallm_teamtable WHERE team_id = $1",
-        team_id,
-    )
+    team = await _require_team_access(request, scope, db, team_id, write=True)
+    organization_id = str(team.get("organization_id") or "").strip()
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        locked_team = await _lock_team_for_mutation(request, scope, tx, team_id)
+        organization_id = str(locked_team.get("organization_id") or "").strip()
+        await require_active_organization_mutation(tx, organization_id)
+        key_count = await tx.query_raw(
+            "SELECT COUNT(*) AS cnt FROM deltallm_verificationtoken WHERE team_id = $1",
+            team_id,
+        )
+        if key_count and int(key_count[0].get("cnt", 0)) > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot delete team: {key_count[0]['cnt']} API key(s) still assigned. "
+                    "Reassign or revoke them first."
+                ),
+            )
+        await tx.execute_raw(
+            "DELETE FROM deltallm_teammembership WHERE team_id = $1",
+            team_id,
+        )
+        await tx.execute_raw(
+            "UPDATE deltallm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1",
+            team_id,
+        )
+        deleted = await tx.execute_raw(
+            "DELETE FROM deltallm_teamtable WHERE team_id = $1",
+            team_id,
+        )
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
@@ -758,47 +1005,61 @@ async def remove_team_member(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    await _require_team_access(request, scope, db, team_id, write=True)
-    removed = await db.execute_raw(
-        "DELETE FROM deltallm_teammembership WHERE team_id = $1 AND account_id = $2",
-        team_id,
-        user_id,
-    )
-
+    team = await _require_team_access(request, scope, db, team_id, write=True)
+    organization_id = str(team.get("organization_id") or "").strip()
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Team membership mutation requires transaction support",
+        )
+    owned_key_rows: list[dict[str, Any]] = []
     revoked_keys = 0
-    if int(removed or 0) > 0:
-        owned_key_rows = await db.query_raw(
-            "SELECT token FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+    async with db.tx() as tx:
+        locked_team = await _lock_team_for_mutation(request, scope, tx, team_id)
+        organization_id = str(locked_team.get("organization_id") or "").strip()
+        await require_active_organization_mutation(tx, organization_id)
+        removed = await tx.execute_raw(
+            "DELETE FROM deltallm_teammembership WHERE team_id = $1 AND account_id = $2",
             team_id,
             user_id,
         )
-        if owned_key_rows:
-            revoked_keys = int(
-                await db.execute_raw(
-                    "DELETE FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
-                    team_id,
-                    user_id,
-                )
-                or 0
+        if int(removed or 0) > 0:
+            owned_key_rows = await tx.query_raw(
+                "SELECT token FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+                team_id,
+                user_id,
             )
-            if revoked_keys > 0:
-                try:
-                    key_service = request.app.state.key_service
-                    for kr in owned_key_rows:
-                        await key_service.invalidate_key_cache_by_hash(str(kr["token"]))
-                except Exception:
-                    import logging
-                    logging.getLogger(__name__).exception("failed to invalidate key cache after membership removal auto-revoke")
-                for kr in owned_key_rows:
-                    await emit_admin_mutation_audit(
-                        request=request,
-                        request_start=request_start,
-                        action=AuditAction.ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED,
-                        scope=scope,
-                        resource_type="api_key",
-                        resource_id=str(kr["token"]),
-                        response_payload={"team_id": team_id, "removed_account_id": user_id},
+            if owned_key_rows:
+                revoked_keys = int(
+                    await tx.execute_raw(
+                        "DELETE FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+                        team_id,
+                        user_id,
                     )
+                    or 0
+                )
+
+    if revoked_keys > 0:
+        try:
+            key_service = request.app.state.key_service
+            for key_row in owned_key_rows:
+                await key_service.invalidate_key_cache_by_hash(str(key_row["token"]))
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "failed to invalidate key cache after membership removal auto-revoke"
+            )
+        for key_row in owned_key_rows:
+            await emit_admin_mutation_audit(
+                request=request,
+                request_start=request_start,
+                action=AuditAction.ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED,
+                scope=scope,
+                resource_type="api_key",
+                resource_id=str(key_row["token"]),
+                response_payload={"team_id": team_id, "removed_account_id": user_id},
+            )
 
     response = {"removed": int(removed or 0) > 0, "revoked_keys": revoked_keys}
     await emit_admin_mutation_audit(

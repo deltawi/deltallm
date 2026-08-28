@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ class _FakeKeyNotificationDB:
             }
         }
         self.accounts = {"acct-owner"}
+        self.organization_states = {"org-1": "active"}
         self.keys: dict[str, dict[str, Any]] = {
             "key-1": {
                 "token": "key-1",
@@ -37,18 +39,35 @@ class _FakeKeyNotificationDB:
             }
         }
 
+    @asynccontextmanager
+    async def tx(self):
+        yield self
+
     async def query_raw(self, query: str, *params):  # noqa: ANN201
         normalized = " ".join(query.lower().split())
         token = str(params[0]) if params else ""
 
+        if "from deltallm_organizationtable" in normalized and "for share" in normalized:
+            state = self.organization_states.get(token)
+            return (
+                [{"organization_id": token, "lifecycle_state": state}] if state is not None else []
+            )
+
         if normalized.startswith("select account_id from deltallm_platformaccount"):
             return [{"account_id": token}] if token in self.accounts else []
 
-        if "from deltallm_teamtable" in normalized and "where team_id = $1" in normalized and "team_alias" in normalized:
+        if (
+            "from deltallm_teamtable" in normalized
+            and "where team_id = $1" in normalized
+            and "team_alias" in normalized
+        ):
             row = self.teams.get(token)
             return [dict(row)] if row is not None else []
 
-        if "from deltallm_verificationtoken vt" in normalized and "left join deltallm_usertable" in normalized:
+        if (
+            "from deltallm_verificationtoken vt" in normalized
+            and "left join deltallm_usertable" in normalized
+        ):
             row = self.keys.get(token)
             if row is None:
                 return []
@@ -66,7 +85,15 @@ class _FakeKeyNotificationDB:
             return [{"token": row["token"]}] if row else []
 
         if (
-            "select vt.token, vt.key_name, vt.team_id, t.team_alias, t.organization_id," in normalized
+            normalized.startswith("select token, key_name, user_id, team_id")
+            and "from deltallm_verificationtoken" in normalized
+        ):
+            row = self.keys.get(token)
+            return [dict(row)] if row is not None else []
+
+        if (
+            "select vt.token, vt.key_name, vt.team_id, t.team_alias, t.organization_id,"
+            in normalized
             and "from deltallm_verificationtoken vt" in normalized
         ):
             row = self.keys.get(token)
@@ -117,7 +144,9 @@ class _FakeKeyNotificationDB:
                 "owner_service_account_id": owner_service_account_id,
             }
             return 1
-        if normalized.startswith("update deltallm_verificationtoken set token = $1, updated_at = now() where token = $2"):
+        if normalized.startswith(
+            "update deltallm_verificationtoken set token = $1, updated_at = now() where token = $2"
+        ):
             new_hash = str(params[0])
             old_hash = str(params[1])
             row = self.keys.pop(old_hash, None)
@@ -162,12 +191,16 @@ async def test_regenerate_delete_and_revoke_survive_notification_failure(client,
     test_app.state.key_notification_service = notifier
     setattr(test_app.state.settings, "master_key", "mk-test")
 
-    regenerate = await client.post("/ui/api/keys/key-1/regenerate", headers={"Authorization": "Bearer mk-test"})
+    regenerate = await client.post(
+        "/ui/api/keys/key-1/regenerate", headers={"Authorization": "Bearer mk-test"}
+    )
     assert regenerate.status_code == 200
     new_hash = regenerate.json()["token"]
     assert notifier.calls[0]["event_kind"] == "api_key_regenerated"
 
-    revoke = await client.post(f"/ui/api/keys/{new_hash}/revoke", headers={"Authorization": "Bearer mk-test"})
+    revoke = await client.post(
+        f"/ui/api/keys/{new_hash}/revoke", headers={"Authorization": "Bearer mk-test"}
+    )
     assert revoke.status_code == 200
     assert revoke.json() == {"revoked": True}
     assert notifier.calls[1]["event_kind"] == "api_key_revoked"
@@ -184,3 +217,67 @@ async def test_regenerate_delete_and_revoke_survive_notification_failure(client,
     assert delete.status_code == 200
     assert delete.json() == {"deleted": True}
     assert notifier.calls[2]["event_kind"] == "api_key_deleted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "delete"])
+async def test_key_deletion_rejects_inactive_organization(
+    client,
+    test_app,
+    method: str,
+) -> None:
+    db = _FakeKeyNotificationDB()
+    db.organization_states["org-1"] = "deletion_pending"
+    test_app.state.prisma_manager = type("Prisma", (), {"client": db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    path = "/ui/api/keys/key-1/revoke" if method == "post" else "/ui/api/keys/key-1"
+
+    response = await client.request(
+        method,
+        path,
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "organization_inactive"
+    assert "key-1" in db.keys
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update", "regenerate"])
+async def test_other_key_mutations_reject_inactive_organization(
+    client,
+    test_app,
+    operation: str,
+) -> None:
+    db = _FakeKeyNotificationDB()
+    db.organization_states["org-1"] = "deletion_pending"
+    test_app.state.prisma_manager = type("Prisma", (), {"client": db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    if operation == "create":
+        response = await client.post(
+            "/ui/api/keys",
+            headers={"Authorization": "Bearer mk-test"},
+            json={
+                "key_name": "Blocked Key",
+                "team_id": "team-1",
+                "owner_account_id": "acct-owner",
+            },
+        )
+    elif operation == "update":
+        response = await client.put(
+            "/ui/api/keys/key-1",
+            headers={"Authorization": "Bearer mk-test"},
+            json={"key_name": "Blocked Rename"},
+        )
+    else:
+        response = await client.post(
+            "/ui/api/keys/key-1/regenerate",
+            headers={"Authorization": "Bearer mk-test"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "organization_inactive"
+    assert set(db.keys) == {"key-1"}
+    assert db.keys["key-1"]["key_name"] == "Existing Key"

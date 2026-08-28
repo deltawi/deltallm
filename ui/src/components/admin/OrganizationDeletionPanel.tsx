@@ -9,11 +9,16 @@ import {
   type OrganizationDeletionJob,
   type OrganizationDeletionPlan,
 } from '../../lib/organizationDeletion';
+import {
+  organizationLifecycleTransitionForDeletionJob,
+  type OrganizationLifecycleTransition,
+} from '../../lib/organizationLifecycle';
 
 
 type Props = {
   organizationId: string;
   organizationName: string;
+  onLifecycleChange?: (transition: OrganizationLifecycleTransition) => Promise<void>;
 };
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'restored']);
@@ -107,6 +112,7 @@ function ProgressSummary({ job }: { job: OrganizationDeletionJob }) {
 export default function OrganizationDeletionPanel({
   organizationId,
   organizationName,
+  onLifecycleChange,
 }: Props) {
   const navigate = useNavigate();
   const { pushToast } = useToast();
@@ -121,6 +127,15 @@ export default function OrganizationDeletionPanel({
   const [confirmationName, setConfirmationName] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState('');
+
+  const reconcileLifecycle = useCallback(async (nextJob: OrganizationDeletionJob) => {
+    if (!onLifecycleChange) return;
+    try {
+      await onLifecycleChange(organizationLifecycleTransitionForDeletionJob(nextJob));
+    } catch {
+      // The lifecycle transition remains successful; the parent renders refresh recovery.
+    }
+  }, [onLifecycleChange]);
 
   const loadPlan = useCallback(async (signal: AbortSignal) => {
     const nextPlan = await organizationDeletion.plan(organizationId, signal);
@@ -172,6 +187,9 @@ export default function OrganizationDeletionPanel({
           controller.signal,
         );
         setJob(nextJob);
+        if (nextJob.phase !== job.phase || nextJob.status !== job.status) {
+          await reconcileLifecycle(nextJob);
+        }
         if (nextJob.status === 'completed') {
           pushToast({ tone: 'success', title: 'Organization deleted', message: `${organizationName} was permanently deleted.` });
           navigate('/organizations', { replace: true });
@@ -200,7 +218,7 @@ export default function OrganizationDeletionPanel({
       if (timeoutId !== undefined) window.clearTimeout(timeoutId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [job, navigate, organizationId, organizationName, pushToast]);
+  }, [job, navigate, organizationId, organizationName, pushToast, reconcileLifecycle]);
 
   useEffect(() => () => operationController.current?.abort(), []);
 
@@ -238,6 +256,7 @@ export default function OrganizationDeletionPanel({
       setJob(nextJob);
       setDeleteOpen(false);
       pushToast({ tone: 'info', title: 'Deletion scheduled', message: `Access is revoked now. Permanent deletion is scheduled after ${plan.recovery_window_hours} hours.` });
+      void reconcileLifecycle(nextJob);
     } catch (nextError: unknown) {
       if (!controller.signal.aborted) setError(errorMessage(nextError, 'Unable to schedule deletion.'));
     } finally {
@@ -258,6 +277,7 @@ export default function OrganizationDeletionPanel({
         : await organizationDeletion.retry(organizationId, job.deletion_job_id, controller.signal);
       setJob(nextJob);
       setRestoreOpen(false);
+      void reconcileLifecycle(nextJob);
       if (action === 'restore') {
         await loadPlan(controller.signal);
         pushToast({ tone: 'success', title: 'Organization restored', message: 'Access is active again. Cancelled work is not restarted.' });

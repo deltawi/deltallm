@@ -48,7 +48,9 @@ class FakeMemberCandidateDB:
         return 1
 
     async def query_raw(self, query: str, *params):
-        if "FROM deltallm_teamtable" in query and "WHERE team_id = $1" in query:
+        if "FROM deltallm_teamtable" in query and (
+            "WHERE team_id = $1" in query or "WHERE t.team_id = $1" in query
+        ):
             if params[0] == "team-1":
                 return [
                     {

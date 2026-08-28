@@ -19,9 +19,15 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     validate_runtime_user_scope,
 )
+from src.api.admin.organization_mutations import require_active_organization_mutation
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+from src.db.callable_target_policies import CallableTargetScopePolicyRepository
+from src.db.callable_targets import CallableTargetBindingRepository
+from src.db.route_groups import RouteGroupRepository
 from src.middleware.platform_auth import get_platform_auth_context
+from src.services.asset_binding_mirror import reload_callable_target_grants
 from src.services.asset_visibility_preview import build_asset_visibility_preview
-from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
+from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state
 
 router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
@@ -32,6 +38,15 @@ _SELF_SERVICE_RATE_LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "rph_limit", "rpd_l
 _ADMIN_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_UPDATE, Permission.KEY_REVOKE})
 _READ_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_READ})
 _OWNER_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_CREATE_SELF})
+
+
+def _transaction_repository(
+    request: Request, state_name: str, repository_type: type, db: Any
+) -> Any:
+    repository = getattr(request.app.state, state_name, None)
+    if isinstance(repository, repository_type):
+        return repository_type(db)
+    return repository
 
 
 def _normalize_lock_part(value: object) -> str:
@@ -62,13 +77,19 @@ def _normalize_self_service_budget(max_budget: Any) -> float | None:
     if max_budget is None:
         return None
     if isinstance(max_budget, bool):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a valid number")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a valid number"
+        )
     try:
         budget_val = float(max_budget)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a valid number")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a valid number"
+        )
     if not math.isfinite(budget_val):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a finite number")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a finite number"
+        )
     return budget_val
 
 
@@ -76,12 +97,18 @@ def _normalize_self_service_limit(value: Any, field_name: str) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a positive integer",
+        )
     if isinstance(value, int):
         parsed = value
     elif isinstance(value, float):
         if not value.is_integer():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} must be a positive integer",
+            )
         parsed = int(value)
     elif isinstance(value, str):
         stripped = value.strip()
@@ -90,12 +117,21 @@ def _normalize_self_service_limit(value: Any, field_name: str) -> int | None:
         try:
             parsed = int(stripped)
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} must be a positive integer",
+            )
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a positive integer",
+        )
 
     if parsed <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a positive integer",
+        )
     return parsed
 
 
@@ -104,11 +140,17 @@ def _parse_self_service_expiry(expires: str | None) -> datetime | None:
         return None
     raw = expires.strip()
     if not raw:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a valid ISO 8601 datetime string")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="expires must be a valid ISO 8601 datetime string",
+        )
     try:
         exp_dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a valid ISO 8601 datetime string")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="expires must be a valid ISO 8601 datetime string",
+        )
     if exp_dt.tzinfo is None:
         exp_dt = exp_dt.replace(tzinfo=UTC)
     return exp_dt.astimezone(UTC)
@@ -171,7 +213,9 @@ async def _notify_key_lifecycle(
             record=record,
         )
     except Exception:  # pragma: no cover - defensive guard
-        logger.exception("failed to enqueue key lifecycle notification", extra={"notification_kind": event_kind})
+        logger.exception(
+            "failed to enqueue key lifecycle notification", extra={"notification_kind": event_kind}
+        )
 
 
 async def _get_self_service_policy(db: Any, team_id: str) -> dict[str, Any]:
@@ -236,7 +280,10 @@ async def _validate_self_service_constraints(
 
     budget_val = _normalize_self_service_budget(max_budget)
     if budget_val is not None and budget_val < 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be greater than or equal to 0")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="max_budget must be greater than or equal to 0",
+        )
     budget_ceiling = policy.get("budget_ceiling")
     if budget_ceiling is not None:
         if budget_val is None:
@@ -411,7 +458,9 @@ def _resolve_key_read_access_mode(
         return "admin"
 
     owner_only_read = False
-    for permissions in _target_scope_permission_sets(scope, organization_id=organization_id, team_id=team_id):
+    for permissions in _target_scope_permission_sets(
+        scope, organization_id=organization_id, team_id=team_id
+    ):
         if permissions.intersection(_ADMIN_KEY_LIST_PERMISSIONS):
             return "admin"
         if Permission.KEY_READ in permissions and Permission.KEY_CREATE_SELF not in permissions:
@@ -484,7 +533,9 @@ def _ordered_unique_scope_ids(*groups: list[str]) -> list[str]:
     return ordered
 
 
-def _append_key_list_scope_clause(scope: Any, clauses: list[str], params: list[Any], *, my_keys: bool) -> bool:
+def _append_key_list_scope_clause(
+    scope: Any, clauses: list[str], params: list[Any], *, my_keys: bool
+) -> bool:
     owner_account_id = str(getattr(scope, "account_id", "") or "").strip() or None
     owner_param_index: int | None = None
     if my_keys:
@@ -511,7 +562,9 @@ def _append_key_list_scope_clause(scope: Any, clauses: list[str], params: list[A
     ]
     owner_team_ids = [
         scope_id
-        for scope_id in _scope_ids_with_any_permission(team_permissions, _OWNER_KEY_LIST_PERMISSIONS)
+        for scope_id in _scope_ids_with_any_permission(
+            team_permissions, _OWNER_KEY_LIST_PERMISSIONS
+        )
         if scope_id not in admin_team_id_set
     ]
     owner_org_id_set = set(owner_org_ids)
@@ -543,10 +596,14 @@ def _append_key_list_scope_clause(scope: Any, clauses: list[str], params: list[A
             owner_param_index = len(params)
         owner_org_predicate = _append_in_predicate("t.organization_id", owner_org_ids, params)
         if owner_org_predicate is not None:
-            scope_parts.append(f"({owner_org_predicate} AND vt.owner_account_id = ${owner_param_index})")
+            scope_parts.append(
+                f"({owner_org_predicate} AND vt.owner_account_id = ${owner_param_index})"
+            )
         owner_team_predicate = _append_in_predicate("vt.team_id", owner_team_ids, params)
         if owner_team_predicate is not None:
-            scope_parts.append(f"({owner_team_predicate} AND vt.owner_account_id = ${owner_param_index})")
+            scope_parts.append(
+                f"({owner_team_predicate} AND vt.owner_account_id = ${owner_param_index})"
+            )
 
     if not scope_parts:
         return False
@@ -584,6 +641,28 @@ async def _get_team_row(db: Any, team_id: str) -> dict[str, Any]:
     return dict(rows[0])
 
 
+async def _lock_team_organization_for_key_mutation(
+    db: Any,
+    team_id: str,
+) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT team_id, team_alias, organization_id
+        FROM deltallm_teamtable
+        WHERE team_id = $1
+        FOR SHARE
+        """,
+        team_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    team = dict(rows[0])
+    organization_id = str(team.get("organization_id") or "").strip()
+    if organization_id:
+        await require_active_organization_mutation(db, organization_id)
+    return team
+
+
 async def _get_key_scope_row(db: Any, token_hash: str) -> dict[str, Any]:
     rows = await db.query_raw(
         """
@@ -605,6 +684,38 @@ async def _get_key_scope_row(db: Any, token_hash: str) -> dict[str, Any]:
     return dict(rows[0])
 
 
+async def _lock_key_organization_for_mutation(
+    db: Any,
+    token_hash: str,
+) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT
+            vt.token,
+            vt.user_id,
+            COALESCE(vt.team_id, u.team_id, sa.team_id) AS team_id,
+            t.organization_id
+        FROM deltallm_verificationtoken vt
+        LEFT JOIN deltallm_usertable u ON u.user_id = vt.user_id
+        LEFT JOIN deltallm_serviceaccount sa
+          ON sa.service_account_id = vt.owner_service_account_id
+        LEFT JOIN deltallm_teamtable t
+          ON t.team_id = COALESCE(vt.team_id, u.team_id, sa.team_id)
+        WHERE vt.token = $1
+        LIMIT 1
+        FOR UPDATE OF vt
+        """,
+        token_hash,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+    row = dict(rows[0])
+    organization_id = str(row.get("organization_id") or "").strip()
+    if organization_id:
+        await require_active_organization_mutation(db, organization_id)
+    return row
+
+
 async def _validate_runtime_user(db: Any, user_id: str, team_id: str | None) -> None:
     await validate_runtime_user_scope(db, user_id, team_id=team_id)
 
@@ -619,7 +730,10 @@ async def _validate_owner_references(
     require_owner: bool,
 ) -> tuple[str | None, str | None]:
     if owner_account_id and owner_service_account_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select either 'You' or a service account, not both")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select either 'You' or a service account, not both",
+        )
 
     ctx = get_platform_auth_context(request)
     if owner_account_id:
@@ -628,9 +742,14 @@ async def _validate_owner_references(
             owner_account_id,
         )
         if not rows:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_account_id not found")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="owner_account_id not found"
+            )
         if ctx is not None and str(ctx.account_id) != owner_account_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_account_id must match the current account")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="owner_account_id must match the current account",
+            )
         return owner_account_id, None
 
     if owner_service_account_id:
@@ -644,12 +763,20 @@ async def _validate_owner_references(
             owner_service_account_id,
         )
         if not rows:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_service_account_id not found")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="owner_service_account_id not found"
+            )
         row = rows[0]
         if str(row.get("team_id") or "") != team_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Service account must belong to the selected team")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Service account must belong to the selected team",
+            )
         if not bool(row.get("is_active", True)):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected service account is inactive")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected service account is inactive",
+            )
         return None, owner_service_account_id
 
     if not require_owner:
@@ -713,14 +840,22 @@ async def list_keys(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_READ, Permission.KEY_CREATE_SELF])
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        any_permission=[Permission.KEY_READ, Permission.KEY_CREATE_SELF],
+    )
     db = db_or_503(request)
 
     clauses: list[str] = []
     params: list[Any] = []
 
     if not _append_key_list_scope_clause(scope, clauses, params, my_keys=my_keys):
-        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+        return {
+            "data": [],
+            "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+        }
 
     if search:
         params.append(f"%{search}%")
@@ -776,7 +911,12 @@ async def list_keys(
 
     return {
         "data": [_key_response_payload(dict(row)) for row in rows],
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -789,8 +929,14 @@ async def create_key(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     _reject_legacy_models_field(payload)
-    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF],
+    )
     db = db_or_503(request)
+    tx_factory = getattr(db, "tx", None)
 
     key_name = str(payload.get("key_name") or "").strip()
     user_id = str(payload.get("user_id") or "").strip() or None
@@ -805,7 +951,9 @@ async def create_key(
     tpd_limit = payload.get("tpd_limit")
     expires = payload.get("expires")
     if expires is not None and not isinstance(expires, str):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime"
+        )
 
     if not key_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="key_name is required")
@@ -823,11 +971,21 @@ async def create_key(
         allow_self_service=True,
     )
     self_service_only = access_mode == "self_service"
+    if not callable(tx_factory):
+        detail = (
+            "Database transactions are required for self-service key creation"
+            if self_service_only
+            else "Key mutation requires transaction support"
+        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
 
     account_email: str | None = None
     if self_service_only:
         if not scope.account_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Self-service key creation requires an account context")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Self-service key creation requires an account context",
+            )
         owner_account_id = scope.account_id
         owner_service_account_id = None
         ctx = get_platform_auth_context(request)
@@ -847,19 +1005,30 @@ async def create_key(
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
     key_service = request.app.state.key_service
     token_hash = key_service.hash_key(raw_key)
-    audit_action = AuditAction.ADMIN_KEY_SELF_CREATE if self_service_only else AuditAction.ADMIN_KEY_CREATE
+    audit_action = (
+        AuditAction.ADMIN_KEY_SELF_CREATE if self_service_only else AuditAction.ADMIN_KEY_CREATE
+    )
 
     try:
-        if self_service_only:
-            tx_factory = getattr(db, "tx", None)
-            if not callable(tx_factory):
+        async with tx_factory() as tx:
+            team = await _lock_team_organization_for_key_mutation(tx, team_id)
+            team_org = str(team.get("organization_id") or "").strip() or None
+            locked_access_mode = _resolve_key_access_mode(
+                scope,
+                organization_id=team_org,
+                team_id=team_id,
+                admin_permission=Permission.KEY_UPDATE,
+                allow_self_service=True,
+            )
+            if locked_access_mode != access_mode:
                 raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database transactions are required for self-service key creation",
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Key authorization changed; retry the request",
                 )
-
-            async with tx_factory() as tx:
-                await _acquire_self_service_key_create_lock(tx, team_id=team_id, account_id=scope.account_id)
+            if self_service_only:
+                await _acquire_self_service_key_create_lock(
+                    tx, team_id=team_id, account_id=scope.account_id
+                )
                 policy = await _get_self_service_policy(tx, team_id)
                 normalized_self_service_values = await _validate_self_service_constraints(
                     tx,
@@ -903,23 +1072,23 @@ async def create_key(
                     tpd_limit=tpd_limit,
                     expires=expires,
                 )
-        else:
-            await _insert_key_row(
-                db,
-                token_hash=token_hash,
-                key_name=key_name,
-                user_id=user_id,
-                team_id=team_id,
-                owner_account_id=owner_account_id,
-                owner_service_account_id=owner_service_account_id,
-                max_budget=max_budget,
-                rpm_limit=rpm_limit,
-                tpm_limit=tpm_limit,
-                rph_limit=rph_limit,
-                rpd_limit=rpd_limit,
-                tpd_limit=tpd_limit,
-                expires=expires,
-            )
+            else:
+                await _insert_key_row(
+                    tx,
+                    token_hash=token_hash,
+                    key_name=key_name,
+                    user_id=user_id,
+                    team_id=team_id,
+                    owner_account_id=owner_account_id,
+                    owner_service_account_id=owner_service_account_id,
+                    max_budget=max_budget,
+                    rpm_limit=rpm_limit,
+                    tpm_limit=tpm_limit,
+                    rph_limit=rph_limit,
+                    rpd_limit=rpd_limit,
+                    tpd_limit=tpd_limit,
+                    expires=expires,
+                )
 
         response = {
             "token": token_hash,
@@ -991,8 +1160,16 @@ async def update_key(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     _reject_legacy_models_field(payload)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
+    tx_factory = getattr(db, "tx", None)
+    if not callable(tx_factory):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Key mutation requires transaction support",
+        )
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     rows = await db.query_raw(
         """
@@ -1009,13 +1186,22 @@ async def update_key(
     existing = dict(rows[0])
     expires = payload.get("expires", existing.get("expires"))
     if expires is not None and not isinstance(expires, str):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime"
+        )
 
     key_name = str(payload.get("key_name", existing.get("key_name")) or "").strip()
     user_id = str(payload.get("user_id", existing.get("user_id")) or "").strip() or None
     team_id = str(payload.get("team_id", existing.get("team_id")) or "").strip()
-    owner_account_id = str(payload.get("owner_account_id", existing.get("owner_account_id")) or "").strip() or None
-    owner_service_account_id = str(payload.get("owner_service_account_id", existing.get("owner_service_account_id")) or "").strip() or None
+    owner_account_id = (
+        str(payload.get("owner_account_id", existing.get("owner_account_id")) or "").strip() or None
+    )
+    owner_service_account_id = (
+        str(
+            payload.get("owner_service_account_id", existing.get("owner_service_account_id")) or ""
+        ).strip()
+        or None
+    )
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = payload.get("rpm_limit", existing.get("rpm_limit"))
     tpm_limit = payload.get("tpm_limit", existing.get("tpm_limit"))
@@ -1032,7 +1218,10 @@ async def update_key(
     if not scope.is_platform_admin:
         team_org = team.get("organization_id")
         if not team_org or team_org not in scope.org_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage keys for teams in your organizations")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only manage keys for teams in your organizations",
+            )
     if user_id:
         await _validate_runtime_user(db, user_id, team_id)
     owner_account_id, owner_service_account_id = await _validate_owner_references(
@@ -1045,77 +1234,93 @@ async def update_key(
     )
 
     try:
-        await db.execute_raw(
-            """
-            UPDATE deltallm_verificationtoken
-            SET key_name = $1,
-                user_id = $2,
-                team_id = $3,
-                owner_account_id = $4,
-                owner_service_account_id = $5,
-                max_budget = $6,
-                rpm_limit = $7,
-                tpm_limit = $8,
-                rph_limit = $9,
-                rpd_limit = $10,
-                tpd_limit = $11,
-                expires = $12::timestamp,
-                updated_at = NOW()
-            WHERE token = $13
-            """,
-            key_name,
-            user_id,
-            team_id,
-            owner_account_id,
-            owner_service_account_id,
-            max_budget,
-            rpm_limit,
-            tpm_limit,
-            rph_limit,
-            rpd_limit,
-            tpd_limit,
-            expires,
-            token_hash,
-        )
+        async with tx_factory() as tx:
+            await _lock_key_organization_for_mutation(tx, token_hash)
+            await _require_key_access(
+                scope,
+                tx,
+                token_hash,
+                admin_permission=Permission.KEY_UPDATE,
+            )
+            locked_team = await _lock_team_organization_for_key_mutation(tx, team_id)
+            _resolve_key_access_mode(
+                scope,
+                organization_id=str(locked_team.get("organization_id") or "").strip() or None,
+                team_id=team_id,
+                admin_permission=Permission.KEY_UPDATE,
+            )
+            await tx.execute_raw(
+                """
+                UPDATE deltallm_verificationtoken
+                SET key_name = $1,
+                    user_id = $2,
+                    team_id = $3,
+                    owner_account_id = $4,
+                    owner_service_account_id = $5,
+                    max_budget = $6,
+                    rpm_limit = $7,
+                    tpm_limit = $8,
+                    rph_limit = $9,
+                    rpd_limit = $10,
+                    tpd_limit = $11,
+                    expires = $12::timestamp,
+                    updated_at = NOW()
+                WHERE token = $13
+                """,
+                key_name,
+                user_id,
+                team_id,
+                owner_account_id,
+                owner_service_account_id,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                expires,
+                token_hash,
+            )
+
+            updated_rows = await tx.query_raw(
+                """
+                SELECT
+                    vt.token,
+                    vt.key_name,
+                    vt.user_id,
+                    vt.team_id,
+                    t.team_alias,
+                    vt.owner_account_id,
+                    pa.email AS owner_account_email,
+                    vt.owner_service_account_id,
+                    sa.name AS owner_service_account_name,
+                    vt.spend,
+                    vt.max_budget,
+                    vt.rpm_limit,
+                    vt.tpm_limit,
+                    vt.rph_limit,
+                    vt.rpd_limit,
+                    vt.tpd_limit,
+                    vt.expires,
+                    vt.created_at,
+                    vt.updated_at
+                FROM deltallm_verificationtoken vt
+                LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
+                LEFT JOIN deltallm_platformaccount pa ON vt.owner_account_id = pa.account_id
+                LEFT JOIN deltallm_serviceaccount sa
+                  ON vt.owner_service_account_id = sa.service_account_id
+                WHERE token = $1
+                LIMIT 1
+                """,
+                token_hash,
+            )
+            if not updated_rows:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+            updated = _key_response_payload(dict(updated_rows[0]))
 
         key_service = getattr(request.app.state, "key_service", None)
         if key_service:
             await key_service.invalidate_key_cache_by_hash(token_hash)
-
-        updated_rows = await db.query_raw(
-            """
-            SELECT
-                vt.token,
-                vt.key_name,
-                vt.user_id,
-                vt.team_id,
-                t.team_alias,
-                vt.owner_account_id,
-                pa.email AS owner_account_email,
-                vt.owner_service_account_id,
-                sa.name AS owner_service_account_name,
-                vt.spend,
-                vt.max_budget,
-                vt.rpm_limit,
-                vt.tpm_limit,
-                vt.rph_limit,
-                vt.rpd_limit,
-                vt.tpd_limit,
-                vt.expires,
-                vt.created_at,
-                vt.updated_at
-            FROM deltallm_verificationtoken vt
-            LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
-            LEFT JOIN deltallm_platformaccount pa ON vt.owner_account_id = pa.account_id
-            LEFT JOIN deltallm_serviceaccount sa ON vt.owner_service_account_id = sa.service_account_id
-            WHERE token = $1
-            LIMIT 1
-            """,
-            token_hash,
-        )
-        if not updated_rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
-        updated = _key_response_payload(dict(updated_rows[0]))
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
@@ -1156,7 +1361,9 @@ async def _require_key_access(
     organization_id = str(row.get("organization_id") or "").strip() or None
     team_id = str(row.get("team_id") or "").strip() or None
     if admin_permission == Permission.KEY_READ:
-        access_mode = _resolve_key_read_access_mode(scope, organization_id=organization_id, team_id=team_id)
+        access_mode = _resolve_key_read_access_mode(
+            scope, organization_id=organization_id, team_id=team_id
+        )
     else:
         access_mode = _resolve_key_access_mode(
             scope,
@@ -1173,7 +1380,9 @@ async def _require_key_access(
         )
         if owner_rows and str(owner_rows[0].get("owner_account_id") or "") == scope.account_id:
             return access_mode
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage your own keys")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage your own keys"
+        )
 
     return access_mode
 
@@ -1189,7 +1398,9 @@ async def get_key_asset_visibility(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_READ)
     key_row = await _get_key_scope_row(db, token_hash)
@@ -1197,7 +1408,10 @@ async def get_key_asset_visibility(
     team_id = str(key_row.get("team_id") or "").strip() or None
     user_id = str(key_row.get("user_id") or "").strip() or None
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Key team organization is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Key team organization is not configured",
+        )
     return await build_asset_visibility_preview(
         request,
         organization_id=organization_id,
@@ -1222,7 +1436,9 @@ async def get_key_asset_access(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_READ)
     key_row = await _get_key_scope_row(db, token_hash)
@@ -1230,7 +1446,10 @@ async def get_key_asset_access(
     team_id = str(key_row.get("team_id") or "").strip() or None
     user_id = str(key_row.get("user_id") or "").strip() or None
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Key team organization is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Key team organization is not configured",
+        )
     return await build_scope_asset_access(
         request,
         scope_type="api_key",
@@ -1255,7 +1474,9 @@ async def update_key_asset_access(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     key_row = await _get_key_scope_row(db, token_hash)
@@ -1263,7 +1484,10 @@ async def update_key_asset_access(
     team_id = str(key_row.get("team_id") or "").strip() or None
     user_id = str(key_row.get("user_id") or "").strip() or None
     if not organization_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Key team organization is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Key team organization is not configured",
+        )
     asset_access_payload = {
         "scope_type": "api_key",
         "scope_id": token_hash,
@@ -1277,7 +1501,69 @@ async def update_key_asset_access(
     }
     if "selected_access_group_keys" in payload:
         asset_access_payload["selected_access_group_keys"] = payload["selected_access_group_keys"]
-    response = await apply_scope_asset_access(request, **asset_access_payload)
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Key asset-access mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        locked_key = await _lock_key_organization_for_mutation(tx, token_hash)
+        await _require_key_access(
+            scope,
+            tx,
+            token_hash,
+            admin_permission=Permission.KEY_UPDATE,
+        )
+        locked_organization_id = str(locked_key.get("organization_id") or "").strip()
+        if not locked_organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Key team organization is not configured",
+            )
+        locked_team_id = str(locked_key.get("team_id") or "").strip() or None
+        locked_user_id = str(locked_key.get("user_id") or "").strip() or None
+        asset_access_payload["organization_id"] = locked_organization_id
+        asset_access_payload["team_id"] = locked_team_id
+        asset_access_payload["user_id"] = locked_user_id
+        await sync_scope_asset_access_state(
+            request,
+            **asset_access_payload,
+            binding_repository=_transaction_repository(
+                request,
+                "callable_target_binding_repository",
+                CallableTargetBindingRepository,
+                tx,
+            ),
+            access_group_repository=_transaction_repository(
+                request,
+                "callable_target_access_group_repository",
+                CallableTargetAccessGroupBindingRepository,
+                tx,
+            ),
+            policy_repository=_transaction_repository(
+                request,
+                "callable_target_scope_policy_repository",
+                CallableTargetScopePolicyRepository,
+                tx,
+            ),
+            route_group_repository=_transaction_repository(
+                request,
+                "route_group_repository",
+                RouteGroupRepository,
+                tx,
+            ),
+            reload_after_write=False,
+        )
+    await reload_callable_target_grants(request)
+    response = await build_scope_asset_access(
+        request,
+        scope_type="api_key",
+        scope_id=token_hash,
+        organization_id=locked_organization_id,
+        team_id=locked_team_id,
+        api_key_id=token_hash,
+        user_id=locked_user_id,
+    )
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -1299,34 +1585,47 @@ async def regenerate_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
-    db = db_or_503(request)
-    access_mode = await _require_key_access(
-        scope,
-        db,
-        token_hash,
-        admin_permission=Permission.KEY_UPDATE,
-        allow_self_service=True,
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF],
     )
-
-    rows = await db.query_raw("SELECT token FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
-    if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
-    notification_row = await _get_key_notification_row(db, token_hash)
+    db = db_or_503(request)
+    tx_factory = getattr(db, "tx", None)
+    if not callable(tx_factory):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Key mutation requires transaction support",
+        )
 
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
     new_hash = request.app.state.key_service.hash_key(raw_key)
-    await db.execute_raw(
-        "UPDATE deltallm_verificationtoken SET token = $1, updated_at = NOW() WHERE token = $2",
-        new_hash,
-        token_hash,
-    )
+    async with tx_factory() as tx:
+        await _lock_key_organization_for_mutation(tx, token_hash)
+        access_mode = await _require_key_access(
+            scope,
+            tx,
+            token_hash,
+            admin_permission=Permission.KEY_UPDATE,
+            allow_self_service=True,
+        )
+        notification_row = await _get_key_notification_row(tx, token_hash)
+        await tx.execute_raw(
+            "UPDATE deltallm_verificationtoken SET token = $1, updated_at = NOW() WHERE token = $2",
+            new_hash,
+            token_hash,
+        )
     try:
         await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         await request.app.state.key_service.invalidate_key_cache_by_hash(new_hash)
     except Exception:
         logger.exception("failed to invalidate key auth cache after regenerate")
-    audit_action = AuditAction.ADMIN_KEY_SELF_ROTATE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REGENERATE
+    audit_action = (
+        AuditAction.ADMIN_KEY_SELF_ROTATE
+        if access_mode == "self_service"
+        else AuditAction.ADMIN_KEY_REGENERATE
+    )
     response = {"token": new_hash, "raw_key": raw_key}
     if notification_row is not None:
         notification_row["token"] = new_hash
@@ -1357,17 +1656,31 @@ async def revoke_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
-    db = db_or_503(request)
-    access_mode = await _require_key_access(
-        scope,
-        db,
-        token_hash,
-        admin_permission=Permission.KEY_REVOKE,
-        allow_self_service=True,
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF],
     )
-    notification_row = await _get_key_notification_row(db, token_hash)
-    deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
+    db = db_or_503(request)
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Key mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        await _lock_key_organization_for_mutation(tx, token_hash)
+        access_mode = await _require_key_access(
+            scope,
+            tx,
+            token_hash,
+            admin_permission=Permission.KEY_REVOKE,
+            allow_self_service=True,
+        )
+        notification_row = await _get_key_notification_row(tx, token_hash)
+        deleted = await tx.execute_raw(
+            "DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash
+        )
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
@@ -1380,7 +1693,11 @@ async def revoke_key(
                 actor_account_id=scope.account_id,
                 record=_notification_record(notification_row),
             )
-    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REVOKE
+    audit_action = (
+        AuditAction.ADMIN_KEY_SELF_REVOKE
+        if access_mode == "self_service"
+        else AuditAction.ADMIN_KEY_REVOKE
+    )
     response = {"revoked": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
@@ -1402,17 +1719,31 @@ async def delete_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
-    db = db_or_503(request)
-    access_mode = await _require_key_access(
-        scope,
-        db,
-        token_hash,
-        admin_permission=Permission.KEY_REVOKE,
-        allow_self_service=True,
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF],
     )
-    notification_row = await _get_key_notification_row(db, token_hash)
-    deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
+    db = db_or_503(request)
+    if not hasattr(db, "tx"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Key mutation requires transaction support",
+        )
+    async with db.tx() as tx:
+        await _lock_key_organization_for_mutation(tx, token_hash)
+        access_mode = await _require_key_access(
+            scope,
+            tx,
+            token_hash,
+            admin_permission=Permission.KEY_REVOKE,
+            allow_self_service=True,
+        )
+        notification_row = await _get_key_notification_row(tx, token_hash)
+        deleted = await tx.execute_raw(
+            "DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash
+        )
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
@@ -1425,7 +1756,11 @@ async def delete_key(
                 actor_account_id=scope.account_id,
                 record=_notification_record(notification_row),
             )
-    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_DELETE
+    audit_action = (
+        AuditAction.ADMIN_KEY_SELF_REVOKE
+        if access_mode == "self_service"
+        else AuditAction.ADMIN_KEY_DELETE
+    )
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,

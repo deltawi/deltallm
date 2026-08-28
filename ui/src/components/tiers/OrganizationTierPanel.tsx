@@ -26,6 +26,7 @@ import TierSimulationPanel from './TierSimulationPanel';
 type OrganizationTierPanelProps = {
   organizationId: string;
   canManage: boolean;
+  readOnlyReason?: string;
 };
 
 const EMPTY_FORM: AssignmentForm = {
@@ -43,7 +44,11 @@ function createEmptyForm(): AssignmentForm {
   return { ...EMPTY_FORM };
 }
 
-export default function OrganizationTierPanel({ organizationId, canManage }: OrganizationTierPanelProps) {
+export default function OrganizationTierPanel({
+  organizationId,
+  canManage,
+  readOnlyReason,
+}: OrganizationTierPanelProps) {
   const { pushToast } = useToast();
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<AssignmentForm>(() => createEmptyForm());
@@ -70,8 +75,8 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
   }, [organizationId]);
 
   const { data: assignmentsResponse, loading: assignmentsLoading, error: assignmentsError, refetch: refetchAssignments } = useApi(
-    () => canManage ? organizations.tierAssignments(organizationId) : Promise.resolve({ data: [] }),
-    [organizationId, canManage],
+    (signal) => organizations.tierAssignments(organizationId, undefined, signal),
+    [organizationId],
   );
   const { data: tierPage } = useApi(
     () => canManage ? tiers.listAll({ enabled: true }) : Promise.resolve([]),
@@ -82,8 +87,8 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
     [canManage, form.tier_id],
   );
   const { data: preview, loading: previewLoading, error: previewError, refetch: refetchPreview } = useApi(
-    () => canManage ? organizations.tierPolicyPreview(organizationId) : Promise.resolve(null),
-    [organizationId, canManage],
+    (signal) => organizations.tierPolicyPreview(organizationId, signal),
+    [organizationId],
   );
 
   const assignments = useMemo(
@@ -284,7 +289,7 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
         <div>
           <h3 className="text-sm font-semibold text-gray-900">Service policy is read-only</h3>
           <p className="mt-1 text-xs leading-relaxed text-gray-600">
-            Tier assignments are managed by a platform administrator. Organization roles cannot assign, change, or remove tiers.
+            {readOnlyReason || 'Tier assignments are managed by a platform administrator. Organization roles cannot assign, change, or remove tiers.'}
           </p>
         </div>
       </section>

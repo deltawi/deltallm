@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -26,6 +27,7 @@ class _FakeScopeDB:
                 "tpm_limit": None,
                 "audit_content_storage_enabled": False,
                 "metadata": {},
+                "lifecycle_state": "active",
                 "created_at": now,
                 "updated_at": now,
             }
@@ -62,20 +64,49 @@ class _FakeScopeDB:
             }
         }
 
+    @asynccontextmanager
+    async def tx(self):
+        yield self
+
     async def query_raw(self, query: str, *params):  # noqa: ANN201
         if "FROM deltallm_organizationtable" in query and "WHERE organization_id = $1" in query:
             organization = self.organizations.get(str(params[0]))
             return [organization] if organization else []
-        if "FROM deltallm_teamtable" in query and "WHERE team_id = $1" in query:
+        if "FROM deltallm_teamtable" in query and (
+            "WHERE team_id = $1" in query or "WHERE t.team_id = $1" in query
+        ):
             team = self.teams.get(str(params[0]))
             return [team] if team else []
         if "FROM deltallm_usertable u" in query and "WHERE u.user_id = $1" in query:
+            user = self.users.get(str(params[0]))
+            return [user] if user else []
+        if "FROM deltallm_usertable" in query and "WHERE user_id = $1" in query:
             user = self.users.get(str(params[0]))
             return [user] if user else []
         if "FROM deltallm_verificationtoken vt" in query and "WHERE vt.token = $1" in query:
             key = self.keys.get(str(params[0]))
             return [key] if key else []
         return []
+
+    async def execute_raw(self, query: str, *params):  # noqa: ANN201
+        if "UPDATE deltallm_usertable SET" in query:
+            user = self.users.get(str(params[0]))
+            if user is None:
+                return 0
+            user.update(
+                {
+                    "rpm_limit": params[1],
+                    "tpm_limit": params[2],
+                    "max_parallel_requests": params[3],
+                    "rph_limit": params[4],
+                    "rpd_limit": params[5],
+                    "tpd_limit": params[6],
+                    "max_budget": params[7],
+                    "blocked": params[8],
+                }
+            )
+            return 1
+        return 0
 
 
 class _FakeRouteGroupRepository:
@@ -107,7 +138,9 @@ class _FakeRouteGroupRepository:
         items = list(self.groups.values())[offset : offset + limit]
         return items, len(self.groups)
 
-    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=500, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, group_key=None, scope_type=None, scope_id=None, limit=500, offset=0
+    ):  # noqa: ANN001, ANN201
         items = [binding for bindings in self.bindings.values() for binding in bindings]
         if group_key:
             items = [binding for binding in items if binding.group_key == group_key]
@@ -144,7 +177,9 @@ class _FakeCallableTargetBindingRepository:
         self.bindings: list[CallableTargetBindingRecord] = []
         self._counter = 0
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=500, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=500, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -156,7 +191,11 @@ class _FakeCallableTargetBindingRepository:
 
     async def upsert_binding(self, *, callable_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         for index, item in enumerate(self.bindings):
-            if item.callable_key == callable_key and item.scope_type == scope_type and item.scope_id == scope_id:
+            if (
+                item.callable_key == callable_key
+                and item.scope_type == scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -178,7 +217,9 @@ class _FakeCallableTargetAccessGroupBindingRepository:
         self.bindings: list[CallableTargetAccessGroupBindingRecord] = []
         self._counter = 0
 
-    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=500, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, group_key=None, scope_type=None, scope_id=None, limit=500, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if group_key:
             items = [item for item in items if item.group_key == group_key]
@@ -190,7 +231,11 @@ class _FakeCallableTargetAccessGroupBindingRepository:
 
     async def upsert_binding(self, *, group_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         for index, item in enumerate(self.bindings):
-            if item.group_key == group_key and item.scope_type == scope_type and item.scope_id == scope_id:
+            if (
+                item.group_key == group_key
+                and item.scope_type == scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -239,7 +284,9 @@ class _FakeCallableTargetScopePolicyRepository:
 
 
 @pytest.mark.asyncio
-async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sources(client, test_app):
+async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sources(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     route_groups = _FakeRouteGroupRepository()
@@ -277,9 +324,23 @@ async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sour
         enabled=True,
         metadata=None,
     )
-    await route_groups.upsert_binding("support-owned", scope_type="team", scope_id="team-1", enabled=True, metadata={"source": "team"})
-    await route_groups.upsert_binding("org-shared", scope_type="organization", scope_id="org-1", enabled=True, metadata={"source": "org"})
-    await route_groups.upsert_binding("team-only", scope_type="team", scope_id="team-1", enabled=True, metadata={"source": "team"})
+    await route_groups.upsert_binding(
+        "support-owned",
+        scope_type="team",
+        scope_id="team-1",
+        enabled=True,
+        metadata={"source": "team"},
+    )
+    await route_groups.upsert_binding(
+        "org-shared",
+        scope_type="organization",
+        scope_id="org-1",
+        enabled=True,
+        metadata={"source": "org"},
+    )
+    await route_groups.upsert_binding(
+        "team-only", scope_type="team", scope_id="team-1", enabled=True, metadata={"source": "team"}
+    )
     await callable_targets.upsert_binding(
         callable_key="support-owned",
         scope_type="team",
@@ -322,7 +383,9 @@ async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sour
         enabled=True,
         metadata={"source": "team"},
     )
-    await policies.upsert_policy(scope_type="team", scope_id="team-1", mode="restrict", metadata={"rollout": "pilot"})
+    await policies.upsert_policy(
+        scope_type="team", scope_id="team-1", mode="restrict", metadata={"rollout": "pilot"}
+    )
 
     response = await client.get(
         "/ui/api/teams/team-1/asset-visibility",
@@ -338,7 +401,9 @@ async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sour
 
     route_groups_payload = {item["group_key"]: item for item in payload["route_groups"]["items"]}
     assert route_groups_payload["support-owned"]["visibility_source"] == "inherited_and_granted"
-    assert {source["scope_type"] for source in route_groups_payload["support-owned"]["sources"]} == {"organization", "team"}
+    assert {
+        source["scope_type"] for source in route_groups_payload["support-owned"]["sources"]
+    } == {"organization", "team"}
     assert route_groups_payload["support-owned"]["effective_visible"] is True
     assert route_groups_payload["org-shared"]["visibility_source"] == "inherited"
     assert route_groups_payload["org-shared"]["effective_visible"] is False
@@ -347,7 +412,10 @@ async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sour
 
     callable_payload = {item["callable_key"]: item for item in payload["callable_targets"]["items"]}
     assert callable_payload["gpt-4o-mini"]["visibility_source"] == "inherited_and_granted"
-    assert {source["scope_type"] for source in callable_payload["gpt-4o-mini"]["sources"]} == {"organization", "team"}
+    assert {source["scope_type"] for source in callable_payload["gpt-4o-mini"]["sources"]} == {
+        "organization",
+        "team",
+    }
     assert callable_payload["gpt-4o-mini"]["effective_visible"] is True
     assert callable_payload["team-assistant"]["visibility_source"] == "granted"
     assert callable_payload["team-assistant"]["effective_visible"] is False
@@ -366,8 +434,12 @@ async def test_parent_asset_visibility_returns_paged_selectable_access_groups(cl
     test_app.state.callable_target_access_group_repository = access_groups
     test_app.state.callable_target_scope_policy_repository = policies
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
-        "support-chat": CallableTarget(key="support-chat", target_type="route_group", access_groups=frozenset({"support"})),
+        "gpt-4o-mini": CallableTarget(
+            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
+        ),
+        "support-chat": CallableTarget(
+            key="support-chat", target_type="route_group", access_groups=frozenset({"support"})
+        ),
     }
     await access_groups.upsert_binding(
         group_key="beta",
@@ -432,9 +504,27 @@ async def test_key_asset_visibility_includes_org_team_and_key_sources(client, te
         enabled=True,
         metadata=None,
     )
-    await route_groups.upsert_binding("support-owned", scope_type="team", scope_id="team-1", enabled=True, metadata={"source": "team"})
-    await route_groups.upsert_binding("support-owned", scope_type="api_key", scope_id="key-hash-1", enabled=True, metadata={"source": "key"})
-    await route_groups.upsert_binding("key-only", scope_type="api_key", scope_id="key-hash-1", enabled=True, metadata={"source": "key"})
+    await route_groups.upsert_binding(
+        "support-owned",
+        scope_type="team",
+        scope_id="team-1",
+        enabled=True,
+        metadata={"source": "team"},
+    )
+    await route_groups.upsert_binding(
+        "support-owned",
+        scope_type="api_key",
+        scope_id="key-hash-1",
+        enabled=True,
+        metadata={"source": "key"},
+    )
+    await route_groups.upsert_binding(
+        "key-only",
+        scope_type="api_key",
+        scope_id="key-hash-1",
+        enabled=True,
+        metadata={"source": "key"},
+    )
     await callable_targets.upsert_binding(
         callable_key="support-owned",
         scope_type="team",
@@ -484,8 +574,12 @@ async def test_key_asset_visibility_includes_org_team_and_key_sources(client, te
         enabled=True,
         metadata={"source": "key"},
     )
-    await policies.upsert_policy(scope_type="team", scope_id="team-1", mode="restrict", metadata=None)
-    await policies.upsert_policy(scope_type="api_key", scope_id="key-hash-1", mode="restrict", metadata=None)
+    await policies.upsert_policy(
+        scope_type="team", scope_id="team-1", mode="restrict", metadata=None
+    )
+    await policies.upsert_policy(
+        scope_type="api_key", scope_id="key-hash-1", mode="restrict", metadata=None
+    )
 
     response = await client.get(
         "/ui/api/keys/key-hash-1/asset-visibility",
@@ -503,14 +597,20 @@ async def test_key_asset_visibility_includes_org_team_and_key_sources(client, te
 
     route_groups_payload = {item["group_key"]: item for item in payload["route_groups"]["items"]}
     assert route_groups_payload["support-owned"]["visibility_source"] == "inherited_and_granted"
-    assert {source["scope_type"] for source in route_groups_payload["support-owned"]["sources"]} == {"organization", "team", "api_key"}
+    assert {
+        source["scope_type"] for source in route_groups_payload["support-owned"]["sources"]
+    } == {"organization", "team", "api_key"}
     assert route_groups_payload["support-owned"]["effective_visible"] is True
     assert route_groups_payload["key-only"]["visibility_source"] == "granted"
     assert route_groups_payload["key-only"]["effective_visible"] is False
 
     callable_payload = {item["callable_key"]: item for item in payload["callable_targets"]["items"]}
     assert callable_payload["gpt-4o-mini"]["visibility_source"] == "inherited_and_granted"
-    assert {source["scope_type"] for source in callable_payload["gpt-4o-mini"]["sources"]} == {"organization", "team", "api_key"}
+    assert {source["scope_type"] for source in callable_payload["gpt-4o-mini"]["sources"]} == {
+        "organization",
+        "team",
+        "api_key",
+    }
     assert callable_payload["gpt-4o-mini"]["effective_visible"] is True
     assert callable_payload["key-assistant"]["visibility_source"] == "granted"
     assert callable_payload["key-assistant"]["effective_visible"] is False
@@ -577,7 +677,9 @@ async def test_key_asset_visibility_applies_user_scope_narrowing(client, test_ap
 
 
 @pytest.mark.asyncio
-async def test_user_asset_visibility_treats_disabled_access_group_binding_as_authoritative(client, test_app):
+async def test_user_asset_visibility_treats_disabled_access_group_binding_as_authoritative(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     callable_targets = _FakeCallableTargetBindingRepository()
@@ -585,9 +687,13 @@ async def test_user_asset_visibility_treats_disabled_access_group_binding_as_aut
     test_app.state.route_group_repository = _FakeRouteGroupRepository()
     test_app.state.callable_target_binding_repository = callable_targets
     test_app.state.callable_target_access_group_repository = access_groups
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "gpt-4o-mini": CallableTarget(
+            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
+        ),
     }
     await callable_targets.upsert_binding(
         callable_key="gpt-4o-mini",
@@ -623,7 +729,9 @@ async def test_user_asset_visibility_treats_disabled_access_group_binding_as_aut
 
 
 @pytest.mark.asyncio
-async def test_org_asset_visibility_paginates_large_route_group_and_callable_target_sets(client, test_app):
+async def test_org_asset_visibility_paginates_large_route_group_and_callable_target_sets(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     route_groups = _FakeRouteGroupRepository()
@@ -696,7 +804,9 @@ async def test_user_asset_access_routes_support_explicit_user_scope(client, test
         metadata={"source": "team"},
     )
 
-    access = await client.get("/ui/api/users/user-1/asset-access", headers={"Authorization": "Bearer mk-test"})
+    access = await client.get(
+        "/ui/api/users/user-1/asset-access", headers={"Authorization": "Bearer mk-test"}
+    )
     assert access.status_code == 200
     access_payload = access.json()
     assert access_payload["scope_type"] == "user"
@@ -714,12 +824,48 @@ async def test_user_asset_access_routes_support_explicit_user_scope(client, test
     assert update_payload["mode"] == "restrict"
     assert update_payload["selected_callable_keys"] == ["gpt-4o-mini"]
 
-    visibility = await client.get("/ui/api/users/user-1/asset-visibility", headers={"Authorization": "Bearer mk-test"})
+    visibility = await client.get(
+        "/ui/api/users/user-1/asset-visibility", headers={"Authorization": "Bearer mk-test"}
+    )
     assert visibility.status_code == 200
     visibility_payload = visibility.json()
     assert visibility_payload["user_id"] == "user-1"
     assert visibility_payload["scope_policies"]["user"] == "restrict"
-    callable_items = {item["callable_key"]: item for item in visibility_payload["callable_targets"]["items"]}
+    callable_items = {
+        item["callable_key"]: item for item in visibility_payload["callable_targets"]["items"]
+    }
     assert visibility_payload["callable_targets"]["total"] == 2
     assert callable_items["gpt-4o-mini"]["effective_visible"] is True
     assert callable_items["team-assistant"]["effective_visible"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/ui/api/users/user-1", {"rpm_limit": 10}),
+        (
+            "/ui/api/users/user-1/asset-access",
+            {"mode": "restrict", "selected_callable_keys": []},
+        ),
+    ],
+)
+async def test_user_mutations_reject_inactive_organization(
+    client,
+    test_app,
+    path: str,
+    payload: dict[str, object],
+) -> None:
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    db = _FakeScopeDB()
+    db.organizations["org-1"]["lifecycle_state"] = "deletion_pending"
+    test_app.state.prisma_manager = type("Prisma", (), {"client": db})()
+
+    response = await client.put(
+        path,
+        headers={"Authorization": "Bearer mk-test"},
+        json=payload,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "organization_inactive"

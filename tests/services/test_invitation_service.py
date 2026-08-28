@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ import pytest
 
 from src.db.invitations import PlatformInvitationRecord
 from src.services.invitation_service import InvitationService
+from src.services.organization_mutation_policy import OrganizationMutationInactiveError
 from src.services.platform_identity_service import LoginResult
 
 
@@ -17,14 +19,21 @@ class FakeInvitationRepository:
 
     async def create(self, record: PlatformInvitationRecord) -> PlatformInvitationRecord:
         invitation_id = record.invitation_id or f"inv-{len(self.records) + 1}"
-        stored = replace(record, invitation_id=invitation_id, created_at=datetime.now(tz=UTC), updated_at=datetime.now(tz=UTC))
+        stored = replace(
+            record,
+            invitation_id=invitation_id,
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
         self.records[invitation_id] = stored
         return stored
 
     async def get_by_id(self, invitation_id: str) -> PlatformInvitationRecord | None:
         return self.records.get(invitation_id)
 
-    async def get_latest_pending_by_account_id(self, account_id: str) -> PlatformInvitationRecord | None:
+    async def get_latest_pending_by_account_id(
+        self, account_id: str
+    ) -> PlatformInvitationRecord | None:
         for record in self.records.values():
             if record.account_id == account_id and record.status in {"pending", "sent"}:
                 return record
@@ -66,12 +75,16 @@ class FakeInvitationRepository:
 
     async def mark_accepted(self, invitation_id: str) -> bool:
         record = self.records[invitation_id]
-        self.records[invitation_id] = replace(record, status="accepted", accepted_at=datetime.now(tz=UTC))
+        self.records[invitation_id] = replace(
+            record, status="accepted", accepted_at=datetime.now(tz=UTC)
+        )
         return True
 
     async def mark_cancelled(self, invitation_id: str) -> bool:
         record = self.records[invitation_id]
-        self.records[invitation_id] = replace(record, status="cancelled", cancelled_at=datetime.now(tz=UTC))
+        self.records[invitation_id] = replace(
+            record, status="cancelled", cancelled_at=datetime.now(tz=UTC)
+        )
         return True
 
     async def mark_expired(self, invitation_id: str) -> bool:
@@ -106,11 +119,21 @@ class FakeTokenService:
         self.invalidated.append((purpose, account_id, invitation_id))
         return 1
 
-    async def issue_invitation_token(self, *, account_id: str, email: str, invitation_id: str, created_by_account_id: str | None):  # noqa: ANN001, ANN201
+    async def issue_invitation_token(
+        self, *, account_id: str, email: str, invitation_id: str, created_by_account_id: str | None
+    ):  # noqa: ANN001, ANN201
         del created_by_account_id
         raw = f"raw-{invitation_id}"
-        record = SimpleNamespace(token_id=f"tok-{invitation_id}", expires_at=datetime.now(tz=UTC) + timedelta(hours=72))
-        self.by_raw_token[raw] = SimpleNamespace(token_id=record.token_id, account_id=account_id, email=email, invitation_id=invitation_id, expires_at=record.expires_at)
+        record = SimpleNamespace(
+            token_id=f"tok-{invitation_id}", expires_at=datetime.now(tz=UTC) + timedelta(hours=72)
+        )
+        self.by_raw_token[raw] = SimpleNamespace(
+            token_id=record.token_id,
+            account_id=account_id,
+            email=email,
+            invitation_id=invitation_id,
+            expires_at=record.expires_at,
+        )
         return SimpleNamespace(raw_token=raw, record=record)
 
     async def validate_token(self, *, purpose: str, raw_token: str):  # noqa: ANN201
@@ -180,7 +203,9 @@ class FakePlatformIdentityService:
             self.accounts[account_id] = account
         return account
 
-    async def upsert_organization_membership(self, *, account_id: str, organization_id: str, role: str) -> None:
+    async def upsert_organization_membership(
+        self, *, account_id: str, organization_id: str, role: str
+    ) -> None:
         self.org_memberships.append((account_id, organization_id, role))
 
     async def upsert_team_membership(self, *, account_id: str, team_id: str, role: str) -> None:
@@ -228,11 +253,24 @@ class FakePlatformIdentityService:
 
 
 class FakeDB:
+    def __init__(self, *, lifecycle_state: str = "active") -> None:
+        self.lifecycle_state = lifecycle_state
+
+    @asynccontextmanager
+    async def tx(self):
+        yield self
+
     async def query_raw(self, query: str, *params):  # noqa: ANN001, ANN201
         if "FROM deltallm_teamtable" in query:
             return [{"team_id": params[0], "team_alias": "Engineering", "organization_id": "org-1"}]
         if "FROM deltallm_organizationtable" in query:
-            return [{"organization_id": params[0], "organization_name": "Acme"}]
+            return [
+                {
+                    "organization_id": params[0],
+                    "organization_name": "Acme",
+                    "lifecycle_state": self.lifecycle_state,
+                }
+            ]
         if "SELECT email FROM deltallm_platformaccount" in query:
             return [{"email": "admin@example.com"}]
         if "SELECT account_id, email FROM deltallm_platformaccount" in query:
@@ -241,7 +279,9 @@ class FakeDB:
 
 
 def _config():
-    return SimpleNamespace(general_settings=SimpleNamespace(instance_name="DeltaLLM", invitation_token_ttl_hours=72))
+    return SimpleNamespace(
+        general_settings=SimpleNamespace(instance_name="DeltaLLM", invitation_token_ttl_hours=72)
+    )
 
 
 @pytest.mark.asyncio
@@ -269,6 +309,59 @@ async def test_create_invitation_creates_pending_account_memberships_and_email()
     assert response["status"] == "sent"
     assert identity_service.org_memberships == []
     assert identity_service.team_memberships == []
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_rejects_inactive_organization_before_writes() -> None:
+    identity_service = FakePlatformIdentityService()
+    repository = FakeInvitationRepository()
+    service = InvitationService(
+        db_client=FakeDB(lifecycle_state="deletion_pending"),
+        repository=repository,
+        token_service=FakeTokenService(),
+        outbox_service=FakeOutboxService(),
+        platform_identity_service=identity_service,
+        config_getter=_config,
+    )
+
+    with pytest.raises(OrganizationMutationInactiveError):
+        await service.create_invitation(
+            email="user@example.com",
+            invited_by_account_id="acct-admin",
+            organization_id="org-1",
+        )
+
+    assert repository.records == {}
+    assert identity_service.accounts == {}
+
+
+@pytest.mark.asyncio
+async def test_cancel_invitation_rejects_inactive_organization() -> None:
+    repository = FakeInvitationRepository()
+    invitation = await repository.create(
+        PlatformInvitationRecord(
+            invitation_id="inv-1",
+            account_id="acct-1",
+            email="user@example.com",
+            status="sent",
+            invite_scope_type="organization",
+            expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+            metadata={"organization_invites": [{"organization_id": "org-1", "role": "org_member"}]},
+        )
+    )
+    service = InvitationService(
+        db_client=FakeDB(lifecycle_state="deletion_pending"),
+        repository=repository,
+        token_service=FakeTokenService(),
+        outbox_service=FakeOutboxService(),
+        platform_identity_service=FakePlatformIdentityService(),
+        config_getter=_config,
+    )
+
+    with pytest.raises(OrganizationMutationInactiveError):
+        await service.cancel_invitation(invitation_id=invitation.invitation_id)
+
+    assert repository.records[invitation.invitation_id].status == "sent"
 
 
 @pytest.mark.asyncio
@@ -302,7 +395,9 @@ async def test_create_invitation_keeps_distinct_pending_records_per_scope() -> N
 
 
 @pytest.mark.asyncio
-async def test_create_invitation_rejects_suppressed_recipient_delivery_and_consumes_new_token() -> None:
+async def test_create_invitation_rejects_suppressed_recipient_delivery_and_consumes_new_token() -> (
+    None
+):
     repository = FakeInvitationRepository()
     token_service = FakeTokenService()
     outbox_service = FakeOutboxService(status="cancelled")
@@ -680,7 +775,9 @@ async def test_accept_invitation_applies_team_and_org_memberships_on_accept() ->
             expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
             metadata={
                 "organization_invites": [{"organization_id": "org-1", "role": "org_admin"}],
-                "team_invites": [{"team_id": "team-1", "organization_id": "org-1", "role": "team_developer"}],
+                "team_invites": [
+                    {"team_id": "team-1", "organization_id": "org-1", "role": "team_developer"}
+                ],
             },
         )
     )

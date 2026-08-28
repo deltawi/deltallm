@@ -19,6 +19,7 @@ from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository, PlatformInvitationRecord
 from src.services.email_token_service import EmailTokenService
 from src.services.email_outbox_service import EmailOutboxService
+from src.services.organization_mutation_policy import OrganizationMutationPolicy
 from src.services.platform_identity_service import LoginResult, PlatformIdentityService
 
 
@@ -197,6 +198,15 @@ class InvitationService:
                 != str(organization_context.get("organization_id") or "").strip()
             ):
                 raise ValueError("team_id does not belong to organization_id")
+        organization_ids = {
+            str(context.get("organization_id") or "").strip()
+            for context in (organization_context, team_context)
+            if context is not None and str(context.get("organization_id") or "").strip()
+        }
+        for scoped_organization_id in sorted(organization_ids):
+            await OrganizationMutationPolicy.for_database(db_client).require_active(
+                scoped_organization_id
+            )
 
         account = await identity_service.ensure_account(
             email=normalized_email,
@@ -317,13 +327,45 @@ class InvitationService:
         )
 
     async def cancel_invitation(self, *, invitation_id: str) -> bool:
-        invitation = await self._require_manageable_invitation(invitation_id)
-        await self.token_service.invalidate_active_tokens(
-            purpose="invite_accept",
-            account_id=invitation.account_id,
-            invitation_id=invitation.invitation_id,
-        )
-        return await self.repository.mark_cancelled(invitation.invitation_id)
+        if self.db is None or not hasattr(self.db, "tx"):
+            raise RuntimeError("invitation cancellation requires transaction support")
+        async with self.db.tx() as tx:
+            repository, token_service, _outbox_service, _identity_service = (
+                self._transactional_dependencies(tx)
+            )
+            invitation = await repository.get_by_id(invitation_id)
+            if invitation is None:
+                raise ValueError("invitation not found")
+            await self._require_active_invitation_scopes(tx, invitation.metadata)
+            invitation = await self._expire_if_needed(
+                invitation,
+                repository=repository,
+                token_service=token_service,
+            )
+            if invitation.status == "accepted":
+                raise ValueError("accepted invitations cannot be modified")
+            if invitation.status == "cancelled":
+                raise ValueError("cancelled invitations cannot be modified")
+            await token_service.invalidate_active_tokens(
+                purpose="invite_accept",
+                account_id=invitation.account_id,
+                invitation_id=invitation.invitation_id,
+            )
+            return await repository.mark_cancelled(invitation.invitation_id)
+
+    async def _require_active_invitation_scopes(
+        self,
+        db_client: Any,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        organization_ids = {
+            str(item.get("organization_id") or "").strip()
+            for key in ("organization_invites", "team_invites")
+            for item in list((metadata or {}).get(key) or [])
+            if isinstance(item, dict) and str(item.get("organization_id") or "").strip()
+        }
+        for organization_id in sorted(organization_ids):
+            await OrganizationMutationPolicy.for_database(db_client).require_active(organization_id)
 
     async def describe_invitation_token(self, raw_token: str) -> InvitationContext | None:
         token = await self.token_service.validate_token(
@@ -501,7 +543,6 @@ class InvitationService:
             SELECT organization_id, organization_name
             FROM deltallm_organizationtable
             WHERE organization_id = $1
-              AND lifecycle_state = 'active'
             LIMIT 1
             """,
             organization_id,
@@ -523,7 +564,6 @@ class InvitationService:
             LEFT JOIN deltallm_organizationtable AS o
               ON o.organization_id = t.organization_id
             WHERE t.team_id = $1
-              AND (t.organization_id IS NULL OR o.lifecycle_state = 'active')
             LIMIT 1
             """,
             team_id,
