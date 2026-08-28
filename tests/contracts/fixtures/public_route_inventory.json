@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "9e21536e4f3e65257e182784f7b1245312eb91eb",
+  "baseline_route_count": 279,
+  "classification_precedence": "exact developer routes, then longest matching non-developer prefix",
+  "developer_routes": [
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "audience": "developer",
+      "dialect": "json_rpc",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/files",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}/content",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/batches",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/batches/{batch_id}",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/batches",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/batches/{batch_id}/cancel",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/completions",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/messages",
+      "audience": "developer",
+      "dialect": "anthropic",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/embeddings",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/images/generations",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/speech",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/transcriptions",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/rerank",
+      "audience": "developer",
+      "dialect": "delta_json",
+      "authentication": "bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models",
+      "audience": "developer",
+      "dialect": "openai",
+      "authentication": "bearer"
+    }
+  ],
+  "non_developer_route_families": [
+    {
+      "prefix": "/ui/api",
+      "audience": "admin_control_plane",
+      "dialect": "delta_json"
+    },
+    {
+      "prefix": "/webhooks/email",
+      "audience": "system_callback",
+      "dialect": "provider_webhook"
+    },
+    {
+      "prefix": "/openapi.json",
+      "audience": "operator_documentation",
+      "dialect": "openapi"
+    },
+    {
+      "prefix": "/docs",
+      "audience": "operator_documentation",
+      "dialect": "html"
+    },
+    {
+      "prefix": "/redoc",
+      "audience": "operator_documentation",
+      "dialect": "html"
+    },
+    {
+      "prefix": "/health",
+      "audience": "operator_diagnostics",
+      "dialect": "delta_json"
+    },
+    {
+      "prefix": "/metrics",
+      "audience": "internal_observability",
+      "dialect": "prometheus"
+    },
+    {
+      "prefix": "/spend",
+      "audience": "legacy_reporting",
+      "dialect": "delta_json"
+    },
+    {
+      "prefix": "/global",
+      "audience": "legacy_reporting",
+      "dialect": "delta_json"
+    },
+    {
+      "prefix": "/auth",
+      "audience": "identity_control_plane",
+      "dialect": "delta_json"
+    },
+    {
+      "prefix": "/ui",
+      "audience": "browser_application",
+      "dialect": "html_or_asset"
+    }
+  ]
+}

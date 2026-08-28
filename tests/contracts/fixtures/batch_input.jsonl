@@ -1,0 +1,2 @@
+{"custom_id":"embed-1","method":"POST","url":"/v1/embeddings","body":{"model":"text-embedding-3-small","input":"first document"}}
+{"custom_id":"embed-2","method":"POST","url":"/v1/embeddings","body":{"model":"text-embedding-3-small","input":"second document"}}

@@ -7,6 +7,24 @@ on:
     branches: [main, master, feature/org-tiers]
 
 jobs:
+  official-typescript-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install compatibility-test dependencies
+        run: npm ci
+
+      - name: Run official OpenAI TypeScript client smoke tests
+        run: npm run test:compat
+
   ui-build:
     runs-on: ubuntu-latest
     defaults:

@@ -1,5 +1,11 @@
 {
+  "scripts": {
+    "test:compat": "node --test tests/compat/openai_typescript/*.test.mjs"
+  },
   "dependencies": {
     "playwright": "^1.59.1"
+  },
+  "devDependencies": {
+    "openai": "^7.5.0"
   }
 }

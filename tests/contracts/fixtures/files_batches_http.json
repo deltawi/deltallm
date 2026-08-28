@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "file_upload": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/files?purpose=batch_output",
+      "multipart_filename": "batch_input.jsonl",
+      "multipart_purpose": "batch",
+      "service_observed_purpose": "batch_output"
+    },
+    "response": {
+      "status_code": 200,
+      "body": {
+        "id": "file_input_001",
+        "object": "file",
+        "bytes": 261,
+        "created_at": 1700000000,
+        "filename": "batch_input.jsonl",
+        "purpose": "batch_output",
+        "status": "uploaded"
+      }
+    }
+  },
+  "file_retrieve": {
+    "response": {
+      "status_code": 200,
+      "body": {
+        "id": "file_input_001",
+        "object": "file",
+        "bytes": 261,
+        "created_at": 1700000000,
+        "filename": "batch_input.jsonl",
+        "purpose": "batch",
+        "status": "uploaded"
+      }
+    }
+  },
+  "file_content": {
+    "response": {
+      "status_code": 200,
+      "content_type": "application/jsonl",
+      "fixture": "batch_output.jsonl"
+    }
+  },
+  "batch_create": {
+    "request": {
+      "input_file_id": "file_input_001",
+      "endpoint": "/v1/embeddings",
+      "completion_window": "24h",
+      "metadata": {
+        "customer_job_id": "job-42"
+      },
+      "webhook": {
+        "url": "https://receiver.example/deltallm/batches",
+        "signing_secret_present": true
+      }
+    },
+    "response": {
+      "status_code": 200,
+      "body": {
+        "id": "batch_queued_001",
+        "object": "batch",
+        "endpoint": "/v1/embeddings",
+        "completion_window": "24h",
+        "status": "validating",
+        "input_file_id": "file_input_001",
+        "output_file_id": null,
+        "error_file_id": null,
+        "created_at": 1700000000,
+        "expires_at": 1702592000,
+        "in_progress_at": null,
+        "completed_at": null,
+        "failed_at": null,
+        "expired_at": null,
+        "errors": null,
+        "request_counts": {
+          "total": 2,
+          "completed": 0,
+          "failed": 0,
+          "cancelled": 0,
+          "in_progress": 0
+        },
+        "metadata": {
+          "customer_job_id": "job-42"
+        },
+        "webhook": {
+          "configured": true
+        }
+      }
+    }
+  },
+  "batch_retrieve": {
+    "response": {
+      "status_code": 200,
+      "body": {
+        "id": "batch_completed_001",
+        "object": "batch",
+        "endpoint": "/v1/embeddings",
+        "completion_window": "24h",
+        "status": "completed",
+        "input_file_id": "file_input_001",
+        "output_file_id": "file_output_001",
+        "error_file_id": null,
+        "created_at": 1700000000,
+        "expires_at": 1702592000,
+        "in_progress_at": 1700000060,
+        "completed_at": 1700000300,
+        "failed_at": null,
+        "expired_at": null,
+        "errors": null,
+        "request_counts": {
+          "total": 2,
+          "completed": 2,
+          "failed": 0,
+          "cancelled": 0,
+          "in_progress": 0
+        },
+        "metadata": {
+          "customer_job_id": "job-42"
+        },
+        "webhook": {
+          "configured": true
+        }
+      }
+    }
+  },
+  "batch_list": {
+    "response": {
+      "status_code": 200,
+      "body": {
+        "object": "list",
+        "data": [
+          {
+            "id": "batch_completed_001",
+            "object": "batch",
+            "endpoint": "/v1/embeddings",
+            "completion_window": "24h",
+            "status": "completed",
+            "input_file_id": "file_input_001",
+            "output_file_id": "file_output_001",
+            "error_file_id": null,
+            "created_at": 1700000000,
+            "expires_at": 1702592000,
+            "in_progress_at": 1700000060,
+            "completed_at": 1700000300,
+            "failed_at": null,
+            "expired_at": null,
+            "errors": null,
+            "request_counts": {
+              "total": 2,
+              "completed": 2,
+              "failed": 0,
+              "cancelled": 0,
+              "in_progress": 0
+            },
+            "metadata": {
+              "customer_job_id": "job-42"
+            },
+            "webhook": {
+              "configured": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "batch_cancel": {
+    "response": {
+      "status_code": 200,
+      "body": {
+        "id": "batch_completed_001",
+        "object": "batch",
+        "endpoint": "/v1/embeddings",
+        "completion_window": "24h",
+        "status": "cancelling",
+        "input_file_id": "file_input_001",
+        "output_file_id": null,
+        "error_file_id": null,
+        "created_at": 1700000000,
+        "expires_at": 1702592000,
+        "in_progress_at": 1700000060,
+        "completed_at": null,
+        "failed_at": null,
+        "expired_at": null,
+        "errors": null,
+        "request_counts": {
+          "total": 2,
+          "completed": 1,
+          "failed": 0,
+          "cancelled": 0,
+          "in_progress": 1
+        },
+        "metadata": {
+          "customer_job_id": "job-42"
+        },
+        "webhook": {
+          "configured": true
+        }
+      }
+    }
+  },
+  "errors": {
+    "file_missing": {
+      "status_code": 404,
+      "body": {
+        "detail": "File not found"
+      }
+    },
+    "file_foreign": {
+      "status_code": 403,
+      "body": {
+        "detail": "File access denied"
+      }
+    },
+    "batch_missing": {
+      "status_code": 404,
+      "body": {
+        "detail": "Batch not found"
+      }
+    },
+    "batch_foreign": {
+      "status_code": 403,
+      "body": {
+        "detail": "Batch access denied"
+      }
+    },
+    "file_upload_validation": {
+      "status_code": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body",
+              "file"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    },
+    "batch_body_validation": {
+      "status_code": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      }
+    }
+  }
+}

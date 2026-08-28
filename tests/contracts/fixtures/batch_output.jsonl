@@ -1,0 +1,1 @@
+{"id": "batch_req_item_001", "custom_id": "embed-1", "response": {"status_code": 200, "request_id": "req_batch_item_001", "body": {"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}], "model": "text-embedding-3-small", "usage": {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2}}}, "error": null}
