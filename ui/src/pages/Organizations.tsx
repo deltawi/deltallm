@@ -7,6 +7,7 @@ import {
   callableTargets,
   organizations,
   type CallableTargetListItem,
+  type OrganizationListItem,
   type OrganizationRecord,
   type OrganizationServicePolicy,
 } from '../lib/api';
@@ -24,6 +25,7 @@ import {
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { OrganizationLifecycleBadge } from '../components/admin/OrganizationLifecycleStatus';
+import { OrganizationMembershipSummary } from '../components/admin/OrganizationMembershipSummary';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
   Plus, Building2, Users, DollarSign,
@@ -165,7 +167,7 @@ export default function Organizations() {
     (signal) => organizations.list({ search, limit: pageSize, offset: pageOffset }, signal),
     [search, pageOffset],
   );
-  const rawItems: OrganizationRecord[] = result?.data || [];
+  const rawItems: OrganizationListItem[] = result?.data || [];
   const pagination = result?.pagination;
 
   /* client-side status filter (only filters the current page) */
@@ -587,17 +589,10 @@ export default function Organizations() {
 
                       {/* Members + teams */}
                       <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-1 text-gray-700">
-                            <Users className="w-3.5 h-3.5 text-gray-400" />
-                            <span className="text-sm font-medium">{row.member_count ?? row.user_count ?? 0}</span>
-                          </div>
-                          <span className="text-gray-300">·</span>
-                          <div className="flex items-center gap-1 text-gray-500 text-xs">
-                            <Building2 className="w-3.5 h-3.5 text-gray-400" />
-                            {row.team_count ?? 0} teams
-                          </div>
-                        </div>
+                        <OrganizationMembershipSummary
+                          memberCount={row.member_count}
+                          teamCount={row.team_count}
+                        />
                       </td>
 
                       {/* Actions */}

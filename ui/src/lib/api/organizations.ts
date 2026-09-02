@@ -3,6 +3,10 @@ import {
   normalizeOrganizationLifecycleState,
   type OrganizationLifecycleState,
 } from '../organizationLifecycle';
+import {
+  normalizeOrganizationCount,
+  type OrganizationCount,
+} from '../organizationCounts';
 
 export interface OrganizationTierAssignment {
   assignment_id: string;
@@ -92,12 +96,17 @@ export interface OrganizationRecord {
   service_policy: OrganizationServicePolicy;
   primary_tier_assignment?: OrganizationTierAssignment;
   capabilities: OrganizationCapabilities;
-  team_count?: number;
-  member_count?: number;
-  user_count?: number;
+  team_count?: number | null;
+  member_count?: number | null;
+  user_count?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
   [key: string]: unknown;
+}
+
+export interface OrganizationListItem extends OrganizationRecord {
+  team_count: OrganizationCount;
+  member_count: OrganizationCount;
 }
 
 export interface OrganizationCreatePayload {
@@ -121,7 +130,7 @@ export interface OrganizationCreatePayload {
 }
 
 export interface OrganizationPage {
-  data: OrganizationRecord[];
+  data: OrganizationListItem[];
   pagination: {
     total: number;
     limit: number;
@@ -171,13 +180,22 @@ export function normalizeOrganizationRecord(value: unknown): OrganizationRecord 
   } as OrganizationRecord;
 }
 
-function normalizeOrganizationPage(value: unknown): OrganizationPage {
+export function normalizeOrganizationListItem(value: unknown): OrganizationListItem {
+  if (!isRecord(value)) throw new Error('Invalid organization response');
+  return {
+    ...normalizeOrganizationRecord(value),
+    team_count: normalizeOrganizationCount(value.team_count),
+    member_count: normalizeOrganizationCount(value.member_count),
+  };
+}
+
+export function normalizeOrganizationPage(value: unknown): OrganizationPage {
   if (!isRecord(value) || !Array.isArray(value.data) || !isRecord(value.pagination)) {
     throw new Error('Invalid organization list response');
   }
   const pagination = value.pagination;
   return {
-    data: value.data.map(normalizeOrganizationRecord),
+    data: value.data.map(normalizeOrganizationListItem),
     pagination: {
       total: Number(pagination.total || 0),
       limit: Number(pagination.limit || 0),

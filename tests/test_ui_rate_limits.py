@@ -201,11 +201,24 @@ class FakeAdminDB:
         return 1
 
     async def query_raw(self, query: str, *params):
+        normalized = " ".join(query.lower().split())
+        if "count(*) as total" in normalized and "from deltallm_organizationtable" in normalized:
+            return [{"total": len(self.organizations)}]
         if "FROM deltallm_organizationtable" in query:
             if "WHERE organization_id = $1" in query:
                 row = self.organizations.get(str(params[0]))
                 return [row] if row else []
-            return list(self.organizations.values())
+            return [
+                {
+                    **row,
+                    "team_count": sum(
+                        team.get("organization_id") == organization_id
+                        for team in self.teams.values()
+                    ),
+                    "member_count": 0,
+                }
+                for organization_id, row in self.organizations.items()
+            ]
 
         if "FROM deltallm_teamtable" in query:
             if "WHERE team_id = $1" in query:
