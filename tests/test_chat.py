@@ -327,6 +327,75 @@ async def test_chat_completion_success(client, test_app):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "include_assistant_content",
+    [pytest.param(False, id="omitted"), pytest.param(True, id="null")],
+)
+async def test_chat_completion_preserves_assistant_tool_call_content_presence(
+    client,
+    test_app,
+    include_assistant_content: bool,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        captured.update(json)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-tool-history",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": json["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+            },
+        )
+
+    test_app.state.http_client.post = post
+    assistant: dict[str, object] = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "search", "arguments": "{}"},
+            }
+        ],
+    }
+    if include_assistant_content:
+        assistant["content"] = None
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "search"},
+                assistant,
+                {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    forwarded_assistant = captured["messages"][1]
+    assert ("content" in forwarded_assistant) is include_assistant_content
+    if include_assistant_content:
+        assert forwarded_assistant["content"] is None
+    assert forwarded_assistant["tool_calls"] == assistant["tool_calls"]
+
+
+@pytest.mark.asyncio
 async def test_chat_authorizes_the_model_after_pre_call_transformation(client, test_app):
     rewriter = RewritingPreCallCallback(model="forbidden-model")
     manager = CallbackManager()
@@ -1386,6 +1455,48 @@ async def test_chat_completion_streaming_success(client, test_app):
     deployment_id = str(response.headers["x-deltallm-route-deployment"])
     usage = await test_app.state.router_state_backend.get_usage(deployment_id)
     assert usage == {"rpm": 1, "tpm": 3}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "include_assistant_content",
+    [pytest.param(False, id="omitted"), pytest.param(True, id="null")],
+)
+async def test_chat_completion_streaming_accepts_contentless_assistant_tool_call_history(
+    client,
+    test_app,
+    include_assistant_content: bool,
+) -> None:
+    assistant: dict[str, object] = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "search", "arguments": "{}"},
+            }
+        ],
+    }
+    if include_assistant_content:
+        assistant["content"] = None
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "search"},
+                assistant,
+                {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+            ],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "data: [DONE]" in response.text
 
 
 @pytest.mark.asyncio

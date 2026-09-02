@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from src.models.errors import FailureClassification, ProxyError
+from src.models.request_serialization import dump_openai_chat_request
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import (
@@ -69,7 +70,7 @@ class OpenAIAdapter(ProviderAdapter):
         canonical_request: ChatCompletionRequest,
         provider_config: dict[str, Any],
     ) -> dict[str, Any]:
-        payload = canonical_request.model_dump(exclude_none=True)
+        payload = dump_openai_chat_request(canonical_request)
         if payload.get("tool_choice") is not None and not payload.get("tools"):
             payload.pop("tool_choice", None)
         provider = resolve_provider(provider_config)

@@ -99,6 +99,8 @@ def _is_provider_token_usage(usage: dict[str, Any]) -> bool:
 
 
 def _content_chars(content: Any) -> int:
+    if content is None:
+        return 0
     if isinstance(content, str):
         return len(content)
     return len(json.dumps(content, sort_keys=True, separators=(",", ":"), default=str))

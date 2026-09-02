@@ -17,10 +17,11 @@ from src.models.errors import (
     ServiceUnavailableError,
 )
 from src.models.requests import (
+    AssistantChatMessage,
     ChatCompletionRequest,
-    ChatMessage,
     FunctionToolDefinition,
     MCPToolDefinition,
+    ToolChatMessage,
 )
 from src.models.responses import UserAPIKeyAuth
 from src.services.audit_service import (
@@ -331,7 +332,7 @@ class MCPChatOrchestrator:
                     operation_id=tool_operation_id,
                 )
                 next_messages.append(
-                    ChatMessage(
+                    ToolChatMessage(
                         role="tool",
                         content=self._tool_message_content(guarded_result),
                         tool_call_id=str(tool_call.get("id") or tool_name),
@@ -357,7 +358,9 @@ class MCPChatOrchestrator:
         return [item for item in tool_calls if isinstance(item, dict)]
 
     @staticmethod
-    def _assistant_message_from_response(response_payload: dict[str, Any]) -> ChatMessage:
+    def _assistant_message_from_response(
+        response_payload: dict[str, Any],
+    ) -> AssistantChatMessage:
         choice = (
             ((response_payload.get("choices") or [{}])[0])
             if isinstance(response_payload.get("choices"), list)
@@ -366,7 +369,7 @@ class MCPChatOrchestrator:
         message = choice.get("message") if isinstance(choice, dict) else {}
         if not isinstance(message, dict):
             message = {}
-        return ChatMessage(
+        return AssistantChatMessage(
             role="assistant",
             content=message.get("content")
             if isinstance(message.get("content"), list)

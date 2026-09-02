@@ -49,6 +49,42 @@ def test_committed_openapi_operation_ids_are_unique() -> None:
     assert "get_ui_branding_asset" in operation_ids
 
 
+def test_committed_openapi_chat_messages_are_role_aware() -> None:
+    schema = json.loads((PROJECT_ROOT / "docs" / "api" / "openapi.json").read_text())
+    schemas = schema["components"]["schemas"]
+    message_items = schemas["ChatCompletionRequest"]["properties"]["messages"]["items"]
+
+    assert message_items["discriminator"] == {
+        "propertyName": "role",
+        "mapping": {
+            "assistant": "#/components/schemas/AssistantChatMessage",
+            "system": "#/components/schemas/SystemChatMessage",
+            "tool": "#/components/schemas/ToolChatMessage",
+            "user": "#/components/schemas/UserChatMessage",
+        },
+    }
+    assert {item["$ref"] for item in message_items["oneOf"]} == {
+        "#/components/schemas/AssistantChatMessage",
+        "#/components/schemas/SystemChatMessage",
+        "#/components/schemas/ToolChatMessage",
+        "#/components/schemas/UserChatMessage",
+    }
+
+    assistant = schemas["AssistantChatMessage"]
+    assert "content" not in assistant["required"]
+    assert {variant.get("type") for variant in assistant["properties"]["content"]["anyOf"]} >= {
+        "string",
+        "array",
+        "null",
+    }
+    for name in ("SystemChatMessage", "ToolChatMessage", "UserChatMessage"):
+        assert "content" in schemas[name]["required"]
+        assert all(
+            variant.get("type") != "null"
+            for variant in schemas[name]["properties"]["content"]["anyOf"]
+        )
+
+
 def test_generated_artifact_check_detects_drift(tmp_path: Path) -> None:
     artifact = tmp_path / "artifact.md"
     artifact.write_text("old\n", encoding="utf-8")

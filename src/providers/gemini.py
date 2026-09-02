@@ -136,6 +136,15 @@ class GeminiAdapter(ProviderAdapter):
         canonical_request: ChatCompletionRequest,
         provider_config: dict[str, Any],
     ) -> dict[str, Any]:
+        if canonical_request.tools or any(
+            message.role == "tool" or bool(message.tool_calls)
+            for message in canonical_request.messages
+        ):
+            raise InvalidRequestError(
+                message="Provider 'gemini' does not support tool calling",
+                param="tools",
+            )
+
         system_parts: list[dict[str, str]] = []
         contents: list[dict[str, Any]] = []
         for message in canonical_request.messages:
@@ -147,7 +156,7 @@ class GeminiAdapter(ProviderAdapter):
                     for part in content
                 )
             else:
-                text = str(content)
+                text = str(content or "")
             if role == "system":
                 if text:
                     system_parts.append({"text": text})
