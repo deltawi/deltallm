@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 import logging
 
 import pytest
 from fastapi import HTTPException
 
-from src.batch.models import BatchFileRecord, BatchJobRecord, BatchJobStatus, OPENAI_BATCH_COMPLETION_WINDOW
+from src.batch.models import (
+    BatchFileRecord,
+    BatchJobRecord,
+    BatchJobStatus,
+    OPENAI_BATCH_COMPLETION_WINDOW,
+)
 from src.batch.service import OPENAI_BATCH_STATUS_VALUES, BatchService
 from src.metrics.batch import deltallm_batch_artifact_failures_metric
 from src.db.callable_targets import CallableTargetBindingRecord
@@ -32,7 +38,9 @@ class _DummyStorage:
         self.reads.append(storage_key)
         return b"{}"
 
-    async def iter_lines(self, storage_key: str, chunk_size: int = 65_536, max_line_bytes: int | None = None):  # noqa: ARG002
+    async def iter_lines(
+        self, storage_key: str, chunk_size: int = 65_536, max_line_bytes: int | None = None
+    ):  # noqa: ARG002
         del max_line_bytes
         self.reads.append(storage_key)
         for line in self.lines_by_key.get(storage_key, []):
@@ -177,7 +185,9 @@ class _FakeCallableTargetBindingRepository:
     def __init__(self, bindings: list[CallableTargetBindingRecord]) -> None:
         self.bindings = list(bindings)
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -286,6 +296,56 @@ async def test_parse_input_jsonl_accepts_chat_completion_lines() -> None:
     assert items[0].request_body["model"] == "gpt-4o-mini"
     assert items[0].request_body["messages"] == [{"role": "user", "content": "hello"}]
     assert items[0].request_body["stream"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "include_assistant_content",
+    [pytest.param(False, id="omitted"), pytest.param(True, id="null")],
+)
+async def test_parse_input_jsonl_preserves_assistant_tool_call_content_presence(
+    include_assistant_content: bool,
+) -> None:
+    service = _service(callable_target_scope_policy_mode="shadow")
+    auth = UserAPIKeyAuth(api_key="sk-test", models=["gpt-4o-mini"])
+    assistant: dict[str, object] = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "search", "arguments": "{}"},
+            }
+        ],
+    }
+    if include_assistant_content:
+        assistant["content"] = None
+    line = {
+        "custom_id": "chat-tool-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "search"},
+                assistant,
+                {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+            ],
+        },
+    }
+
+    items, model = service._parse_input_jsonl(
+        (json.dumps(line) + "\n").encode(),
+        endpoint="/v1/chat/completions",
+        auth=auth,
+    )
+
+    assert model == "gpt-4o-mini"
+    stored_assistant = items[0].request_body["messages"][1]
+    assert ("content" in stored_assistant) is include_assistant_content
+    if include_assistant_content:
+        assert stored_assistant["content"] is None
+    assert stored_assistant["tool_calls"] == assistant["tool_calls"]
 
 
 @pytest.mark.asyncio
@@ -563,7 +623,9 @@ async def test_get_file_content_allows_same_organization_without_team_match() ->
 
 
 @pytest.mark.asyncio
-async def test_get_file_content_denies_same_organization_for_team_owned_file_with_different_team() -> None:
+async def test_get_file_content_denies_same_organization_for_team_owned_file_with_different_team() -> (
+    None
+):
     now = datetime.now(tz=UTC)
 
     class _Repo:
@@ -653,7 +715,9 @@ async def test_get_file_content_increments_artifact_read_failure_metric() -> Non
 
 
 @pytest.mark.asyncio
-async def test_batch_service_refresh_runtime_metrics_logs_debug_on_failure(caplog: pytest.LogCaptureFixture) -> None:
+async def test_batch_service_refresh_runtime_metrics_logs_debug_on_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class _Repo:
         async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
             del now
@@ -898,7 +962,9 @@ async def test_list_batches_prefers_team_scope_over_org_scope_for_runtime_visibi
 
 
 @pytest.mark.asyncio
-async def test_get_batch_denies_same_organization_for_team_owned_batch_with_different_team() -> None:
+async def test_get_batch_denies_same_organization_for_team_owned_batch_with_different_team() -> (
+    None
+):
     now = datetime.now(tz=UTC)
 
     class _Repo:

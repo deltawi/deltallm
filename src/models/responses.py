@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .requests import ChatMessage
+from .requests import AssistantChatMessage
 
 
 class Usage(BaseModel):
@@ -15,7 +15,7 @@ class Usage(BaseModel):
 
 class Choice(BaseModel):
     index: int
-    message: ChatMessage
+    message: AssistantChatMessage
     finish_reason: Literal["stop", "length", "tool_calls", "content_filter"] | None = None
     logprobs: dict[str, Any] | None = None
 

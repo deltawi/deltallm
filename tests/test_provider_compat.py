@@ -35,6 +35,27 @@ from src.providers.openai import OpenAIAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
 from src.upstream_http import build_upstream_http_client
 
+_OMITTED = object()
+
+
+def _assistant_tool_call_message(content: object = _OMITTED) -> dict[str, object]:
+    message: dict[str, object] = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "toolu_1",
+                "type": "function",
+                "function": {
+                    "name": "docs.search",
+                    "arguments": json.dumps({"query": "delta"}),
+                },
+            }
+        ],
+    }
+    if content is not _OMITTED:
+        message["content"] = content
+    return message
+
 
 async def _line_stream(lines: list[str]):
     for line in lines:
@@ -134,6 +155,46 @@ async def test_openai_adapter_keeps_tool_choice_with_tools() -> None:
         )
         payload = await adapter.translate_request(req, {"model": "openai/gpt-4o-mini"})
         assert payload.get("tool_choice") == "auto"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+@pytest.mark.parametrize(
+    ("assistant_content", "expected_present"),
+    [pytest.param(_OMITTED, False, id="omitted"), pytest.param(None, True, id="null")],
+)
+async def test_openai_compatible_adapter_preserves_assistant_content_presence(
+    adapter_type,
+    assistant_content: object,
+    expected_present: bool,
+) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest.model_validate(
+            {
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "user", "content": "search docs"},
+                    _assistant_tool_call_message(assistant_content),
+                    {"role": "tool", "tool_call_id": "toolu_1", "content": "result"},
+                ],
+            }
+        )
+        payload = await adapter.translate_request(
+            req,
+            {
+                "provider": adapter.provider_name,
+                "model": f"{adapter.provider_name}/gpt-4o-mini",
+            },
+        )
+
+        assistant = payload["messages"][1]
+        assert ("content" in assistant) is expected_present
+        if expected_present:
+            assert assistant["content"] is None
+        assert assistant["tool_calls"] == _assistant_tool_call_message()["tool_calls"]
     finally:
         await adapter.http_client.aclose()
 
@@ -1052,7 +1113,17 @@ async def test_anthropic_adapter_translate_request_and_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_anthropic_adapter_forwards_tools_and_tool_messages() -> None:
+@pytest.mark.parametrize(
+    "assistant_content",
+    [
+        pytest.param(_OMITTED, id="omitted"),
+        pytest.param(None, id="null"),
+        pytest.param("", id="empty-string"),
+    ],
+)
+async def test_anthropic_adapter_forwards_tools_and_tool_messages(
+    assistant_content: object,
+) -> None:
     adapter = AnthropicAdapter(httpx.AsyncClient())
     try:
         req = ChatCompletionRequest.model_validate(
@@ -1061,20 +1132,7 @@ async def test_anthropic_adapter_forwards_tools_and_tool_messages() -> None:
                 "max_tokens": 32,
                 "messages": [
                     {"role": "user", "content": "search docs for delta"},
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "toolu_1",
-                                "type": "function",
-                                "function": {
-                                    "name": "docs.search",
-                                    "arguments": json.dumps({"query": "delta"}),
-                                },
-                            }
-                        ],
-                    },
+                    _assistant_tool_call_message(assistant_content),
                     {"role": "tool", "tool_call_id": "toolu_1", "content": "delta docs result"},
                 ],
                 "tools": [
@@ -1398,6 +1456,51 @@ async def test_gemini_adapter_translate_request_and_response() -> None:
         payload = canonical.model_dump(mode="json")
         assert payload["choices"][0]["message"]["content"] == "Hello"
         assert payload["usage"]["total_tokens"] == 6
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_payload",
+    [
+        pytest.param(
+            {
+                "model": "gemini-2.5-flash",
+                "messages": [{"role": "user", "content": "search"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "search", "parameters": {"type": "object"}},
+                    }
+                ],
+            },
+            id="tool-definition",
+        ),
+        pytest.param(
+            {
+                "model": "gemini-2.5-flash",
+                "messages": [
+                    {"role": "user", "content": "search"},
+                    _assistant_tool_call_message(),
+                    {"role": "tool", "tool_call_id": "toolu_1", "content": "result"},
+                ],
+            },
+            id="tool-history",
+        ),
+    ],
+)
+async def test_gemini_adapter_rejects_unsupported_tool_calling(
+    request_payload: dict[str, object],
+) -> None:
+    adapter = GeminiAdapter(httpx.AsyncClient())
+    try:
+        request = ChatCompletionRequest.model_validate(request_payload)
+
+        with pytest.raises(InvalidRequestError, match="does not support tool calling") as exc_info:
+            await adapter.translate_request(request, {"model": "gemini/gemini-2.5-flash"})
+
+        assert exc_info.value.param == "tools"
     finally:
         await adapter.http_client.aclose()
 
@@ -1832,7 +1935,17 @@ async def test_bedrock_adapter_translate_stream_uses_sequential_tool_call_indexe
 
 
 @pytest.mark.asyncio
-async def test_bedrock_adapter_forwards_tools_and_tool_messages() -> None:
+@pytest.mark.parametrize(
+    "assistant_content",
+    [
+        pytest.param(_OMITTED, id="omitted"),
+        pytest.param(None, id="null"),
+        pytest.param("", id="empty-string"),
+    ],
+)
+async def test_bedrock_adapter_forwards_tools_and_tool_messages(
+    assistant_content: object,
+) -> None:
     adapter = BedrockAdapter(httpx.AsyncClient())
     try:
         req = ChatCompletionRequest.model_validate(
@@ -1841,20 +1954,7 @@ async def test_bedrock_adapter_forwards_tools_and_tool_messages() -> None:
                 "max_tokens": 32,
                 "messages": [
                     {"role": "user", "content": "search docs for delta"},
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "toolu_1",
-                                "type": "function",
-                                "function": {
-                                    "name": "docs.search",
-                                    "arguments": json.dumps({"query": "delta"}),
-                                },
-                            }
-                        ],
-                    },
+                    _assistant_tool_call_message(assistant_content),
                     {"role": "tool", "tool_call_id": "toolu_1", "content": "delta docs result"},
                 ],
                 "tools": [

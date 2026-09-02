@@ -49,3 +49,32 @@ def test_stream_usage_tracker_estimates_when_provider_usage_is_malformed() -> No
 
     assert resolved.source == "estimated"
     assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+
+
+def test_stream_usage_tracker_handles_contentless_assistant_tool_call_history() -> None:
+    payload = ChatCompletionRequest.model_validate(
+        {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "search"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "search", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+            ],
+            "stream": True,
+        }
+    )
+    tracker = StreamUsageTracker()
+
+    resolved = tracker.resolve(payload)
+
+    assert resolved.source == "estimated"
+    assert resolved.usage == {"prompt_tokens": 8, "completion_tokens": 0, "total_tokens": 8}

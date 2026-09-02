@@ -61,6 +61,33 @@ This is the main endpoint most applications should start with.
 
 Chat requests also support DeltaLLM-managed MCP tools through `tools: [{ "type": "mcp", ... }]` on non-streaming requests. See [MCP Gateway & Tooling](mcp.md).
 
+OpenAI-compatible client-managed tool histories may omit assistant `content`, or set it to
+`null`, when that assistant message contains non-empty `tool_calls`. Follow the assistant turn
+with the matching tool result:
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {"role": "user", "content": "Search the documentation."},
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {"name": "search", "arguments": "{\"query\":\"DeltaLLM\"}"}
+        }
+      ]
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "Search result"}
+  ]
+}
+```
+
+System, user, and tool messages still require non-null `content`. Use
+`POST /v1/chat/completions`, not the legacy `POST /v1/completions`, for tool-calling requests.
+
 Provider error bodies are bounded and never returned verbatim. Encoded error bodies are kept opaque
 and classified from trusted status and `Retry-After` metadata instead of being decompressed; bounded
 identity bodies may also contribute provider-specific classifications. Before response commit,

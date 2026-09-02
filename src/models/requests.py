@@ -1,16 +1,49 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Self, TypeAlias
+from typing import Annotated, Any, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant", "tool"]
-    content: str | list[dict[str, Any]]
+ChatMessageContent: TypeAlias = str | list[dict[str, Any]]
+
+
+class ChatMessageBase(BaseModel):
     name: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
+
+
+class SystemChatMessage(ChatMessageBase):
+    role: Literal["system"]
+    content: ChatMessageContent
+
+
+class UserChatMessage(ChatMessageBase):
+    role: Literal["user"]
+    content: ChatMessageContent
+
+
+class AssistantChatMessage(ChatMessageBase):
+    role: Literal["assistant"]
+    content: ChatMessageContent | None = None
+
+    @model_validator(mode="after")
+    def validate_content_or_tool_calls(self) -> Self:
+        if self.content is None and not self.tool_calls:
+            raise ValueError("assistant message requires content or non-empty tool_calls")
+        return self
+
+
+class ToolChatMessage(ChatMessageBase):
+    role: Literal["tool"]
+    content: ChatMessageContent
+
+
+ChatRequestMessage: TypeAlias = Annotated[
+    SystemChatMessage | UserChatMessage | AssistantChatMessage | ToolChatMessage,
+    Field(discriminator="role"),
+]
 
 
 class FunctionToolDefinition(BaseModel):
@@ -40,7 +73,7 @@ class ResponseFormat(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: list[ChatRequestMessage]
     temperature: float | None = Field(default=1.0, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1)
     top_p: float | None = Field(default=1.0, ge=0, le=1)
