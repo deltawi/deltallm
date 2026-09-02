@@ -149,7 +149,10 @@ class _FakeAdminDB:
         if "count(*) as total" in normalized and "from deltallm_organizationtable" in normalized:
             return [{"total": len(self.organizations)}]
         if "from deltallm_organizationtable o" in normalized:
-            return list(self.organizations.values())
+            return [
+                {**organization, "team_count": 0, "member_count": 0}
+                for organization in self.organizations.values()
+            ]
         if "FROM deltallm_organizationtable" in query:
             organization_id = str(params[0])
             row = self.organizations.get(organization_id)

@@ -407,6 +407,11 @@ group's configured strategy.
 | `DELETE` | `/ui/api/organizations/{organization_id}/members/{membership_id}` | Remove a member |
 | `GET` | `/ui/api/organizations/{organization_id}/teams` | List teams in the organization |
 
+Each item returned by `GET /ui/api/organizations` includes non-null `member_count` and
+`team_count` aggregates. `member_count` counts direct rows in
+`deltallm_organizationmembership`; the aggregate is limited to organizations visible to the
+authenticated principal.
+
 ### RBAC
 
 | Method | Endpoint | Purpose |

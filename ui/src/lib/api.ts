@@ -10,6 +10,7 @@ export type { StructuredApiErrorDetail } from './api/transport';
 export type {
   OrganizationCapabilities,
   OrganizationCreatePayload,
+  OrganizationListItem,
   OrganizationPrimaryTierSummary,
   OrganizationRecord,
   OrganizationServicePolicy,

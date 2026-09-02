@@ -52,6 +52,13 @@ class OrganizationResponse(BaseModel):
     updated_at: str | None = None
 
 
+class OrganizationListItemResponse(OrganizationResponse):
+    """Organization fields whose aggregates are authoritative on list responses."""
+
+    team_count: int = Field(ge=0)
+    member_count: int = Field(ge=0)
+
+
 class OrganizationPaginationResponse(BaseModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
@@ -60,12 +67,13 @@ class OrganizationPaginationResponse(BaseModel):
 
 
 class OrganizationListResponse(BaseModel):
-    data: list[OrganizationResponse]
+    data: list[OrganizationListItemResponse]
     pagination: OrganizationPaginationResponse
 
 
 __all__ = [
     "OrganizationCapabilitiesResponse",
+    "OrganizationListItemResponse",
     "OrganizationListResponse",
     "OrganizationPaginationResponse",
     "OrganizationResponse",

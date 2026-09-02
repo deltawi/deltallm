@@ -13,7 +13,7 @@ deletion are platform-admin actions; scoped edits require `org.update` for that 
 - Organization identity and display name
 - Top-level budgets and rate limits (RPM, TPM, RPH, RPD, TPD)
 - Audit content storage behavior
-- Team count and ownership context
+- Direct organization-member and team counts
 - The tenant boundary that callable-target and access-group grants inherit from
 
 ## Typical workflow

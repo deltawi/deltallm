@@ -2075,11 +2075,287 @@
         "title": "OrganizationLifecycleState",
         "type": "string"
       },
+      "OrganizationListItemResponse": {
+        "additionalProperties": true,
+        "description": "Organization fields whose aggregates are authoritative on list responses.",
+        "properties": {
+          "audit_content_storage_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Content Storage Enabled"
+          },
+          "budget_duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Duration"
+          },
+          "budget_reset_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Reset At"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/OrganizationCapabilitiesResponse"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "deletion_not_before_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletion Not Before At"
+          },
+          "deletion_requested_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletion Requested At"
+          },
+          "lifecycle_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationLifecycleState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_budget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Budget"
+          },
+          "member_count": {
+            "minimum": 0.0,
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "model_rpm_limit": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Rpm Limit"
+          },
+          "model_tpm_limit": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Tpm Limit"
+          },
+          "organization_id": {
+            "minLength": 1,
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "organization_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Name"
+          },
+          "rpd_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rpd Limit"
+          },
+          "rph_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rph Limit"
+          },
+          "rpm_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rpm Limit"
+          },
+          "service_policy": {
+            "additionalProperties": true,
+            "title": "Service Policy",
+            "type": "object"
+          },
+          "soft_budget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Soft Budget"
+          },
+          "spend": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend"
+          },
+          "team_count": {
+            "minimum": 0.0,
+            "title": "Team Count",
+            "type": "integer"
+          },
+          "tpd_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tpd Limit"
+          },
+          "tpm_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tpm Limit"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "user_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Count"
+          }
+        },
+        "required": [
+          "organization_id",
+          "lifecycle_state",
+          "service_policy",
+          "team_count",
+          "member_count"
+        ],
+        "title": "OrganizationListItemResponse",
+        "type": "object"
+      },
       "OrganizationListResponse": {
         "properties": {
           "data": {
             "items": {
-              "$ref": "#/components/schemas/OrganizationResponse"
+              "$ref": "#/components/schemas/OrganizationListItemResponse"
             },
             "title": "Data",
             "type": "array"

@@ -1053,7 +1053,8 @@ async def list_organizations(
                    o.audit_content_storage_enabled, o.metadata,
                    o.lifecycle_state, o.deletion_requested_at, o.deletion_not_before_at,
                    o.created_at, o.updated_at,
-                   (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count"""
+                   (SELECT COUNT(*)::int FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count,
+                   (SELECT COUNT(*)::int FROM deltallm_organizationmembership om WHERE om.organization_id = o.organization_id) AS member_count"""
 
     count_rows = await db.query_raw(
         f"SELECT COUNT(*) AS total FROM deltallm_organizationtable o {where_sql}",
