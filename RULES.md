@@ -47,6 +47,7 @@ Redis or process memory MUST NOT be the sole durable copy of billing, audit, ide
 3. Read adjacent tests and the relevant public docs. Treat plans and TODOs as design intent, not proof that code is implemented.
 4. State the invariant, source of truth, tenant scope, failure mode, retry boundary, and latency impact of the change.
 5. For a cross-cutting change, make a short plan with independently verifiable slices before coding.
+6. A new cross-cutting subsystem, infrastructure dependency, source of truth, or competing lifecycle/policy pattern requires a short checked-in design decision describing ownership, alternatives, failure modes, capacity impact, migration, rollback, and eventual removal of any compatibility path.
 
 ### While editing
 
@@ -121,9 +122,11 @@ Large files already concentrate too many reasons to change. Existing size is deb
 
 For text requests preserve this logical order:
 
-`authenticate -> cheap model-agnostic preflight capacity -> resolve/mutate prompts -> hooks and guardrails -> validate transformed payload -> authorize final model -> budget/final admission -> route/acquire leases -> provider -> durable accounting/audit`
+`dependency-free ingress bulkhead -> authenticate -> cheap authenticated preflight capacity -> resolve/mutate prompts -> hooks and guardrails -> validate transformed payload -> authorize final model -> budget/final admission -> route/acquire leases -> provider -> durable accounting/audit`
 
-- A lightweight preflight gate protects DB/Redis capacity before expensive prompt/policy work. It MUST be cheap, bounded, model-agnostic, and released once final admission is acquired. It never replaces final model/tier authorization, budget, rate, or concurrency enforcement after mutation.
+- Every public data-plane request first passes a cheap process-local or edge ingress bulkhead before expensive body parsing, authentication, or any SQL/Redis lookup. This gate has no shared-state dependency, bounds concurrent and queued work, has a short wait deadline, and rejects overload with a stable local `429`/`503` without marking a provider unhealthy.
+- Authentication cache misses and durable fallback use their own short deadline, bounded concurrency/waiter limit, and safe single-flight or equivalent collapse. Redis failure or attacker-chosen unique credentials MUST NOT create unbounded PostgreSQL fallback load; overload returns deny/unavailable and never authorizes by failure.
+- After authentication, a lightweight preflight gate protects the remaining DB/Redis capacity before expensive prompt/policy work. It MUST be cheap, bounded, model-agnostic, and released once final admission is acquired. It never replaces final model/tier authorization, budget, rate, or concurrency enforcement after mutation.
 - Any component that mutates the model, messages, tools, metadata, or token count MUST run before the affected authorization/admission checks, or repeat those checks afterward.
 - Cache lookup stays after authentication and full policy preflight. Cache keys include tenant/key scope and every response-affecting dimension. Change the cache-key version when semantics change.
 - Do not parse or normalize the same request body independently in multiple middleware/handler layers.
@@ -143,6 +146,9 @@ Gateway overhead is a feature. Every data-plane round trip consumes latency and 
 - Use negative caching only where stale absence is safe, tenant-scoped, bounded, versioned/invalidated, and observable; pair cold lookups with per-process single-flight to prevent stampedes. Every memory cache needs both a size bound and eviction policy.
 - Do not fix amplification only by increasing pool sizes. Remove repeated work first, then size DB, Redis, HTTP, worker, file-descriptor, and provider capacity as one deployment-wide budget.
 - Sum each per-process pool/limit across only the API/worker process roles that instantiate it at their maximum replica counts. The resulting deployment-wide totals MUST fit database, Redis, host, and provider limits with headroom.
+- Keep a checked-in capacity calculation for production profiles: `max replicas * processes per replica * per-process pool/limit`, summed across API, workers, migrations, admin/reporting, and surge capacity. CI/Helm validation MUST reject a profile whose declared maximum can exceed an owned PostgreSQL, Redis, file-descriptor, or provider budget.
+- Data-plane capacity is reserved from control-plane, reporting, maintenance, and background work with separate pools, semaphores, queues, priorities, or an equivalent proven allocation. Best-effort work sheds load before consuming capacity required for authentication, admission, routing, or accounting.
+- Autoscaling for the asynchronous data plane MUST include a saturation signal such as admitted in-flight work, queue/pool wait, capacity rejection, or time-to-first-token in addition to CPU/memory. Maximum replicas remain capped by downstream connection, provider, and coordination budgets; scaling replicas is not a substitute for backpressure.
 - Use the existing shared provider and control-plane HTTP clients. Keep explicit connect, pool, write, read, per-attempt, and total-deadline bounds.
 - Propagate one end-to-end deadline through queueing, backoff, attempts, providers, and MCP. Retry layers MUST NOT multiply into an uncontrolled total deadline.
 - Retries are bounded, jittered, deadline-aware, classified, and limited to idempotent operations. Do not stack independent retry loops at HTTP, router, adapter, and worker layers.
@@ -153,7 +159,7 @@ Gateway overhead is a feature. Every data-plane round trip consumes latency and 
 
 For hot-path work, record a reproducible constant-arrival test with raw samples, offered and received rates, in-flight/queue slope, dependency call counts, provider time, and p50/p95/p99. Separate gateway certification with a fixed local provider mock from real-provider latency.
 
-The current proposed release-certificate target is a 10-minute 50 RPS run of a fixed one-token non-streaming local-mock profile with at least 99.9% success, client end-to-end p95 at or below 150 ms, p99 at or below 300 ms, and no positive queue slope. It is **not enforced** until the load harness, workload definition, baseline artifact, and SLO owner are checked in and approved. Until then, 50 RPS without queue growth is the direction; per-change before/after dependency counts and latency distributions are the enforceable ratchet.
+The repository contains a constant-arrival load generator. The current proposed release-certificate target is a 10-minute 50 RPS run of a fixed one-token non-streaming local-mock profile with at least 99.9% success, client end-to-end p95 at or below 150 ms, p99 at or below 300 ms, and no positive queue slope. It is **not enforced** until the canonical workload definition, dependency/server-metric collection, baseline artifact, pass/fail automation, and SLO owner are checked in and approved. Until then, 50 RPS without queue growth is the direction; per-change before/after dependency counts and latency distributions are the enforceable ratchet.
 
 ## 8. OpenAI and provider compatibility
 
@@ -174,6 +180,11 @@ The current proposed release-certificate target is a 10-minute 50 RPS run of a f
 - Production DDL runs through one coordinated, retry-safe release/migration workflow before application rollout. Migration history/locking makes retries idempotent; API replicas MUST NOT race DDL on startup.
 - Commit schema, migration, repository/query changes, generated-client impact, fixtures, and tests together.
 - Growing lists use server-side filtering and cursor-based or otherwise bounded pagination. New hot/high-volume queries need index and query-plan reasoning; avoid N+1 reads and per-row writes.
+- Data-plane query work MUST be bounded by the request shape, not by total tenant, event, audit, or ledger history. Admission/auth/routing MUST NOT fall back to `SUM`, full-history scans, or rollup repair on an append-only event table; use maintained counters/materialized snapshots and reconcile missing or corrupt rollups off the request path.
+- Every data-plane database operation has explicit pool-acquisition, statement, lock, and transaction deadlines subordinate to the end-to-end request deadline. Pool timeout alone is not a statement timeout; cancellation must release the connection and leave no open transaction.
+- New or materially changed hot queries include a representative-cardinality `EXPLAIN`/plan check and prove the intended index and row bound. An index is not proof of bounded work.
+- Every append-heavy table has a documented write/index budget, retention and archival policy, partitioning decision, and vacuum/analyze operating plan. Adding an index to a high-volume ledger requires read benefit, write-amplification, storage, and rollout evidence.
+- Every read declares its consistency need. Authentication/revocation, hard budget/quota, lease ownership, and other security/economic decisions use the authoritative primary or a version/fence with equivalent safety; read replicas and caches are allowed only when their bounded staleness cannot authorize, overspend, or resurrect revoked state.
 - Raw SQL values are parameterized. Static allowlists are required for table, column, direction, or expression fragments.
 - Use UTC instants at persistence boundaries and make interval/reset semantics explicit.
 - New monetary values use `Decimal` with declared rounding or integer atomic units. Do not introduce new binary-float money logic. Migrating existing float fields requires an explicit data migration and compatibility plan.
@@ -184,24 +195,33 @@ The current proposed release-certificate target is a 10-minute 50 RPS run of a f
 Economic effects require stronger guarantees than best-effort telemetry.
 
 - Every charge has a stable event ID and exactly-once economic effect under retries and process death.
+- A hard budget or quota is not a read-only check. Before provider execution, reserve a conservative upper-bound cost atomically across every applicable key/user/team/organization/model scope, or use a bounded escrow/allocation protocol with equivalent multi-replica guarantees. Reconcile actual cost and release unused capacity idempotently; reclaim abandoned reservations safely. If an enforceable upper bound cannot be reserved, describe the control as soft rather than hard.
+- Budget reservation, provider execution, and final accounting share a stable operation/event identity. Durable event/outbox delivery may be at least once; uniqueness, fencing, and idempotent state transitions ensure one economic effect. Redis may coordinate an escrow but MUST NOT be the only durable record of granted economic capacity.
 - Persist the spend event and all ledger deltas transactionally, or use a durable outbox with idempotent consumers and replay. Never use fire-and-forget tasks for spend, budget state, or required audit.
 - Do not increment key/user/team/organization/model ledgers as unrelated best-effort operations that can leave partial state.
 - Freeze attribution, pricing source/version, currency, token accounting, and rounding inputs with the accepted event so replay produces the same result.
 - Finalize usage once across non-streaming success, streaming completion, cache hits, errors, cancellation, and disconnects. Make the owner of that side effect explicit.
 - Budget and hard-quota dependency failures use a documented production fail mode. Never silently turn an economic/security control into per-process enforcement in a multi-replica deployment.
+- Soft-budget notifications, reporting refreshes, recipient discovery, and optional callbacks do not add network or unbounded database work to admission. Durably enqueue them after the decision with deduplication and bounded delivery.
 - Audit storage is bounded, redacted, access-controlled, and retained for a declared period. Prompt/body/tool content is opt-in and must obey content settings before enqueue.
 - A successful mutation does not become “failed” merely because a reporting refresh failed; expose reconciliation as a separate, observable state.
 
 ## 11. Redis, cache, and distributed coordination
 
-Use one centrally configured Redis pool per process role with bounded connect/read/write/pool timeouts, connection count, retry/backoff policy, TLS/auth, health checks, and pool-saturation metrics. Never construct a Redis client per request.
+Redis clients and pools have one central lifecycle/configuration owner per process role. Use explicit named pools for critical coordination/auth, ordinary cache traffic, and bulk/response-cache traffic when they have different latency or failure budgets; never create ad-hoc or per-request clients. Every pool has bounded connect/read/write/pool timeouts, connection count, retry/backoff policy, TLS/auth, health checks, and pool-wait/saturation metrics.
+
+Connection-pool separation does not isolate server memory. Critical admission, lease, auth, and invalidation state MUST run in a Redis instance/cluster or reserved memory/eviction domain where bulk cache growth cannot evict or starve it. If capabilities share a Redis deployment, document and test the memory limit, eviction policy, reserved headroom, overload behavior, and why critical keys remain protected.
 
 All keys and channels use a shared builder with application + environment + schema-version + capability namespace. Include tenant scope where needed. Do not expose raw internal cache keys in response headers. Hash sensitive identifiers and custom cache keys.
 
 - Every ephemeral key has a justified TTL. Memory and Redis TTLs are not substitutes for invalidation when authorization or economic correctness changes.
+- Every cache declares maximum key bytes, value/serialized-entry bytes, TTL range, total entries or memory, and expected cardinality per tenant and deployment. Reject or skip oversized entries; client-provided TTLs and custom keys are bounded and normalized before use.
+- Cached payloads are versioned and schema-validated as untrusted input. For a best-effort cache, malformed, incompatible, or failed deserialization behaves as an observable miss and may evict the bad entry; it MUST NOT fail an otherwise valid inference request.
+- Add bounded TTL jitter where synchronized expiration can create a herd. Per-process single-flight is insufficient for a hot key across replicas: use a bounded distributed fill lease, stale-while-revalidate/refresh-ahead, or another reviewed cross-replica strategy where duplicate durable/upstream reads could overload a dependency.
 - `KEYS` is forbidden. `SCAN`/wildcard deletion is allowed only in bounded admin/background maintenance, never on a request path. Prefer exact invalidation or generation/version bumps.
 - Use `MGET`, pipelines, or Lua for multi-entity operations. A method named “batch” MUST NOT loop over individual Redis commands.
 - Redis-backed counters, quotas, admission, leases, locks, and claims use a reviewed Lua script/transaction, never `GET` followed by `SET`. PostgreSQL worker claims continue to use transactional `SKIP LOCKED` and fencing.
+- Global counters and multi-key scripts require a contention/cardinality benchmark at the declared maximum replica/load profile. Avoid a single hot key or oversized Lua execution that serializes the whole gateway; shard, hierarchically allocate, or redesign while preserving the required atomicity.
 - Locks/leases use a unique owner token, TTL, guarded refresh/release, cancellation cleanup, and fencing epoch when stale owners could commit work.
 - Declare supported Redis topology. Multi-key Lua MUST share a Redis Cluster hash slot if Cluster is supported.
 - Critical Redis logic needs real-Redis tests for the applicable concurrency, TTL, reconnect, outage, and recovery semantics; Lua/script-cached changes also test `NOSCRIPT` recovery. Fake-only tests are insufficient for distributed claims.
@@ -211,7 +231,7 @@ Each Redis-backed feature declares and tests its failure policy:
 | Capability | Redis outage behavior |
 | --- | --- |
 | Response/prompt cache | Fail as a cache miss to the durable/upstream source, with bounded single-flight and an observable degraded state |
-| API-key/auth cache | Fall back to PostgreSQL; never authorize because Redis failed, and return deny/unavailable if the durable check also fails; a cache write failure alone must not fail auth |
+| API-key/auth cache | Fall back to PostgreSQL through the bounded auth-fallback bulkhead; never authorize because Redis failed, and return deny/unavailable if the durable check also fails or fallback capacity is exhausted; a cache write failure alone must not fail auth |
 | Config/governance invalidation | Reconcile from PostgreSQL/outbox/generation with a declared maximum staleness; listener restarts with backoff |
 | Routing/cooldown/health | Use an explicit bounded degraded policy and report it; do not pretend local state is cluster-wide |
 | Rate/concurrency/tier/quota | Obey an explicit fail-open/fail-closed setting; hard security/economic controls default closed in production |
@@ -272,9 +292,10 @@ The existing batch subsystem is the reliability pattern to copy: durable state, 
 - Logs and errors never contain authorization headers, keys, credentials, session/reset/invite tokens, prompts, tool arguments/results, provider payloads, webhook secrets, decrypted config, or credentialed URLs by default.
 - Prometheus labels come only from fixed enums or deliberately bounded configured sets. Never label by request/batch ID, raw URL, free-form error text, API key/hash, user, team, organization, tenant, or attacker-controlled value.
 - One component owns each request, token, spend, audit, callback, health, and cache side effect. Avoid double-counting across middleware, failover, provider adapters, and callbacks.
-- Liveness performs no dependency I/O. Readiness uses short independent timeouts and fails when a configured critical client or supervised task is missing/dead. “Unavailable” and “intentionally disabled” are different states.
+- Liveness performs no dependency I/O. Readiness runs dependency checks concurrently with short independent timeouts below the probe timeout and fails when a configured critical client or supervised task is missing/dead. Startup/readiness reports a dependency ready only after a bounded real check, not merely after constructing its client. “Unavailable” and “intentionally disabled” are different states.
 - Keep `/metrics` and detailed diagnostics internal or authenticated. Public health MUST NOT expose provider errors or topology.
 - New critical paths and workers ship with bounded RED/USE metrics, actionable error classification, degraded/readiness semantics, and tests for timeout, cancellation, dependency outage, and recovery.
+- PostgreSQL and Redis instrumentation records bounded operation/route classes for call count, latency, errors/timeouts, pool wait, in-use connections, and saturation. It MUST support proving a hot-path dependency-call budget without tenant, key, request, query-text, or other unbounded labels.
 - Never swallow an operational error into an empty list or zero. Preserve last-known-good data with freshness and explicitly label partial/stale/unavailable state.
 - Local pool saturation, queue overload, or gateway-capacity rejection MUST NOT mark a provider deployment unhealthy or trigger provider cooldown; classify local and provider failures separately.
 
@@ -324,6 +345,7 @@ The existing batch subsystem is the reliability pattern to copy: durable state, 
 - Production Kubernetes uses explicit resources, probes, PDB/rolling safety, topology, least-privilege service accounts, external secrets, NetworkPolicy, and a drain-aligned termination grace.
 - Liveness is process-only; readiness gates traffic on required dependencies/tasks and becomes false during drain.
 - Production PostgreSQL and Redis are authenticated, TLS-protected where supported, backed up, restore-tested, and externally capacity-managed. Docker Compose defaults and exposed ports are development-only.
+- Production overlays explicitly set critical admission, budget/query mode, Redis failure policy, pool limits/timeouts, and worker durability settings rather than silently inheriting local defaults. Helm/schema validation fails when a production-critical choice is absent or incompatible with replica and dependency capacity.
 - When batch is enabled in multi-replica production, use split API/workers and durable shared object storage.
 - Release CI builds and smoke-tests the exact artifact from the same commit. Prefer immutable action/base-image references, vulnerability/secret scans, SBOM/provenance, and signed published images.
 - CI/release workflows use least-privilege permissions. Third-party release actions and production base images SHOULD be pinned to immutable commit/digest references and updated through reviewed dependency automation.
@@ -339,6 +361,9 @@ Run the smallest focused checks first, then the broader gate required by risk.
 | Auth, tenant scope, billing, routing, config, cache, streaming | Focused failure/denial/cancellation tests plus the full affected integration suite |
 | Redis atomicity/degradation | Unit tests and real Redis concurrency/TTL/outage/recovery coverage |
 | Database/schema | `uv run prisma generate --schema=./prisma/schema.prisma`, migration on fresh and upgrade DBs, repository/integration tests |
+| Hot data-plane dependency path | Before/after SQL/Redis/network call counts, timeout/overload tests, representative query plans, and constant-arrival latency/queue evidence |
+| Hard budget/quota | Multi-replica concurrent reservation, retry/idempotency, crash/reclaim, reconciliation, and fail-mode tests against real PostgreSQL/Redis as applicable |
+| Production capacity/autoscaling | Checked deployment-wide pool/connection/worker arithmetic, Helm/schema rejection tests, and scale/overload evidence using the declared saturation signal |
 | UI | Touched-file ESLint with zero errors, `npm --prefix ui run test:unit`, `npm --prefix ui run build`, and full `npm --prefix ui run lint` compared with the recorded baseline |
 | API shape used by UI | Backend contract test, frontend type/adapter test, and production UI build |
 | Helm/config | Helm lint/template for base, eval, and production values plus relevant `tests/helm` tests |
@@ -352,6 +377,7 @@ Additional rules:
 - Tests cover success, authorization/tenant denial, invalid input, timeout, cancellation, partial failure, retry/failover, and recovery as applicable.
 - A flaky timing test is a product signal: assert invariants with deterministic clocks/barriers where possible; do not add arbitrary sleeps or wide retries.
 - If a repository-wide gate has known pre-existing failures, run it, record the baseline, require zero new failures in touched files, and reduce the count where practical. Do not hide the result.
+- Objective limits should become machine-enforced ratchets rather than permanent prose. When touching dependency direction, module/function size, typed boundaries, configuration schema, hot-path call counts, or bundle/performance budgets, add or extend the narrowest practical automated check; any temporary exception is named, owned, justified, bounded, and has a removal condition.
 - Never delete or skip a regression test without proving the behavior is obsolete and updating its governing contract/docs.
 - Every change runs `git diff --check`. Dependency changes also run `uv lock --check` or the package-manager lock-integrity equivalent. A migration-sensitive change adds a reusable last-release upgrade fixture/script if the repository does not yet provide one.
 
@@ -396,6 +422,8 @@ A change is done only when:
 - public/API/provider behavior remains compatible or has a documented migration;
 - state changes are atomic or durably replayable under process death and retries;
 - multi-replica, Redis outage, cancellation, shutdown, and overload behavior are considered;
+- hot-path dependency call counts, deadlines, cache cardinality/bytes, pool allocation, and maximum-replica capacity arithmetic are explicit and remain within their budgets;
+- any hard budget/quota has tested atomic reservation and idempotent reconciliation rather than only a preflight read;
 - secrets and tenant data are redacted, scoped, and absent from unbounded metrics/logs;
 - configuration, UI contracts, docs, deployment manifests, and generated outputs are synchronized where applicable;
 - focused tests and proportionate production gates pass, with pre-existing failures reported; and

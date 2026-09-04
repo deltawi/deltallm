@@ -167,12 +167,18 @@ class AuditPolicyInvalidation:
         pubsub = self.redis.pubsub()
         try:
             await pubsub.subscribe(self.channel)
-            self.invalidate_all()
-            self._state = WorkerState.READY
-            self._detail = None
-            self._started.set()
             async for message in pubsub.listen():
-                if message.get("type") != "message":
+                message_type = message.get("type")
+                if message_type == "subscribe":
+                    # Sending SUBSCRIBE does not wait for Redis to acknowledge
+                    # it. Only expose readiness after the acknowledgement so a
+                    # publisher cannot race ahead of the active subscription.
+                    self.invalidate_all()
+                    self._state = WorkerState.READY
+                    self._detail = None
+                    self._started.set()
+                    continue
+                if message_type != "message":
                     continue
                 data = _decode_message(message.get("data"))
                 if data.get("source_instance") == self.instance_id:
