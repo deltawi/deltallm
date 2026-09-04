@@ -14,7 +14,7 @@ from src.models.requests import ChatCompletionRequest
 from src.metrics import observe_request_phase
 from src.providers.base import ProviderAdapter, read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
-from src.providers.resolution import is_openai_family_provider, resolve_provider
+from src.providers.resolution import provider_supports_stream_usage_request, resolve_provider
 from src.providers.signing import apply_request_signing
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
@@ -298,7 +298,7 @@ def _request_stream_usage_when_supported(
 ) -> bool:
     if not upstream_payload.get("stream"):
         return False
-    if not is_openai_family_provider(resolve_provider(params)):
+    if not provider_supports_stream_usage_request(resolve_provider(params)):
         return False
     stream_options = upstream_payload.get("stream_options")
     if stream_options is None:

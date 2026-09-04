@@ -13,6 +13,7 @@ from src.models.errors import (
     FailureClassification,
     InvalidRequestError,
     RateLimitError,
+    RoutingFailureAction,
     ServiceUnavailableError,
     TimeoutError,
 )
@@ -544,12 +545,205 @@ async def test_openai_compatible_stream_preserves_filter_after_output(adapter_ty
 @pytest.mark.asyncio
 @pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
 @pytest.mark.parametrize(
+    ("reasoning_field", "reasoning_value"),
+    [
+        ("reasoning", "step"),
+        ("reasoning_content", "step"),
+        ("reasoning_details", [{"type": "reasoning.text", "text": "step"}]),
+    ],
+)
+async def test_openai_compatible_stream_treats_reasoning_as_output(
+    adapter_type,
+    reasoning_field: str,
+    reasoning_value: object,
+) -> None:
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"id":"chatcmpl-reasoning","choices":[{"index":0,'
+            '"delta":{"role":"assistant"},"finish_reason":null}]}',
+            *[
+                "data: "
+                + json.dumps(
+                    {
+                        "id": "chatcmpl-reasoning",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    reasoning_field: reasoning_value,
+                                    "provider_extension": {"sequence": index},
+                                },
+                                "finish_reason": None,
+                            }
+                        ],
+                    },
+                    separators=(",", ":"),
+                )
+                for index in range(33)
+            ],
+            'data: {"id":"chatcmpl-reasoning","choices":[{"index":0,'
+            '"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",'
+            '"function":{"name":"search","arguments":"{}"}}]},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-reasoning","choices":[{"index":0,'
+            '"delta":{"content":"answer"},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-reasoning","choices":[{"index":0,'
+            '"delta":{},"finish_reason":"stop"}]}',
+            "data: [DONE]",
+        ]
+
+        out = [line async for line in adapter.translate_stream(_line_stream(lines))]
+
+        assert out == lines
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+async def test_openai_compatible_stream_marks_unknown_output_limit_for_next_deployment(
+    adapter_type,
+    monkeypatch,
+) -> None:
+    validation_reasons: list[str] = []
+
+    def record_validation_failure(*, reason) -> None:  # noqa: ANN001
+        validation_reasons.append(reason.value)
+
+    monkeypatch.setattr(
+        "src.providers.openai_compatible.increment_provider_stream_validation_failure",
+        record_validation_failure,
+    )
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        lines = [
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-future-output",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"future_reasoning_field": f"step-{index}"},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                separators=(",", ":"),
+            )
+            for index in range(33)
+        ]
+
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert str(error_info.value) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error_info.value.affects_deployment_health is False
+        assert error_info.value.failure_classification is FailureClassification.GENERIC
+        assert error_info.value.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
+        assert validation_reasons == ["precommit_unknown_output_limit"]
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+async def test_openai_compatible_stream_marks_unknown_output_terminal_for_next_deployment(
+    adapter_type,
+    monkeypatch,
+) -> None:
+    validation_reasons: list[str] = []
+
+    def record_validation_failure(*, reason) -> None:  # noqa: ANN001
+        validation_reasons.append(reason.value)
+
+    monkeypatch.setattr(
+        "src.providers.openai_compatible.increment_provider_stream_validation_failure",
+        record_validation_failure,
+    )
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"id":"chatcmpl-future-output","choices":[{"index":0,'
+            '"delta":{"future_reasoning_field":"step"},"finish_reason":null}]}',
+            "data: [DONE]",
+        ]
+
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert str(error_info.value) == INVALID_PROVIDER_RESPONSE_MESSAGE
+        assert error_info.value.affects_deployment_health is False
+        assert error_info.value.failure_classification is FailureClassification.GENERIC
+        assert error_info.value.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
+        assert validation_reasons == ["precommit_unknown_output_terminal"]
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+async def test_openai_compatible_stream_marks_role_only_limit_as_provider_failure(
+    adapter_type,
+    monkeypatch,
+) -> None:
+    validation_reasons: list[str] = []
+
+    def record_validation_failure(*, reason) -> None:  # noqa: ANN001
+        validation_reasons.append(reason.value)
+
+    monkeypatch.setattr(
+        "src.providers.openai_compatible.increment_provider_stream_validation_failure",
+        record_validation_failure,
+    )
+    adapter = adapter_type(httpx.AsyncClient())
+    try:
+        lines = [
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-role-only",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                separators=(",", ":"),
+            )
+            for _ in range(33)
+        ]
+
+        with pytest.raises(ServiceUnavailableError) as error_info:
+            async for _ in adapter.translate_stream(_line_stream(lines)):
+                pass
+
+        assert error_info.value.affects_deployment_health is True
+        assert error_info.value.routing_failure_action is None
+        assert validation_reasons == ["precommit_no_output_limit"]
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_type", [OpenAIAdapter, AzureOpenAIAdapter])
+@pytest.mark.parametrize(
     "lines",
     [
         ["data: [DONE]"],
         [
             'data: {"id":"chatcmpl-truncated","choices":[{"index":0,'
             '"delta":{"role":"assistant"},"finish_reason":null}]}'
+        ],
+        [
+            'data: {"id":"chatcmpl-empty-reasoning","choices":[{"index":0,'
+            '"delta":{"reasoning_content":"","reasoning_details":[]},'
+            '"finish_reason":null}]}',
+            "data: [DONE]",
         ],
     ],
 )

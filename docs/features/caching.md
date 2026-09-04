@@ -70,8 +70,17 @@ DeltaLLM builds cache keys from:
 - relevant request parameters
 - an optional custom cache key
 - the authenticated request scope
+- the cache schema version and response mode (`json` or `stream`)
 
-This means two different API keys do not share cache entries by default.
+This means two different API keys do not share cache entries by default, and a streaming response
+cannot be returned to a non-streaming request (or the reverse). Cache schema v2 intentionally treats
+older streaming entries as misses because they did not preserve the complete event stream.
+
+For chat streams, DeltaLLM stores each validated SSE data frame rather than rebuilding a response
+from content text. Cache hits therefore preserve reasoning fields, refusals, tool calls, provider
+extensions, finish reasons, and frame order. A provider usage frame is replayed only when the client
+requested `stream_options.include_usage`; `[DONE]` is emitted exactly once. Incomplete, cancelled,
+malformed, or over-limit streams are not cached.
 
 ## Verify Cache Hits
 
@@ -119,6 +128,8 @@ The cache middleware also reads:
 - Cache accounting still updates request, usage, and spend metrics on cache hits
 - Budget enforcement and auth still happen before a cached response is returned
 - If caching is disabled globally, request-level cache metadata has no effect
+- `stream_cache_max_bytes` and `stream_cache_max_fragments` bound all retained SSE data frames, not
+  only content fragments
 
 ## Related Pages
 

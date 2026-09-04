@@ -44,6 +44,8 @@ class RedisBackend(CacheBackend):
             deployment_id=payload.get("deployment_id"),
             provider=payload.get("provider"),
             deployment_model=payload.get("deployment_model"),
+            stream_lines=_stream_lines(payload.get("stream_lines")),
+            stream_usage_line=_stream_usage_line(payload.get("stream_usage_line")),
         )
 
     async def set(self, key: str, entry: CacheEntry, ttl: int | None = None) -> None:
@@ -65,3 +67,15 @@ class RedisBackend(CacheBackend):
                 await self.redis.delete(*keys)
             if cursor == 0:
                 break
+
+
+def _stream_lines(value: object) -> list[str] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    if not all(isinstance(line, str) for line in value):
+        return None
+    return list(value)
+
+
+def _stream_usage_line(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None

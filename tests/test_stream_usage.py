@@ -34,6 +34,110 @@ def test_stream_usage_tracker_estimates_when_provider_usage_missing() -> None:
 
     assert resolved.source == "estimated"
     assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+    assert resolved.estimate_incomplete is False
+
+
+def test_stream_usage_tracker_counts_reasoning_only_output() -> None:
+    tracker = StreamUsageTracker()
+
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning_content":"thinking"},'
+        '"finish_reason":null}]}'
+    )
+    resolved = tracker.resolve(_payload())
+
+    assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert resolved.estimate_incomplete is False
+
+
+def test_stream_usage_tracker_does_not_double_count_reasoning_aliases() -> None:
+    tracker = StreamUsageTracker()
+
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning":"abcdefgh",'
+        '"reasoning_content":"abcdefgh","reasoning_details":'
+        '[{"type":"reasoning.text","text":"abcdefgh"}]},"finish_reason":null}]}'
+    )
+    resolved = tracker.resolve(_payload())
+
+    assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+
+
+def test_stream_usage_tracker_sums_reasoning_when_representation_changes_between_deltas() -> None:
+    tracker = StreamUsageTracker()
+
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning":"abcdefgh"},"finish_reason":null}]}'
+    )
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning_content":"ijklmnop"},'
+        '"finish_reason":null}]}'
+    )
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning_details":'
+        '[{"type":"reasoning.text","text":"qrstuvwx"}]},"finish_reason":null}]}'
+    )
+    resolved = tracker.resolve(_payload())
+
+    assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 6, "total_tokens": 9}
+
+
+def test_stream_usage_tracker_counts_reasoning_detail_text_and_summary() -> None:
+    tracker = StreamUsageTracker()
+
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning_details":'
+        '[{"type":"reasoning.text","text":"step","summary":"plan"}]},'
+        '"finish_reason":null}]}'
+    )
+    resolved = tracker.resolve(_payload())
+
+    assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert resolved.estimate_incomplete is False
+
+
+def test_stream_usage_tracker_conservatively_counts_encrypted_reasoning() -> None:
+    tracker = StreamUsageTracker()
+
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning_details":'
+        '[{"type":"reasoning.encrypted","data":"opaque"}]},"finish_reason":null}]}'
+    )
+    resolved = tracker.resolve(_payload())
+
+    assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert resolved.estimate_incomplete is True
+    assert resolved.metadata()["usage_estimate_incomplete"] is True
+
+
+def test_stream_usage_tracker_conservatively_counts_structured_reasoning() -> None:
+    tracker = StreamUsageTracker()
+
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning":{"data":"opaque"}},'
+        '"finish_reason":null}]}'
+    )
+    resolved = tracker.resolve(_payload())
+
+    assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}
+    assert resolved.estimate_incomplete is True
+
+
+def test_stream_usage_tracker_provider_usage_overrides_incomplete_estimate() -> None:
+    tracker = StreamUsageTracker()
+
+    tracker.add_line(
+        'data: {"choices":[{"index":0,"delta":{"reasoning_details":'
+        '[{"type":"reasoning.encrypted","data":"opaque"}]},"finish_reason":null}]}'
+    )
+    tracker.add_line(
+        'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":7,"total_tokens":10}}'
+    )
+    resolved = tracker.resolve(_payload())
+
+    assert resolved.source == "provider"
+    assert resolved.usage == {"prompt_tokens": 3, "completion_tokens": 7, "total_tokens": 10}
+    assert resolved.estimate_incomplete is False
 
 
 def test_stream_usage_tracker_estimates_when_provider_usage_is_malformed() -> None:

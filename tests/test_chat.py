@@ -2035,6 +2035,48 @@ async def test_chat_stream_billing_uses_provider_usage_when_present(client, test
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_requests_usage_from_vllm(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.update(
+        {
+            "provider": "vllm",
+            "model": "zai-org/GLM-5.3-Flash",
+            "api_base": "https://vllm.example/v1",
+        }
+    )
+    captured_payloads: list[dict[str, Any]] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):  # noqa: ANN001
+        del method, url, headers, timeout
+        captured_payloads.append(dict(json))
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-vllm-usage","choices":[{"index":0,'
+                '"delta":{"content":"ok"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-vllm-usage","choices":[],"usage":'
+                '{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}',
+                "data: [DONE]",
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured_payloads[-1]["stream_options"] == {"include_usage": True}
+    assert '"choices":[]' not in response.text
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_default_usage_collection_does_not_expose_usage_chunk(client, test_app):
     recorder = _SpendRecorder()
     test_app.state.spend_tracking_service = recorder
@@ -2127,9 +2169,7 @@ async def test_chat_stream_forwards_usage_chunk_when_client_requested_usage(clie
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pricing(
-    client, test_app
-):
+async def test_chat_stream_billing_estimates_reasoning_and_applies_tier_pricing(client, test_app):
     recorder = _SpendRecorder()
     test_app.state.spend_tracking_service = recorder
     test_app.state.tier_policy_service = _TierPricingService(
@@ -2144,7 +2184,7 @@ async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pric
             status_code=200,
             lines=[
                 'data: {"id":"chatcmpl-est","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
-                'data: {"id":"chatcmpl-est","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-est","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"thinking"},"finish_reason":null}]}',
                 "data: [DONE]",
             ],
         )
@@ -2162,19 +2202,20 @@ async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pric
     assert response.status_code == 200
     deployment_id = str(response.headers["x-deltallm-route-deployment"])
     usage = await test_app.state.router_state_backend.get_usage(deployment_id)
-    assert usage == {"rpm": 1, "tpm": 4}
+    assert usage == {"rpm": 1, "tpm": 5}
     await asyncio.sleep(0.05)
     assert recorder.events[-1]["usage"] == {
         "prompt_tokens": 3,
-        "completion_tokens": 1,
-        "total_tokens": 4,
+        "completion_tokens": 2,
+        "total_tokens": 5,
     }
-    assert recorder.events[-1]["cost"] == 22.0
-    assert recorder.events[-1]["metadata"]["provider_cost"] == 5.0
+    assert recorder.events[-1]["cost"] == 32.0
+    assert recorder.events[-1]["metadata"]["provider_cost"] == 7.0
     assert recorder.events[-1]["metadata"]["pricing_source"] == "tier"
     assert recorder.events[-1]["metadata"]["customer_tier_key"] == "enterprise"
     assert recorder.events[-1]["metadata"]["usage_source"] == "estimated"
     assert recorder.events[-1]["metadata"]["usage_estimated"] is True
+    assert recorder.events[-1]["metadata"]["usage_estimate_incomplete"] is False
 
 
 @pytest.mark.asyncio
@@ -2292,6 +2333,243 @@ async def test_stream_retries_before_first_token_with_failover(client, test_app)
     assert calls["count"] == 2
     assert response.headers["x-deltallm-route-deployment"] == "gpt-4o-mini-fallback"
     assert response.headers["x-deltallm-route-fallback-used"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_stream_reasoning_commits_without_cooling_or_trying_fallback(client, test_app):
+    primary, fallback = _configure_chat_fallback(test_app)
+    test_app.state.cooldown_manager.allowed_fails = 0
+    attempted_auths: list[str | None] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
+        del method, url, json, timeout
+        attempted_auths.append(headers.get("Authorization"))
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-reasoning","choices":[{"index":0,'
+                '"delta":{"role":"assistant"},"finish_reason":null}]}',
+                *[
+                    "data: "
+                    + jsonlib.dumps(
+                        {
+                            "id": "chatcmpl-reasoning",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"reasoning_content": f"step-{index}"},
+                                    "finish_reason": None,
+                                }
+                            ],
+                        },
+                        separators=(",", ":"),
+                    )
+                    for index in range(33)
+                ],
+                'data: {"id":"chatcmpl-reasoning","choices":[{"index":0,'
+                '"delta":{"content":"answer"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-reasoning","choices":[{"index":0,'
+                '"delta":{},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert '"reasoning_content":"step-32"' in response.text
+    assert '"content":"answer"' in response.text
+    assert "data: [DONE]" in response.text
+    assert attempted_auths == ["Bearer provider-key"]
+    assert response.headers["x-deltallm-route-deployment"] == primary.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "false"
+    for deployment in (primary, fallback):
+        health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+        assert int(health.get("consecutive_failures", 0) or 0) == 0
+        assert health.get("last_error") is None
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_fail_over_after_reasoning_output(client, test_app):
+    primary, fallback = _configure_chat_fallback(test_app)
+    test_app.state.cooldown_manager.allowed_fails = 0
+    attempted_auths: list[str | None] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
+        del method, url, json, timeout
+        attempted_auths.append(headers.get("Authorization"))
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-reasoning-partial","choices":[{"index":0,'
+                '"delta":{"reasoning_content":"partial thought"},"finish_reason":null}]}'
+            ],
+            line_error=httpx.ReadError("stream broke after reasoning output"),
+        )
+
+    test_app.state.http_client.stream = stream
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "partial thought" in response.text
+    assert "data: [DONE]" not in response.text
+    assert attempted_auths == ["Bearer provider-key"]
+    primary_health = await test_app.state.router_state_backend.get_health(primary.deployment_id)
+    fallback_health = await test_app.state.router_state_backend.get_health(fallback.deployment_id)
+    assert primary_health.get("last_error") == "Provider unavailable"
+    assert fallback_health.get("last_error") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("unknown_frame_count", "include_terminal"),
+    [(33, False), (2, True)],
+)
+async def test_stream_precommit_unknown_output_fails_over_without_cooldown(
+    client,
+    test_app,
+    unknown_frame_count: int,
+    include_terminal: bool,
+):
+    primary, fallback = _configure_chat_fallback(test_app)
+    test_app.state.cooldown_manager.allowed_fails = 0
+    spend = _SpendRecorder()
+    audit = _RecordingAuditService()
+    test_app.state.spend_tracking_service = spend
+    test_app.state.audit_service = audit
+    attempted_auths: list[str | None] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
+        del method, url, json, timeout
+        authorization = headers.get("Authorization")
+        attempted_auths.append(authorization)
+        if authorization == "Bearer provider-key-fallback":
+            return _StreamContext(
+                status_code=200,
+                lines=[
+                    'data: {"id":"chatcmpl-fallback","object":"chat.completion.chunk",'
+                    '"choices":[{"index":0,"delta":{"content":"fallback ok"},'
+                    '"finish_reason":null}]}',
+                    'data: {"id":"chatcmpl-fallback","object":"chat.completion.chunk",'
+                    '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                    "data: [DONE]",
+                ],
+            )
+        lines = [
+            "data: "
+            + jsonlib.dumps(
+                {
+                    "id": "chatcmpl-future-output",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"future_reasoning_field": f"step-{index}"},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                separators=(",", ":"),
+            )
+            for index in range(unknown_frame_count)
+        ]
+        if include_terminal:
+            lines.append("data: [DONE]")
+        return _StreamContext(status_code=200, lines=lines)
+
+    test_app.state.http_client.stream = stream
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert '"content":"fallback ok"' in response.text
+    assert attempted_auths == ["Bearer provider-key", "Bearer provider-key-fallback"]
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    for deployment in (primary, fallback):
+        health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+        assert int(health.get("consecutive_failures", 0) or 0) == 0
+        assert health.get("last_error") is None
+
+    await asyncio.wait_for(spend.wait_for_events(1), timeout=0.5)
+    assert spend.events[-1]["metadata"]["stream"] is True
+    chat_audits = [
+        event
+        for event, _, _ in audit.records
+        if getattr(event, "action", None) == "CHAT_COMPLETION_REQUEST"
+    ]
+    assert chat_audits[-1].metadata["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_precommit_role_only_limit_cools_primary_and_fails_over(client, test_app):
+    primary, fallback = _configure_chat_fallback(test_app)
+    test_app.state.cooldown_manager.allowed_fails = 0
+    attempted_auths: list[str | None] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
+        del method, url, json, timeout
+        authorization = headers.get("Authorization")
+        attempted_auths.append(authorization)
+        if authorization == "Bearer provider-key-fallback":
+            return _StreamContext(
+                status_code=200,
+                lines=[
+                    'data: {"id":"chatcmpl-fallback","choices":[{"index":0,'
+                    '"delta":{"content":"ok"},"finish_reason":null}]}',
+                    'data: {"id":"chatcmpl-fallback","choices":[{"index":0,'
+                    '"delta":{},"finish_reason":"stop"}]}',
+                    "data: [DONE]",
+                ],
+            )
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-role-only","choices":[{"index":0,'
+                '"delta":{"role":"assistant"},"finish_reason":null}]}'
+                for _ in range(33)
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert attempted_auths == ["Bearer provider-key", "Bearer provider-key-fallback"]
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    primary_health = await test_app.state.router_state_backend.get_health(primary.deployment_id)
+    assert primary_health["last_error"] == "Provider returned an invalid response"
 
 
 @pytest.mark.asyncio

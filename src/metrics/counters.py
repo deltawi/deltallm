@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 from prometheus_client import Counter, Gauge
@@ -11,6 +12,21 @@ from src.metrics.prometheus import (
     hash_api_key,
     sanitize_label,
 )
+
+
+class ProviderStreamValidationFailureReason(StrEnum):
+    FRAME_TOO_LARGE = "frame_too_large"
+    INCOMPLETE_STREAM = "incomplete_stream"
+    INVALID_CHOICES = "invalid_choices"
+    INVALID_JSON = "invalid_json"
+    INVALID_PAYLOAD = "invalid_payload"
+    INVALID_SSE = "invalid_sse"
+    PRECOMMIT_NO_OUTPUT_LIMIT = "precommit_no_output_limit"
+    PRECOMMIT_UNKNOWN_OUTPUT_LIMIT = "precommit_unknown_output_limit"
+    PRECOMMIT_UNKNOWN_OUTPUT_TERMINAL = "precommit_unknown_output_terminal"
+    TERMINAL_BEFORE_OUTPUT = "terminal_before_output"
+    UNKNOWN_ERROR_ENVELOPE = "unknown_error_envelope"
+
 
 deltallm_requests_metric = Counter(
     "deltallm_requests_total",
@@ -137,6 +153,13 @@ deltallm_provider_error_body_discards_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_provider_stream_validation_failures_metric = Counter(
+    "deltallm_provider_stream_validation_failures_total",
+    "OpenAI-compatible provider streams rejected by bounded validation reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_tier_capacity_fair_share_decisions_metric = Counter(
     "deltallm_tier_capacity_fair_share_decisions_total",
     "Tier capacity fair-share decisions",
@@ -176,6 +199,15 @@ def increment_provider_error_body_discard(*, reason: str) -> None:
     if reason not in {"encoded", "oversized"}:
         raise ValueError("unsupported provider error body discard reason")
     deltallm_provider_error_body_discards_metric.labels(reason=reason).inc()
+
+
+def increment_provider_stream_validation_failure(
+    *,
+    reason: ProviderStreamValidationFailureReason,
+) -> None:
+    if not isinstance(reason, ProviderStreamValidationFailureReason):
+        raise ValueError("unsupported provider stream validation failure reason")
+    deltallm_provider_stream_validation_failures_metric.labels(reason=reason.value).inc()
 
 
 def increment_usage(

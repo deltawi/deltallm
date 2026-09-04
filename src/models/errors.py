@@ -19,6 +19,14 @@ class FailureClassification(StrEnum):
     GENERIC = "generic"
 
 
+class RoutingFailureAction(StrEnum):
+    """Explicit request-local routing action, independent of deployment health."""
+
+    FAIL_FAST = "fail_fast"
+    RETRY_OR_NEXT = "retry_or_next"
+    NEXT_DEPLOYMENT = "next_deployment"
+
+
 def parse_retry_after_header(value: str | None) -> int | None:
     if value is None:
         return None
@@ -57,12 +65,14 @@ class ProxyError(Exception):
         *,
         affects_deployment_health: bool | None = None,
         failure_classification: FailureClassification | None = None,
+        routing_failure_action: RoutingFailureAction | None = None,
     ):
         self.message = message or self.message
         self.param = param
         self.code = code
         self.affects_deployment_health = affects_deployment_health
         self.failure_classification = failure_classification
+        self.routing_failure_action = routing_failure_action
         super().__init__(self.message)
 
 

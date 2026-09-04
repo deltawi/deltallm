@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from src.models.requests import ChatCompletionRequest
+from src.providers.openai_stream_contract import OpenAIStreamDeltaField
 
 StreamUsageSource = Literal["provider", "estimated"]
 _TOKEN_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
@@ -19,6 +20,7 @@ class StreamLineInfo:
 class StreamUsage:
     usage: dict[str, Any]
     source: StreamUsageSource
+    estimate_incomplete: bool = False
 
     @property
     def estimated(self) -> bool:
@@ -28,13 +30,23 @@ class StreamUsage:
         return {
             "usage_source": self.source,
             "usage_estimated": self.estimated,
+            "usage_estimate_incomplete": self.estimate_incomplete,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _CompletionDeltaUsage:
+    ordinary_chars: int = 0
+    reasoning_chars: int = 0
+    reasoning_estimate_incomplete: bool = False
 
 
 class StreamUsageTracker:
     def __init__(self) -> None:
         self._provider_usage: dict[str, Any] | None = None
         self._completion_chars = 0
+        self._reasoning_chars = 0
+        self._reasoning_estimate_incomplete = False
 
     def add_line(self, line: str) -> StreamLineInfo:
         if not line.startswith("data:"):
@@ -53,7 +65,12 @@ class StreamUsageTracker:
         if isinstance(usage, dict) and _is_provider_token_usage(usage):
             self._provider_usage = dict(usage)
 
-        self._completion_chars += _completion_delta_chars(chunk)
+        delta_usage = _completion_delta_usage(chunk)
+        self._completion_chars += delta_usage.ordinary_chars
+        self._reasoning_chars += delta_usage.reasoning_chars
+        self._reasoning_estimate_incomplete = (
+            self._reasoning_estimate_incomplete or delta_usage.reasoning_estimate_incomplete
+        )
         return StreamLineInfo(is_usage_only_chunk=_is_usage_only_chunk(chunk))
 
     def resolve(self, payload: ChatCompletionRequest) -> StreamUsage:
@@ -61,7 +78,10 @@ class StreamUsageTracker:
             return StreamUsage(usage=_normalized_usage(self._provider_usage), source="provider")
 
         prompt_tokens = estimate_chat_prompt_tokens(payload)
-        completion_tokens = _estimate_tokens_from_chars(self._completion_chars, minimum=0)
+        completion_tokens = _estimate_tokens_from_chars(
+            self._completion_chars + self._reasoning_chars,
+            minimum=0,
+        )
         return StreamUsage(
             usage={
                 "prompt_tokens": prompt_tokens,
@@ -69,6 +89,7 @@ class StreamUsageTracker:
                 "total_tokens": prompt_tokens + completion_tokens,
             },
             source="estimated",
+            estimate_incomplete=self._reasoning_estimate_incomplete,
         )
 
 
@@ -106,23 +127,33 @@ def _content_chars(content: Any) -> int:
     return len(json.dumps(content, sort_keys=True, separators=(",", ":"), default=str))
 
 
-def _completion_delta_chars(chunk: dict[str, Any]) -> int:
+def _completion_delta_usage(chunk: dict[str, Any]) -> _CompletionDeltaUsage:
     choices = chunk.get("choices")
     if not isinstance(choices, list):
-        return 0
+        return _CompletionDeltaUsage()
 
-    total = 0
+    ordinary_chars = 0
+    reasoning_chars = 0
+    reasoning_estimate_incomplete = False
     for choice in choices:
         if not isinstance(choice, dict):
             continue
         delta = choice.get("delta")
-        if isinstance(delta, dict):
-            total += _delta_chars(delta)
+        if not isinstance(delta, dict):
+            delta = choice.get("message")
+        if not isinstance(delta, dict):
             continue
-        message = choice.get("message")
-        if isinstance(message, dict):
-            total += _delta_chars(message)
-    return total
+        delta_usage = _delta_usage(delta)
+        ordinary_chars += delta_usage.ordinary_chars
+        reasoning_chars += delta_usage.reasoning_chars
+        reasoning_estimate_incomplete = (
+            reasoning_estimate_incomplete or delta_usage.reasoning_estimate_incomplete
+        )
+    return _CompletionDeltaUsage(
+        ordinary_chars=ordinary_chars,
+        reasoning_chars=reasoning_chars,
+        reasoning_estimate_incomplete=reasoning_estimate_incomplete,
+    )
 
 
 def _is_usage_only_chunk(chunk: dict[str, Any]) -> bool:
@@ -131,19 +162,79 @@ def _is_usage_only_chunk(chunk: dict[str, Any]) -> bool:
     return isinstance(usage, dict) and isinstance(choices, list) and not choices
 
 
-def _delta_chars(delta: dict[str, Any]) -> int:
-    total = 0
-    content = delta.get("content")
+def _delta_usage(delta: dict[str, Any]) -> _CompletionDeltaUsage:
+    ordinary_chars = 0
+    content = delta.get(OpenAIStreamDeltaField.CONTENT.value)
     if isinstance(content, str):
-        total += len(content)
+        ordinary_chars += len(content)
     elif content is not None:
-        total += _content_chars(content)
+        ordinary_chars += _content_chars(content)
 
-    for key in ("refusal", "function_call", "tool_calls"):
+    for key in (
+        OpenAIStreamDeltaField.REFUSAL.value,
+        OpenAIStreamDeltaField.FUNCTION_CALL.value,
+        OpenAIStreamDeltaField.TOOL_CALLS.value,
+    ):
         value = delta.get(key)
         if value is not None:
-            total += _content_chars(value)
-    return total
+            ordinary_chars += _content_chars(value)
+
+    reasoning_chars, reasoning_incomplete = _reasoning_text_chars(
+        delta.get(OpenAIStreamDeltaField.REASONING.value)
+    )
+    reasoning_content_chars, reasoning_content_incomplete = _reasoning_text_chars(
+        delta.get(OpenAIStreamDeltaField.REASONING_CONTENT.value)
+    )
+    reasoning_details_chars, reasoning_details_incomplete = _reasoning_details_text_chars(
+        delta.get(OpenAIStreamDeltaField.REASONING_DETAILS.value)
+    )
+    return _CompletionDeltaUsage(
+        ordinary_chars=ordinary_chars,
+        reasoning_chars=max(
+            reasoning_chars,
+            reasoning_content_chars,
+            reasoning_details_chars,
+        ),
+        reasoning_estimate_incomplete=(
+            reasoning_incomplete or reasoning_content_incomplete or reasoning_details_incomplete
+        ),
+    )
+
+
+def _reasoning_text_chars(value: Any) -> tuple[int, bool]:
+    if value in (None, "", [], {}):
+        return 0, False
+    if isinstance(value, str):
+        return len(value), False
+    return _content_chars(value), True
+
+
+def _reasoning_details_text_chars(value: Any) -> tuple[int, bool]:
+    if value in (None, "", [], {}):
+        return 0, False
+    if isinstance(value, str):
+        return len(value), False
+
+    items = value if isinstance(value, list) else [value]
+    total = 0
+    incomplete = False
+    for item in items:
+        if isinstance(item, str):
+            total += len(item)
+            continue
+        if not isinstance(item, dict):
+            total += _content_chars(item)
+            incomplete = True
+            continue
+        item_chars = sum(
+            len(text) for key in ("text", "summary") if isinstance((text := item.get(key)), str)
+        )
+        if item_chars == 0:
+            opaque_value = item.get("data")
+            item_chars = _content_chars(opaque_value if opaque_value is not None else item)
+            incomplete = True
+        total += item_chars
+    return total, incomplete
 
 
 def _estimate_tokens_from_chars(char_count: int, *, minimum: int) -> int:

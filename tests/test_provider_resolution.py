@@ -5,6 +5,7 @@ import pytest
 from src.config_runtime.models import ModelHotReloadManager
 from src.providers.resolution import (
     is_openai_compatible_provider,
+    provider_supports_stream_usage_request,
     provider_from_model,
     provider_supports_mode,
     resolve_provider,
@@ -65,6 +66,12 @@ def test_openai_compatible_registry_contains_common_gateways() -> None:
     assert is_openai_compatible_provider("groq") is True
     assert is_openai_compatible_provider("anthropic") is False
     assert is_openai_compatible_provider("elevenlabs") is False
+
+
+def test_stream_usage_request_capability_includes_vllm_but_not_openrouter() -> None:
+    assert provider_supports_stream_usage_request("openai") is True
+    assert provider_supports_stream_usage_request("vllm") is True
+    assert provider_supports_stream_usage_request("openrouter") is False
 
 
 def test_model_validation_rejects_unsupported_provider_mode_combo() -> None:

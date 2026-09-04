@@ -22,6 +22,7 @@ from src.models.errors import (
     NO_HEALTHY_DEPLOYMENTS_CODE,
     ProxyError,
     RateLimitError,
+    RoutingFailureAction,
     ServiceUnavailableError,
     TimeoutError,
     parse_retry_after_header,
@@ -39,6 +40,7 @@ from src.router.execution import (
     attach_failover_attempt_context,
     attach_failover_original_error,
 )
+from src.router.failure_policy import routing_failure_action
 from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
 from src.router.state import DeploymentStateBackend
@@ -570,7 +572,8 @@ class FailoverManager:
                                     return result, served
                                 return result
 
-                    if not affects_deployment_health(last_error):
+                    failure_action = routing_failure_action(last_error)
+                    if failure_action is RoutingFailureAction.FAIL_FAST:
                         attach_failover_attempt_context(
                             last_error,
                             model_group=model_group,
@@ -579,6 +582,9 @@ class FailoverManager:
                         if last_error is exc:
                             raise last_error
                         raise last_error from exc
+
+                    if failure_action is RoutingFailureAction.NEXT_DEPLOYMENT:
+                        break
 
                     if (
                         not entered_cooldown
@@ -774,12 +780,15 @@ class FailoverManager:
                         attempted_deployment_ids=attempt_history,
                     )
                     raise normalized_error from exc
-                if not affects_deployment_health(
-                    normalized_error
-                ) and failure_classification not in {
-                    ErrorClassification.CONTEXT_WINDOW,
-                    ErrorClassification.CONTENT_POLICY,
-                }:
+                failure_action = routing_failure_action(normalized_error)
+                if (
+                    failure_action is RoutingFailureAction.FAIL_FAST
+                    and failure_classification
+                    not in {
+                        ErrorClassification.CONTEXT_WINDOW,
+                        ErrorClassification.CONTENT_POLICY,
+                    }
+                ):
                     if normalized_error is exc:
                         attach_failover_attempt_context(
                             normalized_error,

@@ -33,7 +33,11 @@ class _StreamAccumulator:
     model: str | None = None
     finish_reason: str = "stop"
     content_parts: list[str] = field(default_factory=list)
-    usage: dict[str, Any] = field(default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+    stream_lines: list[str] = field(default_factory=list)
+    stream_usage_line: str | None = None
+    usage: dict[str, Any] = field(
+        default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    )
     buffered_bytes: int = 0
     fragment_count: int = 0
     disabled_reason: str | None = None
@@ -44,12 +48,22 @@ class _StreamAccumulator:
             return
         self.disabled_reason = reason
         self.content_parts.clear()
+        self.stream_lines.clear()
+        self.stream_usage_line = None
         self.buffered_bytes = 0
         self.fragment_count = 0
 
-    def add_chunk(self, chunk: dict[str, Any]) -> str | None:
+    def add_chunk(self, chunk: dict[str, Any], line: str) -> str | None:
         if self.disabled_reason is not None:
             return self.disabled_reason
+
+        next_fragment_count = self.fragment_count + 1
+        if next_fragment_count > self.max_fragments:
+            return "fragment_limit_exceeded"
+
+        next_buffered_bytes = self.buffered_bytes + len(line.encode("utf-8"))
+        if next_buffered_bytes > self.max_buffer_bytes:
+            return "buffer_limit_exceeded"
 
         self.saw_chunk = True
         if self.response_id is None:
@@ -74,6 +88,12 @@ class _StreamAccumulator:
 
         choices = chunk.get("choices") or []
         if not choices:
+            if isinstance(usage, dict):
+                self.stream_usage_line = line
+            else:
+                self.stream_lines.append(line)
+            self.fragment_count = next_fragment_count
+            self.buffered_bytes = next_buffered_bytes
             return None
 
         choice = choices[0] or {}
@@ -82,27 +102,17 @@ class _StreamAccumulator:
             self.finish_reason = str(finish_reason)
 
         delta = choice.get("delta") or {}
-        if "content" not in delta:
-            return None
-
-        content = str(delta.get("content") or "")
-        if not content:
-            return None
-
-        next_fragment_count = self.fragment_count + 1
-        if next_fragment_count > self.max_fragments:
-            return "fragment_limit_exceeded"
-
-        next_buffered_bytes = self.buffered_bytes + len(content.encode("utf-8"))
-        if next_buffered_bytes > self.max_buffer_bytes:
-            return "buffer_limit_exceeded"
-
-        self.content_parts.append(content)
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            self.content_parts.append(content)
+        self.stream_lines.append(line)
         self.fragment_count = next_fragment_count
         self.buffered_bytes = next_buffered_bytes
         return None
 
-    def build_response(self, *, fallback_model: str, usage: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    def build_response(
+        self, *, fallback_model: str, usage: Mapping[str, Any] | None = None
+    ) -> dict[str, Any] | None:
         if not self.saw_chunk or self.disabled_reason is not None:
             return None
         resolved_usage = _normalized_usage(usage if usage is not None else self.usage)
@@ -150,20 +160,41 @@ class StreamingCacheHandler:
     def write_failures_total(self) -> int:
         return self._write_failures_total
 
-    def reconstruct_sse_stream(self, response: dict[str, Any], *, include_usage: bool = False):
+    def can_replay(self, entry: CacheEntry) -> bool:
+        lines = entry.stream_lines
+        usage_line = entry.stream_usage_line
+        valid_usage_line = usage_line is None or (
+            usage_line.startswith("data:") and usage_line.strip() != "data: [DONE]"
+        )
+        return (
+            valid_usage_line
+            and bool(lines)
+            and all(
+                isinstance(line, str)
+                and line.startswith("data:")
+                and line.strip() != "data: [DONE]"
+                for line in lines
+            )
+        )
+
+    def reconstruct_sse_stream(self, entry: CacheEntry, *, include_usage: bool = False):
         async def generator():
-            for chunk in self._response_to_chunks(response):
-                yield f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n"
+            for line in entry.stream_lines or []:
+                yield f"{line}\n\n"
             if include_usage:
-                usage_chunk = {
-                    "id": response.get("id"),
-                    "object": "chat.completion.chunk",
-                    "created": response.get("created"),
-                    "model": response.get("model"),
-                    "choices": [],
-                    "usage": _normalized_usage(response.get("usage") or {}),
-                }
-                yield f"data: {json.dumps(usage_chunk, separators=(',', ':'))}\n\n"
+                if entry.stream_usage_line is not None:
+                    yield f"{entry.stream_usage_line}\n\n"
+                else:
+                    response = entry.response
+                    usage_chunk = {
+                        "id": response.get("id"),
+                        "object": "chat.completion.chunk",
+                        "created": response.get("created"),
+                        "model": response.get("model"),
+                        "choices": [],
+                        "usage": _normalized_usage(response.get("usage") or {}),
+                    }
+                    yield f"data: {json.dumps(usage_chunk, separators=(',', ':'))}\n\n"
             yield "data: [DONE]\n\n"
 
         return generator()
@@ -196,7 +227,7 @@ class StreamingCacheHandler:
             self._disable_stream(state, reason="invalid_payload")
             return
 
-        reason = state.add_chunk(chunk)
+        reason = state.add_chunk(chunk, line)
         if reason is not None:
             self._disable_stream(state, reason=reason)
 
@@ -226,6 +257,8 @@ class StreamingCacheHandler:
             deployment_id=ctx.deployment_id,
             provider=ctx.provider,
             deployment_model=ctx.deployment_model,
+            stream_lines=list(state.stream_lines),
+            stream_usage_line=state.stream_usage_line,
         )
         try:
             await self.backend.set(ctx.cache_key, entry, ctx.ttl)
@@ -241,40 +274,6 @@ class StreamingCacheHandler:
         state.disable(reason)
         if was_enabled:
             self._disabled_streams_total += 1
-
-    def _response_to_chunks(self, response: dict[str, Any]) -> list[dict[str, Any]]:
-        choices = response.get("choices") or []
-        if not choices:
-            return []
-
-        content = ((choices[0] or {}).get("message") or {}).get("content") or ""
-        words = str(content).split(" ") if content else [""]
-        base_id = response.get("id") or f"chatcmpl-{uuid.uuid4().hex}"
-        created = int(response.get("created") or time.time())
-        model = str(response.get("model") or "unknown")
-        finish_reason = choices[0].get("finish_reason") or "stop"
-
-        chunks: list[dict[str, Any]] = []
-        for idx, word in enumerate(words):
-            tail = " " if idx < len(words) - 1 else ""
-            chunks.append(
-                {
-                    "id": base_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": f"{word}{tail}"},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-            )
-
-        chunks[-1]["choices"][0]["finish_reason"] = finish_reason
-        return chunks
 
 
 def _normalized_usage(usage: Mapping[str, Any]) -> dict[str, int]:
