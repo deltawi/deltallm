@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import pytest
+
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.db.prompt_registry import PromptResolvedRecord
 from src.cache import CacheKeyBuilder, InMemoryBackend, PrometheusCacheMetrics
+from src.metrics import (
+    ProviderStreamValidationFailureReason,
+    increment_provider_stream_validation_failure,
+)
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.prompt_registry import PromptRegistryService
 
@@ -144,6 +150,23 @@ async def test_metrics_endpoint_exposes_router_health_transitions(client, test_a
     text = metrics.text
     assert "deltallm_router_health_transitions_total" in text
     assert 'transition="manual_cooldown"' in text
+
+
+async def test_metrics_endpoint_exposes_bounded_provider_stream_validation_failures(client):
+    increment_provider_stream_validation_failure(
+        reason=ProviderStreamValidationFailureReason.PRECOMMIT_UNKNOWN_OUTPUT_LIMIT
+    )
+
+    metrics = await client.get("/metrics")
+
+    assert metrics.status_code == 200
+    assert "deltallm_provider_stream_validation_failures_total" in metrics.text
+    assert 'reason="precommit_unknown_output_limit"' in metrics.text
+    with pytest.raises(
+        ValueError,
+        match="unsupported provider stream validation failure reason",
+    ):
+        increment_provider_stream_validation_failure(reason="provider-owned-value")
 
 
 async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app):

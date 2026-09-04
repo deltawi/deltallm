@@ -124,6 +124,7 @@ from src.metrics.prompt import (
     set_prompt_singleflight_inflight,
 )
 from src.metrics.counters import (
+    ProviderStreamValidationFailureReason,
     increment_cache_hit,
     increment_cache_miss,
     increment_callable_target_policy_fallback,
@@ -131,6 +132,7 @@ from src.metrics.counters import (
     increment_config_reload,
     increment_prompt_cache_lookup,
     increment_prompt_resolution,
+    increment_provider_stream_validation_failure,
     increment_request,
     increment_request_failure,
     increment_router_health_transition,
@@ -158,6 +160,7 @@ from src.metrics.prometheus import get_prometheus_registry, infer_provider
 from src.metrics.request_phases import observe_request_phase
 
 __all__ = [
+    "ProviderStreamValidationFailureReason",
     "get_prometheus_registry",
     "infer_provider",
     "collect_batch_scheduler_status_metrics",
@@ -293,6 +296,7 @@ __all__ = [
     "increment_config_reload",
     "increment_prompt_cache_lookup",
     "increment_prompt_resolution",
+    "increment_provider_stream_validation_failure",
     "observe_request_latency",
     "observe_api_latency",
     "observe_prompt_resolution_latency",

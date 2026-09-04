@@ -392,6 +392,7 @@ async def test_streaming_cache_hit(client, test_app):
     assert r1.headers["x-deltallm-cache-hit"] == "false"
     assert r2.headers["x-deltallm-cache-hit"] == "true"
     assert "data: [DONE]" in r2.text
+    assert r2.text == r1.text
     assert test_app.state.http_client.stream_calls == 1
 
 
@@ -415,10 +416,106 @@ async def test_streaming_cache_miss_populates_cache_entry(client, test_app):
     assert len(backend._cache) == 1
     stored = next(iter(backend._cache.values()))
     assert stored.response.get("object") == "chat.completion"
+    assert stored.stream_lines
 
 
 @pytest.mark.asyncio
-async def test_streaming_cache_hit_bills_from_estimated_usage_without_provider_cost(
+async def test_streaming_cache_replays_reasoning_tools_and_usage_exactly(client, test_app):
+    _enable_stream_cache(test_app)
+    calls = {"count": 0}
+    lines = [
+        'data: {"id":"chatcmpl-reasoning-cache","object":"chat.completion.chunk",'
+        '"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+        'data: {"id":"chatcmpl-reasoning-cache","object":"chat.completion.chunk",'
+        '"choices":[{"index":0,"delta":{"reasoning_content":"think"},'
+        '"finish_reason":null}]}',
+        'data: {"id":"chatcmpl-reasoning-cache","object":"chat.completion.chunk",'
+        '"choices":[{"index":0,"delta":{"reasoning_details":'
+        '[{"type":"reasoning.text","text":"step"}],"tool_calls":[{"index":0,'
+        '"id":"call_1","type":"function","function":{"name":"search",'
+        '"arguments":"{}"}}]},"finish_reason":null}]}',
+        'data: {"id":"chatcmpl-reasoning-cache","object":"chat.completion.chunk",'
+        '"choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}]}',
+        'data: {"id":"chatcmpl-reasoning-cache","object":"chat.completion.chunk",'
+        '"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}',
+        "data: [DONE]",
+    ]
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):  # noqa: ANN001
+        del method, url, headers, json, timeout
+        calls["count"] += 1
+        return _StreamContext(lines=lines)
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "reason about this"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+    warm = await client.post("/v1/chat/completions", headers=headers, json=body)
+    hit = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert warm.status_code == 200
+    assert hit.status_code == 200
+    assert hit.headers["x-deltallm-cache-hit"] == "true"
+    assert hit.text == warm.text
+    assert calls["count"] == 1
+    stored = next(iter(test_app.state.cache_backend._cache.values()))
+    assert stored.stream_lines == lines[:-2]
+    assert stored.stream_usage_line == lines[-2]
+
+
+@pytest.mark.asyncio
+async def test_streaming_cache_legacy_entry_is_treated_as_miss(client, test_app):
+    _enable_stream_cache(test_app)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "legacy entry"}],
+        "stream": True,
+    }
+
+    warm = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert warm.status_code == 200
+    stored = next(iter(test_app.state.cache_backend._cache.values()))
+    stored.stream_lines = None
+
+    miss = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert miss.status_code == 200
+    assert miss.headers["x-deltallm-cache-hit"] == "false"
+    assert test_app.state.http_client.stream_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_cache_keys_are_versioned_and_separated_by_response_mode(client, test_app):
+    _enable_cache(test_app)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    base = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "same input"}],
+    }
+
+    json_response = await client.post(
+        "/v1/chat/completions", headers=headers, json={**base, "stream": False}
+    )
+    stream_response = await client.post(
+        "/v1/chat/completions", headers=headers, json={**base, "stream": True}
+    )
+
+    assert json_response.status_code == 200
+    assert stream_response.status_code == 200
+    keys = list(test_app.state.cache_backend._cache)
+    assert len(keys) == 2
+    assert any("schema:v2:mode:json:" in key for key in keys)
+    assert any("schema:v2:mode:stream:" in key for key in keys)
+
+
+@pytest.mark.asyncio
+async def test_streaming_reasoning_cache_hit_bills_estimated_usage_without_provider_cost(
     client, test_app
 ):
     _enable_stream_cache(test_app)
@@ -436,7 +533,7 @@ async def test_streaming_cache_hit_bills_from_estimated_usage_without_provider_c
         return _StreamContext(
             lines=[
                 'data: {"id":"chatcmpl-est-cache","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
-                'data: {"id":"chatcmpl-est-cache","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-est-cache","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"thinking"},"finish_reason":null}]}',
                 "data: [DONE]",
             ]
         )
@@ -454,8 +551,8 @@ async def test_streaming_cache_hit_bills_from_estimated_usage_without_provider_c
     stored = next(iter(test_app.state.cache_backend._cache.values()))
     assert stored.response["usage"] == {
         "prompt_tokens": 3,
-        "completion_tokens": 1,
-        "total_tokens": 4,
+        "completion_tokens": 2,
+        "total_tokens": 5,
     }
 
     hit = await client.post("/v1/chat/completions", headers=headers, json=body)
@@ -466,13 +563,13 @@ async def test_streaming_cache_hit_bills_from_estimated_usage_without_provider_c
     assert recorder.events[-1]["cache_hit"] is True
     assert recorder.events[-1]["usage"] == {
         "prompt_tokens": 3,
-        "completion_tokens": 1,
-        "total_tokens": 4,
+        "completion_tokens": 2,
+        "total_tokens": 5,
         "prompt_tokens_cached": 3,
     }
-    assert recorder.events[-1]["cost"] == 5.0
+    assert recorder.events[-1]["cost"] == 7.0
     assert recorder.events[-1]["metadata"]["provider_cost"] == 0.0
-    assert recorder.events[-1]["metadata"]["provider_cost_avoided"] == 5.0
+    assert recorder.events[-1]["metadata"]["provider_cost_avoided"] == 7.0
     assert recorder.events[-1]["metadata"]["cache_cost_basis"] == "avoided_provider_cost"
 
 

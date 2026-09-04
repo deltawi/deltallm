@@ -39,6 +39,10 @@ class InMemoryBackend(CacheBackend):
                     deployment_id=entry.deployment_id,
                     provider=entry.provider,
                     deployment_model=entry.deployment_model,
+                    stream_lines=(
+                        list(entry.stream_lines) if entry.stream_lines is not None else None
+                    ),
+                    stream_usage_line=entry.stream_usage_line,
                 )
 
             if key in self._cache:

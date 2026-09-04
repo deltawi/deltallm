@@ -525,7 +525,7 @@ async def emit_nonstream_success(
     )
 
 
-async def emit_nonstream_failure(
+async def emit_precommit_failure(
     *,
     request: Request,
     auth: Any,
@@ -544,6 +544,7 @@ async def emit_nonstream_failure(
     api_base: str,
     exc: Exception,
     status_code: int,
+    stream: bool,
 ) -> None:
     failure_fields = _resolve_failure_fields(
         request,
@@ -569,7 +570,7 @@ async def emit_nonstream_failure(
                 request,
                 {
                     "route": request.url.path,
-                    "stream": False,
+                    "stream": stream,
                     "cache_hit": cache_hit,
                     "cache_key": cache_key,
                     "api_base": failure_fields["api_base"],
@@ -648,7 +649,7 @@ async def emit_nonstream_failure(
             request,
             {
                 "route": request.url.path,
-                "stream": False,
+                "stream": stream,
                 "cache_hit": cache_hit,
                 "cache_key": cache_key,
                 "api_base": failure_fields["api_base"],

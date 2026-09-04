@@ -3,7 +3,16 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
 
-from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
+from src.metrics.counters import (
+    ProviderStreamValidationFailureReason,
+    increment_provider_stream_validation_failure,
+)
+from src.models.errors import (
+    FailureClassification,
+    InvalidRequestError,
+    ProxyError,
+    RoutingFailureAction,
+)
 from src.providers.base import (
     ProviderErrorDetails,
     invalid_provider_response_error,
@@ -12,6 +21,7 @@ from src.providers.base import (
     provider_error_details_from_payload,
     validate_provider_success_payload,
 )
+from src.providers.openai_stream_contract import inspect_openai_stream_choices
 
 _MAX_PRECOMMIT_STREAM_FRAMES = 32
 _MAX_PRECOMMIT_STREAM_CHARS = 262_144
@@ -90,39 +100,57 @@ async def translate_openai_compatible_stream(
 
     pending: list[str] = []
     pending_chars = 0
+    pending_unknown_output_candidate = False
     emitted_output = False
     saw_terminal = False
 
     async for line in provider_stream:
         if not line or line.startswith(":") or line.startswith("event:"):
             continue
-        if len(line) > _MAX_STREAM_FRAME_CHARS or not line.startswith("data:"):
-            raise invalid_provider_response_error()
+        if len(line) > _MAX_STREAM_FRAME_CHARS:
+            raise _invalid_stream_response_error(
+                ProviderStreamValidationFailureReason.FRAME_TOO_LARGE
+            )
+        if not line.startswith("data:"):
+            raise _invalid_stream_response_error(ProviderStreamValidationFailureReason.INVALID_SSE)
 
         raw_payload = line[len("data:") :].strip()
         if not raw_payload:
             continue
         if raw_payload == "[DONE]":
             if not emitted_output:
-                raise invalid_provider_response_error()
+                reason = (
+                    ProviderStreamValidationFailureReason.PRECOMMIT_UNKNOWN_OUTPUT_TERMINAL
+                    if pending_unknown_output_candidate
+                    else ProviderStreamValidationFailureReason.TERMINAL_BEFORE_OUTPUT
+                )
+                raise _invalid_stream_response_error(reason)
             yield line
             return
 
         try:
             payload = json.loads(raw_payload)
         except (RecursionError, TypeError, ValueError) as exc:
-            raise invalid_provider_response_error() from exc
+            raise _invalid_stream_response_error(
+                ProviderStreamValidationFailureReason.INVALID_JSON
+            ) from exc
         if not isinstance(payload, Mapping):
-            raise invalid_provider_response_error()
+            raise _invalid_stream_response_error(
+                ProviderStreamValidationFailureReason.INVALID_PAYLOAD
+            )
 
         if "error" in payload:
             raise _map_openai_compatible_stream_error(payload, classify_failure)
 
         choices = payload.get("choices")
         if not isinstance(choices, list):
-            raise invalid_provider_response_error()
+            raise _invalid_stream_response_error(
+                ProviderStreamValidationFailureReason.INVALID_CHOICES
+            )
         if not _valid_stream_choices(choices):
-            raise invalid_provider_response_error()
+            raise _invalid_stream_response_error(
+                ProviderStreamValidationFailureReason.INVALID_CHOICES
+            )
 
         classified_stop = _content_filter_stop(choices)
         if classified_stop and not emitted_output:
@@ -132,10 +160,19 @@ async def translate_openai_compatible_stream(
                 failure_classification=FailureClassification.CONTENT_POLICY,
             )
 
-        has_output = _choices_have_output(choices)
+        inspection = inspect_openai_stream_choices(choices)
+        has_output = inspection.has_output
         has_terminal = _choices_have_terminal(choices)
         if not emitted_output and not has_output and not has_terminal:
-            pending_chars = _buffer_precommit_frame(pending, pending_chars, line)
+            pending_unknown_output_candidate = (
+                pending_unknown_output_candidate or inspection.has_unknown_output_candidate
+            )
+            pending_chars = _buffer_precommit_frame(
+                pending,
+                pending_chars,
+                line,
+                has_unknown_output_candidate=pending_unknown_output_candidate,
+            )
             continue
 
         if not emitted_output:
@@ -147,7 +184,9 @@ async def translate_openai_compatible_stream(
         saw_terminal = saw_terminal or has_terminal
 
     if not emitted_output or not saw_terminal:
-        raise invalid_provider_response_error()
+        raise _invalid_stream_response_error(
+            ProviderStreamValidationFailureReason.INCOMPLETE_STREAM
+        )
 
 
 def _valid_stream_choices(choices: list[object]) -> bool:
@@ -168,20 +207,6 @@ def _valid_stream_choices(choices: list[object]) -> bool:
     return True
 
 
-def _choices_have_output(choices: list[object]) -> bool:
-    for value in choices:
-        if not isinstance(value, Mapping):
-            continue
-        delta = value.get("delta")
-        if not isinstance(delta, Mapping):
-            continue
-        for key in ("content", "refusal", "function_call", "tool_calls"):
-            output = delta.get(key)
-            if output not in (None, "", [], {}):
-                return True
-    return False
-
-
 def _choices_have_terminal(choices: list[object]) -> bool:
     return any(
         isinstance(value, Mapping)
@@ -200,12 +225,39 @@ def _content_filter_stop(choices: list[object]) -> bool:
     )
 
 
-def _buffer_precommit_frame(pending: list[str], pending_chars: int, line: str) -> int:
+def _buffer_precommit_frame(
+    pending: list[str],
+    pending_chars: int,
+    line: str,
+    *,
+    has_unknown_output_candidate: bool,
+) -> int:
     next_chars = pending_chars + len(line)
     if len(pending) >= _MAX_PRECOMMIT_STREAM_FRAMES or next_chars > _MAX_PRECOMMIT_STREAM_CHARS:
-        raise invalid_provider_response_error()
+        reason = (
+            ProviderStreamValidationFailureReason.PRECOMMIT_UNKNOWN_OUTPUT_LIMIT
+            if has_unknown_output_candidate
+            else ProviderStreamValidationFailureReason.PRECOMMIT_NO_OUTPUT_LIMIT
+        )
+        raise _invalid_stream_response_error(reason)
     pending.append(line)
     return next_chars
+
+
+def _invalid_stream_response_error(
+    reason: ProviderStreamValidationFailureReason,
+) -> ProxyError:
+    increment_provider_stream_validation_failure(reason=reason)
+    compatibility_failure = reason in {
+        ProviderStreamValidationFailureReason.PRECOMMIT_UNKNOWN_OUTPUT_LIMIT,
+        ProviderStreamValidationFailureReason.PRECOMMIT_UNKNOWN_OUTPUT_TERMINAL,
+    }
+    return invalid_provider_response_error(
+        affects_deployment_health=not compatibility_failure,
+        routing_failure_action=(
+            RoutingFailureAction.NEXT_DEPLOYMENT if compatibility_failure else None
+        ),
+    )
 
 
 def _map_openai_compatible_stream_error(
@@ -225,4 +277,6 @@ def _map_openai_compatible_stream_error(
         return map_standard_provider_status_error(400)
     if details.identifiers & _SERVER_ERROR_IDENTIFIERS:
         return map_standard_provider_status_error(500)
-    return invalid_provider_response_error()
+    return _invalid_stream_response_error(
+        ProviderStreamValidationFailureReason.UNKNOWN_ERROR_ENVELOPE
+    )

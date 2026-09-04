@@ -430,10 +430,10 @@ when a dynamic update attempts to change them.
 | `cache_backend` | `memory` | Cache backend: `memory`, `redis`, or `s3` |
 | `cache_ttl` | `3600` | Cache entry time-to-live in seconds |
 | `cache_max_size` | `10000` | Maximum entries for memory cache |
-| `stream_cache_max_bytes` | `262144` | Max buffered streaming response bytes before streaming cache is disabled for that stream |
+| `stream_cache_max_bytes` | `262144` | Max total bytes across retained SSE data frames before streaming cache is disabled for that stream |
 | `prompt_singleflight_max_keys` | `256` | Maximum distinct prompt-resolution cache misses admitted per process; callers for an existing key share its task |
 | `prompt_singleflight_timeout_seconds` | `2` | Deadline for an owned prompt-resolution cache-miss task before it fails with a controlled service-unavailable response |
-| `stream_cache_max_fragments` | `2048` | Max buffered streaming content fragments before streaming cache is disabled for that stream |
+| `stream_cache_max_fragments` | `2048` | Max retained SSE data frames before streaming cache is disabled for that stream |
 | `failover_event_history_size` | `1000` | Max in-memory failover events retained per instance for `/health/fallback-events` |
 
 ## Health Check Settings

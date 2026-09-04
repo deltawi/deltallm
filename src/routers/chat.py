@@ -14,8 +14,8 @@ from src.cache.pricing import cache_pricing_snapshot_from_deployment
 from src.cache.streaming import StreamWriteContext
 from src.chat import (
     audit_action_for_path,
-    emit_nonstream_failure,
     emit_nonstream_success,
+    emit_precommit_failure,
     emit_stream_failure,
     emit_stream_success,
     execute_chat,
@@ -506,7 +506,7 @@ async def handle_chat_like_request(
     except httpx.HTTPError as exc:
         provider_registry = request.app.state.provider_error_mapper_registry
         mapped_error = provider_registry.map_error(api_provider, exc)
-        await emit_nonstream_failure(
+        await emit_precommit_failure(
             request=request,
             auth=auth,
             payload=payload,
@@ -524,11 +524,12 @@ async def handle_chat_like_request(
             api_base=api_base,
             exc=mapped_error,
             status_code=mapped_error.status_code,
+            stream=bool(payload.stream),
         )
         raise mapped_error from exc
     except Exception as exc:
         status_code = int(getattr(exc, "status_code", 500) or 500)
-        await emit_nonstream_failure(
+        await emit_precommit_failure(
             request=request,
             auth=auth,
             payload=payload,
@@ -546,5 +547,6 @@ async def handle_chat_like_request(
             api_base=api_base,
             exc=exc,
             status_code=status_code,
+            stream=bool(payload.stream),
         )
         raise

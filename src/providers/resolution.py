@@ -28,6 +28,9 @@ OPENAI_FAMILY_PROVIDERS = {
     "azure_openai",
 }
 
+# Providers where requesting the final OpenAI stream usage chunk is supported.
+STREAM_USAGE_REQUEST_PROVIDERS = OPENAI_FAMILY_PROVIDERS | {"vllm"}
+
 PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
     "openai": ("openai/",),
     "anthropic": ("anthropic/",),
@@ -167,6 +170,10 @@ def resolve_upstream_model(
 
 def is_openai_family_provider(provider: str) -> bool:
     return (provider or "").strip().lower() in OPENAI_FAMILY_PROVIDERS
+
+
+def provider_supports_stream_usage_request(provider: str) -> bool:
+    return (provider or "").strip().lower() in STREAM_USAGE_REQUEST_PROVIDERS
 
 
 def normalize_openai_chat_payload(

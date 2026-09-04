@@ -16,6 +16,8 @@ class CacheEntry:
     deployment_id: str | None = None
     provider: str | None = None
     deployment_model: str | None = None
+    stream_lines: list[str] | None = None
+    stream_usage_line: str | None = None
 
 
 class CacheBackend(ABC):

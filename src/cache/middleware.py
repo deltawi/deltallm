@@ -46,6 +46,7 @@ from .metrics import CacheMetricsProtocol, NoopCacheMetrics
 from .pricing import has_cache_hit_only_pricing, provider_cache_miss_usage
 
 logger = logging.getLogger(__name__)
+_CACHE_SCHEMA_VERSION = "v2"
 
 
 class CacheControl(str, Enum):
@@ -169,7 +170,11 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 return response
 
             cache_key = key_builder.build_key_from_payload(request_data, cache_options.custom_key)
-            cache_key = f"endpoint:{endpoint}:{cache_key}"
+            response_mode = "stream" if bool(request_data.get("stream")) else "json"
+            cache_key = (
+                f"schema:{_CACHE_SCHEMA_VERSION}:mode:{response_mode}:"
+                f"endpoint:{endpoint}:{cache_key}"
+            )
             cache_key = self._scoped_cache_key(cache_key, request)
             request.state.cache_context = CacheContext(
                 cache_key=cache_key, options=cache_options, model=model
@@ -183,7 +188,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                     return response
                 if cache_options.control != CacheControl.NO_CACHE:
                     cached = await backend.get(cache_key)
-                    if cached is not None:
+                    if cached is not None and streaming_handler.can_replay(cached):
                         metrics.hit(endpoint=endpoint, model=model)
                         request.state.cache_context.hit = True
                         request.state.cache_hit = True
@@ -192,7 +197,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                         )
                         return StreamingResponse(
                             streaming_handler.reconstruct_sse_stream(
-                                cached.response,
+                                cached,
                                 include_usage=_stream_usage_requested(request_data),
                             ),
                             media_type="text/event-stream",

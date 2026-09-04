@@ -16,6 +16,7 @@ from src.models.errors import (
     NO_HEALTHY_DEPLOYMENTS_CODE,
     ProxyError,
     RateLimitError,
+    RoutingFailureAction,
     ServiceUnavailableError,
     TimeoutError,
     parse_retry_after_header,
@@ -207,13 +208,18 @@ def reject_openai_compatible_failure_response(payload: object) -> None:
             )
 
 
-def invalid_provider_response_error() -> ServiceUnavailableError:
-    """Return the one sanitized error for malformed nominal-success payloads."""
+def invalid_provider_response_error(
+    *,
+    affects_deployment_health: bool = True,
+    routing_failure_action: RoutingFailureAction | None = None,
+) -> ServiceUnavailableError:
+    """Return the one sanitized error for nominal-success validation failures."""
 
     return ServiceUnavailableError(
         message=INVALID_PROVIDER_RESPONSE_MESSAGE,
-        affects_deployment_health=True,
+        affects_deployment_health=affects_deployment_health,
         failure_classification=FailureClassification.GENERIC,
+        routing_failure_action=routing_failure_action,
     )
 
 

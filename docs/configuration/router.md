@@ -189,12 +189,31 @@ the bounded provider-specific context/content markers.
 
 No fallback starts after a streaming response frame has been sent. Provider role and metadata
 events are held in a bounded pre-commit buffer until output or a valid terminal event establishes a
-real response. This lets OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock classified terminal
-events select a specialized fallback when they arrive before output. Empty, terminal-only, and
-truncated pre-output streams are malformed successes and may use the general fallback chain. After
-partial output has committed a response, a classified stop terminates that stream with the compatible
-`content_filter` or `length` finish reason instead of starting another provider attempt. Any other
-malformed committed stream is aborted, marked unhealthy, and never cached as a complete response.
+real response. For OpenAI-compatible streams, non-empty `reasoning`, `reasoning_content`, and
+`reasoning_details` deltas are output, just like content, refusals, and tool calls. The first such
+delta commits the response, releases buffered metadata in its original order, and prevents replay on
+another deployment. This lets OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock classified
+terminal events select a specialized fallback when they arrive before output. Empty, terminal-only,
+and truncated pre-output streams are malformed successes and may use the general fallback chain.
+After partial output has committed a response, a classified stop terminates that stream with the
+compatible `content_filter` or `length` finish reason instead of starting another provider attempt.
+Any other malformed committed stream is aborted, marked unhealthy, and never cached as a complete
+response. Exceeding the bounded pre-commit buffer with otherwise well-formed, unrecognized metadata
+is treated as a gateway compatibility failure: it returns the same sanitized provider-response error
+but does not cool down the deployment. A clean `[DONE]` marker after only unrecognized, non-empty
+delta fields follows the same health-neutral path. Before any response frame is sent, the router
+skips a same-deployment retry and tries the next eligible deployment once. If every eligible
+deployment returns only unrecognized output fields and reaches either boundary, the request fails
+with the sanitized provider-response error and none of those deployments is marked unhealthy. A
+buffer filled only with known metadata, such as repeated role-only deltas, is instead a malformed
+provider stream and affects health.
+
+For OpenAI-compatible streaming requests, DeltaLLM asks OpenAI-family and vLLM deployments for a
+final usage chunk even when the client did not request one; that internal chunk is hidden from the
+client. If the provider omits usage, fallback estimation deduplicates textual `reasoning`,
+`reasoning_content`, and `reasoning_details` aliases within each delta, then sums the deltas. Opaque
+reasoning details use a conservative payload-size estimate and are marked incomplete in usage
+metadata.
 
 Each replica serializes durable config loads, subscriber application, publication, and rollback.
 Runtime reloads publish all three immutable maps as one generation, and publication is fenced by

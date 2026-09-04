@@ -16,6 +16,7 @@ from src.models.errors import (
     InvalidRequestError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
     RateLimitError,
+    RoutingFailureAction,
     ServiceUnavailableError,
     TimeoutError,
     parse_retry_after_header,
@@ -1706,6 +1707,68 @@ async def test_failover_local_execution_error_does_not_affect_deployment_health_
 
 
 @pytest.mark.asyncio
+async def test_health_neutral_next_deployment_action_skips_retry_and_preserves_health():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    fallback = _deployment("dep-b")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=3, retry_after=0, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary, fallback]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            raise invalid_provider_response_error(
+                affects_deployment_health=False,
+                routing_failure_action=RoutingFailureAction.NEXT_DEPLOYMENT,
+            )
+        return "ok"
+
+    result = await manager.execute_with_failover(primary, "group-a", run)
+
+    assert result == "ok"
+    assert attempts == [primary.deployment_id, fallback.deployment_id]
+    for deployment in (primary, fallback):
+        health = await state.get_health(deployment.deployment_id)
+        assert int(health.get("consecutive_failures", 0) or 0) == 0
+        assert health.get("last_error") is None
+
+
+@pytest.mark.asyncio
+async def test_health_neutral_next_deployment_action_exhausts_each_candidate_once():
+    state = RedisStateBackend(redis=None)
+    deployments = [_deployment(f"dep-{suffix}") for suffix in ("a", "b", "c")]
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=3, retry_after=0, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": deployments}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        raise invalid_provider_response_error(
+            affects_deployment_health=False,
+            routing_failure_action=RoutingFailureAction.NEXT_DEPLOYMENT,
+        )
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await manager.execute_with_failover(deployments[0], "group-a", run)
+
+    assert exc_info.value.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
+    assert attempts == [deployment.deployment_id for deployment in deployments]
+    for deployment in deployments:
+        health = await state.get_health(deployment.deployment_id)
+        assert int(health.get("consecutive_failures", 0) or 0) == 0
+        assert health.get("last_error") is None
+
+
+@pytest.mark.asyncio
 async def test_failover_classified_fallback_local_error_does_not_cool_down_or_try_next_fallback():
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
@@ -1746,6 +1809,55 @@ async def test_failover_classified_fallback_local_error_does_not_cool_down_or_tr
     assert not await state.is_cooled_down(primary.deployment_id)
     assert not await state.is_cooled_down(fallback_a.deployment_id)
     assert not await state.is_cooled_down(fallback_b.deployment_id)
+
+
+@pytest.mark.asyncio
+async def test_classified_fallback_honors_health_neutral_next_deployment_action():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    fallback_a = _deployment("dep-b")
+    fallback_b = _deployment("dep-c")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            num_retries=0,
+            timeout=1.0,
+            context_window_fallbacks={"group-a": ["ctx-fallbacks"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary], "ctx-fallbacks": [fallback_a, fallback_b]},
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            raise InvalidRequestError(
+                message="Provider rejected request",
+                failure_classification=FailureClassification.CONTEXT_WINDOW,
+            )
+        if deployment is fallback_a:
+            raise invalid_provider_response_error(
+                affects_deployment_health=False,
+                routing_failure_action=RoutingFailureAction.NEXT_DEPLOYMENT,
+            )
+        return "ok"
+
+    result = await manager.execute_with_failover(primary, "group-a", run)
+
+    assert result == "ok"
+    assert attempts == [
+        primary.deployment_id,
+        fallback_a.deployment_id,
+        fallback_b.deployment_id,
+    ]
+    for deployment in (primary, fallback_a, fallback_b):
+        health = await state.get_health(deployment.deployment_id)
+        assert int(health.get("consecutive_failures", 0) or 0) == 0
+        assert health.get("last_error") is None
 
 
 @pytest.mark.asyncio
@@ -2162,14 +2274,17 @@ async def test_cooldown_manager_ignores_invalid_request_errors():
 async def test_failover_treats_pool_timeout_as_gateway_capacity_error():
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
+    fallback = _deployment("dep-b")
     manager = FailoverManager(
         config=FallbackConfig(num_retries=0, timeout=1.0),
-        candidate_planner=_planner(state, {"group-a": [primary]}),
+        candidate_planner=_planner(state, {"group-a": [primary, fallback]}),
         state_backend=state,
         cooldown_manager=CooldownManager(state),
     )
+    attempts: list[str] = []
 
-    async def run(deployment: Deployment):  # noqa: ARG001, ANN202
+    async def run(deployment: Deployment):  # noqa: ANN202
+        attempts.append(deployment.deployment_id)
         raise httpx.PoolTimeout("connection pool exhausted")
 
     with pytest.raises(GatewayCapacityError) as exc_info:
@@ -2177,6 +2292,7 @@ async def test_failover_treats_pool_timeout_as_gateway_capacity_error():
 
     assert exc_info.value.code == "upstream_pool_timeout"
     assert exc_info.value.affects_deployment_health is False
+    assert attempts == [primary.deployment_id]
     health = await state.get_health(primary.deployment_id)
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 0

@@ -498,6 +498,14 @@ committed stream is marked unhealthy and never cached as a complete response. Op
 streams close without `[DONE]`; Anthropic Messages streams emit one sanitized `event: error` frame.
 Neither path starts another provider attempt after commit.
 
+Before commit, a bounded run of non-empty, unknown delta fields is treated as a forward-compatibility
+failure rather than evidence that the deployment is unhealthy. The router skips a same-deployment
+retry and tries the next eligible deployment once. This applies when the pre-commit buffer reaches
+its bound or a clean `[DONE]` marker follows only those unknown fields. Repeated known metadata with
+no output, such as role-only deltas, remains a malformed provider stream and follows the
+health-affecting general fallback path. Non-empty `reasoning`, `reasoning_content`, and
+`reasoning_details` are recognized output and commit immediately.
+
 All three maps are immutable members of one routing-runtime generation. Each replica serializes the
 durable config load, subscriber application, generation publication, and rollback. Publication is
 fenced by the complete generation identity, so a slower reload cannot overwrite a newer grant or

@@ -76,6 +76,7 @@ Core metrics include:
 | `deltallm_router_health_transitions_total` | Counter | Actual cooldown, manual-cooldown, and recovery transitions |
 | `deltallm_router_health_update_failures_total` | Counter | Post-outcome router health updates that could not be persisted |
 | `deltallm_provider_error_body_discards_total` | Counter | Encoded or oversized provider error bodies excluded from classification |
+| `deltallm_provider_stream_validation_failures_total` | Counter | Rejected OpenAI-compatible streams by a fixed validation reason |
 | `deltallm_prompt_resolutions_total` | Counter | Prompt registry resolution results |
 | `deltallm_prompt_resolution_latency_seconds` | Histogram | Prompt resolution latency |
 | `deltallm_prompt_singleflight_inflight` | Gauge | Distinct process-owned prompt cold-load tasks currently running |
@@ -119,6 +120,14 @@ Blocked required audits need operator replay after the dependency is repaired;
 unknown delivery outcomes require provider reconciliation and explicit resolution.
 Sustained prompt singleflight overload or timeout outcomes indicate that the
 configured distinct-key bound or the prompt dependency latency needs attention.
+
+Provider stream validation reasons are bounded. In particular,
+`precommit_unknown_output_limit` indicates a health-neutral compatibility failure that may move to
+the next deployment, and `precommit_unknown_output_terminal` records the same decision when a clean
+`[DONE]` marker follows only unknown output fields. `precommit_no_output_limit` indicates a
+health-affecting stream that repeated known metadata without producing output. Other reasons identify
+invalid SSE/JSON/schema, oversized frames, incomplete streams, unknown error envelopes, or
+termination before output.
 
 Both static hard caps and advanced fair-share strategies emit `deltallm_tier_capacity_requests_total` and saturation. Capacity request metrics intentionally omit organization IDs to keep Prometheus cardinality bounded; use the admin capacity dashboard for per-organization top-consumer and limit-hit details. Active-organization, fair-share-decision, and fair-share-latency series apply only to `weighted_fair` and `reserved_burst`. See the [Organization Tiers Rollout](../deployment/organization-tiers-rollout.md) runbook for queries and release checks.
 
