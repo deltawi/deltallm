@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from scripts.docs import export_openapi
 from scripts.docs.generate_config_reference import generate_reference as generate_config
 from scripts.docs.generate_provider_reference import generate_reference as generate_providers
 from scripts.docs.generated_artifact import write_or_check
@@ -11,6 +14,28 @@ from src.providers.model_catalog_loader import load_provider_catalogs
 from src.providers.resolution import PROVIDER_PRESETS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_generated_openapi_excludes_runtime_spa_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _App:
+        def openapi(self) -> dict[str, object]:
+            return {
+                "paths": {
+                    "/v1/models": {"get": {"operationId": "list_models"}},
+                    "/{full_path}": {"get": {"operationId": "serve_spa__full_path__get"}},
+                }
+            }
+
+    monkeypatch.setattr(export_openapi, "create_app", _App)
+    content, path_count, operation_count = export_openapi.generate_openapi()
+
+    schema = json.loads(content)
+    assert "/v1/models" in schema["paths"]
+    assert "/{full_path}" not in schema["paths"]
+    assert path_count == 1
+    assert operation_count == 1
 
 
 def test_generated_config_reference_covers_every_general_setting() -> None:
