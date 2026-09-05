@@ -14,7 +14,7 @@ from src.db.route_groups import (
     RouteGroupRecord,
     RoutePolicyRecord,
 )
-from src.router import build_deployment_registry
+from src.router import FallbackConfig, build_deployment_registry
 from src.router.policy_validation import (
     merge_policy_document_for_write,
     merge_policy_members,
@@ -252,6 +252,9 @@ class _FakeRouteGroupRepository:
                     else None,
                     "retry": policy_json.get("retry")
                     if isinstance(policy_json.get("retry"), dict)
+                    else None,
+                    "context": policy_json.get("context")
+                    if isinstance(policy_json.get("context"), dict)
                     else None,
                     "default_prompt": group.default_prompt,
                     "members": merge_policy_members(
@@ -746,6 +749,43 @@ def test_legacy_policy_publish_is_deprecated_in_openapi(test_app):  # noqa: ANN0
     assert operation["deprecated"] is True
 
 
+def test_route_policy_simulation_request_is_typed_in_openapi(test_app):  # noqa: ANN001
+    schema = test_app.openapi()
+    operation = schema["paths"]["/ui/api/route-groups/{group_key}/policy/simulate"]["post"]
+    request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
+
+    assert request_schema["anyOf"][0]["$ref"] == (
+        "#/components/schemas/RoutePolicySimulationRequest"
+    )
+    properties = schema["components"]["schemas"]["RoutePolicySimulationRequest"]["properties"]
+    assert properties["input_tokens"]["minimum"] == 0
+    assert properties["requested_output_tokens"]["anyOf"][0]["minimum"] == 0
+
+
+@pytest.mark.asyncio
+async def test_route_policy_simulation_preserves_bad_request_validation_status(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/route-groups/sim-route/policy/simulate",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"iterations": 0},
+    )
+
+    assert response.status_code == 400
+
+    malformed = await client.post(
+        "/ui/api/route-groups/sim-route/policy/simulate",
+        headers={
+            "Authorization": "Bearer mk-test",
+            "Content-Type": "application/json",
+        },
+        content=b"{",
+    )
+
+    assert malformed.status_code == 400
+
+
 @pytest.mark.asyncio
 async def test_policy_publish_reports_refresh_failure_as_post_commit_warning(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -1133,6 +1173,243 @@ async def test_route_group_policy_simulation_reports_retries_and_fallbacks(
     ]
     assert health_reads == 1
     assert cooldown_reads == 1
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_endpoints_reject_context_for_unsupported_mode(
+    client,
+    test_app,
+):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    test_app.state.model_registry = {
+        "rerank-model": [
+            {
+                "deployment_id": "dep-rerank",
+                "deltallm_params": {"model": "cohere/rerank-v3", "api_key": "key"},
+                "model_info": {"mode": "rerank"},
+            }
+        ]
+    }
+    _publish_test_model_registry(test_app)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "rerank-route", "mode": "rerank", "strategy": "weighted"},
+    )
+    await client.post(
+        "/ui/api/route-groups/rerank-route/members",
+        headers=headers,
+        json={"deployment_id": "dep-rerank", "weight": 1},
+    )
+
+    context_policy = {"context": {"mode": "eligible-only"}}
+    requests = [
+        ("/policy/validate", context_policy),
+        ("/policy/draft", context_policy),
+        ("/policy/publish", context_policy),
+        ("/policy/simulate", {"iterations": 1, "policy": context_policy}),
+    ]
+    for suffix, payload in requests:
+        response = await client.post(
+            f"/ui/api/route-groups/rerank-route{suffix}",
+            headers=headers,
+            json=payload,
+        )
+        assert response.status_code == 400
+        assert "route group mode 'rerank'" in response.text
+
+    disabled_response = await client.post(
+        "/ui/api/route-groups/rerank-route/policy/validate",
+        headers=headers,
+        json={"context": None},
+    )
+    assert disabled_response.status_code == 200
+    assert disabled_response.json()["policy"]["context"] is None
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_simulation_applies_context_token_demand(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    test_app.state.model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "dep-small",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "key"},
+                "model_info": {"mode": "chat", "max_tokens": 8_000},
+            },
+            {
+                "deployment_id": "dep-large",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "key"},
+                "model_info": {"mode": "chat", "max_tokens": 32_000},
+            },
+        ]
+    }
+    _publish_test_model_registry(test_app)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "context-sim", "mode": "chat", "strategy": "weighted"},
+    )
+    for priority, deployment_id in enumerate(("dep-small", "dep-large")):
+        await client.post(
+            "/ui/api/route-groups/context-sim/members",
+            headers=headers,
+            json={"deployment_id": deployment_id, "weight": 1, "priority": priority},
+        )
+
+    response = await client.post(
+        "/ui/api/route-groups/context-sim/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 2,
+            "input_tokens": 9_000,
+            "requested_output_tokens": 1_000,
+            "policy": {
+                "strategy": "weighted",
+                "context": {
+                    "mode": "eligible-only",
+                    "unknown_capacity": "exclude",
+                    "safety_margin_tokens": 0,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["selections"] == [
+        {"deployment_id": "dep-large", "count": 2, "ratio": 1.0}
+    ]
+
+    published = await client.post(
+        "/ui/api/route-groups/context-sim/policy/publish",
+        headers=headers,
+        json={
+            "strategy": "priority-based-routing",
+            "context": {
+                "mode": "eligible-only",
+                "unknown_capacity": "exclude",
+                "safety_margin_tokens": 0,
+            },
+        },
+    )
+    assert published.status_code == 200
+
+    omitted_context = await client.post(
+        "/ui/api/route-groups/context-sim/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 1,
+            "input_tokens": 9_000,
+            "requested_output_tokens": 1_000,
+            "policy": {"strategy": "priority-based-routing"},
+        },
+    )
+    deleted_context = await client.post(
+        "/ui/api/route-groups/context-sim/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 1,
+            "input_tokens": 9_000,
+            "requested_output_tokens": 1_000,
+            "policy": {"strategy": "priority-based-routing", "context": None},
+        },
+    )
+
+    assert omitted_context.status_code == 200
+    assert omitted_context.json()["selections"] == [
+        {"deployment_id": "dep-large", "count": 1, "ratio": 1.0}
+    ]
+    assert deleted_context.status_code == 200
+    assert deleted_context.json()["selections"] == [
+        {"deployment_id": "dep-small", "count": 1, "ratio": 1.0}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_simulation_counts_local_context_fallback(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    test_app.state.model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "dep-small",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "key"},
+                "model_info": {"mode": "chat", "max_tokens": 8_000},
+            },
+            {
+                "deployment_id": "dep-large",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "key"},
+                "model_info": {"mode": "chat", "max_tokens": 32_000},
+            },
+        ]
+    }
+    _publish_test_model_registry(test_app)
+    store = test_app.state.routing_runtime_generation_store
+    current = store.require_snapshot()
+    store.replace(
+        replace(
+            current,
+            failover_config=FallbackConfig(
+                context_window_fallbacks={"context-primary": ["context-large"]}
+            ),
+        )
+    )
+    headers = {"Authorization": "Bearer mk-test"}
+
+    for group_key, deployment_id in (
+        ("context-primary", "dep-small"),
+        ("context-large", "dep-large"),
+    ):
+        created = await client.post(
+            "/ui/api/route-groups",
+            headers=headers,
+            json={
+                "group_key": group_key,
+                "mode": "chat",
+                "strategy": "priority-based-routing",
+            },
+        )
+        assert created.status_code == 200
+        member = await client.post(
+            f"/ui/api/route-groups/{group_key}/members",
+            headers=headers,
+            json={"deployment_id": deployment_id, "priority": 0},
+        )
+        assert member.status_code == 200
+
+    response = await client.post(
+        "/ui/api/route-groups/context-primary/policy/simulate",
+        headers=headers,
+        json={
+            "iterations": 1,
+            "input_tokens": 9_000,
+            "requested_output_tokens": 1_000,
+            "policy": {
+                "strategy": "priority-based-routing",
+                "context": {"mode": "eligible-only", "safety_margin_tokens": 0},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["fallback_requests"] == 1
+    assert payload["served_deployments"] == [
+        {"deployment_id": "dep-large", "count": 1, "ratio": 1.0}
+    ]
+    assert payload["sample_attempts"][0]["transition"] == "fallback"
 
 
 @pytest.mark.asyncio

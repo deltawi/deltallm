@@ -5,7 +5,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, cast
 
-from src.config import ModelMode, SUPPORTED_MODEL_MODES
+from src.config import (
+    ModelMode,
+    SUPPORTED_MODEL_MODES,
+    validate_context_routing_workload_mode,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +78,8 @@ def resolve_route_group_modes(
         raw_mode = group.get("mode")
         if raw_mode not in (None, ""):
             group["mode"] = normalize_route_group_mode(raw_mode)
+            if group.get("context") is not None:
+                validate_context_routing_workload_mode(group["mode"])
             resolved_groups.append(group)
             continue
 
@@ -92,6 +98,8 @@ def resolve_route_group_modes(
                 f"workload modes: {modes}"
             )
         group["mode"] = next(iter(member_modes), "chat")
+        if group.get("context") is not None:
+            validate_context_routing_workload_mode(group["mode"])
         inferred_keys.append(group_key)
         resolved_groups.append(group)
 

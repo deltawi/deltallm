@@ -17,6 +17,11 @@ class _Member:
     enabled: bool = True
 
 
+@dataclass
+class _Group:
+    mode: str = "chat"
+
+
 class _Repository:
     def __init__(self) -> None:
         self.group_exists = True
@@ -24,10 +29,11 @@ class _Repository:
         self.document_calls: list[dict[str, object]] = []
         self.draft_calls = 0
         self.draft_exists = True
+        self.group_mode = "chat"
 
-    async def get_group(self, group_key: str) -> object | None:
+    async def get_group(self, group_key: str) -> _Group | None:
         del group_key
-        return object() if self.group_exists else None
+        return _Group(mode=self.group_mode) if self.group_exists else None
 
     async def list_members(self, group_key: str) -> list[_Member]:
         del group_key
@@ -147,3 +153,25 @@ async def test_missing_group_or_draft_does_not_refresh() -> None:
         await service.publish_latest_draft("support")
 
     assert refresh_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_document_publication_rejects_context_for_unsupported_group_mode() -> None:
+    repository = _Repository()
+    repository.group_mode = "rerank"
+
+    async def refresh() -> tuple[str, ...]:
+        return ()
+
+    service = RoutePolicyPublicationService(
+        route_groups=repository,
+        refresh_runtime=refresh,
+    )
+
+    with pytest.raises(ValueError, match="route group mode 'rerank'"):
+        await service.publish_document(
+            "support",
+            {"context": {"mode": "eligible-only"}},
+        )
+
+    assert repository.document_calls == []

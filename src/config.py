@@ -64,6 +64,20 @@ SUPPORTED_MODEL_MODES = frozenset(
         "rerank",
     }
 )
+CONTEXT_ROUTING_MODEL_MODES = frozenset({"chat", "embedding"})
+
+
+def validate_context_routing_workload_mode(workload_mode: object) -> None:
+    normalized = str(workload_mode or "").strip().lower()
+    if normalized in CONTEXT_ROUTING_MODEL_MODES:
+        return
+    supported = ", ".join(sorted(CONTEXT_ROUTING_MODEL_MODES))
+    actual = normalized or "unknown"
+    raise ValueError(
+        f"context routing is not supported for route group mode '{actual}'; "
+        f"supported modes: {supported}"
+    )
+
 
 RoutingStrategyName = Literal[
     "simple-shuffle",
@@ -195,6 +209,8 @@ class ModelInfo(BaseModel):
     audio_seconds_pm_limit: int | None = None
     char_pm_limit: int | None = None
     rerank_units_pm_limit: int | None = None
+    # Non-positive values remain readable as legacy "unknown" sentinels. New admin
+    # writes enforce positive values at their transport boundary.
     max_tokens: int | None = None
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
@@ -206,6 +222,13 @@ class ModelInfo(BaseModel):
     @classmethod
     def validate_access_groups(cls, value: object) -> list[str]:
         return normalize_access_group_list(value, strict=True)
+
+    @field_validator("max_tokens", "max_input_tokens", "max_output_tokens", mode="before")
+    @classmethod
+    def reject_boolean_context_limits(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("context capacity must be a positive integer")
+        return value
 
 
 class ModelDeployment(BaseModel):
@@ -228,6 +251,22 @@ class RouteGroupMember(BaseModel):
     priority: int | None = None
 
 
+class ContextRoutingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["eligible-only", "smallest-sufficient"] = "eligible-only"
+    unknown_capacity: Literal["allow", "exclude"] = "allow"
+    default_output_tokens: int = Field(default=1024, ge=0)
+    safety_margin_tokens: int = Field(default=256, ge=0)
+
+    @field_validator("default_output_tokens", "safety_margin_tokens", mode="before")
+    @classmethod
+    def reject_boolean_token_settings(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("context token settings must be non-negative integers")
+        return value
+
+
 class RouteGroupConfig(BaseModel):
     key: str
     # Omitted mode is retained for compatibility with pre-mode file configs and
@@ -237,11 +276,18 @@ class RouteGroupConfig(BaseModel):
     strategy: RoutingStrategyName | None = None
     access_groups: list[str] = Field(default_factory=list)
     members: list[RouteGroupMember] = Field(default_factory=list)
+    context: ContextRoutingConfig | None = None
 
     @field_validator("access_groups", mode="before")
     @classmethod
     def validate_access_groups(cls, value: object) -> list[str]:
         return normalize_access_group_list(value, strict=True)
+
+    @model_validator(mode="after")
+    def validate_context_workload_mode(self) -> "RouteGroupConfig":
+        if self.context is not None and self.mode is not None:
+            validate_context_routing_workload_mode(self.mode)
+        return self
 
 
 class RouterSettings(BaseModel):

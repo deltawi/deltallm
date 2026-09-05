@@ -21,6 +21,8 @@ from src.mcp.exceptions import MCPTransportError
 from src.mcp.models import MCPToolCallResult
 from src.models.errors import ServiceUnavailableError
 from src.rate_limit_policy import estimate_tokens
+from src.router import RouteGroupPolicy
+from src.router.context_policy import ContextRoutingPolicy, get_request_token_demand
 
 
 class BlockingChatGuardrail(CustomGuardrail):
@@ -434,13 +436,23 @@ async def test_chat_rate_limit_estimate_uses_final_transformed_payload(
     manager.register_callback(rewriter, callback_type="success")
     test_app.state.callback_manager = manager
     captured_tokens: list[int] = []
+    routed_tokens: list[int] = []
     original_acquire = rate_limit_middleware.acquire_rate_limit_controls
+    original_select = test_app.state.router.select_deployment
 
     async def capture_acquire(**kwargs):  # noqa: ANN003, ANN202
         captured_tokens.append(int(kwargs["tokens"]))
         return await original_acquire(**kwargs)
 
     monkeypatch.setattr(rate_limit_middleware, "acquire_rate_limit_controls", capture_acquire)
+
+    async def capture_route(model_group, request_context):  # noqa: ANN001, ANN202
+        demand = get_request_token_demand(request_context)
+        assert demand is not None
+        routed_tokens.append(demand.input_tokens)
+        return await original_select(model_group, request_context)
+
+    monkeypatch.setattr(test_app.state.router, "select_deployment", capture_route)
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {
         "model": "gpt-4o-mini",
@@ -459,8 +471,57 @@ async def test_chat_rate_limit_estimate_uses_final_transformed_payload(
 
     assert response.status_code == 200
     assert captured_tokens == [estimate_tokens(final_body)]
+    assert routed_tokens == captured_tokens
     assert captured_tokens[0] > estimate_tokens(body)
     assert rewriter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_local_context_rejection_uses_context_window_fallback(client, test_app):
+    registry_store = test_app.state.router.deployment_registry
+    primary = registry_store["gpt-4o-mini"][0]
+    primary.model_info["max_tokens"] = 512
+    fallback = type(primary)(
+        deployment_id="gpt-4o-mini-local-context-fallback",
+        model_name="gpt-4o-mini-context",
+        deltallm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "context-fallback-key",
+        },
+        model_info={"mode": "chat", "max_tokens": 32_000},
+    )
+    registry_store.replace(
+        {
+            **registry_store.snapshot(),
+            "gpt-4o-mini": [primary],
+            "gpt-4o-mini-context": [fallback],
+        }
+    )
+    context_policy = ContextRoutingPolicy(safety_margin_tokens=0)
+    test_app.state.router.config.route_group_policies.update(
+        {
+            "gpt-4o-mini": RouteGroupPolicy(context=context_policy),
+            "gpt-4o-mini-context": RouteGroupPolicy(context=context_policy),
+        }
+    )
+    test_app.state.failover_manager.config = replace(
+        test_app.state.failover_manager.config,
+        context_window_fallbacks={"gpt-4o-mini": ["gpt-4o-mini-context"]},
+    )
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    assert test_app.state.http_client.post_calls == 1
 
 
 @pytest.mark.asyncio

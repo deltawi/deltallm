@@ -113,6 +113,8 @@ test('route-group policy simulation sends the typed scenario and AbortSignal', a
     const controller = new AbortController();
     const result = await routeGroups.simulatePolicy('support / eu', {
       iterations: 2,
+      input_tokens: 9_000,
+      requested_output_tokens: 1_000,
       policy: { mode: 'fallback' },
       metadata: { tags: ['vip'] },
       outcomes: [{ deployment_id: 'dep-a', outcome: 'timeout' }],
@@ -123,6 +125,8 @@ test('route-group policy simulation sends the typed scenario and AbortSignal', a
     assert.equal(capturedInit?.signal, controller.signal);
     assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
       iterations: 2,
+      input_tokens: 9000,
+      requested_output_tokens: 1000,
       policy: { mode: 'fallback' },
       metadata: { tags: ['vip'] },
       outcomes: [{ deployment_id: 'dep-a', outcome: 'timeout' }],

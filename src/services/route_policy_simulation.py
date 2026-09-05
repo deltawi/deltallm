@@ -20,15 +20,23 @@ from src.router import (
     CooldownManager,
     Deployment,
     FailoverManager,
+    InitialDeploymentSource,
     Router,
     RouterConfig,
     build_deployment_registry,
     build_route_group_policies,
+    select_initial_deployment,
 )
 from src.router.policy_validation import (
     PolicyMemberInventoryItem,
+    merge_context_policy_block,
     merge_policy_members,
     validate_route_policy,
+)
+from src.router.context_policy import (
+    CONTEXT_ROUTING_METRICS_ENABLED_KEY,
+    RequestTokenDemand,
+    set_request_token_demand,
 )
 from src.router.runtime_generation import RoutingRuntimeGeneration
 from src.router.simulation_state import RoutingSimulationState, RoutingStateSnapshotMiss
@@ -63,7 +71,7 @@ class _SimulationFailoverManager(FailoverManager):
     def _record_fallback_event(
         self,
         model_group: str,
-        from_id: str,
+        from_id: str | None,
         to_id: str | None,
         reason: str,
         classification: str,
@@ -133,6 +141,7 @@ class RoutePolicySimulationService:
                 normalized, policy_warnings = validate_route_policy(
                     request.policy,
                     available_members=membership.inventory,
+                    workload_mode=group.mode,
                 )
             except ValueError as exc:
                 raise RoutePolicySimulationInvalidError(str(exc)) from exc
@@ -163,6 +172,10 @@ class RoutePolicySimulationService:
                 runtime_groups=runtime_groups,
                 metadata=metadata,
                 user_id=request.user_id,
+                token_demand=RequestTokenDemand(
+                    input_tokens=request.input_tokens,
+                    requested_output_tokens=request.requested_output_tokens,
+                ),
             )
         except ValueError as exc:
             raise RoutePolicySimulationInvalidError(str(exc)) from exc
@@ -190,8 +203,22 @@ class RoutePolicySimulationService:
                 "metadata": dict(metadata),
                 "user_id": request.user_id,
                 ROUTING_MODE_CONTEXT_KEY: str(group.mode or "chat"),
+                CONTEXT_ROUTING_METRICS_ENABLED_KEY: False,
             }
-            selected = await router.select_deployment(group_key, context)
+            set_request_token_demand(
+                context,
+                RequestTokenDemand(
+                    input_tokens=request.input_tokens,
+                    requested_output_tokens=request.requested_output_tokens,
+                ),
+            )
+            initial_selection = await select_initial_deployment(
+                router=router,
+                failover_manager=failover,
+                model_group=group_key,
+                request_context=context,
+            )
+            selected = initial_selection.deployment
             decision = context.get("route_decision")
             if isinstance(decision, dict):
                 counters.reasons[str(decision.get("reason") or "unknown")] += 1
@@ -213,13 +240,16 @@ class RoutePolicySimulationService:
                 counters.total_attempts += 1
                 if len(sample_attempts) < _MAX_SAMPLE_ATTEMPTS:
                     previous_id = attempt_ids[-2] if len(attempt_ids) > 1 else None
-                    transition = (
-                        "primary"
-                        if previous_id is None
-                        else "retry"
-                        if previous_id == deployment.deployment_id
-                        else "fallback"
-                    )
+                    if previous_id is None:
+                        transition = (
+                            "fallback"
+                            if initial_selection.source is InitialDeploymentSource.CONTEXT_FALLBACK
+                            else "primary"
+                        )
+                    elif previous_id == deployment.deployment_id:
+                        transition = "retry"
+                    else:
+                        transition = "fallback"
                     sample_attempts.append(
                         RoutePolicySimulationAttempt(
                             iteration=iteration,
@@ -275,7 +305,10 @@ class RoutePolicySimulationService:
             counters.served_requests += 1
             counters.served[served.deployment_id] += 1
             counters.terminal["success"] += 1
-            if served.deployment_id != selected.deployment_id:
+            if (
+                initial_selection.source is InitialDeploymentSource.CONTEXT_FALLBACK
+                or served.deployment_id != selected.deployment_id
+            ):
                 counters.fallback_requests += 1
 
         return RoutePolicySimulationResponse(
@@ -380,6 +413,7 @@ class RoutePolicySimulationService:
         runtime_groups: list[dict[str, Any]],
         metadata: dict[str, Any],
         user_id: str,
+        token_demand: RequestTokenDemand,
     ) -> tuple[Router, FailoverManager, RoutingSimulationState, set[str]]:
         model_registry = {
             key: [dict(entry) for entry in entries]
@@ -401,12 +435,19 @@ class RoutePolicySimulationService:
             deployment_registry=deployment_registry,
         )
         fallback_groups = list(self._runtime.failover_config.fallbacks.get(group_key, []))
+        context_fallback_groups = list(
+            self._runtime.failover_config.context_window_fallbacks.get(group_key, [])
+        )
+        planned_groups = list(
+            dict.fromkeys([group_key, *fallback_groups, *context_fallback_groups])
+        )
         warm_context: dict[str, Any] = {
             "metadata": dict(metadata),
             "user_id": user_id,
             ROUTING_MODE_CONTEXT_KEY: group_mode,
         }
-        await router.plan_deployments([group_key, *fallback_groups], warm_context)
+        set_request_token_demand(warm_context, token_demand)
+        await router.plan_deployments(planned_groups, warm_context)
         snapshot_state.freeze()
         cooldown = CooldownManager(
             snapshot_state,
@@ -421,7 +462,7 @@ class RoutePolicySimulationService:
         )
         reachable_ids = {
             deployment.deployment_id
-            for model_group in [group_key, *fallback_groups]
+            for model_group in planned_groups
             for deployment in router.deployment_registry.get(model_group, ())
         }
         return router, failover, snapshot_state, reachable_ids
@@ -451,6 +492,11 @@ def _apply_policy_override(
         )
         patched["timeouts"] = policy.get("timeouts")
         patched["retry"] = policy.get("retry")
+        context = merge_context_policy_block(group.get("context"), policy)
+        if context is None:
+            patched.pop("context", None)
+        else:
+            patched["context"] = context
         patched["members"] = merge_policy_members(
             base_members,
             policy.get("members") if "members" in policy else None,

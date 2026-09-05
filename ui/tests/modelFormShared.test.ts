@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AuthSsoConfig, ModelDeploymentDetail, Principal } from '../src/lib/api';
-import { EMPTY_FORM, buildModelPayload, formFromModel, type ModelFormValues } from '../src/components/modelFormShared';
+import {
+  EMPTY_FORM,
+  buildModelPayload,
+  formFromModel,
+  parseOptionalPositiveInteger,
+  validateContextCapacityFields,
+  type ModelFormValues,
+} from '../src/components/modelFormShared';
 import {
   formatOptionalBudget,
   formatOptionalLimit,
@@ -132,6 +139,136 @@ test('buildModelPayload clears scheduler capacity when all scheduler fields are 
 
   assert.equal('batch_capacity' in payload.model_info, false);
   assert.deepEqual(payload.model_info.vendor_metadata, { owner: 'infra' });
+});
+
+test('context capacity parsing distinguishes blank, valid, and invalid values', () => {
+  assert.deepEqual(parseOptionalPositiveInteger('  '), { kind: 'blank' });
+  assert.deepEqual(parseOptionalPositiveInteger('128000'), { kind: 'valid', value: 128000 });
+  for (const invalid of ['0', '-1', '1.5', 'not-a-number', '9007199254740992']) {
+    assert.deepEqual(parseOptionalPositiveInteger(invalid), { kind: 'invalid' });
+  }
+});
+
+test('context capacity validation is mode-aware', () => {
+  assert.deepEqual(validateContextCapacityFields(chatForm({
+    max_context_window: '0',
+    max_input_tokens: '-1',
+    max_output_tokens: '1.5',
+  })), {
+    max_context_window: 'Context Window must be a whole number greater than or equal to 1.',
+    max_input_tokens: 'Max Input Tokens must be a whole number greater than or equal to 1.',
+    max_output_tokens: 'Max Output Tokens must be a whole number greater than or equal to 1.',
+  });
+  assert.deepEqual(validateContextCapacityFields(chatForm({
+    mode: 'embedding',
+    max_context_window: '8192',
+    max_input_tokens: '-1',
+    max_output_tokens: '-1',
+  })), {
+    max_input_tokens: 'Max Input Tokens must be a whole number greater than or equal to 1.',
+  });
+});
+
+test('embedding edits preserve configured max input capacity', () => {
+  const payload = buildModelPayload(
+    chatForm({
+      mode: 'embedding',
+      max_context_window: '8192',
+      max_input_tokens: '8000',
+    }),
+    [],
+    {
+      max_tokens: 8192,
+      max_input_tokens: 8000,
+      provider_private_metadata: { region: 'iad' },
+    },
+  );
+  const serializedModelInfo = JSON.parse(JSON.stringify(payload.model_info)) as Record<string, unknown>;
+
+  assert.equal(serializedModelInfo.max_tokens, 8192);
+  assert.equal(serializedModelInfo.max_input_tokens, 8000);
+  assert.deepEqual(serializedModelInfo.provider_private_metadata, { region: 'iad' });
+});
+
+test('invalid nonblank context capacity cannot erase existing model metadata', () => {
+  assert.throws(
+    () => buildModelPayload(
+      chatForm({ max_context_window: '0' }),
+      [],
+      { max_tokens: 128000, provider_private_metadata: { region: 'iad' } },
+    ),
+    /Context Window must be a positive safe integer/,
+  );
+});
+
+test('blank context capacity intentionally clears existing metadata', () => {
+  const payload = buildModelPayload(
+    chatForm({ max_context_window: '', max_input_tokens: '', max_output_tokens: '' }),
+    [],
+    { max_tokens: 128000, max_input_tokens: 120000, max_output_tokens: 8000 },
+  );
+  const serializedModelInfo = JSON.parse(JSON.stringify(payload.model_info)) as Record<string, unknown>;
+
+  assert.equal('max_tokens' in serializedModelInfo, false);
+  assert.equal('max_input_tokens' in serializedModelInfo, false);
+  assert.equal('max_output_tokens' in serializedModelInfo, false);
+});
+
+test('legacy non-positive context capacity loads as unknown and is removed on edit', () => {
+  const existingModel = {
+    deployment_id: 'dep-legacy-capacity',
+    model_name: 'legacy-capacity-model',
+    provider: 'vllm',
+    deltallm_params: {
+      provider: 'vllm',
+      model: 'meta-llama/Llama-3.1-8B-Instruct',
+      api_base: 'https://vllm.example/v1',
+    },
+    model_info: {
+      mode: 'chat',
+      max_tokens: 0,
+      max_input_tokens: -1,
+      max_output_tokens: 0,
+      provider_private_metadata: { region: 'iad' },
+    },
+  } as ModelDeploymentDetail;
+
+  const { form, defaultParams } = formFromModel(existingModel);
+  const payload = buildModelPayload(form, defaultParams, existingModel.model_info);
+  const serializedModelInfo = JSON.parse(JSON.stringify(payload.model_info)) as Record<string, unknown>;
+
+  assert.equal(form.max_context_window, '');
+  assert.equal(form.max_input_tokens, '');
+  assert.equal(form.max_output_tokens, '');
+  assert.equal('max_tokens' in serializedModelInfo, false);
+  assert.equal('max_input_tokens' in serializedModelInfo, false);
+  assert.equal('max_output_tokens' in serializedModelInfo, false);
+  assert.deepEqual(serializedModelInfo.provider_private_metadata, { region: 'iad' });
+});
+
+test('legacy digit-string context capacity is normalized on edit', () => {
+  const existingModel = {
+    deployment_id: 'dep-legacy-string-capacity',
+    model_name: 'legacy-capacity-model',
+    provider: 'vllm',
+    deltallm_params: {
+      provider: 'vllm',
+      model: 'meta-llama/Llama-3.1-8B-Instruct',
+    },
+    model_info: {
+      mode: 'chat',
+      max_tokens: '8192',
+      max_input_tokens: '8000',
+    },
+  } as ModelDeploymentDetail;
+
+  const { form, defaultParams } = formFromModel(existingModel);
+  const payload = buildModelPayload(form, defaultParams, existingModel.model_info);
+
+  assert.equal(form.max_context_window, '8192');
+  assert.equal(form.max_input_tokens, '8000');
+  assert.equal(payload.model_info.max_tokens, 8192);
+  assert.equal(payload.model_info.max_input_tokens, 8000);
 });
 
 test('self-registration helpers require enabled SSO sandbox access', () => {

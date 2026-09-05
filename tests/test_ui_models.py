@@ -657,6 +657,74 @@ async def test_create_model_rejects_invalid_access_groups(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_create_model_rejects_invalid_context_capacity_metadata(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "invalid-context-model",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_key": "provider-key",
+            },
+            "model_info": {"mode": "chat", "max_input_tokens": 0},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "model_info.max_input_tokens must be a positive integer" in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_model_preserves_unchanged_legacy_context_capacity(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    deployment = test_app.state.model_registry["gpt-4o-mini"][0]
+    deployment.setdefault("model_info", {})["max_input_tokens"] = 0
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "gpt-4o-mini",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_info"]["max_input_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_update_model_normalizes_legacy_digit_string_context_capacity(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    deployment = test_app.state.model_registry["gpt-4o-mini"][0]
+    deployment.setdefault("model_info", {})["max_input_tokens"] = "8192"
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "gpt-4o-mini",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_info"]["max_input_tokens"] == 8192
+
+
+@pytest.mark.asyncio
 async def test_create_model_response_uses_effective_named_credential_custom_auth_summary(
     client, test_app
 ):

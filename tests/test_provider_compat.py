@@ -1307,6 +1307,34 @@ async def test_anthropic_adapter_translate_request_and_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_anthropic_adapter_uses_shared_required_output_default() -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        request = ChatCompletionRequest(
+            model="claude-sonnet-4",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        configured = await adapter.translate_request(
+            request,
+            {
+                "provider": "anthropic",
+                "model": "anthropic/claude-sonnet-4",
+                "max_tokens": 4096,
+            },
+        )
+        implicit = await adapter.translate_request(
+            request,
+            {"provider": "anthropic", "model": "anthropic/claude-sonnet-4"},
+        )
+
+        assert configured["max_tokens"] == 4096
+        assert implicit["max_tokens"] == 1024
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "assistant_content",
     [

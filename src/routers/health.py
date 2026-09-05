@@ -4,8 +4,25 @@ import asyncio
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 router = APIRouter(tags=["health"])
+
+
+class FallbackEventResponse(BaseModel):
+    timestamp: float
+    model_group: str
+    from_deployment: str | None
+    to_deployment: str | None
+    reason: str
+    error_classification: str
+    error_message: str
+    attempt: int
+    success: bool
+
+
+class FallbackEventsResponse(BaseModel):
+    events: list[FallbackEventResponse]
 
 
 @router.get("/health")
@@ -46,13 +63,13 @@ async def deployments_health(request: Request, model: str | None = None) -> JSON
     return JSONResponse(status_code=status_code, content=payload)
 
 
-@router.get("/health/fallback-events")
-async def fallback_events(request: Request, limit: int = 50) -> JSONResponse:
+@router.get("/health/fallback-events", response_model=FallbackEventsResponse)
+async def fallback_events(request: Request, limit: int = 50) -> FallbackEventsResponse:
     failover_manager = getattr(request.app.state, "failover_manager", None)
     if failover_manager is None:
-        return JSONResponse(status_code=200, content={"events": []})
+        return FallbackEventsResponse(events=[])
     events = failover_manager.get_recent_fallback_events(limit=min(limit, 200))
-    return JSONResponse(status_code=200, content={"events": events})
+    return FallbackEventsResponse.model_validate({"events": events})
 
 
 async def _readiness_payload(request: Request) -> dict[str, object]:

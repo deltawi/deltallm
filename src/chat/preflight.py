@@ -12,6 +12,7 @@ from src.chat.audit import request_client_ip
 from src.models.errors import InvalidRequestError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
+from src.rate_limit_policy import estimate_tokens
 from src.middleware.rate_limit import (
     _release_rate_limits,
     acquire_parallel_limits_for_payload,
@@ -37,6 +38,7 @@ class TextPreflightResult:
     request_data: dict[str, Any]
     callback_manager: CallbackManager
     guardrail_middleware: Any
+    token_estimate: int
 
 
 async def run_text_preflight(
@@ -45,16 +47,10 @@ async def run_text_preflight(
     payload: ChatCompletionRequest,
     request_data: dict[str, Any] | None,
     routing_runtime: RoutingRuntimeGeneration,
-) -> tuple[Any, ChatCompletionRequest, dict[str, Any], CallbackManager, Any]:
+) -> TextPreflightResult:
     prepared = getattr(request.state, "prepared_text_request", None)
     if isinstance(prepared, TextPreflightResult):
-        return (
-            prepared.auth,
-            prepared.payload,
-            dict(prepared.request_data),
-            prepared.callback_manager,
-            prepared.guardrail_middleware,
-        )
+        return prepared
 
     auth = request.state.user_api_key
     capacity_started = perf_counter()
@@ -183,6 +179,7 @@ async def run_text_preflight(
             message="Request data was invalid after pre-call policy processing"
         ) from exc
     transformed_data = dump_request_for_preflight(transformed_payload)
+    token_estimate = estimate_tokens(transformed_data)
 
     authorization_started = perf_counter()
     try:
@@ -224,6 +221,7 @@ async def run_text_preflight(
             request,
             model=transformed_payload.model,
             payload=transformed_data,
+            token_estimate=token_estimate,
         )
     except Exception:
         _observe_preflight_phase(
@@ -266,6 +264,7 @@ async def run_text_preflight(
             request,
             model=transformed_payload.model,
             payload=transformed_data,
+            token_estimate=token_estimate,
         )
     except Exception:
         _observe_preflight_phase(
@@ -290,9 +289,10 @@ async def run_text_preflight(
         request_data=dict(transformed_data),
         callback_manager=callback_manager,
         guardrail_middleware=guardrail_middleware,
+        token_estimate=token_estimate,
     )
     request.state.prepared_text_request = result
-    return auth, transformed_payload, dict(transformed_data), callback_manager, guardrail_middleware
+    return result
 
 
 def _route_group_key_for_model(request: Request, model: str) -> str | None:

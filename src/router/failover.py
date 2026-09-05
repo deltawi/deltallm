@@ -8,9 +8,10 @@ import time
 from collections.abc import Mapping, Sequence
 from collections import deque
 from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import partial
 from types import MappingProxyType
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Protocol
 
 import httpx
 
@@ -33,6 +34,7 @@ from src.router.candidates import (
     RouteCandidatePlanner,
 )
 from src.router.cooldown import CooldownManager
+from src.router.context_policy import context_capacity_error
 from src.router.execution import (
     ManagedFailoverResult,
     ProviderAttemptResult,
@@ -47,8 +49,47 @@ from src.router.state import DeploymentStateBackend
 
 logger = logging.getLogger(__name__)
 _ATTEMPT_PERMIT_CLEANUP_MARGIN_SECONDS = 30
+_INITIAL_DEPLOYMENT_SELECTION_CONTEXT_KEY = "_deltallm_initial_deployment_selection"
 
 TimeoutForDeployment = Callable[[Deployment], float | int | None]
+
+
+class InitialDeploymentRouter(Protocol):
+    async def select_deployment(
+        self,
+        model_group: str,
+        request_context: dict[str, Any],
+    ) -> Deployment | None: ...
+
+    def require_deployment(
+        self,
+        model_group: str,
+        deployment: Deployment | None,
+        *,
+        request_context: dict[str, Any] | None = None,
+    ) -> Deployment: ...
+
+
+class InitialDeploymentSource(StrEnum):
+    PRIMARY = "primary"
+    CONTEXT_FALLBACK = "context_fallback"
+    NONE = "none"
+
+
+@dataclass(frozen=True, slots=True)
+class InitialDeploymentSelection:
+    model_group: str
+    deployment: Deployment | None
+    source: InitialDeploymentSource
+    primary_rejection_reason: str | None
+    terminal_reason: str | None
+
+
+def get_initial_deployment_selection(
+    request_context: dict[str, Any],
+) -> InitialDeploymentSelection | None:
+    value = request_context.get(_INITIAL_DEPLOYMENT_SELECTION_CONTEXT_KEY)
+    return value if isinstance(value, InitialDeploymentSelection) else None
 
 
 def _freeze_fallback_map(
@@ -143,7 +184,7 @@ class RetryPolicy:
 class FallbackEvent:
     timestamp: float
     model_group: str
-    from_deployment_id: str
+    from_deployment_id: str | None
     to_deployment_id: str | None
     reason: str
     error_classification: str
@@ -167,6 +208,20 @@ class _NormalizedExecutionError:
     classification: FailureClassification
     allow_classified_fallbacks: bool
     retry_source: Exception
+
+
+class _ClassifiedFallbackAvailability(StrEnum):
+    NOT_CONFIGURED = "not_configured"
+    AVAILABLE = "available"
+    ELIGIBILITY_REJECTED = "eligibility_rejected"
+    CAPACITY_UNKNOWN = "capacity_unknown"
+    TEMPORARILY_UNAVAILABLE = "temporarily_unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class _ClassifiedFallbackPlan:
+    deployments: tuple[Deployment, ...]
+    availability: _ClassifiedFallbackAvailability
 
 
 class FallbackEventJournal:
@@ -224,7 +279,7 @@ class FailoverManager:
     def _record_fallback_event(
         self,
         model_group: str,
-        from_id: str,
+        from_id: str | None,
         to_id: str | None,
         reason: str | FailureClassification,
         classification: str | FailureClassification,
@@ -460,13 +515,30 @@ class FailoverManager:
                         break
                     deployment_was_attempted = True
                     try:
-                        if chain_index > 0:
+                        initial_selection = get_initial_deployment_selection(routing_context)
+                        local_context_fallback = bool(
+                            chain_index == 0
+                            and initial_selection is not None
+                            and initial_selection.source is InitialDeploymentSource.CONTEXT_FALLBACK
+                            and initial_selection.deployment is not None
+                            and initial_selection.deployment.deployment_id
+                            == deployment.deployment_id
+                        )
+                        if chain_index > 0 or local_context_fallback:
                             self._record_fallback_event(
                                 model_group=model_group,
-                                from_id=previous_deployment_id,
+                                from_id=(previous_deployment_id if chain_index > 0 else None),
                                 to_id=deployment.deployment_id,
-                                reason="primary_failed",
-                                classification="success",
+                                reason=(
+                                    "primary_failed"
+                                    if chain_index > 0
+                                    else "context_capacity_exceeded"
+                                ),
+                                classification=(
+                                    "success"
+                                    if chain_index > 0
+                                    else ErrorClassification.CONTEXT_WINDOW
+                                ),
                                 error_msg="",
                                 attempt=attempt,
                                 success=True,
@@ -528,7 +600,7 @@ class FailoverManager:
                     )
 
                     if normalized.allow_classified_fallbacks:
-                        extra_chain = await deadline.wait_for(
+                        extra_plan = await deadline.wait_for(
                             self._get_classified_fallbacks(
                                 classification,
                                 model_group,
@@ -536,9 +608,9 @@ class FailoverManager:
                                 excluded_ids=visited_ids | attempted_ids,
                             )
                         )
-                        if extra_chain:
+                        if extra_plan.deployments:
                             extra_result = await self._try_classified_fallbacks(
-                                extra_chain,
+                                list(extra_plan.deployments),
                                 model_group,
                                 execute,
                                 deployment.deployment_id,
@@ -634,6 +706,34 @@ class FailoverManager:
     def create_request_deadline(self, timeout_seconds: float | None = None) -> RequestDeadline:
         return RequestDeadline.after(self._effective_timeout(timeout_seconds))
 
+    async def select_context_fallback_for_local_rejection(
+        self,
+        model_group: str,
+        routing_context: dict[str, Any],
+    ) -> Deployment | None:
+        """Resolve a locally classified context rejection before provider execution."""
+
+        decision = routing_context.get("route_decision")
+        if not isinstance(decision, dict) or decision.get("reason") != "context_capacity_exceeded":
+            return None
+        plan = await self._get_classified_fallbacks(
+            ErrorClassification.CONTEXT_WINDOW,
+            model_group,
+            routing_context,
+            excluded_ids=set(),
+        )
+        if not plan.deployments:
+            self._record_context_fallback_unavailability(
+                routing_context,
+                plan.availability,
+            )
+            return None
+        selected = plan.deployments[0]
+        decision["primary_rejection_reason"] = "context_capacity_exceeded"
+        decision["selected_deployment_id"] = selected.deployment_id
+        decision["reason"] = "context_fallback_selected"
+        return selected
+
     async def execute_managed_with_failover(
         self,
         primary_deployment: Deployment,
@@ -667,17 +767,23 @@ class FailoverManager:
         routing_context: dict[str, Any],
         *,
         excluded_ids: set[str],
-    ) -> list[Deployment]:
+    ) -> _ClassifiedFallbackPlan:
         if classification == ErrorClassification.CONTEXT_WINDOW:
             fallback_map = self.config.context_window_fallbacks
         elif classification == ErrorClassification.CONTENT_POLICY:
             fallback_map = self.config.content_policy_fallbacks
         else:
-            return []
+            return _ClassifiedFallbackPlan(
+                deployments=(),
+                availability=_ClassifiedFallbackAvailability.NOT_CONFIGURED,
+            )
 
         fallback_groups = fallback_map.get(model_group, [])
         if not fallback_groups:
-            return []
+            return _ClassifiedFallbackPlan(
+                deployments=(),
+                availability=_ClassifiedFallbackAvailability.NOT_CONFIGURED,
+            )
 
         plans = await self.candidate_planner.plan_deployments(
             fallback_groups,
@@ -693,7 +799,41 @@ class FailoverManager:
                 if dep.deployment_id not in seen:
                     chain.append(dep)
                     seen.add(dep.deployment_id)
-        return chain
+        if chain:
+            return _ClassifiedFallbackPlan(
+                deployments=tuple(chain),
+                availability=_ClassifiedFallbackAvailability.AVAILABLE,
+            )
+        if classification == ErrorClassification.CONTEXT_WINDOW:
+            if any(
+                plan.context_eligible_count is not None and plan.context_eligible_count > 0
+                for plan in plans.values()
+            ):
+                availability = _ClassifiedFallbackAvailability.TEMPORARILY_UNAVAILABLE
+            elif any(
+                plan.rejection_reason == "context_capacity_unknown" for plan in plans.values()
+            ):
+                availability = _ClassifiedFallbackAvailability.CAPACITY_UNKNOWN
+            else:
+                availability = _ClassifiedFallbackAvailability.ELIGIBILITY_REJECTED
+        else:
+            availability = _ClassifiedFallbackAvailability.ELIGIBILITY_REJECTED
+        return _ClassifiedFallbackPlan(deployments=(), availability=availability)
+
+    @staticmethod
+    def _record_context_fallback_unavailability(
+        routing_context: dict[str, Any],
+        availability: _ClassifiedFallbackAvailability,
+    ) -> None:
+        decision = routing_context.get("route_decision")
+        if not isinstance(decision, dict):
+            return
+        if availability is _ClassifiedFallbackAvailability.TEMPORARILY_UNAVAILABLE:
+            decision["primary_rejection_reason"] = "context_capacity_exceeded"
+            decision["reason"] = "no_eligible_candidates"
+        elif availability is _ClassifiedFallbackAvailability.CAPACITY_UNKNOWN:
+            decision["primary_rejection_reason"] = "context_capacity_exceeded"
+            decision["reason"] = "context_capacity_unknown"
 
     async def _try_classified_fallbacks(
         self,
@@ -1031,7 +1171,38 @@ class FailoverManager:
         eligible_ids = {
             deployment.deployment_id for plan in plans.values() for deployment in plan.deployments
         }
-        if primary_deployment.deployment_id in eligible_ids:
+        primary_plan = plans.get(model_group)
+        primary_context_rejected = bool(
+            primary_plan is not None
+            and primary_plan.rejection_reason == "context_capacity_exceeded"
+        )
+        if primary_context_rejected:
+            context_plan = await self._get_classified_fallbacks(
+                ErrorClassification.CONTEXT_WINDOW,
+                model_group,
+                routing_context,
+                excluded_ids=set(),
+            )
+            if not context_plan.deployments:
+                self._record_context_fallback_unavailability(
+                    routing_context,
+                    context_plan.availability,
+                )
+            if context_plan.availability in {
+                _ClassifiedFallbackAvailability.TEMPORARILY_UNAVAILABLE,
+                _ClassifiedFallbackAvailability.CAPACITY_UNKNOWN,
+            }:
+                raise ServiceUnavailableError(
+                    message=f"No healthy deployments available for model '{model_group}'",
+                    code=NO_HEALTHY_DEPLOYMENTS_CODE,
+                )
+            if not context_plan.deployments:
+                raise context_capacity_error(model_group)
+            context_ids = {deployment.deployment_id for deployment in context_plan.deployments}
+            if primary_deployment.deployment_id in context_ids:
+                add([primary_deployment])
+            add(list(context_plan.deployments))
+        elif primary_deployment.deployment_id in eligible_ids:
             add([primary_deployment])
 
         for group in groups:
@@ -1039,4 +1210,78 @@ class FailoverManager:
             if plan is not None:
                 add(list(plan.deployments))
 
+        if (
+            not chain
+            and primary_plan is not None
+            and primary_plan.rejection_reason == "context_capacity_exceeded"
+        ):
+            raise context_capacity_error(model_group)
+
         return chain
+
+
+async def select_initial_deployment(
+    *,
+    router: InitialDeploymentRouter,
+    failover_manager: FailoverManager,
+    model_group: str,
+    request_context: dict[str, Any],
+) -> InitialDeploymentSelection:
+    """Select a primary or an eligible classified context fallback."""
+
+    selected = await router.select_deployment(model_group, request_context)
+    decision = request_context.get("route_decision")
+    primary_rejection_reason = (
+        str(decision.get("reason"))
+        if selected is None and isinstance(decision, dict) and decision.get("reason") is not None
+        else None
+    )
+    source = (
+        InitialDeploymentSource.PRIMARY if selected is not None else InitialDeploymentSource.NONE
+    )
+    if selected is None:
+        selected = await failover_manager.select_context_fallback_for_local_rejection(
+            model_group,
+            request_context,
+        )
+        if selected is not None:
+            source = InitialDeploymentSource.CONTEXT_FALLBACK
+    decision = request_context.get("route_decision")
+    selection = InitialDeploymentSelection(
+        model_group=model_group,
+        deployment=selected,
+        source=source,
+        primary_rejection_reason=primary_rejection_reason,
+        terminal_reason=(
+            str(decision.get("reason"))
+            if isinstance(decision, dict) and decision.get("reason") is not None
+            else None
+        ),
+    )
+    if selection.source is InitialDeploymentSource.CONTEXT_FALLBACK:
+        request_context[_INITIAL_DEPLOYMENT_SELECTION_CONTEXT_KEY] = selection
+    else:
+        request_context.pop(_INITIAL_DEPLOYMENT_SELECTION_CONTEXT_KEY, None)
+    return selection
+
+
+async def require_initial_deployment(
+    *,
+    router: InitialDeploymentRouter,
+    failover_manager: FailoverManager,
+    model_group: str,
+    request_context: dict[str, Any],
+) -> Deployment:
+    """Select an initial deployment, then apply the router's standard errors."""
+
+    selection = await select_initial_deployment(
+        router=router,
+        failover_manager=failover_manager,
+        model_group=model_group,
+        request_context=request_context,
+    )
+    return router.require_deployment(
+        model_group=model_group,
+        deployment=selection.deployment,
+        request_context=request_context,
+    )

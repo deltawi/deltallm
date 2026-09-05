@@ -108,6 +108,7 @@ interface RouteGroupAdvancedTabProps {
 
   /* Routing Policy */
   groupKey: string;
+  workloadMode: string;
   guidedPolicy: PolicyGuidedValues;
   members: RouteGroupMemberDetail[];
   guidedPreview: string;
@@ -163,6 +164,7 @@ export default function RouteGroupAdvancedTab({
   onSaveBinding,
   onDeleteBinding,
   groupKey,
+  workloadMode,
   guidedPolicy,
   members,
   guidedPreview,
@@ -466,6 +468,7 @@ export default function RouteGroupAdvancedTab({
               onChange={onGuidedPolicyChange}
               strategyOptions={routeGroupStrategyOptions(guidedPolicy.strategy)}
               memberOptions={members}
+              workloadMode={workloadMode}
             />
           )}
 

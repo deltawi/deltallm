@@ -260,13 +260,29 @@ POST successor.
 `mode: "fallback"` inputs remain accepted with deprecation warnings and normalize to `weighted` and
 `priority-based-routing`, respectively.
 
+The optional `context` policy block is accepted only when the route group's workload mode is
+`chat` or `embedding`. Validation, draft, publication, rollback, and simulation reject it for image,
+audio, and rerank groups.
+
+Omitting `context` from a policy write preserves the stored context block for forward compatibility.
+Send `"context": null` to explicitly disable context routing; the deletion marker is applied during
+the write and is not retained in the published document. Context token settings accept exact
+non-negative integers (or their decimal string form) and reject fractional values.
+
 Policy simulation accepts a bounded scenario (1–5000 iterations):
 
 ```json
 {
   "iterations": 100,
+  "input_tokens": 9000,
+  "requested_output_tokens": 1000,
   "policy": {
     "strategy": "priority-based-routing",
+    "context": {
+      "mode": "eligible-only",
+      "unknown_capacity": "allow",
+      "safety_margin_tokens": 256
+    },
     "members": [
       {"deployment_id": "primary", "priority": 0},
       {"deployment_id": "standby", "priority": 1}
@@ -280,7 +296,9 @@ Policy simulation accepts a bounded scenario (1–5000 iterations):
 }
 ```
 
-Supported assumed outcomes are `success`, `timeout`, `rate_limit`, and `unavailable`. Omitted
+`input_tokens` defaults to `0`; an omitted or null `requested_output_tokens` uses the context
+policy's deployment/default output allowance. Supported assumed outcomes are `success`, `timeout`,
+`rate_limit`, and `unavailable`. Omitted
 deployments default to `success`. The response includes initial `selections`,
 `served_deployments`, `terminal_outcomes`, aggregate retry/fallback counts, eligibility
 `reason_counts`, and a bounded `sample_attempts` trace. `basis` is `live_state_dry_run`: the server

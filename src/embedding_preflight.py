@@ -14,6 +14,8 @@ from src.middleware.rate_limit import (
 )
 from src.models.errors import InvalidRequestError
 from src.models.requests import EmbeddingRequest
+from src.rate_limit_policy import estimate_tokens
+from src.router.context_policy import estimate_embedding_context_input_tokens
 from src.routers.utils import enforce_budget_if_configured
 from src.router.runtime_generation import RoutingRuntimeGeneration
 from src.services.model_visibility import (
@@ -31,6 +33,8 @@ class EmbeddingPreflightResult:
     payload: EmbeddingRequest
     request_data: dict[str, Any]
     callback_manager: CallbackManager
+    token_estimate: int
+    context_input_tokens: int
 
 
 async def run_embedding_preflight(
@@ -69,6 +73,8 @@ async def run_embedding_preflight(
             message="Request data was invalid after pre-call policy processing"
         ) from exc
     transformed_data = transformed_payload.model_dump(exclude_none=True)
+    token_estimate = estimate_tokens(transformed_data)
+    context_input_tokens = estimate_embedding_context_input_tokens(transformed_payload.input)
 
     ensure_model_allowed(
         auth,
@@ -89,6 +95,7 @@ async def run_embedding_preflight(
         request,
         model=transformed_payload.model,
         payload=transformed_data,
+        token_estimate=token_estimate,
     )
     try:
         await enforce_budget_if_configured(
@@ -105,6 +112,7 @@ async def run_embedding_preflight(
             request,
             model=transformed_payload.model,
             payload=transformed_data,
+            token_estimate=token_estimate,
         )
     finally:
         await release_preflight_capacity(request)
@@ -114,6 +122,8 @@ async def run_embedding_preflight(
         payload=transformed_payload,
         request_data=dict(transformed_data),
         callback_manager=callback_manager,
+        token_estimate=token_estimate,
+        context_input_tokens=context_input_tokens,
     )
     request.state.prepared_embedding_request = result
     return result

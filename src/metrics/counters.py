@@ -146,6 +146,13 @@ deltallm_router_health_update_failures_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_router_context_decisions_metric = Counter(
+    "deltallm_router_context_decisions_total",
+    "Context-capacity routing decisions by bounded outcome",
+    ["outcome"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_provider_error_body_discards_metric = Counter(
     "deltallm_provider_error_body_discards_total",
     "Provider error bodies discarded before classification by bounded reason",
@@ -278,6 +285,12 @@ def increment_router_health_transition(*, transition: str) -> None:
 
 def increment_router_health_update_failure() -> None:
     deltallm_router_health_update_failures_metric.inc()
+
+
+def increment_router_context_decision(*, outcome: str) -> None:
+    if outcome not in {"selected", "capacity_exceeded", "capacity_unknown", "unavailable"}:
+        raise ValueError("unsupported router context decision outcome")
+    deltallm_router_context_decisions_metric.labels(outcome=outcome).inc()
 
 
 def increment_prompt_cache_lookup(*, entity: str, tier: str) -> None:

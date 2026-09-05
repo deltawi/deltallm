@@ -44,8 +44,14 @@ from src.metrics import (
     set_batch_worker_saturation,
 )
 from src.models.requests import EmbeddingRequest
+from src.models.request_serialization import dump_request_for_preflight
 from src.providers.resolution import resolve_provider
-from src.router import ROUTING_MODE_CONTEXT_KEY
+from src.router import ROUTING_MODE_CONTEXT_KEY, require_initial_deployment
+from src.router.context_policy import (
+    RequestTokenDemand,
+    build_combined_request_context,
+    set_request_token_demand,
+)
 from src.router.execution import get_failover_original_error
 from src.routers.routing_decision import route_failover_kwargs
 
@@ -61,7 +67,7 @@ class EmbeddingWorkerExecutionMixin:
             app=self.app,
             job=job,
             payload=embedding_request,
-            request_data=embedding_request.model_dump(exclude_none=True),
+            request_data=dump_request_for_preflight(embedding_request),
             call_type="embedding",
             routing_runtime=routing_generation,
         )
@@ -72,13 +78,22 @@ class EmbeddingWorkerExecutionMixin:
             "user_id": preflight.auth.user_id or preflight.auth.api_key,
             ROUTING_MODE_CONTEXT_KEY: "embedding",
         }
+        set_request_token_demand(
+            request_context,
+            RequestTokenDemand(
+                input_tokens=preflight.context_input_tokens,
+                requested_output_tokens=0,
+            ),
+        )
         app_router = routing_generation.router
         model_group = app_router.resolve_model_group(embedding_request.model)
         await self._raise_if_model_group_deferred(model_group)
 
-        primary_deployment = app_router.require_deployment(
+        primary_deployment = await require_initial_deployment(
+            router=app_router,
+            failover_manager=routing_generation.failover_manager,
             model_group=model_group,
-            deployment=await app_router.select_deployment(model_group, request_context),
+            request_context=request_context,
         )
         input_kind, microbatch_eligible, microbatch_ineligible_reason = (
             classify_embedding_microbatch_request(embedding_request)
@@ -629,6 +644,9 @@ class EmbeddingWorkerExecutionMixin:
         batch_id = job.batch_id
         chunk_size = len(prepared_items)
         first_item = prepared_items[0]
+        failover_routing_context = build_combined_request_context(
+            [prepared.request_context for prepared in prepared_items]
+        )
         item_ids = [prepared.item.item_id for prepared in prepared_items]
         item_heartbeats: dict[str, asyncio.Task[None]] = {}
         item_lease_lost = asyncio.Event()
@@ -682,7 +700,7 @@ class EmbeddingWorkerExecutionMixin:
                     model_group=first_item.model_group,
                     execute=_execute_for_deployment,
                     return_deployment=True,
-                    routing_context=first_item.request_context,
+                    routing_context=failover_routing_context,
                     **first_item.failover_kwargs,
                 ),
                 lease_lost_event=item_lease_lost,

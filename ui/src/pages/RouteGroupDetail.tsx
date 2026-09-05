@@ -27,9 +27,11 @@ import {
   GUIDED_POLICY_DEFAULTS,
   parsePolicyTextLoose,
   reconcileGuidedPolicyMembers,
+  restoreDraftPolicyTombstones,
   routeGroupMutationOutcome,
   toGuidedPolicy,
   validateGuidedPolicy,
+  validatePolicyContextCompatibility,
   type PolicyAction,
   type PolicyGuidedValues,
 } from '../lib/routeGroups';
@@ -148,6 +150,7 @@ export default function RouteGroupDetail() {
 
   const policies = useMemo(() => policyHistory.data?.policies || [], [policyHistory.data?.policies]);
   const members = useMemo(() => detail.data?.members || [], [detail.data?.members]);
+  const workloadMode = detail.data?.group.mode || 'chat';
   const bindings = useMemo(() => groupBindings.data?.data || [], [groupBindings.data?.data]);
   const healthyMembers = members.filter((m) => m.healthy === true).length;
   const missingMembers = members.filter((m) => m.healthy == null).length;
@@ -188,17 +191,27 @@ export default function RouteGroupDetail() {
   useEffect(() => {
     if (policies.length === 0) return;
     const preferred = draftPolicy || policies[0];
-    const policyJson =
+    const storedPolicyJson =
       preferred.policy_json && typeof preferred.policy_json === 'object' && !Array.isArray(preferred.policy_json)
         ? preferred.policy_json
         : {};
+    const storedPublishedPolicy = publishedPolicy?.policy_json;
+    const publishedPolicyJson =
+      storedPublishedPolicy
+      && typeof storedPublishedPolicy === 'object'
+      && !Array.isArray(storedPublishedPolicy)
+        ? storedPublishedPolicy
+        : null;
+    const policyJson = preferred.status === 'draft'
+      ? restoreDraftPolicyTombstones(storedPolicyJson, publishedPolicyJson)
+      : storedPolicyJson;
     setPolicyText(JSON.stringify(policyJson, null, 2));
     setGuidedPolicy(toGuidedPolicy(policyJson, members));
     const rollbackCandidates = policies
       .filter((p) => p.status === 'archived' || p.status === 'published')
       .sort((a, b) => b.version - a.version);
     setSelectedRollbackVersion(rollbackCandidates[0]?.version ?? null);
-  }, [draftPolicy, members, policies]);
+  }, [draftPolicy, members, policies, publishedPolicy]);
 
   useEffect(() => {
     setGuidedPolicy((current) => reconcileGuidedPolicyMembers(current, members));
@@ -221,16 +234,22 @@ export default function RouteGroupDetail() {
   }, [guidedPolicy, policyText]);
 
   const simulationPolicy = useMemo(() => {
-    if (showAdvancedJson) return parsePolicyTextLoose(policyText);
-    if (validateGuidedPolicy(guidedPolicy, members)) return null;
+    if (showAdvancedJson) {
+      const parsed = parsePolicyTextLoose(policyText);
+      if (!parsed || validatePolicyContextCompatibility(parsed, workloadMode)) return null;
+      return parsed;
+    }
+    if (validateGuidedPolicy(guidedPolicy, members, workloadMode)) return null;
     return buildPolicyFromGuided(parsePolicyTextLoose(policyText) || {}, guidedPolicy);
-  }, [guidedPolicy, members, policyText, showAdvancedJson]);
+  }, [guidedPolicy, members, policyText, showAdvancedJson, workloadMode]);
   const simulationPolicyError = useMemo(() => {
     if (showAdvancedJson) {
-      return parsePolicyTextLoose(policyText) ? null : 'Enter valid policy JSON before simulating.';
+      const parsed = parsePolicyTextLoose(policyText);
+      if (!parsed) return 'Enter valid policy JSON before simulating.';
+      return validatePolicyContextCompatibility(parsed, workloadMode);
     }
-    return validateGuidedPolicy(guidedPolicy, members);
-  }, [guidedPolicy, members, policyText, showAdvancedJson]);
+    return validateGuidedPolicy(guidedPolicy, members, workloadMode);
+  }, [guidedPolicy, members, policyText, showAdvancedJson, workloadMode]);
 
   const promptSummary = useMemo(() => {
     if (!winningPrompt || !winningPromptDetail.data) return null;
@@ -254,7 +273,7 @@ export default function RouteGroupDetail() {
   /* ── Handlers ── */
   const parsePolicy = (): Record<string, unknown> | null => {
     if (!showAdvancedJson) {
-      const guidedError = validateGuidedPolicy(guidedPolicy, members);
+      const guidedError = validateGuidedPolicy(guidedPolicy, members, workloadMode);
       if (guidedError) {
         setPolicyError(guidedError);
         return null;
@@ -267,6 +286,8 @@ export default function RouteGroupDetail() {
     }
     const parsed = parsePolicyTextLoose(policyText);
     if (!parsed) { setPolicyError('Invalid JSON payload'); return null; }
+    const compatibilityError = validatePolicyContextCompatibility(parsed, workloadMode);
+    if (compatibilityError) { setPolicyError(compatibilityError); return null; }
     setPolicyError(null);
     return parsed;
   };
@@ -625,6 +646,7 @@ export default function RouteGroupDetail() {
           ) : activeTab === 'advanced' ? (
             <RouteGroupAdvancedTab
               groupKey={group.group_key}
+              workloadMode={workloadMode}
               bindings={bindings}
               templates={promptTemplates.data?.data || []}
               bindingForm={bindingForm}

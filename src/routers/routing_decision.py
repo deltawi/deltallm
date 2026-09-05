@@ -102,11 +102,13 @@ def update_served_route_decision(
 ) -> dict[str, Any]:
     current = getattr(request.state, "route_decision", None)
     decision = dict(current) if isinstance(current, dict) else {}
+    initial_context_fallback = decision.get("reason") == "context_fallback_selected"
     decision["primary_deployment_id"] = primary_deployment_id
     decision["served_deployment_id"] = served_deployment_id
-    decision["fallback_used"] = (
+    deployment_fallback_used = (
         primary_deployment_id != served_deployment_id if fallback_used is None else fallback_used
     )
+    decision["fallback_used"] = initial_context_fallback or deployment_fallback_used
     request.state.route_decision = decision
     _refresh_request_resolution(request)
     return decision

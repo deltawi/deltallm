@@ -1597,6 +1597,28 @@ def test_legacy_file_route_group_rejects_ambiguous_inferred_mode():
         )
 
 
+def test_legacy_file_route_group_rejects_context_for_unsupported_inferred_mode():
+    with pytest.raises(ValueError, match="route group mode 'rerank'"):
+        resolve_route_group_modes_for_registry(
+            [
+                {
+                    "key": "legacy-rerank-route",
+                    "mode": None,
+                    "context": {"mode": "eligible-only"},
+                    "members": [{"deployment_id": "dep-rerank"}],
+                }
+            ],
+            {
+                "rerank": [
+                    {
+                        "deployment_id": "dep-rerank",
+                        "model_info": {"mode": "rerank"},
+                    }
+                ]
+            },
+        )
+
+
 def test_invalid_route_group_generation_leaves_live_registry_unchanged():
     initial = build_deployment_registry(
         {

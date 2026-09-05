@@ -7,8 +7,6 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import ValidationError
-
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.services.asset_binding_mirror import (
@@ -31,6 +29,7 @@ from src.api.admin.route_group_contracts import (
     RoutePolicyMutationResponse,
     RoutePolicyRollbackResponse,
 )
+from src.api.admin.request_validation import BadRequestValidationRoute
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.db.route_groups import RouteGroupRepository
@@ -427,10 +426,17 @@ async def _resolve_group_metadata(
 
 
 def _validate_policy_payload(
-    payload: dict[str, Any], *, available_members: dict[str, PolicyMemberInventoryItem]
+    payload: dict[str, Any],
+    *,
+    available_members: dict[str, PolicyMemberInventoryItem],
+    workload_mode: object,
 ) -> tuple[dict[str, Any], list[str]]:
     try:
-        normalized, warnings = validate_route_policy(payload, available_members=available_members)
+        normalized, warnings = validate_route_policy(
+            payload,
+            available_members=available_members,
+            workload_mode=workload_mode,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -994,6 +1000,7 @@ async def validate_route_group_policy(
     normalized, warnings = _validate_policy_payload(
         payload,
         available_members=await _resolve_policy_members(repository, group_key),
+        workload_mode=group.mode,
     )
     return {"group_key": group_key, "valid": True, "policy": normalized, "warnings": warnings}
 
@@ -1014,6 +1021,7 @@ async def save_route_group_policy_draft(
     normalized, warnings = _validate_policy_payload(
         payload,
         available_members=await _resolve_policy_members(repository, group_key),
+        workload_mode=group.mode,
     )
     try:
         policy = await repository.save_draft_policy(group_key, normalized)
@@ -1104,21 +1112,12 @@ async def rollback_route_group_policy(
     return response
 
 
-@router.post(
-    "/ui/api/route-groups/{group_key}/policy/simulate",
-    response_model=RoutePolicySimulationResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
-)
 async def simulate_route_group_policy(
-    request: Request, group_key: str, payload: dict[str, Any] | None = None
+    request: Request,
+    group_key: str,
+    payload: RoutePolicySimulationRequest | None = None,
 ) -> RoutePolicySimulationResponse:
-    try:
-        simulation_request = RoutePolicySimulationRequest.model_validate(payload or {})
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=exc.errors(include_url=False),
-        ) from exc
+    simulation_request = payload or RoutePolicySimulationRequest()
 
     try:
         runtime = require_routing_runtime_generation(request.app.state)
@@ -1144,6 +1143,17 @@ async def simulate_route_group_policy(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+
+router.add_api_route(
+    "/ui/api/route-groups/{group_key}/policy/simulate",
+    simulate_route_group_policy,
+    methods=["POST"],
+    response_model=RoutePolicySimulationResponse,
+    responses={400: {"description": "Invalid simulation request"}},
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    route_class_override=BadRequestValidationRoute,
+)
 
 
 @router.put(

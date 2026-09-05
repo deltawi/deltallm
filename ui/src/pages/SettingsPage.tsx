@@ -13,6 +13,7 @@ import { useThemeSettingsController } from '../components/settings/useThemeSetti
 import { useToast } from '../components/ToastProvider';
 import { normalizeBranding } from '../lib/branding';
 import { useBranding } from '../lib/brandingContext';
+import { parseFallbackEvents, type FallbackEvent } from '../lib/fallbackEvents';
 
 interface FallbackEntry {
   from: string;
@@ -32,15 +33,6 @@ interface SettingsForm {
   background_health_checks: boolean;
   health_check_interval: number | string;
   log_level: string;
-}
-
-interface FallbackEvent {
-  timestamp: number;
-  model_group: string;
-  from_deployment: string;
-  to_deployment: string | null;
-  error_classification: string;
-  success: boolean;
 }
 
 const DEFAULT_SETTINGS_FORM: SettingsForm = {
@@ -88,31 +80,6 @@ function serializeFallbacks(entries: FallbackEntry[]): Array<Record<string, stri
     }
   }
   return Object.entries(map).map(([k, v]) => ({ [k]: v }));
-}
-
-function parseFallbackEvents(payload: unknown): FallbackEvent[] {
-  if (!isRecord(payload) || !Array.isArray(payload.events)) return [];
-
-  return payload.events.flatMap((event) => {
-    if (
-      !isRecord(event)
-      || typeof event.timestamp !== 'number'
-      || typeof event.model_group !== 'string'
-      || typeof event.from_deployment !== 'string'
-      || (event.to_deployment !== null && typeof event.to_deployment !== 'string')
-      || typeof event.error_classification !== 'string'
-      || typeof event.success !== 'boolean'
-    ) return [];
-
-    return [{
-      timestamp: event.timestamp,
-      model_group: event.model_group,
-      from_deployment: event.from_deployment,
-      to_deployment: event.to_deployment,
-      error_classification: event.error_classification,
-      success: event.success,
-    }];
-  });
 }
 
 const TABS = [
@@ -605,7 +572,9 @@ export default function SettingsPage() {
                               </td>
                               <td className="py-2.5 px-3">
                                 <div className="flex items-center gap-1.5 text-xs font-mono text-gray-600">
-                                  <span className="truncate max-w-[130px]">{evt.from_deployment}</span>
+                                  <span className="truncate max-w-[130px]">
+                                    {evt.from_deployment ?? 'local capacity check'}
+                                  </span>
                                   {evt.to_deployment ? (
                                     <>
                                       <ChevronRight className="w-3 h-3 text-gray-300 shrink-0" />

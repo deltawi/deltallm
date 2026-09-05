@@ -17,11 +17,13 @@ class _RoutePolicyDB:
         draft_policy: dict | None = None,
         rollback_policy: dict | None = None,
         fail_insert: bool = False,
+        group_mode: str = "chat",
     ) -> None:
         self.current_policy = current_policy
         self.draft_policy = draft_policy
         self.rollback_policy = rollback_policy
         self.fail_insert = fail_insert
+        self.group_mode = group_mode
         self.calls: list[tuple[str, tuple[object, ...]]] = []
         self.executions: list[tuple[str, tuple[object, ...]]] = []
 
@@ -33,14 +35,20 @@ class _RoutePolicyDB:
             return [
                 {
                     "group_key": "support-route",
-                    "group_mode": "chat",
+                    "group_mode": self.group_mode,
                     "deployment_id": "dep-a",
                     "enabled": True,
-                    "deployment_mode": "chat",
+                    "deployment_mode": self.group_mode,
                 }
             ]
         if "status = $2" in sql and "SELECT policy_json" in sql:
             return [{"policy_json": self.current_policy}] if self.current_policy is not None else []
+        if "SELECT policy_json, semantics_version" in sql and "status = 'published'" in sql:
+            return (
+                [{"policy_json": self.current_policy, "semantics_version": 2}]
+                if self.current_policy is not None
+                else []
+            )
         if "SELECT route_policy_id, policy_json" in sql and "status = 'draft'" in sql:
             return (
                 [{"route_policy_id": "draft-1", "policy_json": self.draft_policy}]
@@ -211,6 +219,38 @@ async def test_publish_policy_does_not_allow_client_to_overwrite_opaque_fields()
 
 
 @pytest.mark.asyncio
+async def test_publish_policy_uses_null_to_delete_context_without_ambiguous_omission() -> None:
+    existing = {
+        "strategy": "weighted",
+        "context": {
+            "mode": "smallest-sufficient",
+            "unknown_capacity": "exclude",
+            "server_capacity_source": "catalog",
+        },
+    }
+
+    omitted_transaction = _RoutePolicyDB(current_policy=existing)
+    omitted = await RouteGroupRepository(
+        _TransactionalRoutePolicyDB(omitted_transaction)
+    ).publish_policy(
+        "support-route",
+        {"strategy": "least-busy"},
+    )
+    deleted_transaction = _RoutePolicyDB(current_policy=existing)
+    deleted = await RouteGroupRepository(
+        _TransactionalRoutePolicyDB(deleted_transaction)
+    ).publish_policy(
+        "support-route",
+        {"strategy": "least-busy", "context": None},
+    )
+
+    assert omitted is not None
+    assert omitted.policy_json["context"] == existing["context"]
+    assert deleted is not None
+    assert "context" not in deleted.policy_json
+
+
+@pytest.mark.asyncio
 async def test_runtime_policy_member_list_excludes_omitted_base_members() -> None:
     groups = await RouteGroupRepository(_RuntimeRouteGroupDB()).list_runtime_groups()
 
@@ -284,7 +324,10 @@ async def test_draft_update_preserves_opaque_fields() -> None:
 @pytest.mark.asyncio
 async def test_publish_latest_draft_preserves_document_exactly() -> None:
     source = {"strategy": "weighted", "server_revision": 5}
-    transaction = _RoutePolicyDB(draft_policy=source)
+    transaction = _RoutePolicyDB(
+        current_policy={"context": {"mode": "eligible-only"}},
+        draft_policy=source,
+    )
     prisma = _TransactionalRoutePolicyDB(transaction)
 
     record = await RouteGroupRepository(prisma).publish_latest_draft(
@@ -295,6 +338,48 @@ async def test_publish_latest_draft_preserves_document_exactly() -> None:
     assert record is not None
     assert record.policy_json == source
     assert prisma.committed == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    ["publish", "save_draft", "publish_latest_draft", "rollback"],
+)
+async def test_policy_lifecycle_rejects_context_for_unsupported_group_mode(
+    operation: str,
+) -> None:
+    context_policy = {"context": {"mode": "eligible-only"}}
+    transaction = _RoutePolicyDB(
+        draft_policy=context_policy if operation == "publish_latest_draft" else None,
+        rollback_policy=context_policy if operation == "rollback" else None,
+        group_mode="rerank",
+    )
+    repository = RouteGroupRepository(_TransactionalRoutePolicyDB(transaction))
+
+    with pytest.raises(RoutePolicyStateConflictError, match="route group mode 'rerank'"):
+        if operation == "publish":
+            await repository.publish_policy("support-route", context_policy)
+        elif operation == "save_draft":
+            await repository.save_draft_policy("support-route", context_policy)
+        elif operation == "publish_latest_draft":
+            await repository.publish_latest_draft("support-route")
+        else:
+            await repository.rollback_policy("support-route", target_version=1)
+
+
+@pytest.mark.asyncio
+async def test_group_mode_change_rejects_existing_context_policy() -> None:
+    transaction = _RoutePolicyDB(
+        current_policy={"context": {"mode": "eligible-only"}},
+        group_mode="rerank",
+    )
+    repository = RouteGroupRepository(transaction)
+
+    with pytest.raises(
+        RoutePolicyStateConflictError,
+        match="route-group change would invalidate the published policy",
+    ):
+        await repository._validate_published_policy_after_group_change("group-1")
 
 
 @pytest.mark.asyncio

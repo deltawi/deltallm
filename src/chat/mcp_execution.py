@@ -7,9 +7,12 @@ from typing import Any
 from src.guardrails.middleware import GuardrailMiddleware
 from src.mcp.orchestrator import MCPChatOrchestrator, MCPRequestContext
 from src.models.errors import ProxyError, ServiceUnavailableError
+from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import UserAPIKeyAuth
+from src.rate_limit_policy import estimate_tokens
 from src.router import Deployment, FailoverManager
+from src.router.context_policy import RequestTokenDemand, set_request_token_demand
 
 
 ChatDeploymentCall = Callable[
@@ -70,6 +73,13 @@ class MCPChatExecutionService:
             phase_payload: ChatCompletionRequest,
         ) -> tuple[dict[str, Any], float]:
             nonlocal fallback_used, phase_primary, served_deployment
+            set_request_token_demand(
+                routing.routing_context,
+                RequestTokenDemand(
+                    input_tokens=estimate_tokens(dump_request_for_preflight(phase_payload)),
+                    requested_output_tokens=phase_payload.max_tokens,
+                ),
+            )
             attempted_primary = phase_primary
             result, phase_served_deployment = await self.failover_manager.execute_with_failover(
                 primary_deployment=attempted_primary,

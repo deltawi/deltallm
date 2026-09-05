@@ -24,7 +24,10 @@ from src.metrics import (
     increment_batch_policy_retryable_failure,
     observe_batch_preflight_latency,
 )
+from src.models.requests import EmbeddingRequest
+from src.models.request_serialization import dump_request_for_preflight
 from src.models.responses import UserAPIKeyAuth
+from src.router.context_policy import estimate_embedding_context_input_tokens
 from src.services.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
@@ -50,6 +53,8 @@ class BatchPreflightResult:
     payload: Any
     request_data: dict[str, Any]
     auth: UserAPIKeyAuth
+    token_estimate: int
+    context_input_tokens: int
 
 
 def _looks_like_api_key_hash(value: str | None) -> bool:
@@ -160,7 +165,19 @@ async def run_batch_request_preflight(
     observe_batch_preflight_latency(
         endpoint=endpoint, status="allowed", latency_seconds=perf_counter() - started
     )
-    return BatchPreflightResult(payload=transformed_payload, request_data=data, auth=auth)
+    token_estimate = estimate_tokens(dump_request_for_preflight(transformed_payload))
+    context_input_tokens = (
+        estimate_embedding_context_input_tokens(transformed_payload.input)
+        if isinstance(transformed_payload, EmbeddingRequest)
+        else token_estimate
+    )
+    return BatchPreflightResult(
+        payload=transformed_payload,
+        request_data=data,
+        auth=auth,
+        token_estimate=token_estimate,
+        context_input_tokens=context_input_tokens,
+    )
 
 
 async def acquire_batch_policy_lease(
@@ -169,7 +186,7 @@ async def acquire_batch_policy_lease(
     limiter = getattr(app.state, "limit_counter", None)
     if limiter is None:
         return None
-    data = payload.model_dump(exclude_none=True)
+    data = dump_request_for_preflight(payload)
     lease, _state = await acquire_rate_limit_controls(
         limiter=limiter,
         auth=auth,

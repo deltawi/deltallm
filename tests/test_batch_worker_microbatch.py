@@ -29,6 +29,7 @@ from src.models.errors import (
     ServiceUnavailableError,
 )
 from src.models.requests import EmbeddingRequest
+from src.router.context_policy import get_request_token_demand
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 
@@ -127,6 +128,7 @@ class _Router:
         self.deployment = deployment
         self.inject_route_policy = inject_route_policy
         self.select_calls: list[dict] = []
+        self.require_calls: list[dict] = []
 
     def resolve_model_group(self, model: str) -> str:
         return f"group:{model}"
@@ -143,8 +145,9 @@ class _Router:
             }
         return self.deployment
 
-    def require_deployment(self, model_group: str, deployment: object):
+    def require_deployment(self, model_group: str, deployment: object, **_kwargs: object):
         assert model_group.startswith("group:")
+        self.require_calls.append(_kwargs)
         return deployment
 
 
@@ -957,6 +960,8 @@ async def test_prepare_item_for_execution_returns_reusable_metadata_without_exec
         }
     ]
     assert len(router.select_calls) == 1
+    assert len(router.require_calls) == 1
+    assert router.require_calls[0]["request_context"] is prepared.request_context
     assert repo.completed_calls == []
     assert repo.failed_calls == []
     assert failover.calls == []
@@ -1063,7 +1068,9 @@ async def test_worker_groups_eligible_items_into_upstream_microbatch_chunks(monk
 
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
 
-    worker, repo, budget, _, failover = _build_worker(
+    short_input = "a"
+    long_input = "long input " * 100
+    worker, repo, budget, router, failover = _build_worker(
         deployment_model_info={"upstream_max_batch_inputs": 2}
     )
     worker.config.worker_concurrency = 1
@@ -1071,8 +1078,8 @@ async def test_worker_groups_eligible_items_into_upstream_microbatch_chunks(monk
     await worker._process_items(
         _build_job(),
         [
-            _build_item(item_id="i1", input_value="hello-1"),
-            _build_item(item_id="i2", input_value="hello-2"),
+            _build_item(item_id="i1", input_value=short_input),
+            _build_item(item_id="i2", input_value=long_input),
             _build_item(item_id="i3", input_value="hello-3"),
             _build_item(item_id="i4", input_value="hello-4"),
             _build_item(item_id="i5", input_value="hello-5"),
@@ -1080,10 +1087,19 @@ async def test_worker_groups_eligible_items_into_upstream_microbatch_chunks(monk
     )
 
     assert execute_inputs == [
-        ["hello-1", "hello-2"],
+        [short_input, long_input],
         ["hello-3", "hello-4"],
         "hello-5",
     ]
+    item_demands = [
+        get_request_token_demand(call["request_context"]) for call in router.select_calls[:2]
+    ]
+    failover_demand = get_request_token_demand(failover.calls[0]["kwargs"]["routing_context"])
+    assert all(demand is not None for demand in item_demands)
+    assert failover_demand is not None
+    assert failover_demand.input_tokens == max(
+        demand.input_tokens for demand in item_demands if demand is not None
+    )
     assert len(failover.calls) == 3
     assert len(repo.completed_calls) == 5
     assert repo.failed_calls == []
@@ -2107,7 +2123,7 @@ async def test_worker_replans_later_chunks_after_earlier_chunk_usage_is_recorded
             self.select_calls.append(selected.deployment_id)
             return selected
 
-        def require_deployment(self, model_group: str, deployment: object):
+        def require_deployment(self, model_group: str, deployment: object, **_kwargs: object):
             assert model_group.startswith("group:")
             return deployment
 

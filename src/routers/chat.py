@@ -45,7 +45,8 @@ from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailabl
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
-from src.router import ROUTING_MODE_CONTEXT_KEY
+from src.router import ROUTING_MODE_CONTEXT_KEY, require_initial_deployment
+from src.router.context_policy import RequestTokenDemand, set_request_token_demand
 from src.router.health_state import DeploymentHealthRef
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import seed_request_failure_context
@@ -118,12 +119,17 @@ async def handle_chat_like_request(
         audit_action=audit_action,
     )
     routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
-    auth, payload, request_data, callback_manager, guardrail_middleware = await run_text_preflight(
+    preflight = await run_text_preflight(
         request=request,
         payload=payload,
         request_data=request_data,
         routing_runtime=routing_runtime,
     )
+    auth = preflight.auth
+    payload = preflight.payload
+    request_data = preflight.request_data
+    callback_manager = preflight.callback_manager
+    guardrail_middleware = preflight.guardrail_middleware
     has_mcp_tools = chat_request_has_mcp_tools(payload)
 
     router = routing_runtime.router
@@ -133,9 +139,18 @@ async def handle_chat_like_request(
         "user_id": auth.user_id or auth.api_key,
         ROUTING_MODE_CONTEXT_KEY: "chat",
     }
-    primary = router.require_deployment(
+    set_request_token_demand(
+        request_context,
+        RequestTokenDemand(
+            input_tokens=preflight.token_estimate,
+            requested_output_tokens=payload.max_tokens,
+        ),
+    )
+    primary = await require_initial_deployment(
+        router=router,
+        failover_manager=routing_runtime.failover_manager,
         model_group=model_group,
-        deployment=await router.select_deployment(model_group, request_context),
+        request_context=request_context,
     )
     failover_kwargs = route_failover_kwargs(request_context)
     capture_initial_route_decision(request, request_context)

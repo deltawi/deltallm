@@ -71,6 +71,7 @@ class RouteCandidatePlan:
     healthy_count: int
     filtered_count: int
     rejection_reason: str | None = None
+    context_eligible_count: int | None = None
 
 
 class RouteCandidatePlanner(Protocol):
@@ -104,3 +105,7 @@ def candidate_plan_cache(
     plans: dict[str, RouteCandidatePlan] = {}
     request_context[_CANDIDATE_PLANS_CONTEXT_KEY] = plans
     return plans
+
+
+def invalidate_candidate_plan_cache(request_context: dict[str, Any]) -> None:
+    request_context.pop(_CANDIDATE_PLANS_CONTEXT_KEY, None)

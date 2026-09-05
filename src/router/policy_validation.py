@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any
 
+from src.config import validate_context_routing_workload_mode
 from src.router.router import RoutingStrategy
 
 ALLOWED_POLICY_MODES = {"fallback", "weighted", "conditional", "adaptive"}
@@ -12,9 +13,15 @@ POLICY_MODE_STRATEGY_ALIASES = {
     "fallback": RoutingStrategy.PRIORITY_BASED.value,
     "weighted": RoutingStrategy.WEIGHTED.value,
 }
-ALLOWED_POLICY_KEYS = {"mode", "strategy", "members", "timeouts", "retry"}
+ALLOWED_POLICY_KEYS = {"mode", "strategy", "members", "timeouts", "retry", "context"}
 ALLOWED_TIMEOUT_KEYS = {"global_ms", "global_seconds"}
 ALLOWED_RETRY_KEYS = {"max_attempts", "retryable_error_classes"}
+ALLOWED_CONTEXT_KEYS = {
+    "mode",
+    "unknown_capacity",
+    "default_output_tokens",
+    "safety_margin_tokens",
+}
 ALLOWED_RETRYABLE_ERROR_CLASSES = {
     "timeout",
     "rate_limit",
@@ -43,6 +50,45 @@ def _normalize_int(value: Any, field_name: str, *, minimum: int = 0) -> int:
         raise ValueError(f"{field_name} must be an integer") from exc
     if normalized < minimum:
         raise ValueError(f"{field_name} must be >= {minimum}")
+    return normalized
+
+
+def _normalize_exact_int(value: Any, field_name: str, *, minimum: int = 0) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    if isinstance(value, int):
+        normalized = value
+    elif (
+        isinstance(value, str)
+        and value.strip()
+        and value.strip().isascii()
+        and value.strip().isdigit()
+    ):
+        normalized = int(value.strip())
+    else:
+        raise ValueError(f"{field_name} must be an integer")
+    if normalized < minimum:
+        raise ValueError(f"{field_name} must be >= {minimum}")
+    return normalized
+
+
+def _normalize_context_choice(
+    context: Mapping[str, Any],
+    field_name: str,
+    *,
+    default: str,
+    allowed: set[str],
+) -> str:
+    if field_name not in context:
+        return default
+    value = context[field_name]
+    if not isinstance(value, str):
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"context.{field_name} must be one of: {choices}")
+    normalized = value.strip().lower()
+    if normalized not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"context.{field_name} must be one of: {choices}")
     return normalized
 
 
@@ -140,6 +186,12 @@ def merge_policy_document_for_write(
         if opaque:
             merged[field_name] = opaque
 
+    context = merge_context_policy_block(current.get("context"), replacement)
+    if context is None:
+        merged.pop("context", None)
+    else:
+        merged["context"] = context
+
     replacement_members = replacement.get("members")
     if isinstance(replacement_members, list):
         current_members = current.get("members")
@@ -164,6 +216,29 @@ def merge_policy_document_for_write(
             preserved_members.append(member)
         merged["members"] = preserved_members
 
+    return merged
+
+
+def merge_context_policy_block(
+    existing: object,
+    replacement: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Preserve omitted context, while treating explicit null as a deletion tombstone."""
+
+    current = existing if isinstance(existing, dict) else None
+    if "context" not in replacement:
+        return deepcopy(current) if current is not None else None
+    replacement_context = replacement.get("context")
+    if replacement_context is None:
+        return None
+    if not isinstance(replacement_context, dict):
+        raise ValueError("context must be an object or null")
+    merged = {
+        key: deepcopy(value)
+        for key, value in (current or {}).items()
+        if key not in ALLOWED_CONTEXT_KEYS
+    }
+    merged.update(deepcopy(replacement_context))
     return merged
 
 
@@ -282,6 +357,52 @@ def _validate_policy_retry(normalized: dict[str, Any], warnings: list[str]) -> N
     normalized["retry"] = validated
 
 
+def _validate_context_policy(
+    normalized: dict[str, Any],
+    warnings: list[str],
+    *,
+    workload_mode: object | None,
+) -> None:
+    if "context" not in normalized:
+        return
+    context = normalized.get("context")
+    if context is None:
+        return
+    if not isinstance(context, dict):
+        raise ValueError("context must be an object or null")
+    unknown = sorted(key for key in context if key not in ALLOWED_CONTEXT_KEYS)
+    if unknown:
+        warnings.append(_ignored_fields_warning("context", unknown))
+
+    mode = _normalize_context_choice(
+        context,
+        "mode",
+        default="eligible-only",
+        allowed={"eligible-only", "smallest-sufficient"},
+    )
+    unknown_capacity = _normalize_context_choice(
+        context,
+        "unknown_capacity",
+        default="allow",
+        allowed={"allow", "exclude"},
+    )
+
+    validate_context_routing_workload_mode(workload_mode)
+
+    normalized["context"] = {
+        "mode": mode,
+        "unknown_capacity": unknown_capacity,
+        "default_output_tokens": _normalize_exact_int(
+            context.get("default_output_tokens", 1024),
+            "context.default_output_tokens",
+        ),
+        "safety_margin_tokens": _normalize_exact_int(
+            context.get("safety_margin_tokens", 256),
+            "context.safety_margin_tokens",
+        ),
+    }
+
+
 def _validate_member_pool(
     normalized: dict[str, Any],
     available_members: Mapping[str, PolicyMemberInventoryItem] | None,
@@ -357,6 +478,7 @@ def validate_route_policy(
     *,
     available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
     semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
+    workload_mode: object | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("policy payload must be an object")
@@ -371,6 +493,7 @@ def validate_route_policy(
     _validate_policy_members(normalized, warnings)
     _validate_policy_timeouts(normalized, warnings)
     _validate_policy_retry(normalized, warnings)
+    _validate_context_policy(normalized, warnings, workload_mode=workload_mode)
     active_members = _validate_member_pool(
         normalized,
         available_members,

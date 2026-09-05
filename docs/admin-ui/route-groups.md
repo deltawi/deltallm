@@ -88,6 +88,7 @@ In practice, that means:
 - optionally override member `enabled`, `weight`, or `priority`
 - optionally override the group timeout
 - optionally override retry behavior
+- optionally require enough declared context capacity
 
 The supported policy fields today are:
 
@@ -97,6 +98,8 @@ The supported policy fields today are:
 - `timeouts.global_ms` or `timeouts.global_seconds`
 - `retry.max_attempts`
 - `retry.retryable_error_classes`
+- `context.mode`, `context.unknown_capacity`, `context.default_output_tokens`, and
+  `context.safety_margin_tokens`
 
 The route group's workload type and the legacy policy `mode` field are different concepts. The
 workload type identifies the compatible gateway endpoint. `strategy` is the canonical routing
@@ -105,6 +108,26 @@ field; old policy modes are accepted only as migration input and are omitted fro
 `retry.max_attempts` is the maximum number of additional same-deployment retries for the
 whole routed request. The budget is shared across all primary and fallback candidates; it
 is not reset for each candidate. Candidate failover attempts remain separate from retries.
+
+### Route by context size
+
+Context-capacity routing is available only for `chat` and `embedding` route groups. The backend
+rejects a context policy on image, audio, or rerank groups, including during validation,
+simulation, draft publication, rollback, and an incompatible route-group mode change.
+
+Open **Context capacity** in the guided policy editor to enable this constraint. Choose **Eligible
+instances only** to keep the normal strategy among deployments that fit, or **Prefer smallest
+sufficient** to use the smallest fitting context tier first and retain larger tiers as fallbacks.
+Selecting **Disabled** sends an explicit deletion marker; merely omitting the block preserves the
+stored policy for compatibility with older clients.
+
+Capacity comes from each deployment's **Context Window**, **Max Input Tokens**, and **Max Output
+Tokens** model metadata. Missing metadata is allowed by default so an upgrade does not silently
+remove existing members; the strict **Exclude** option is intended for groups whose metadata has
+been fully audited. The safety margin compensates for the gateway's fast approximate token count.
+Embedding deployment forms expose both **Context Window** and **Max Input Tokens**, and preserve
+those values during unrelated edits.
+The feature is inactive when the policy control is disabled.
 
 ## Legacy Policy Mode Aliases
 
@@ -249,7 +272,7 @@ The simulation view is especially useful for:
 ## Policy Simulation
 
 Open **Advanced → Policy Simulation** to dry-run the policy currently shown in the guided or JSON
-editor. The simulation can use request tags and a per-deployment assumed outcome. A successful
+editor. The simulation can use estimated input/output tokens, request tags, and a per-deployment assumed outcome. A successful
 outcome is the default; failure outcomes pass through the same retry classification, retry budget,
 candidate ordering, and fallback decisions used by gateway requests.
 
@@ -274,7 +297,7 @@ events, or mutate live health, cooldown, usage, latency, or concurrency state. T
 answers “what would this policy do against this captured state and these assumed outcomes?”; it is
 not a provider availability forecast.
 
-Editing the policy, request tags, iteration count, or assumed outcomes marks the last result stale.
+Editing the policy, token estimates, request tags, iteration count, or assumed outcomes marks the last result stale.
 Starting a new simulation cancels the prior UI request, and an older completion cannot replace a
 newer result. A failed refresh leaves the last successful result visible with its stale/error state.
 Route-group administration permission is required.

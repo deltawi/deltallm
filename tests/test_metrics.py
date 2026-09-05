@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.callable_target_policies import CallableTargetScopePolicyRecord
-from src.db.prompt_registry import PromptResolvedRecord
 from src.cache import CacheKeyBuilder, InMemoryBackend, PrometheusCacheMetrics
+from src.db.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.prompt_registry import PromptResolvedRecord
 from src.metrics import (
     ProviderStreamValidationFailureReason,
     increment_provider_stream_validation_failure,
+    increment_router_context_decision,
 )
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.prompt_registry import PromptRegistryService
@@ -167,6 +168,15 @@ async def test_metrics_endpoint_exposes_bounded_provider_stream_validation_failu
         match="unsupported provider stream validation failure reason",
     ):
         increment_provider_stream_validation_failure(reason="provider-owned-value")
+
+
+async def test_metrics_endpoint_exposes_context_routing_decisions(client):
+    increment_router_context_decision(outcome="selected")
+
+    metrics = await client.get("/metrics")
+
+    assert "deltallm_router_context_decisions_total" in metrics.text
+    assert 'outcome="selected"' in metrics.text
 
 
 async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app):

@@ -13,8 +13,12 @@ class RoutePolicyPublicationMember(Protocol):
     enabled: bool
 
 
+class RoutePolicyPublicationGroup(Protocol):
+    mode: str
+
+
 class RoutePolicyPublicationRepository(Protocol):
-    async def get_group(self, group_key: str) -> object | None: ...
+    async def get_group(self, group_key: str) -> RoutePolicyPublicationGroup | None: ...
 
     async def list_members(self, group_key: str) -> Sequence[RoutePolicyPublicationMember]: ...
 
@@ -66,10 +70,11 @@ class RoutePolicyPublicationService:
         *,
         published_by: str | None = None,
     ) -> RoutePolicyPublicationResult:
-        await self._require_group(group_key)
+        group = await self._require_group(group_key)
         normalized, warnings = validate_route_policy(
             document,
             available_members=await self._member_inventory(group_key),
+            workload_mode=group.mode,
         )
         policy = await self._route_groups.publish_policy(
             group_key,
@@ -95,9 +100,11 @@ class RoutePolicyPublicationService:
             raise RoutePolicyPublicationNotFoundError("Route group or draft policy not found")
         return await self._finish(policy, [])
 
-    async def _require_group(self, group_key: str) -> None:
-        if await self._route_groups.get_group(group_key) is None:
+    async def _require_group(self, group_key: str) -> RoutePolicyPublicationGroup:
+        group = await self._route_groups.get_group(group_key)
+        if group is None:
             raise RoutePolicyPublicationNotFoundError("Route group not found")
+        return group
 
     async def _member_inventory(self, group_key: str) -> dict[str, PolicyMemberInventoryItem]:
         members = await self._route_groups.list_members(group_key)

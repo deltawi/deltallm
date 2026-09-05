@@ -63,6 +63,94 @@ def test_validate_route_policy_validates_retry_and_timeouts_schema():
     assert normalized["retry"]["retryable_error_classes"] == ["timeout", "rate_limit"]
 
 
+def test_validate_route_policy_normalizes_context_schema():
+    normalized, warnings = validate_route_policy(
+        {
+            "context": {
+                "mode": "smallest-sufficient",
+                "unknown_capacity": "exclude",
+                "default_output_tokens": "2048",
+                "safety_margin_tokens": "512",
+            }
+        },
+        available_members=_inventory(("dep-a", True)),
+        workload_mode="chat",
+    )
+
+    assert warnings == []
+    assert normalized["context"] == {
+        "mode": "smallest-sufficient",
+        "unknown_capacity": "exclude",
+        "default_output_tokens": 2048,
+        "safety_margin_tokens": 512,
+    }
+
+
+def test_validate_route_policy_preserves_explicit_context_deletion_marker():
+    normalized, warnings = validate_route_policy(
+        {"context": None},
+        available_members=_inventory(("dep-a", True)),
+        workload_mode="rerank",
+    )
+
+    assert warnings == []
+    assert normalized["context"] is None
+
+
+@pytest.mark.parametrize(
+    ("context", "message"),
+    [
+        ({"mode": "best-fit"}, "context.mode"),
+        ({"unknown_capacity": "guess"}, "context.unknown_capacity"),
+        ({"safety_margin_tokens": -1}, "context.safety_margin_tokens"),
+        ({"default_output_tokens": 1.9}, "context.default_output_tokens"),
+        ({"safety_margin_tokens": -0.9}, "context.safety_margin_tokens"),
+    ],
+)
+def test_validate_route_policy_rejects_invalid_context_schema(context, message):
+    with pytest.raises(ValueError, match=message):
+        validate_route_policy(
+            {"context": context},
+            available_members=_inventory(("dep-a", True)),
+            workload_mode="chat",
+        )
+
+
+@pytest.mark.parametrize("field_name", ["mode", "unknown_capacity"])
+@pytest.mark.parametrize("value", [False, 0, "", None])
+def test_validate_route_policy_rejects_supplied_falsy_context_choices(
+    field_name: str,
+    value: object,
+):
+    with pytest.raises(ValueError, match=f"context.{field_name}"):
+        validate_route_policy(
+            {"context": {field_name: value}},
+            available_members=_inventory(("dep-a", True)),
+            workload_mode="chat",
+        )
+
+
+@pytest.mark.parametrize(
+    "workload_mode",
+    ["image_generation", "audio_speech", "audio_transcription", "rerank"],
+)
+def test_validate_route_policy_rejects_context_for_unsupported_workload_modes(workload_mode):
+    with pytest.raises(ValueError, match=f"route group mode '{workload_mode}'"):
+        validate_route_policy(
+            {"context": {"mode": "eligible-only"}},
+            available_members=_inventory(("dep-a", True)),
+            workload_mode=workload_mode,
+        )
+
+
+def test_validate_route_policy_requires_workload_mode_for_context_policy():
+    with pytest.raises(ValueError, match="route group mode 'unknown'"):
+        validate_route_policy(
+            {"context": {"mode": "eligible-only"}},
+            available_members=_inventory(("dep-a", True)),
+        )
+
+
 def test_validate_route_policy_maps_fallback_mode_to_priority_strategy():
     normalized, warnings = validate_route_policy(
         {
@@ -180,6 +268,7 @@ def test_policy_write_preserves_opaque_stored_fields():
             "strategy": "weighted",
             "server_revision": 9,
             "retry": {"max_attempts": 3, "server_classification": "strict"},
+            "context": {"mode": "eligible-only", "server_margin_source": "catalog"},
             "members": [
                 {
                     "deployment_id": "dep-a",
@@ -192,6 +281,7 @@ def test_policy_write_preserves_opaque_stored_fields():
         {
             "strategy": "least-busy",
             "retry": {"max_attempts": 1},
+            "context": {"mode": "smallest-sufficient"},
             "members": [{"deployment_id": "dep-a", "enabled": True}],
         },
     )
@@ -200,6 +290,10 @@ def test_policy_write_preserves_opaque_stored_fields():
         "server_revision": 9,
         "strategy": "least-busy",
         "retry": {"server_classification": "strict", "max_attempts": 1},
+        "context": {
+            "server_margin_source": "catalog",
+            "mode": "smallest-sufficient",
+        },
         "members": [
             {
                 "server_assignment": "stable",
@@ -208,3 +302,23 @@ def test_policy_write_preserves_opaque_stored_fields():
             }
         ],
     }
+
+
+def test_policy_write_distinguishes_omitted_context_from_explicit_deletion():
+    existing = {
+        "strategy": "weighted",
+        "context": {
+            "mode": "smallest-sufficient",
+            "unknown_capacity": "exclude",
+            "server_margin_source": "catalog",
+        },
+    }
+
+    omitted = merge_policy_document_for_write(existing, {"strategy": "least-busy"})
+    deleted = merge_policy_document_for_write(
+        existing,
+        {"strategy": "least-busy", "context": None},
+    )
+
+    assert omitted["context"] == existing["context"]
+    assert "context" not in deleted
