@@ -149,6 +149,7 @@ nav:
       - Upstream HTTP Tuning: deployment/upstream-http.md
   - Project:
       - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
+      - Route-Group Model Router Design: project/model-router-design.md
       - Documentation Governance: project/documentation-governance.md
       - Context-capacity Routing Decision: project/context-routing-design.md
 

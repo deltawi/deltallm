@@ -7,7 +7,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any, Sequence, cast
 
-from src.config import ModelMode, validate_context_routing_workload_mode
+from src.route_group_config import ModelMode, validate_context_routing_workload_mode
 from src.metrics import increment_router_context_decision
 from src.models.errors import (
     ModelNotFoundError,

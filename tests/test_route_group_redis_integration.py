@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from redis.asyncio import Redis
 
 from src.config import AppConfig
 from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.router.selection.policy import RouteSelectorActivationState
 from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
@@ -24,7 +26,11 @@ class _MutableRouteGroupRepository:
 
     async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
         self.calls += 1
-        return RouteGroupRuntimeSnapshot(self.revision, list(self.groups))
+        return RouteGroupRuntimeSnapshot(
+            self.revision,
+            list(self.groups),
+            selector_activation_state=RouteSelectorActivationState.INACTIVE,
+        )
 
 
 @pytest.mark.skipif(
@@ -134,6 +140,11 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
         assert await cache.invalidate(required_revision=2) is True
         _, recovered_source = await load_route_groups(repository, cfg, route_group_cache=cache)
         assert recovered_source == "db"
+        raw_envelope = await redis.get(f"{cache_key}:r2")
+        assert raw_envelope is not None
+        envelope = json.loads(raw_envelope)
+        assert envelope["schema_version"] == 2
+        assert envelope["selector_activation_state"] == "inactive"
         cache._l1_entry = None
         _, cached_source = await load_route_groups(repository, cfg, route_group_cache=cache)
         assert cached_source == "l2_cache"

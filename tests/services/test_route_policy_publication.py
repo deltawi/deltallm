@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from src.db.route_policy_lifecycle import RoutePolicyRecord
+from src.router.policy_validation import CURRENT_POLICY_SEMANTICS_VERSION
 from src.services.route_policy_publication import (
     RoutePolicyPublicationNotFoundError,
     RoutePolicyPublicationService,
@@ -73,7 +74,7 @@ def _policy(
         version=1,
         status="published",
         policy_json=document,
-        semantics_version=2,
+        semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
         published_by=published_by,
     )
 
@@ -126,6 +127,88 @@ async def test_empty_document_is_distinct_from_latest_draft() -> None:
 
     assert repository.document_calls == [{}]
     assert repository.draft_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_selector_publication_is_rejected_before_repository_or_refresh() -> None:
+    repository = _Repository()
+    repository.members.append(_Member("dep-b"))
+    refresh_calls = 0
+
+    async def refresh() -> tuple[str, ...]:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return ()
+
+    service = RoutePolicyPublicationService(
+        route_groups=repository,
+        refresh_runtime=refresh,
+        deployment_modes={"dep-a": "chat", "dep-b": "chat"},
+    )
+
+    with pytest.raises(ValueError, match="cannot be activated"):
+        await service.publish_document(
+            "support",
+            {
+                "selector": {
+                    "kind": "llm-tier",
+                    "classifier_deployment_id": "dep-a",
+                    "lanes": [
+                        {"id": "economy", "rank": 0, "description": "Routine work"},
+                        {"id": "quality", "rank": 1, "description": "Complex work"},
+                    ],
+                },
+                "members": [
+                    {"deployment_id": "dep-a", "lane": "economy"},
+                    {"deployment_id": "dep-b", "lane": "quality"},
+                ],
+            },
+        )
+
+    assert repository.document_calls == []
+    assert refresh_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("classifier_mode", [None, "embedding"])
+async def test_selector_publication_rejects_unknown_or_nonchat_classifier_mode(
+    classifier_mode: str | None,
+) -> None:
+    repository = _Repository()
+    repository.members.append(_Member("dep-b"))
+
+    async def refresh() -> tuple[str, ...]:
+        return ()
+
+    deployment_modes = {"dep-b": "chat"}
+    if classifier_mode is not None:
+        deployment_modes["dep-a"] = classifier_mode
+    service = RoutePolicyPublicationService(
+        route_groups=repository,
+        refresh_runtime=refresh,
+        deployment_modes=deployment_modes,
+    )
+
+    with pytest.raises(ValueError, match="classifier must reference a chat deployment"):
+        await service.publish_document(
+            "support",
+            {
+                "selector": {
+                    "kind": "llm-tier",
+                    "classifier_deployment_id": "dep-a",
+                    "lanes": [
+                        {"id": "economy", "rank": 0, "description": "Routine work"},
+                        {"id": "quality", "rank": 1, "description": "Complex work"},
+                    ],
+                },
+                "members": [
+                    {"deployment_id": "dep-a", "lane": "economy"},
+                    {"deployment_id": "dep-b", "lane": "quality"},
+                ],
+            },
+        )
+
+    assert repository.document_calls == []
 
 
 @pytest.mark.asyncio

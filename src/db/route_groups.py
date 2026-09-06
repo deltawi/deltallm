@@ -13,6 +13,10 @@ from src.db.route_policy_lifecycle import (
 )
 from src.db.routing_runtime import ROUTING_RUNTIME_STATE_KEY, RoutingRuntimeRevisionRepository
 from src.router.policy_validation import merge_policy_members
+from src.router.selection.policy import (
+    RouteSelectorActivationState,
+    ensure_selector_activation_supported,
+)
 from src.router.route_group_validation import (
     deployment_modes_by_id,
     validate_route_group_member_modes,
@@ -116,6 +120,7 @@ class RouteGroupRuntimeSnapshot:
     revision: int
     groups: list[dict[str, Any]]
     database_initialized: bool | None = None
+    selector_activation_state: RouteSelectorActivationState = RouteSelectorActivationState.UNCHECKED
 
     def __post_init__(self) -> None:
         if self.database_initialized is None:
@@ -632,7 +637,11 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
 
     async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
         if self.prisma is None:
-            return RouteGroupRuntimeSnapshot(revision=0, groups=[])
+            return RouteGroupRuntimeSnapshot(
+                revision=0,
+                groups=[],
+                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            )
 
         groups = await self.prisma.query_raw(
             """
@@ -679,7 +688,11 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             ROUTING_RUNTIME_STATE_KEY,
         )
         if not groups:
-            return RouteGroupRuntimeSnapshot(revision=0, groups=[])
+            return RouteGroupRuntimeSnapshot(
+                revision=0,
+                groups=[],
+                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            )
 
         revision = int(groups[0].get("runtime_revision") or 0)
         database_initialized = bool(groups[0].get("route_groups_initialized", False))
@@ -715,6 +728,10 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                 if isinstance(member, dict) and str(member.get("deployment_id") or "")
             ]
             semantics_version = int(row.get("policy_semantics_version") or 1)
+            ensure_selector_activation_supported(
+                policy_json,
+                semantics_version=semantics_version,
+            )
             merged_members = merge_policy_members(
                 base_members,
                 policy_json.get("members"),
@@ -748,6 +765,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             revision=revision,
             groups=runtime_groups,
             database_initialized=database_initialized,
+            selector_activation_state=RouteSelectorActivationState.INACTIVE,
         )
 
     async def _bump_runtime_revision(self) -> int:

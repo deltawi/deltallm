@@ -838,12 +838,14 @@ export type {
   RouteGroupMutationResponse,
   RouteGroupWritePayload,
   RoutePolicy,
+  RoutePolicyDocument,
   RoutePolicyMutationResponse,
   RoutePolicySimulationAttempt,
   RoutePolicySimulationOutcome,
   RoutePolicySimulationRequest,
   RoutePolicySimulationResponse,
   RoutePolicySimulationSelection,
+  StoredRoutePolicyDocument,
 } from './api/routeGroups';
 
 export interface PromptTemplate {

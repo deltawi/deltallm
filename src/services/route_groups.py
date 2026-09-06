@@ -1,17 +1,40 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-import json
 import logging
 import time
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from src.config import AppConfig
 from src.db.route_groups import RouteGroupRepository, RouteGroupRuntimeSnapshot
+from src.route_group_config import ModelMode
+from src.route_policy_contract import RoutePolicyMember, validate_selector_assignments
+from src.router.policy_validation import PolicyMemberInventoryItem
+from src.router.selection.policy import (
+    SELECTOR_POLICY_SEMANTICS_VERSION,
+    RouteSelectorActivationState,
+    RouteSelectorActivationUnsupportedError,
+    ensure_selector_activation_supported,
+)
 
 logger = logging.getLogger(__name__)
-ROUTE_GROUP_RUNTIME_CACHE_KEY = "deltallm:routegroup:v1:runtime"
+ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION = 2
+ROUTE_GROUP_RUNTIME_CACHE_KEY = "deltallm:routegroup:v2:runtime"
+ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES = 4 * 1024 * 1024
+
+
+class _RouteGroupRuntimeCacheEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal[2]
+    selector_activation_state: Literal["inactive"]
+    revision: int = Field(ge=0)
+    groups: list[dict[str, Any]]
+    database_initialized: bool | None
 
 
 @dataclass
@@ -22,6 +45,10 @@ class _RuntimeCacheEntry:
 
 class StaleRouteGroupSnapshotError(RuntimeError):
     """A load completed after a newer local invalidation was requested."""
+
+
+class UnvalidatedRouteGroupSnapshotError(RuntimeError):
+    """A runtime snapshot reached the cache without selector-gate provenance."""
 
 
 RouteGroupSnapshotSource = Literal[
@@ -86,6 +113,7 @@ class RouteGroupRuntimeCache:
             return l2_snapshot, "l2_cache"
 
         snapshot = await repository.load_runtime_snapshot()
+        _require_runtime_snapshot_selector_activation_validated(snapshot)
         if load_epoch != self._epoch or snapshot.revision < self._required_revision:
             raise StaleRouteGroupSnapshotError("stale route-group database load discarded")
         self._required_revision = max(self._required_revision, snapshot.revision)
@@ -132,37 +160,54 @@ class RouteGroupRuntimeCache:
             raw = await self.redis.get(self._revision_key(revision))
             if not raw:
                 return None
-            payload = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
+            serialized = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+            if len(serialized) > ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES:
+                logger.debug(
+                    "ignored oversized route group runtime cache entry (%s bytes)",
+                    len(serialized),
+                )
+                return None
+            payload = _RouteGroupRuntimeCacheEnvelope.model_validate_json(serialized)
+        except (TypeError, ValueError, ValidationError) as exc:
+            logger.debug("ignored invalid route group runtime cache envelope: %s", exc)
+            return None
         except Exception as exc:
             logger.debug("failed to read route group runtime cache from redis: %s", exc)
             return None
-        if not isinstance(payload, dict) or int(payload.get("revision", -1)) != revision:
+        if payload.revision != revision:
             return None
-        groups = payload.get("groups")
-        if not isinstance(groups, list):
-            return None
-        return RouteGroupRuntimeSnapshot(
+        snapshot = RouteGroupRuntimeSnapshot(
             revision=revision,
-            groups=[item for item in groups if isinstance(item, dict)],
-            database_initialized=(
-                bool(payload["database_initialized"]) if "database_initialized" in payload else None
-            ),
+            groups=payload.groups,
+            database_initialized=payload.database_initialized,
+            selector_activation_state=RouteSelectorActivationState.INACTIVE,
         )
+        _ensure_runtime_snapshot_selector_activation_supported(snapshot)
+        return snapshot
 
     async def _write_l2(self, snapshot: RouteGroupRuntimeSnapshot) -> bool:
         if self.redis is None:
             return True
+        _require_runtime_snapshot_selector_activation_validated(snapshot)
         try:
+            serialized = _RouteGroupRuntimeCacheEnvelope(
+                schema_version=ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+                revision=snapshot.revision,
+                groups=snapshot.groups,
+                database_initialized=snapshot.database_initialized,
+            ).model_dump_json()
+            serialized_size = len(serialized.encode("utf-8"))
+            if serialized_size > ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES:
+                logger.debug(
+                    "skipped oversized route group runtime cache write (%s bytes)",
+                    serialized_size,
+                )
+                return False
             await self.redis.setex(
                 self._revision_key(snapshot.revision),
                 self.l2_ttl_seconds,
-                json.dumps(
-                    {
-                        "revision": snapshot.revision,
-                        "groups": snapshot.groups,
-                        "database_initialized": snapshot.database_initialized,
-                    }
-                ),
+                serialized,
             )
         except Exception as exc:
             logger.debug("failed to write route group runtime cache into redis: %s", exc)
@@ -178,11 +223,69 @@ class RouteGroupRuntimeCache:
             revision=snapshot.revision,
             groups=deepcopy(snapshot.groups),
             database_initialized=snapshot.database_initialized,
+            selector_activation_state=snapshot.selector_activation_state,
         )
 
 
-def route_groups_from_config(cfg: AppConfig) -> list[dict[str, Any]]:
-    return [item.model_dump(mode="python") for item in cfg.router_settings.route_groups]
+def route_groups_from_config(
+    cfg: AppConfig,
+    *,
+    deployment_modes: Mapping[str, ModelMode] | None = None,
+) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for item in cfg.router_settings.route_groups:
+        policy = item.model_dump(mode="python")
+        if item.selector is not None:
+            if deployment_modes is None:
+                raise ValueError(
+                    f"selector route group '{item.key}' requires loaded deployment inventory"
+                )
+            inventory = {
+                member.deployment_id: PolicyMemberInventoryItem(
+                    deployment_id=member.deployment_id,
+                    enabled=member.enabled,
+                    workload_mode=deployment_modes[member.deployment_id],
+                )
+                for member in item.members
+                if member.deployment_id in deployment_modes
+            }
+            validate_selector_assignments(
+                item.selector,
+                [RoutePolicyMember.model_validate(member.model_dump()) for member in item.members],
+                group_mode=item.mode,
+                available_members=inventory,
+            )
+        ensure_selector_activation_supported(
+            policy,
+            semantics_version=SELECTOR_POLICY_SEMANTICS_VERSION,
+        )
+        policy.pop("selector", None)
+        for member in policy["members"]:
+            member.pop("lane", None)
+        groups.append(policy)
+    return groups
+
+
+def _ensure_runtime_snapshot_selector_activation_supported(
+    snapshot: RouteGroupRuntimeSnapshot,
+) -> None:
+    for group in snapshot.groups:
+        semantics_version = int(group.get("policy_semantics_version") or 1)
+        policy_json = group.get("policy_json")
+        policy = policy_json if isinstance(policy_json, dict) else group
+        ensure_selector_activation_supported(
+            policy,
+            semantics_version=semantics_version,
+        )
+
+
+def _require_runtime_snapshot_selector_activation_validated(
+    snapshot: RouteGroupRuntimeSnapshot,
+) -> None:
+    if snapshot.selector_activation_state != RouteSelectorActivationState.INACTIVE:
+        raise UnvalidatedRouteGroupSnapshotError(
+            "route-group runtime snapshot has not passed the selector activation gate"
+        )
 
 
 async def load_route_group_snapshot(
@@ -191,12 +294,14 @@ async def load_route_group_snapshot(
     route_group_cache: RouteGroupRuntimeCache | None = None,
     *,
     allow_config_fallback: bool = True,
+    deployment_modes: Mapping[str, ModelMode] | None = None,
 ) -> tuple[RouteGroupRuntimeSnapshot, str]:
     result = await load_route_group_snapshot_result(
         repository,
         cfg,
         route_group_cache,
         allow_config_fallback=allow_config_fallback,
+        deployment_modes=deployment_modes,
     )
     return result.snapshot, result.compatibility_source
 
@@ -207,12 +312,14 @@ async def load_route_group_snapshot_result(
     route_group_cache: RouteGroupRuntimeCache | None = None,
     *,
     allow_config_fallback: bool = True,
+    deployment_modes: Mapping[str, ModelMode] | None = None,
 ) -> RouteGroupSnapshotLoadResult:
     if repository is None:
         return RouteGroupSnapshotLoadResult(
             snapshot=RouteGroupRuntimeSnapshot(
                 revision=0,
-                groups=route_groups_from_config(cfg),
+                groups=route_groups_from_config(cfg, deployment_modes=deployment_modes),
+                selector_activation_state=RouteSelectorActivationState.INACTIVE,
             ),
             source="config_only",
             database_available=True,
@@ -225,6 +332,9 @@ async def load_route_group_snapshot_result(
             source = "db"
         else:
             snapshot, source = await route_group_cache.get_snapshot(repository)
+        _require_runtime_snapshot_selector_activation_validated(snapshot)
+    except (RouteSelectorActivationUnsupportedError, UnvalidatedRouteGroupSnapshotError):
+        raise
     except Exception as exc:
         if not allow_config_fallback:
             raise
@@ -232,7 +342,8 @@ async def load_route_group_snapshot_result(
         return RouteGroupSnapshotLoadResult(
             snapshot=RouteGroupRuntimeSnapshot(
                 revision=0,
-                groups=route_groups_from_config(cfg),
+                groups=route_groups_from_config(cfg, deployment_modes=deployment_modes),
+                selector_activation_state=RouteSelectorActivationState.INACTIVE,
             ),
             source="config_db_unavailable",
             database_available=False,
@@ -249,7 +360,8 @@ async def load_route_group_snapshot_result(
     return RouteGroupSnapshotLoadResult(
         snapshot=RouteGroupRuntimeSnapshot(
             revision=snapshot.revision,
-            groups=route_groups_from_config(cfg),
+            groups=route_groups_from_config(cfg, deployment_modes=deployment_modes),
+            selector_activation_state=RouteSelectorActivationState.INACTIVE,
         ),
         source="config_db_empty",
         database_available=True,
@@ -261,6 +373,13 @@ async def load_route_groups(
     repository: RouteGroupRepository | None,
     cfg: AppConfig,
     route_group_cache: RouteGroupRuntimeCache | None = None,
+    *,
+    deployment_modes: Mapping[str, ModelMode] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
-    snapshot, source = await load_route_group_snapshot(repository, cfg, route_group_cache)
+    snapshot, source = await load_route_group_snapshot(
+        repository,
+        cfg,
+        route_group_cache,
+        deployment_modes=deployment_modes,
+    )
     return snapshot.groups, source

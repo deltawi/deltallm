@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from src.config import AppConfig
 from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.router.selection.policy import (
+    RouteSelectorActivationState,
+    RouteSelectorActivationUnsupportedError,
+)
 from src.services.route_groups import (
+    ROUTE_GROUP_RUNTIME_CACHE_KEY,
+    ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES,
+    ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
     RouteGroupRuntimeCache,
     StaleRouteGroupSnapshotError,
+    UnvalidatedRouteGroupSnapshotError,
     load_route_group_snapshot,
     load_route_group_snapshot_result,
     load_route_groups,
+    route_groups_from_config,
 )
 
 
@@ -36,7 +46,13 @@ class _FakeRouteGroupRepository:
             self.revision,
             list(self.groups),
             database_initialized=self.database_initialized,
+            selector_activation_state=RouteSelectorActivationState.INACTIVE,
         )
+
+
+class _SelectorBlockedRepository(_FakeRouteGroupRepository):
+    async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
+        raise RouteSelectorActivationUnsupportedError("cannot be activated")
 
 
 class _FakeRedis:
@@ -62,6 +78,230 @@ class _FakeRedis:
             raise RuntimeError("redis unavailable")
         self.values.pop(key, None)
         self.delete_calls += 1
+
+
+def _selector_config() -> AppConfig:
+    return AppConfig.model_validate(
+        {
+            "router_settings": {
+                "route_groups": [
+                    {
+                        "key": "support-chat",
+                        "mode": "chat",
+                        "selector": {
+                            "kind": "llm-tier",
+                            "classifier_deployment_id": "dep-mini",
+                            "lanes": [
+                                {
+                                    "id": "economy",
+                                    "rank": 0,
+                                    "description": "Routine work",
+                                },
+                                {
+                                    "id": "quality",
+                                    "rank": 1,
+                                    "description": "Complex work",
+                                },
+                            ],
+                        },
+                        "members": [
+                            {"deployment_id": "dep-mini", "lane": "economy"},
+                            {"deployment_id": "dep-large", "lane": "quality"},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+
+
+def test_selector_free_config_runtime_shape_is_unchanged():
+    cfg = AppConfig.model_validate(
+        {
+            "router_settings": {
+                "route_groups": [
+                    {
+                        "key": "support-chat",
+                        "mode": "chat",
+                        "strategy": "weighted",
+                        "members": [{"deployment_id": "dep-mini", "weight": 2}],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert route_groups_from_config(cfg) == [
+        {
+            "key": "support-chat",
+            "mode": "chat",
+            "enabled": True,
+            "strategy": "weighted",
+            "access_groups": [],
+            "members": [
+                {
+                    "deployment_id": "dep-mini",
+                    "enabled": True,
+                    "weight": 2,
+                    "priority": None,
+                }
+            ],
+        }
+    ]
+
+
+def test_file_config_selector_activation_is_explicitly_rejected():
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+        route_groups_from_config(
+            _selector_config(),
+            deployment_modes={"dep-mini": "chat", "dep-large": "chat"},
+        )
+
+
+def test_file_config_selector_requires_loaded_deployment_inventory():
+    with pytest.raises(ValueError, match="requires loaded deployment inventory"):
+        route_groups_from_config(_selector_config())
+
+
+@pytest.mark.parametrize(
+    ("deployment_modes", "message"),
+    [
+        ({"dep-large": "chat"}, "classifier must be a member"),
+        (
+            {"dep-mini": "embedding", "dep-large": "chat"},
+            "classifier must reference a chat deployment",
+        ),
+        (
+            {"dep-mini": "chat"},
+            "selector member 'dep-large' must be a route-group member",
+        ),
+    ],
+)
+def test_file_config_selector_rejects_incomplete_or_incompatible_inventory(
+    deployment_modes,
+    message: str,
+):
+    with pytest.raises(ValueError, match=message):
+        route_groups_from_config(
+            _selector_config(),
+            deployment_modes=deployment_modes,
+        )
+
+
+@pytest.mark.asyncio
+async def test_database_selector_gate_never_falls_back_to_config():
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+        await load_route_group_snapshot_result(_SelectorBlockedRepository(), cfg)
+
+
+@pytest.mark.asyncio
+async def test_l2_cached_selector_snapshot_is_explicitly_rejected():
+    redis = _FakeRedis()
+    redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "inactive",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "selector-route",
+                    "policy_semantics_version": 3,
+                    "selector": {"kind": "llm-tier"},
+                    "members": [],
+                }
+            ],
+        }
+    )
+    cache = RouteGroupRuntimeCache(redis)
+
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+        await cache.get_snapshot(_FakeRouteGroupRepository())
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"] = json.dumps(
+        {
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [{"key": "legacy-cache", "members": []}],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+    rewritten = json.loads(redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"])
+    assert rewritten["schema_version"] == ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION
+    assert rewritten["selector_activation_state"] == "inactive"
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_oversized_envelope_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"] = "x" * (
+        ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES + 1
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_skips_oversized_snapshot_write():
+    redis = _FakeRedis()
+    repository = _FakeRouteGroupRepository(
+        groups=[
+            {
+                "key": "oversized-state",
+                "metadata": {"payload": "x" * ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES},
+                "members": [],
+            }
+        ]
+    )
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "oversized-state"
+    assert redis.setex_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unvalidated_database_snapshot_fails_closed_without_cache_write():
+    class UnvalidatedRepository(_FakeRouteGroupRepository):
+        async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
+            self.calls += 1
+            return RouteGroupRuntimeSnapshot(
+                revision=self.revision,
+                groups=[{"key": "unchecked", "members": []}],
+            )
+
+    redis = _FakeRedis()
+
+    with pytest.raises(UnvalidatedRouteGroupSnapshotError, match="has not passed"):
+        await RouteGroupRuntimeCache(redis).get_snapshot(UnvalidatedRepository())
+
+    assert redis.setex_calls == 0
+
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+    with pytest.raises(UnvalidatedRouteGroupSnapshotError, match="has not passed"):
+        await load_route_group_snapshot_result(UnvalidatedRepository(), cfg)
 
 
 @pytest.mark.asyncio
@@ -362,7 +602,11 @@ async def test_older_in_flight_database_load_cannot_overwrite_newer_generation()
             if self.calls == 1:
                 self.first_started.set()
                 await self.release_first.wait()
-            return RouteGroupRuntimeSnapshot(revision, groups)
+            return RouteGroupRuntimeSnapshot(
+                revision,
+                groups,
+                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            )
 
     cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})
     repository = BarrierRepository()

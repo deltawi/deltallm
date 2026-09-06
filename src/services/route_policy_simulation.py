@@ -39,6 +39,11 @@ from src.router.context_policy import (
     set_request_token_demand,
 )
 from src.router.runtime_generation import RoutingRuntimeGeneration
+from src.router.route_group_validation import deployment_modes_by_id
+from src.router.selection.policy import (
+    SELECTOR_POLICY_SEMANTICS_VERSION,
+    ensure_selector_activation_supported,
+)
 from src.router.simulation_state import RoutingSimulationState, RoutingStateSnapshotMiss
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 
@@ -142,6 +147,10 @@ class RoutePolicySimulationService:
                     request.policy,
                     available_members=membership.inventory,
                     workload_mode=group.mode,
+                )
+                ensure_selector_activation_supported(
+                    normalized,
+                    semantics_version=SELECTOR_POLICY_SEMANTICS_VERSION,
                 )
             except ValueError as exc:
                 raise RoutePolicySimulationInvalidError(str(exc)) from exc
@@ -336,10 +345,14 @@ class RoutePolicySimulationService:
 
     async def _policy_membership(self, group_key: str) -> _PolicyMembership:
         members = await self._route_groups.list_members(group_key)
+        deployment_modes = deployment_modes_by_id(
+            entry for deployments in self._runtime.model_registry.values() for entry in deployments
+        )
         inventory = {
             member.deployment_id.strip(): PolicyMemberInventoryItem(
                 deployment_id=member.deployment_id.strip(),
                 enabled=member.enabled,
+                workload_mode=deployment_modes.get(member.deployment_id.strip()),
             )
             for member in members
             if isinstance(member.deployment_id, str) and member.deployment_id.strip()

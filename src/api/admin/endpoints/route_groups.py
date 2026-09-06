@@ -24,6 +24,7 @@ from src.api.admin.route_group_contracts import (
     RouteGroupDeleteResponse,
     RouteGroupMemberMutationResponse,
     RouteGroupMutationResponse,
+    RoutePolicyDocumentRequest,
     RoutePolicySimulationRequest,
     RoutePolicySimulationResponse,
     RoutePolicyMutationResponse,
@@ -44,6 +45,7 @@ from src.router.route_group_validation import (
     normalize_route_group_mode,
     validate_route_group_member_modes,
 )
+from src.router.selection.policy import RouteSelectorActivationUnsupportedError
 from src.router import RoutingStrategy
 from src.router.runtime_generation import require_routing_runtime_generation
 from src.services.asset_ownership import (
@@ -193,13 +195,17 @@ def _validate_bool(value: Any, *, field_name: str) -> bool:
 
 
 async def _resolve_policy_members(
-    repository: RouteGroupRepository, group_key: str
+    request: Request,
+    repository: RouteGroupRepository,
+    group_key: str,
 ) -> dict[str, PolicyMemberInventoryItem]:
     members = await repository.list_members(group_key)
+    deployment_modes = deployment_modes_by_id(model_entries(request.app))
     return {
         member.deployment_id.strip(): PolicyMemberInventoryItem(
             deployment_id=member.deployment_id.strip(),
             enabled=member.enabled,
+            workload_mode=deployment_modes.get(member.deployment_id.strip()),
         )
         for member in members
         if isinstance(member.deployment_id, str) and member.deployment_id.strip()
@@ -452,6 +458,7 @@ def _policy_publication_service(request: Request) -> RoutePolicyPublicationServi
     return RoutePolicyPublicationService(
         route_groups=_repository_or_503(request),
         refresh_runtime=refresh_runtime,
+        deployment_modes=deployment_modes_by_id(model_entries(request.app)),
     )
 
 
@@ -991,15 +998,16 @@ async def list_route_group_policies(request: Request, group_key: str) -> dict[st
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
 )
 async def validate_route_group_policy(
-    request: Request, group_key: str, payload: dict[str, Any]
+    request: Request, group_key: str, payload: RoutePolicyDocumentRequest
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+    document = payload.to_policy_document()
     normalized, warnings = _validate_policy_payload(
-        payload,
-        available_members=await _resolve_policy_members(repository, group_key),
+        document,
+        available_members=await _resolve_policy_members(request, repository, group_key),
         workload_mode=group.mode,
     )
     return {"group_key": group_key, "valid": True, "policy": normalized, "warnings": warnings}
@@ -1011,16 +1019,17 @@ async def validate_route_group_policy(
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
 )
 async def save_route_group_policy_draft(
-    request: Request, group_key: str, payload: dict[str, Any]
+    request: Request, group_key: str, payload: RoutePolicyDocumentRequest
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+    document = payload.to_policy_document()
     normalized, warnings = _validate_policy_payload(
-        payload,
-        available_members=await _resolve_policy_members(repository, group_key),
+        document,
+        available_members=await _resolve_policy_members(request, repository, group_key),
         workload_mode=group.mode,
     )
     try:
@@ -1041,7 +1050,7 @@ async def save_route_group_policy_draft(
         action=AuditAction.ADMIN_ROUTING_UPDATE,
         resource_type="route_policy_draft",
         resource_id=group_key,
-        request_payload=payload,
+        request_payload=document,
         response_payload=response,
     )
     return response
@@ -1053,9 +1062,11 @@ async def save_route_group_policy_draft(
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
 )
 async def publish_route_group_policy_v2(
-    request: Request, group_key: str, payload: dict[str, Any] | None = None
+    request: Request,
+    group_key: str,
+    payload: RoutePolicyDocumentRequest | None = None,
 ) -> dict[str, Any]:
-    body = payload or {}
+    body = payload.to_policy_document() if payload is not None else {}
     return await _publish_route_group_policy_response(
         request,
         group_key,
@@ -1087,6 +1098,8 @@ async def rollback_route_group_policy(
         )
     except RoutePolicyStateConflictError as exc:
         _raise_route_policy_conflict(exc)
+    except RouteSelectorActivationUnsupportedError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if policy is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Route group or policy version not found"
@@ -1166,7 +1179,7 @@ async def publish_route_group_policy(
     request: Request,
     response: Response,
     group_key: str,
-    payload: dict[str, Any],
+    payload: RoutePolicyDocumentRequest,
 ) -> dict[str, Any]:
     encoded_group_key = quote(group_key, safe="")
     response.headers["Link"] = (
@@ -1175,6 +1188,6 @@ async def publish_route_group_policy(
     return await _publish_route_group_policy_response(
         request,
         group_key,
-        payload,
+        payload.to_policy_document(),
         latest_draft=False,
     )

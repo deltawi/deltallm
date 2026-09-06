@@ -11,8 +11,10 @@ from src.router.policy_validation import (
     merge_policy_document_for_write,
     merge_policy_members,
     validate_route_policy,
+    validate_stored_route_policy,
 )
 from src.router.route_group_validation import validate_route_group_member_modes
+from src.router.selection.policy import ensure_selector_activation_supported
 
 
 class RoutePolicyStateConflictError(ValueError):
@@ -31,6 +33,13 @@ class RoutePolicyRecord:
     published_by: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RoutePolicyValidationContext:
+    group_key: str
+    group_mode: str
+    inventory: dict[str, PolicyMemberInventoryItem]
 
 
 def parse_policy_json(value: Any) -> dict[str, Any]:
@@ -119,10 +128,11 @@ class RoutePolicyLifecycleMixin:
         group_id = await self._lock_group_id(group_key)
         if group_id is None:
             return None
+        context = await self._load_policy_validation_context(group_id)
         try:
-            normalized, _ = await self._validate_policy_document(
-                group_id,
+            normalized, _ = self._validate_policy_document(
                 policy_json,
+                context=context,
                 semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             )
         except ValueError as exc:
@@ -131,6 +141,21 @@ class RoutePolicyLifecycleMixin:
             ) from exc
         current = await self._latest_policy_document(group_id, status="published")
         effective = merge_policy_document_for_write(current, normalized)
+        try:
+            effective_normalized, _ = self._validate_policy_document(
+                effective,
+                context=context,
+                semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
+                stored_document=True,
+            )
+        except ValueError as exc:
+            raise RoutePolicyStateConflictError(
+                f"policy is incompatible with current route-group members: {exc}"
+            ) from exc
+        ensure_selector_activation_supported(
+            effective_normalized,
+            semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
+        )
         return await self._replace_published_policy(
             group_id,
             effective,
@@ -157,10 +182,11 @@ class RoutePolicyLifecycleMixin:
         group_id = await self._lock_group_id(group_key)
         if group_id is None:
             return None
+        context = await self._load_policy_validation_context(group_id)
         try:
-            normalized, _ = await self._validate_policy_document(
-                group_id,
+            normalized, _ = self._validate_policy_document(
                 policy_json,
+                context=context,
                 semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             )
         except ValueError as exc:
@@ -183,6 +209,17 @@ class RoutePolicyLifecycleMixin:
                 parse_policy_json(drafts[0].get("policy_json")),
                 normalized,
             )
+            try:
+                self._validate_policy_document(
+                    effective,
+                    context=context,
+                    semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
+                    stored_document=True,
+                )
+            except ValueError as exc:
+                raise RoutePolicyStateConflictError(
+                    f"draft is incompatible with current route-group members: {exc}"
+                ) from exc
             return await self._update_draft(
                 str(drafts[0]["route_policy_id"]),
                 effective,
@@ -191,6 +228,17 @@ class RoutePolicyLifecycleMixin:
 
         current = await self._latest_policy_document(group_id, status="published")
         effective = merge_policy_document_for_write(current, normalized)
+        try:
+            self._validate_policy_document(
+                effective,
+                context=context,
+                semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
+                stored_document=True,
+            )
+        except ValueError as exc:
+            raise RoutePolicyStateConflictError(
+                f"draft is incompatible with current route-group members: {exc}"
+            ) from exc
         return await self._insert_policy(
             group_id,
             "draft",
@@ -240,16 +288,22 @@ class RoutePolicyLifecycleMixin:
         draft_document = await self._policy_document_by_id(str(drafts[0]["route_policy_id"]))
         if draft_document is None:
             raise RuntimeError("draft policy changed while it was being published")
+        context = await self._load_policy_validation_context(group_id)
         try:
-            await self._validate_policy_document(
-                group_id,
+            normalized, _ = self._validate_policy_document(
                 draft_document,
+                context=context,
                 semantics_version=int(drafts[0].get("semantics_version") or 1),
+                stored_document=True,
             )
         except ValueError as exc:
             raise RoutePolicyStateConflictError(
                 f"draft policy is incompatible with current route-group members: {exc}"
             ) from exc
+        ensure_selector_activation_supported(
+            normalized,
+            semantics_version=int(drafts[0].get("semantics_version") or 1),
+        )
         await self._archive_published(group_id)
         rows = await self.prisma.query_raw(
             """
@@ -310,17 +364,23 @@ class RoutePolicyLifecycleMixin:
             return None
         source_document = parse_policy_json(source[0].get("policy_json"))
         semantics_version = int(source[0].get("semantics_version") or 1)
+        context = await self._load_policy_validation_context(group_id)
         try:
-            await self._validate_policy_document(
-                group_id,
+            normalized, _ = self._validate_policy_document(
                 source_document,
+                context=context,
                 semantics_version=semantics_version,
+                stored_document=True,
             )
         except ValueError as exc:
             raise RoutePolicyStateConflictError(
                 f"policy version {target_version} is incompatible with current "
                 f"route-group members: {exc}"
             ) from exc
+        ensure_selector_activation_supported(
+            normalized,
+            semantics_version=semantics_version,
+        )
         return await self._replace_published_policy(
             group_id,
             source_document,
@@ -388,13 +448,10 @@ class RoutePolicyLifecycleMixin:
         )
         return parse_policy_json(rows[0].get("policy_json")) if rows else None
 
-    async def _validate_policy_document(
+    async def _load_policy_validation_context(
         self,
         group_id: str,
-        policy_json: dict[str, Any],
-        *,
-        semantics_version: int,
-    ) -> tuple[dict[str, Any], list[str]]:
+    ) -> RoutePolicyValidationContext:
         rows = await self.prisma.query_raw(
             """
             SELECT
@@ -402,7 +459,10 @@ class RoutePolicyLifecycleMixin:
                 g.mode AS group_mode,
                 m.deployment_id,
                 m.enabled,
-                COALESCE(d.model_info->>'mode', 'chat') AS deployment_mode
+                CASE
+                    WHEN d.deployment_id IS NULL THEN NULL
+                    ELSE COALESCE(d.model_info->>'mode', 'chat')
+                END AS deployment_mode
             FROM deltallm_routegroup g
             LEFT JOIN deltallm_routegroupmember m ON m.route_group_id = g.route_group_id
             LEFT JOIN deltallm_modeldeployment d ON d.deployment_id = m.deployment_id
@@ -417,16 +477,33 @@ class RoutePolicyLifecycleMixin:
             str(row.get("deployment_id") or ""): PolicyMemberInventoryItem(
                 deployment_id=str(row.get("deployment_id") or ""),
                 enabled=bool(row.get("enabled", True)),
-                workload_mode=str(row.get("deployment_mode") or "chat"),
+                workload_mode=(
+                    str(row["deployment_mode"]) if row.get("deployment_mode") is not None else None
+                ),
             )
             for row in rows
             if str(row.get("deployment_id") or "")
         }
-        normalized, warnings = validate_route_policy(
+        return RoutePolicyValidationContext(
+            group_key=str(rows[0].get("group_key") or ""),
+            group_mode=str(rows[0].get("group_mode") or ""),
+            inventory=inventory,
+        )
+
+    def _validate_policy_document(
+        self,
+        policy_json: dict[str, Any],
+        *,
+        context: RoutePolicyValidationContext,
+        semantics_version: int,
+        stored_document: bool = False,
+    ) -> tuple[dict[str, Any], list[str]]:
+        validator = validate_stored_route_policy if stored_document else validate_route_policy
+        normalized, warnings = validator(
             policy_json,
-            available_members=inventory,
+            available_members=context.inventory,
             semantics_version=semantics_version,
-            workload_mode=rows[0].get("group_mode"),
+            workload_mode=context.group_mode,
         )
         effective_members = merge_policy_members(
             [
@@ -434,7 +511,7 @@ class RoutePolicyLifecycleMixin:
                     "deployment_id": member.deployment_id,
                     "enabled": member.enabled,
                 }
-                for member in inventory.values()
+                for member in context.inventory.values()
             ],
             normalized.get("members") if "members" in normalized else None,
             semantics_version=semantics_version,
@@ -445,11 +522,13 @@ class RoutePolicyLifecycleMixin:
             if bool(member.get("enabled", True))
         ]
         validate_route_group_member_modes(
-            group_key=str(rows[0].get("group_key") or ""),
-            group_mode=rows[0].get("group_mode"),
+            group_key=context.group_key,
+            group_mode=context.group_mode,
             member_ids=active_ids,
             deployment_modes={
-                member_id: member.workload_mode or "chat" for member_id, member in inventory.items()
+                member_id: member.workload_mode
+                for member_id, member in context.inventory.items()
+                if member.workload_mode is not None
             },
         )
         return normalized, warnings
@@ -469,10 +548,12 @@ class RoutePolicyLifecycleMixin:
         if not rows:
             return
         try:
-            await self._validate_policy_document(
-                group_id,
+            context = await self._load_policy_validation_context(group_id)
+            self._validate_policy_document(
                 parse_policy_json(rows[0].get("policy_json")),
+                context=context,
                 semantics_version=int(rows[0].get("semantics_version") or 1),
+                stored_document=True,
             )
         except ValueError as exc:
             raise RoutePolicyStateConflictError(

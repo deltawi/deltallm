@@ -60,6 +60,30 @@ router_settings:
   #         weight: 3
   #       - deployment_id: embeddings-secondary
   #         weight: 1
+  # Model-router contract example (issue #304). This remains commented because selector
+  # runtime activation is intentionally rejected until the complete PR 4 execution path lands.
+  # route_groups:
+  #   - key: support-chat
+  #     mode: chat
+  #     strategy: least-busy
+  #     selector:
+  #       kind: llm-tier
+  #       classifier_deployment_id: support-mini
+  #       timeout_ms: 750
+  #       max_input_chars: 8000
+  #       default_lane: quality
+  #       lanes:
+  #         - id: economy
+  #           rank: 0
+  #           description: Routine extraction, formatting, and simple questions
+  #         - id: quality
+  #           rank: 1
+  #           description: Complex reasoning, ambiguity, and advanced tool use
+  #     members:
+  #       - deployment_id: support-mini
+  #         lane: economy
+  #       - deployment_id: support-large
+  #         lane: quality
 
 general_settings:
   instance_name: DeltaLLM

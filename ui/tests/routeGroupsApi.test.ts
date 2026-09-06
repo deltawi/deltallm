@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { routeGroups } from '../src/lib/api';
+import { routeGroups, type RoutePolicy } from '../src/lib/api';
 import { routeGroupMutationOutcome } from '../src/lib/routeGroups';
 
 test('route-group policy responses preserve semantics and post-commit warnings', async () => {
@@ -33,6 +33,37 @@ test('route-group policy responses preserve semantics and post-commit warnings',
         message: 'Published policy version 3. Runtime warning: Runtime refresh is pending',
       },
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('route-group policy history keeps future semantics opaque on reads', async () => {
+  const historicalPolicy: RoutePolicy = {
+    route_policy_id: 'policy-future',
+    route_group_id: 'group-1',
+    version: 9,
+    semantics_version: 99,
+    status: 'archived',
+    policy_json: {
+      selector: {
+        kind: 'future-selector',
+        server_owned_revision: 7,
+      },
+    },
+    published_at: null,
+    published_by: null,
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    group_key: 'support',
+    policies: [historicalPolicy],
+  }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+  try {
+    const result = await routeGroups.listPolicies('support');
+
+    assert.deepEqual(result.policies[0].policy_json, historicalPolicy.policy_json);
   } finally {
     globalThis.fetch = originalFetch;
   }

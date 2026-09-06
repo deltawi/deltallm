@@ -32,13 +32,57 @@ export interface RouteGroupMemberDetail extends RouteGroupMember {
   healthy?: boolean | null;
 }
 
+export interface RoutePolicySelectorLane {
+  id: string;
+  rank: number;
+  description: string;
+}
+
+export interface RoutePolicySelector {
+  kind: 'llm-tier';
+  classifier_deployment_id: string;
+  timeout_ms?: number;
+  max_input_chars?: number;
+  default_lane?: string | null;
+  lanes: RoutePolicySelectorLane[];
+}
+
+export interface RoutePolicyMemberDocument {
+  deployment_id: string;
+  enabled?: boolean;
+  weight?: number | null;
+  priority?: number | null;
+  lane?: string | null;
+  [opaqueField: string]: unknown;
+}
+
+export interface RoutePolicyDocument {
+  mode?: string | null;
+  strategy?: string | null;
+  members?: RoutePolicyMemberDocument[];
+  timeouts?: {
+    global_ms?: number;
+    global_seconds?: number;
+    [opaqueField: string]: unknown;
+  };
+  retry?: {
+    max_attempts?: number;
+    retryable_error_classes?: string[];
+    [opaqueField: string]: unknown;
+  };
+  selector?: RoutePolicySelector | null;
+  [opaqueField: string]: unknown;
+}
+
+export type StoredRoutePolicyDocument = Record<string, unknown>;
+
 export interface RoutePolicy {
   route_policy_id: string;
   route_group_id: string;
   version: number;
   semantics_version: number;
   status: string;
-  policy_json: Record<string, unknown>;
+  policy_json: StoredRoutePolicyDocument;
   published_at: string | null;
   published_by: string | null;
   created_at?: string | null;
@@ -111,7 +155,7 @@ export interface RoutePolicySimulationRequest {
   iterations?: number;
   input_tokens?: number;
   requested_output_tokens?: number | null;
-  policy?: Record<string, unknown> | null;
+  policy?: RoutePolicyDocument | null;
   metadata?: Record<string, unknown>;
   user_id?: string;
   prompt_ref?: Record<string, unknown> | null;
@@ -224,13 +268,13 @@ export const routeGroups = {
     ),
   validatePolicy: (
     groupKey: string,
-    payload: Record<string, unknown>,
+    payload: RoutePolicyDocument,
     signal?: AbortSignal,
   ) =>
     apiFetch<{
       group_key: string;
       valid: boolean;
-      policy: Record<string, unknown>;
+      policy: RoutePolicyDocument;
       warnings: string[];
     }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/validate`, {
       method: 'POST',
@@ -239,7 +283,7 @@ export const routeGroups = {
     }),
   savePolicyDraft: (
     groupKey: string,
-    payload: Record<string, unknown>,
+    payload: RoutePolicyDocument,
     signal?: AbortSignal,
   ) =>
     apiFetch<RoutePolicyMutationResponse>(
@@ -248,7 +292,7 @@ export const routeGroups = {
     ),
   publishPolicy: (
     groupKey: string,
-    payload?: Record<string, unknown>,
+    payload?: RoutePolicyDocument,
     signal?: AbortSignal,
   ) =>
     apiFetch<RoutePolicyMutationResponse>(

@@ -141,6 +141,7 @@ Route-group policies currently support:
 - `context.unknown_capacity`
 - `context.default_output_tokens`
 - `context.safety_margin_tokens`
+- optional version 3 `selector` and member `lane` fields for the model-router contract
 
 Legacy mode aliases accepted on input:
 
@@ -217,6 +218,22 @@ existing batched state reads.
 
 The ownership, migration, rollback, and latency decisions are recorded in the
 [context-capacity routing decision](../project/context-routing-design.md).
+
+### Model-router policy contract
+
+Version 3 defines a bounded `llm-tier` selector for chat Route Groups. It classifies a request into
+an allowlisted lane; it does not choose a deployment. Lanes have unique contiguous ranks starting at
+zero, and an omitted `default_lane` normalizes to the highest-ranked lane. Selector policies require
+an explicit member list, an enabled same-group chat classifier, and one valid lane for every enabled
+answer member.
+
+In the contract-only delivery stage (PRs 1–3 of issue #304), the API can validate and save a selector
+draft, but publish, rollback activation, deterministic simulation, database runtime loading, and
+file-config runtime loading reject it explicitly. PR 4 is the activation boundary. There is no
+shadow mode and no background classification of production requests.
+
+The complete design, bounds, compatibility behavior, activation gate, rollout, and rollback order
+are documented in [Route-Group Model Router Design](../project/model-router-design.md).
 
 ## Fallback Configuration
 

@@ -1,20 +1,25 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from src.db.route_policy_lifecycle import RoutePolicyRecord
-from src.router.policy_validation import PolicyMemberInventoryItem, validate_route_policy
+from src.router.policy_validation import (
+    CURRENT_POLICY_SEMANTICS_VERSION,
+    PolicyMemberInventoryItem,
+    validate_route_policy,
+)
+from src.router.selection.policy import ensure_selector_activation_supported
+
+
+class RoutePolicyPublicationGroup(Protocol):
+    mode: str
 
 
 class RoutePolicyPublicationMember(Protocol):
     deployment_id: str
     enabled: bool
-
-
-class RoutePolicyPublicationGroup(Protocol):
-    mode: str
 
 
 class RoutePolicyPublicationRepository(Protocol):
@@ -59,9 +64,11 @@ class RoutePolicyPublicationService:
         *,
         route_groups: RoutePolicyPublicationRepository,
         refresh_runtime: RoutePolicyRuntimeRefresh,
+        deployment_modes: Mapping[str, str] | None = None,
     ) -> None:
         self._route_groups = route_groups
         self._refresh_runtime = refresh_runtime
+        self._deployment_modes = dict(deployment_modes or {})
 
     async def publish_document(
         self,
@@ -75,6 +82,10 @@ class RoutePolicyPublicationService:
             document,
             available_members=await self._member_inventory(group_key),
             workload_mode=group.mode,
+        )
+        ensure_selector_activation_supported(
+            normalized,
+            semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
         )
         policy = await self._route_groups.publish_policy(
             group_key,
@@ -112,6 +123,7 @@ class RoutePolicyPublicationService:
             member.deployment_id.strip(): PolicyMemberInventoryItem(
                 deployment_id=member.deployment_id.strip(),
                 enabled=member.enabled,
+                workload_mode=self._deployment_modes.get(member.deployment_id.strip()),
             )
             for member in members
             if member.deployment_id.strip()

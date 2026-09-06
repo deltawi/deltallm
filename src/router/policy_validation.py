@@ -5,15 +5,25 @@ from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any
 
-from src.config import validate_context_routing_workload_mode
+from pydantic import ValidationError
+
+from src.route_group_config import validate_context_routing_workload_mode
 from src.router.router import RoutingStrategy
+from src.router.selection.policy import (
+    LLMTierSelectorPolicy,
+    RoutePolicyMember,
+    SELECTOR_POLICY_SEMANTICS_VERSION,
+    validate_selector_assignments,
+)
 
 ALLOWED_POLICY_MODES = {"fallback", "weighted", "conditional", "adaptive"}
 POLICY_MODE_STRATEGY_ALIASES = {
     "fallback": RoutingStrategy.PRIORITY_BASED.value,
     "weighted": RoutingStrategy.WEIGHTED.value,
 }
-ALLOWED_POLICY_KEYS = {"mode", "strategy", "members", "timeouts", "retry", "context"}
+LEGACY_POLICY_KEYS = {"mode", "strategy", "members", "timeouts", "retry"}
+CONTEXT_POLICY_KEYS = {*LEGACY_POLICY_KEYS, "context"}
+ALLOWED_POLICY_KEYS = {*CONTEXT_POLICY_KEYS, "selector"}
 ALLOWED_TIMEOUT_KEYS = {"global_ms", "global_seconds"}
 ALLOWED_RETRY_KEYS = {"max_attempts", "retryable_error_classes"}
 ALLOWED_CONTEXT_KEYS = {
@@ -29,9 +39,11 @@ ALLOWED_RETRYABLE_ERROR_CLASSES = {
     "content_policy_violation",
     "generic",
 }
-POLICY_MEMBER_KEYS = {"deployment_id", "enabled", "weight", "priority"}
+LEGACY_POLICY_MEMBER_KEYS = {"deployment_id", "enabled", "weight", "priority"}
+POLICY_MEMBER_KEYS = {*LEGACY_POLICY_MEMBER_KEYS, "lane"}
 LEGACY_POLICY_SEMANTICS_VERSION = 1
-CURRENT_POLICY_SEMANTICS_VERSION = 2
+CONTEXT_POLICY_SEMANTICS_VERSION = 2
+CURRENT_POLICY_SEMANTICS_VERSION = SELECTOR_POLICY_SEMANTICS_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +155,10 @@ def merge_policy_members(
             continue
         selected_ids.add(deployment_id)
         merged = dict(base)
-        for field_name in ("weight", "priority"):
+        fields = ["weight", "priority"]
+        if semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION:
+            fields.append("lane")
+        for field_name in fields:
             if field_name in item:
                 merged[field_name] = item[field_name]
         # Group membership is the eligibility boundary. A policy may narrow it,
@@ -271,7 +286,14 @@ def _ignored_fields_warning(path: str, fields: list[str]) -> str:
     return f"Ignored opaque {path} fields: {', '.join(fields)}"
 
 
-def _validate_policy_members(normalized: dict[str, Any], warnings: list[str]) -> None:
+def _validate_policy_members(
+    normalized: dict[str, Any],
+    warnings: list[str],
+    *,
+    semantics_version: int,
+    selector_enabled: bool,
+    stored_document: bool,
+) -> None:
     members = normalized.get("members")
     if members is None:
         return
@@ -283,13 +305,39 @@ def _validate_policy_members(normalized: dict[str, Any], warnings: list[str]) ->
     for idx, raw_member in enumerate(members):
         if not isinstance(raw_member, dict):
             raise ValueError(f"members[{idx}] must be an object")
+        if selector_enabled:
+            selector_member = raw_member
+            if stored_document:
+                unknown = sorted(key for key in raw_member if key not in POLICY_MEMBER_KEYS)
+                if unknown:
+                    warnings.append(_ignored_fields_warning(f"members[{idx}]", unknown))
+                selector_member = {
+                    key: value for key, value in raw_member.items() if key in POLICY_MEMBER_KEYS
+                }
+            try:
+                strict_member = RoutePolicyMember.model_validate(selector_member)
+            except ValidationError as exc:
+                raise ValueError(f"members[{idx}] is invalid: {exc}") from exc
+            member = strict_member.model_dump(mode="python", exclude_none=True)
+            deployment_id = strict_member.deployment_id
+            if deployment_id in seen_member_ids:
+                raise ValueError(f"members[{idx}].deployment_id is duplicated")
+            seen_member_ids.add(deployment_id)
+            validated_members.append(member)
+            continue
+
         deployment_id = str(raw_member.get("deployment_id") or "").strip()
         if not deployment_id:
             raise ValueError(f"members[{idx}].deployment_id is required")
         if deployment_id in seen_member_ids:
             raise ValueError(f"members[{idx}].deployment_id is duplicated")
         seen_member_ids.add(deployment_id)
-        unknown = sorted(key for key in raw_member if key not in POLICY_MEMBER_KEYS)
+        allowed_member_keys = (
+            POLICY_MEMBER_KEYS
+            if semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
+            else LEGACY_POLICY_MEMBER_KEYS
+        )
+        unknown = sorted(key for key in raw_member if key not in allowed_member_keys)
         if unknown:
             warnings.append(_ignored_fields_warning(f"members[{idx}]", unknown))
         member: dict[str, Any] = {
@@ -304,8 +352,50 @@ def _validate_policy_members(normalized: dict[str, Any], warnings: list[str]) ->
             member["priority"] = _normalize_int(
                 raw_member["priority"], f"members[{idx}].priority", minimum=0
             )
+        if (
+            semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
+            and raw_member.get("lane") is not None
+        ):
+            member["lane"] = str(raw_member["lane"]).strip()
         validated_members.append(member)
     normalized["members"] = validated_members
+
+
+def _validate_selector(
+    normalized: dict[str, Any],
+    *,
+    available_members: Mapping[str, PolicyMemberInventoryItem] | None,
+    group_mode: str | None,
+    semantics_version: int,
+) -> None:
+    if semantics_version < SELECTOR_POLICY_SEMANTICS_VERSION:
+        return
+
+    raw_selector = normalized.get("selector")
+    if raw_selector is None:
+        normalized.pop("selector", None)
+        members = normalized.get("members")
+        if isinstance(members, list) and any(
+            isinstance(member, dict) and member.get("lane") is not None for member in members
+        ):
+            raise ValueError("member lanes require a selector")
+        return
+    if "members" not in normalized:
+        raise ValueError("selector policies must provide an explicit members list")
+
+    try:
+        selector = LLMTierSelectorPolicy.model_validate(raw_selector)
+        members = [RoutePolicyMember.model_validate(member) for member in normalized["members"]]
+        validate_selector_assignments(
+            selector,
+            members,
+            group_mode=group_mode,
+            available_members=available_members,
+        )
+    except ValidationError as exc:
+        raise ValueError(f"selector is invalid: {exc}") from exc
+
+    normalized["selector"] = selector.model_dump(mode="json")
 
 
 def _validate_policy_timeouts(normalized: dict[str, Any], warnings: list[str]) -> None:
@@ -473,24 +563,43 @@ def _apply_policy_mode(
         )
 
 
-def validate_route_policy(
+def _validate_route_policy_document(
     payload: dict[str, Any],
     *,
     available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
     semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
     workload_mode: object | None = None,
+    stored_document: bool,
 ) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("policy payload must be an object")
-    unknown = sorted(key for key in payload if key not in ALLOWED_POLICY_KEYS)
+    selector_enabled = (
+        semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
+        and payload.get("selector") is not None
+    )
+    if semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION:
+        allowed_policy_keys = ALLOWED_POLICY_KEYS
+    elif semantics_version >= CONTEXT_POLICY_SEMANTICS_VERSION:
+        allowed_policy_keys = CONTEXT_POLICY_KEYS
+    else:
+        allowed_policy_keys = LEGACY_POLICY_KEYS
+    unknown = sorted(key for key in payload if key not in allowed_policy_keys)
     warnings: list[str] = []
     if unknown:
+        if selector_enabled and not stored_document:
+            raise ValueError(f"selector policies contain unknown fields: {', '.join(unknown)}")
         warnings.append(_ignored_fields_warning("policy", unknown))
 
-    normalized = {key: value for key, value in payload.items() if key in ALLOWED_POLICY_KEYS}
+    normalized = {key: value for key, value in payload.items() if key in allowed_policy_keys}
     mode = _validate_policy_mode(normalized)
     _validate_policy_strategy(normalized)
-    _validate_policy_members(normalized, warnings)
+    _validate_policy_members(
+        normalized,
+        warnings,
+        semantics_version=semantics_version,
+        selector_enabled=selector_enabled,
+        stored_document=stored_document,
+    )
     _validate_policy_timeouts(normalized, warnings)
     _validate_policy_retry(normalized, warnings)
     _validate_context_policy(normalized, warnings, workload_mode=workload_mode)
@@ -501,4 +610,46 @@ def validate_route_policy(
     )
     _apply_policy_mode(normalized, active_members, warnings, mode=mode)
     normalized.pop("mode", None)
+    _validate_selector(
+        normalized,
+        available_members=available_members,
+        group_mode=str(workload_mode) if workload_mode is not None else None,
+        semantics_version=semantics_version,
+    )
     return normalized, warnings
+
+
+def validate_route_policy(
+    payload: dict[str, Any],
+    *,
+    available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
+    semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
+    workload_mode: object | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate an untrusted client-authored policy document."""
+
+    return _validate_route_policy_document(
+        payload,
+        available_members=available_members,
+        semantics_version=semantics_version,
+        workload_mode=workload_mode,
+        stored_document=False,
+    )
+
+
+def validate_stored_route_policy(
+    payload: dict[str, Any],
+    *,
+    available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
+    semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
+    workload_mode: object | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate routing-owned fields while tolerating trusted opaque stored fields."""
+
+    return _validate_route_policy_document(
+        payload,
+        available_members=available_members,
+        semantics_version=semantics_version,
+        workload_mode=workload_mode,
+        stored_document=True,
+    )

@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from src.route_policy_contract import LLMTierSelectorPolicy, RoutePolicyMember
 
 
 class RouteGroupMutationResponse(BaseModel):
@@ -61,6 +63,22 @@ class RoutePolicyMutationResponse(BaseModel):
 
 class RoutePolicyRollbackResponse(RoutePolicyMutationResponse):
     rolled_back_from_version: int
+
+
+class RoutePolicyDocumentRequest(BaseModel):
+    """Typed latest policy shape with opaque compatibility for selector-free documents."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: object | None = None
+    strategy: object | None = None
+    members: list[RoutePolicyMember | dict[str, object]] | object | None = None
+    timeouts: dict[str, object] | object | None = None
+    retry: dict[str, object] | object | None = None
+    selector: LLMTierSelectorPolicy | None = None
+
+    def to_policy_document(self) -> dict[str, Any]:
+        return self.model_dump(mode="python", exclude_unset=True)
 
 
 RoutePolicySimulationOutcome = Literal[

@@ -38,7 +38,10 @@ from src.services.model_deployments import (
     load_model_registry,
 )
 from src.services.route_groups import load_route_group_snapshot_result
-from src.router.route_group_validation import resolve_route_group_modes_for_registry
+from src.router.route_group_validation import (
+    deployment_modes_by_id,
+    resolve_route_group_modes_for_registry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +112,9 @@ async def init_routing_runtime(
         app.state.route_group_repository,
         cfg,
         route_group_cache=app.state.route_group_runtime_cache,
+        deployment_modes=deployment_modes_by_id(
+            entry for deployments in app.state.model_registry.values() for entry in deployments
+        ),
     )
     route_group_snapshot = route_group_load.snapshot
     route_group_source = route_group_load.source

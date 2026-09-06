@@ -74,8 +74,14 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
             "db",
         )
 
-    async def _load_groups(repo, cfg, route_group_cache):  # noqa: ANN001, ANN202
-        calls["load_groups"] = (repo, cfg, route_group_cache)
+    async def _load_groups(  # noqa: ANN001, ANN202
+        repo,
+        cfg,
+        route_group_cache,
+        *,
+        deployment_modes,
+    ):
+        calls["load_groups"] = (repo, cfg, route_group_cache, deployment_modes)
         return RouteGroupSnapshotLoadResult(
             snapshot=RouteGroupRuntimeSnapshot(
                 revision=4,
@@ -129,6 +135,12 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
     assert app.state.router_health_handler is not None
     assert app.state.background_health_checker is not None
     assert app.state.model_hot_reload_manager == {"dynamic_config": dynamic_config_manager}
+    assert calls["load_groups"] == (
+        app.state.route_group_repository,
+        cfg,
+        app.state.route_group_runtime_cache,
+        {"dep-1": "chat"},
+    )
     assert calls["cache"] == (app, cfg, "redis-client", "salt")
     assert runtime.health_task is None
 
@@ -153,7 +165,15 @@ async def test_shutdown_routing_runtime_cancels_health_task(
             "db",
         )
 
-    async def _load_groups(repo, cfg, route_group_cache):  # noqa: ANN001, ANN202
+    async def _load_groups(  # noqa: ANN001, ANN202
+        repo,
+        cfg,
+        route_group_cache,
+        *,
+        deployment_modes,
+    ):
+        del repo, cfg, route_group_cache
+        assert deployment_modes == {"dep-1": "chat"}
         return RouteGroupSnapshotLoadResult(
             snapshot=RouteGroupRuntimeSnapshot(revision=0, groups=[]),
             source="db",
