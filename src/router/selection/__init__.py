@@ -1,6 +1,7 @@
 """Typed policy contracts for request-scoped model selection."""
 
 from src.router.selection.policy import (
+    CONTEXT_POLICY_SEMANTICS_VERSION,
     LLMTierSelectorPolicy,
     RoutePolicyMember,
     RouteSelectorActivationUnsupportedError,
@@ -11,6 +12,7 @@ from src.router.selection.policy import (
 )
 
 __all__ = [
+    "CONTEXT_POLICY_SEMANTICS_VERSION",
     "LLMTierSelectorPolicy",
     "RoutePolicyMember",
     "RouteSelectorActivationUnsupportedError",

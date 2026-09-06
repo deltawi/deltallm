@@ -64,3 +64,24 @@ class RouterRedisKeyspace:
             capability=capability,
             identifiers=identifiers,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RouteGroupRuntimeRedisKeyspace:
+    """Namespaced keys for disposable route-group runtime snapshots."""
+
+    environment: str = "dev"
+    application: str = "deltallm"
+    schema_version: int = 2
+
+    def snapshot(self, revision: int) -> str:
+        normalized_revision = int(revision)
+        if normalized_revision < 0:
+            raise ValueError("route-group runtime revision must be non-negative")
+        return build_redis_key(
+            application=self.application,
+            environment=self.environment,
+            schema_version=self.schema_version,
+            capability="route-group-runtime",
+            identifiers=(f"r{normalized_revision}",),
+        )

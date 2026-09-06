@@ -12,6 +12,7 @@ from src.router.policy_validation import (
     validate_route_policy,
 )
 from src.router.selection.policy import (
+    CONTEXT_POLICY_SEMANTICS_VERSION,
     LLMTierSelectorPolicy,
     RouteSelectorActivationUnsupportedError,
     SELECTOR_POLICY_SEMANTICS_VERSION,
@@ -406,6 +407,76 @@ def test_routing_fingerprint_has_no_revision_or_opaque_document_inputs():
     )
 
     assert equivalent == baseline
+
+
+def test_routing_fingerprint_normalizes_context_defaults():
+    inputs = {
+        "workload_mode": "chat",
+        "strategy": "weighted",
+        "semantics_version": CONTEXT_POLICY_SEMANTICS_VERSION,
+        "effective_members": [{"deployment_id": "dep-mini", "enabled": True}],
+    }
+
+    implicit = build_routing_fingerprint(context={}, **inputs)
+    explicit = build_routing_fingerprint(
+        context={
+            "mode": "eligible-only",
+            "unknown_capacity": "allow",
+            "default_output_tokens": 1024,
+            "safety_margin_tokens": 256,
+        },
+        **inputs,
+    )
+
+    assert implicit == explicit
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("mode", "smallest-sufficient"),
+        ("unknown_capacity", "exclude"),
+        ("default_output_tokens", 2048),
+        ("safety_margin_tokens", 512),
+    ],
+)
+def test_routing_fingerprint_changes_for_context_semantics(
+    field_name: str,
+    value: object,
+):
+    context: dict[str, object] = {
+        "mode": "eligible-only",
+        "unknown_capacity": "allow",
+        "default_output_tokens": 1024,
+        "safety_margin_tokens": 256,
+    }
+    inputs = {
+        "workload_mode": "chat",
+        "strategy": "weighted",
+        "semantics_version": CONTEXT_POLICY_SEMANTICS_VERSION,
+        "effective_members": [{"deployment_id": "dep-mini", "enabled": True}],
+    }
+    baseline = build_routing_fingerprint(context=context, **inputs)
+    context[field_name] = value
+
+    assert build_routing_fingerprint(context=context, **inputs) != baseline
+
+
+def test_routing_fingerprint_ignores_context_before_v2_semantics():
+    inputs = {
+        "workload_mode": "chat",
+        "strategy": "weighted",
+        "semantics_version": 1,
+        "effective_members": [{"deployment_id": "dep-mini", "enabled": True}],
+    }
+
+    without_context = build_routing_fingerprint(**inputs)
+    with_opaque_context = build_routing_fingerprint(
+        context={"mode": "smallest-sufficient"},
+        **inputs,
+    )
+
+    assert with_opaque_context == without_context
 
 
 @pytest.mark.parametrize(

@@ -69,6 +69,55 @@ test('route-group policy history keeps future semantics opaque on reads', async 
   }
 });
 
+test('route-group policy validation preserves typed selector and context fields', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    group_key: 'support',
+    valid: true,
+    policy: {
+      strategy: 'least-busy',
+      context: {
+        mode: 'smallest-sufficient',
+        unknown_capacity: 'exclude',
+        default_output_tokens: 2048,
+        safety_margin_tokens: 512,
+      },
+      selector: {
+        kind: 'llm-tier',
+        classifier_deployment_id: 'dep-mini',
+        timeout_ms: 750,
+        max_input_chars: 8000,
+        default_lane: 'quality',
+        lanes: [
+          { id: 'economy', rank: 0, description: 'Routine work' },
+          { id: 'quality', rank: 1, description: 'Complex work' },
+        ],
+      },
+    },
+    warnings: [],
+  }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+  try {
+    const result = await routeGroups.validatePolicy('support', {
+      context: { mode: 'smallest-sufficient' },
+      selector: {
+        kind: 'llm-tier',
+        classifier_deployment_id: 'dep-mini',
+        lanes: [
+          { id: 'economy', rank: 0, description: 'Routine work' },
+          { id: 'quality', rank: 1, description: 'Complex work' },
+        ],
+      },
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.policy.context?.default_output_tokens, 2048);
+    assert.equal(result.policy.selector?.default_lane, 'quality');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('route-group reads pass AbortSignal to the shared transport', async () => {
   const originalFetch = globalThis.fetch;
   let capturedSignal: AbortSignal | null | undefined;

@@ -6,12 +6,14 @@ from hashlib import sha256
 import json
 
 from src.route_policy_contract import (
+    CONTEXT_POLICY_SEMANTICS_VERSION,
     LLMTierSelectorPolicy,
     RoutePolicyMember,
     SELECTOR_POLICY_SEMANTICS_VERSION,
     SelectorLane,
     validate_selector_assignments,
 )
+from src.router.context_policy import ContextRoutingPolicy, parse_context_routing_policy
 
 
 class RouteSelectorActivationUnsupportedError(ValueError):
@@ -50,6 +52,7 @@ def build_routing_fingerprint(
     timeout_seconds: float | None = None,
     retry_max_attempts: int | None = None,
     retryable_error_classes: Collection[str] | None = None,
+    context: ContextRoutingPolicy | Mapping[str, object] | None = None,
     selector: LLMTierSelectorPolicy | Mapping[str, object] | None = None,
     effective_members: Sequence[Mapping[str, object]],
 ) -> str:
@@ -62,6 +65,22 @@ def build_routing_fingerprint(
             if isinstance(selector, LLMTierSelectorPolicy)
             else LLMTierSelectorPolicy.model_validate(selector)
         ).model_dump(mode="json")
+
+    canonical_context: object = None
+    if semantics_version >= CONTEXT_POLICY_SEMANTICS_VERSION and context is not None:
+        parsed_context = (
+            context
+            if isinstance(context, ContextRoutingPolicy)
+            else parse_context_routing_policy(dict(context))
+        )
+        if parsed_context is None:
+            raise ValueError("context must be a valid normalized routing policy")
+        canonical_context = {
+            "mode": parsed_context.mode,
+            "unknown_capacity": parsed_context.unknown_capacity,
+            "default_output_tokens": parsed_context.default_output_tokens,
+            "safety_margin_tokens": parsed_context.safety_margin_tokens,
+        }
 
     canonical_retryable_errors = None
     if retryable_error_classes:
@@ -87,6 +106,7 @@ def build_routing_fingerprint(
         "timeout_seconds": float(timeout_seconds) if timeout_seconds is not None else None,
         "retry_max_attempts": (int(retry_max_attempts) if retry_max_attempts is not None else None),
         "retryable_error_classes": canonical_retryable_errors,
+        "context": canonical_context,
         "selector": canonical_selector,
         "members": members,
     }
@@ -100,6 +120,7 @@ def build_routing_fingerprint(
 
 
 __all__ = [
+    "CONTEXT_POLICY_SEMANTICS_VERSION",
     "LLMTierSelectorPolicy",
     "RoutePolicyMember",
     "RouteSelectorActivationState",

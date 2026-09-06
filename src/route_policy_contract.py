@@ -6,6 +6,7 @@ from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+CONTEXT_POLICY_SEMANTICS_VERSION = 2
 SELECTOR_POLICY_SEMANTICS_VERSION = 3
 MIN_SELECTOR_TIMEOUT_MS = 100
 MAX_SELECTOR_TIMEOUT_MS = 5_000

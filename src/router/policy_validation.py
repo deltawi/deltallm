@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from src.route_group_config import validate_context_routing_workload_mode
 from src.router.router import RoutingStrategy
 from src.router.selection.policy import (
+    CONTEXT_POLICY_SEMANTICS_VERSION,
     LLMTierSelectorPolicy,
     RoutePolicyMember,
     SELECTOR_POLICY_SEMANTICS_VERSION,
@@ -42,7 +43,6 @@ ALLOWED_RETRYABLE_ERROR_CLASSES = {
 LEGACY_POLICY_MEMBER_KEYS = {"deployment_id", "enabled", "weight", "priority"}
 POLICY_MEMBER_KEYS = {*LEGACY_POLICY_MEMBER_KEYS, "lane"}
 LEGACY_POLICY_SEMANTICS_VERSION = 1
-CONTEXT_POLICY_SEMANTICS_VERSION = 2
 CURRENT_POLICY_SEMANTICS_VERSION = SELECTOR_POLICY_SEMANTICS_VERSION
 
 
@@ -177,8 +177,10 @@ def merge_policy_members(
 def merge_policy_document_for_write(
     existing: dict[str, Any] | None,
     replacement: dict[str, Any],
+    *,
+    existing_semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
 ) -> dict[str, Any]:
-    """Replace client-owned policy fields while retaining opaque stored fields."""
+    """Replace client-owned fields without promoting older opaque policy data."""
 
     current = existing if isinstance(existing, dict) else {}
     merged = {
@@ -201,11 +203,27 @@ def merge_policy_document_for_write(
         if opaque:
             merged[field_name] = opaque
 
-    context = merge_context_policy_block(current.get("context"), replacement)
+    existing_context = (
+        current.get("context")
+        if existing_semantics_version >= CONTEXT_POLICY_SEMANTICS_VERSION
+        else None
+    )
+    context = merge_context_policy_block(existing_context, replacement)
     if context is None:
         merged.pop("context", None)
     else:
         merged["context"] = context
+
+    existing_selector = (
+        current.get("selector")
+        if existing_semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
+        else None
+    )
+    selector = merge_selector_policy_block(existing_selector, replacement)
+    if selector is None:
+        merged.pop("selector", None)
+    else:
+        merged["selector"] = selector
 
     replacement_members = replacement.get("members")
     if isinstance(replacement_members, list):
@@ -230,6 +248,10 @@ def merge_policy_document_for_write(
             member.update(deepcopy(replacement_member))
             preserved_members.append(member)
         merged["members"] = preserved_members
+    elif selector is not None and "members" not in replacement:
+        current_members = current.get("members")
+        if isinstance(current_members, list):
+            merged["members"] = deepcopy(current_members)
 
     return merged
 
@@ -255,6 +277,23 @@ def merge_context_policy_block(
     }
     merged.update(deepcopy(replacement_context))
     return merged
+
+
+def merge_selector_policy_block(
+    existing: object,
+    replacement: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Preserve a v3 selector when omitted and remove it only through explicit null."""
+
+    current = existing if isinstance(existing, dict) else None
+    if "selector" not in replacement:
+        return deepcopy(current) if current is not None else None
+    replacement_selector = replacement.get("selector")
+    if replacement_selector is None:
+        return None
+    if not isinstance(replacement_selector, dict):
+        raise ValueError("selector must be an object or null")
+    return deepcopy(replacement_selector)
 
 
 def _validate_policy_mode(normalized: dict[str, Any]) -> str | None:
@@ -373,7 +412,6 @@ def _validate_selector(
 
     raw_selector = normalized.get("selector")
     if raw_selector is None:
-        normalized.pop("selector", None)
         members = normalized.get("members")
         if isinstance(members, list) and any(
             isinstance(member, dict) and member.get("lane") is not None for member in members

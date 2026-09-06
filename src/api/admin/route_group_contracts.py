@@ -65,6 +65,24 @@ class RoutePolicyRollbackResponse(RoutePolicyMutationResponse):
     rolled_back_from_version: int
 
 
+class RoutePolicyContextDocument(BaseModel):
+    """Typed context-routing fields with forward-compatible opaque extensions."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: Literal["eligible-only", "smallest-sufficient"] = "eligible-only"
+    unknown_capacity: Literal["allow", "exclude"] = "allow"
+    default_output_tokens: int = Field(default=1024, ge=0)
+    safety_margin_tokens: int = Field(default=256, ge=0)
+
+    @field_validator("default_output_tokens", "safety_margin_tokens", mode="before")
+    @classmethod
+    def reject_boolean_token_settings(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("context token settings must be non-negative integers")
+        return value
+
+
 class RoutePolicyDocumentRequest(BaseModel):
     """Typed latest policy shape with opaque compatibility for selector-free documents."""
 
@@ -75,10 +93,56 @@ class RoutePolicyDocumentRequest(BaseModel):
     members: list[RoutePolicyMember | dict[str, object]] | object | None = None
     timeouts: dict[str, object] | object | None = None
     retry: dict[str, object] | object | None = None
+    context: RoutePolicyContextDocument | None = None
     selector: LLMTierSelectorPolicy | None = None
 
     def to_policy_document(self) -> dict[str, Any]:
         return self.model_dump(mode="python", exclude_unset=True)
+
+
+class RoutePolicyTimeoutsDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    global_ms: int | None = Field(default=None, ge=1)
+    global_seconds: float | None = Field(default=None, gt=0)
+
+
+class RoutePolicyRetryDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    max_attempts: int | None = Field(default=None, ge=0)
+    retryable_error_classes: list[str] | None = None
+
+
+class RoutePolicyDocumentResponse(BaseModel):
+    """Normalized latest policy projection; unknown future fields remain readable."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: str | None = None
+    strategy: str | None = None
+    members: list[RoutePolicyMember] | None = None
+    timeouts: RoutePolicyTimeoutsDocument | None = None
+    retry: RoutePolicyRetryDocument | None = None
+    context: RoutePolicyContextDocument | None = None
+    selector: LLMTierSelectorPolicy | None = None
+
+
+class RoutePolicyCurrentResponse(BaseModel):
+    group_key: str
+    policy: RoutePolicyResponse | None
+
+
+class RoutePolicyHistoryResponse(BaseModel):
+    group_key: str
+    policies: list[RoutePolicyResponse]
+
+
+class RoutePolicyValidationResponse(BaseModel):
+    group_key: str
+    valid: Literal[True] = True
+    policy: RoutePolicyDocumentResponse
+    warnings: list[str] = Field(default_factory=list)
 
 
 RoutePolicySimulationOutcome = Literal[

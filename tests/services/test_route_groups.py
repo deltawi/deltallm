@@ -11,8 +11,8 @@ from src.router.selection.policy import (
     RouteSelectorActivationState,
     RouteSelectorActivationUnsupportedError,
 )
+from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.services.route_groups import (
-    ROUTE_GROUP_RUNTIME_CACHE_KEY,
     ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES,
     ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
     RouteGroupRuntimeCache,
@@ -23,6 +23,13 @@ from src.services.route_groups import (
     load_route_groups,
     route_groups_from_config,
 )
+
+
+_ROUTE_GROUP_RUNTIME_KEYSPACE = RouteGroupRuntimeRedisKeyspace()
+
+
+def _runtime_cache_key(revision: int) -> str:
+    return _ROUTE_GROUP_RUNTIME_KEYSPACE.snapshot(revision)
 
 
 class _FakeRouteGroupRepository:
@@ -201,7 +208,7 @@ async def test_database_selector_gate_never_falls_back_to_config():
 @pytest.mark.asyncio
 async def test_l2_cached_selector_snapshot_is_explicitly_rejected():
     redis = _FakeRedis()
-    redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"] = json.dumps(
+    redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
             "selector_activation_state": "inactive",
@@ -226,7 +233,7 @@ async def test_l2_cached_selector_snapshot_is_explicitly_rejected():
 @pytest.mark.asyncio
 async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
     redis = _FakeRedis()
-    redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"] = json.dumps(
+    redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "revision": 1,
             "database_initialized": True,
@@ -240,7 +247,7 @@ async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
     assert source == "db"
     assert snapshot.groups[0]["key"] == "durable-state"
     assert repository.calls == 1
-    rewritten = json.loads(redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"])
+    rewritten = json.loads(redis.values[_runtime_cache_key(1)])
     assert rewritten["schema_version"] == ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION
     assert rewritten["selector_activation_state"] == "inactive"
 
@@ -248,9 +255,7 @@ async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
 @pytest.mark.asyncio
 async def test_l2_cache_ignores_oversized_envelope_and_reloads_durable_state():
     redis = _FakeRedis()
-    redis.values[f"{ROUTE_GROUP_RUNTIME_CACHE_KEY}:r1"] = "x" * (
-        ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES + 1
-    )
+    redis.values[_runtime_cache_key(1)] = "x" * (ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES + 1)
     repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
 
     snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
@@ -585,6 +590,45 @@ async def test_two_replica_caches_reload_from_durable_state_after_invalidation()
     assert second_source == "l2_cache"
     assert first_groups[0]["key"] == "db-group-v2"
     assert second_groups[0]["key"] == "db-group-v2"
+
+
+@pytest.mark.asyncio
+async def test_route_group_l2_cache_is_isolated_by_environment():
+    cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})
+    redis = _FakeRedis()
+    staging_repo = _FakeRouteGroupRepository(
+        groups=[{"key": "staging-route", "enabled": True, "members": []}]
+    )
+    production_repo = _FakeRouteGroupRepository(
+        groups=[{"key": "production-route", "enabled": True, "members": []}]
+    )
+    staging = RouteGroupRuntimeCache(
+        redis,
+        keyspace=RouteGroupRuntimeRedisKeyspace(environment="staging"),
+    )
+    production = RouteGroupRuntimeCache(
+        redis,
+        keyspace=RouteGroupRuntimeRedisKeyspace(environment="production"),
+    )
+
+    staging_groups, staging_source = await load_route_groups(
+        staging_repo,
+        cfg,
+        route_group_cache=staging,
+    )
+    production_groups, production_source = await load_route_groups(
+        production_repo,
+        cfg,
+        route_group_cache=production,
+    )
+
+    assert staging_source == "db"
+    assert production_source == "db"
+    assert staging_groups[0]["key"] == "staging-route"
+    assert production_groups[0]["key"] == "production-route"
+    assert staging_repo.calls == 1
+    assert production_repo.calls == 1
+    assert len(redis.values) == 2
 
 
 @pytest.mark.asyncio

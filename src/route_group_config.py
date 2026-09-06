@@ -43,6 +43,7 @@ def validate_context_routing_workload_mode(workload_mode: object) -> None:
         f"supported modes: {supported}"
     )
 
+
 RoutingStrategyName = Literal[
     "simple-shuffle",
     "least-busy",

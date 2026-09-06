@@ -20,6 +20,7 @@ class _RoutePolicyDB:
         current_policy: dict | None = None,
         draft_policy: dict | None = None,
         rollback_policy: dict | None = None,
+        current_semantics_version: int = 2,
         draft_semantics_version: int = 2,
         rollback_semantics_version: int = 1,
         member_rows: list[dict] | None = None,
@@ -29,6 +30,7 @@ class _RoutePolicyDB:
         self.current_policy = current_policy
         self.draft_policy = draft_policy
         self.rollback_policy = rollback_policy
+        self.current_semantics_version = current_semantics_version
         self.draft_semantics_version = draft_semantics_version
         self.rollback_semantics_version = rollback_semantics_version
         self.member_rows = member_rows
@@ -53,7 +55,16 @@ class _RoutePolicyDB:
             ]
             return self.member_rows if self.member_rows is not None else default_member_rows
         if "status = $2" in sql and "SELECT policy_json" in sql:
-            return [{"policy_json": self.current_policy}] if self.current_policy is not None else []
+            return (
+                [
+                    {
+                        "policy_json": self.current_policy,
+                        "semantics_version": self.current_semantics_version,
+                    }
+                ]
+                if self.current_policy is not None
+                else []
+            )
         if "SELECT policy_json, semantics_version" in sql and "status = 'published'" in sql:
             return (
                 [{"policy_json": self.current_policy, "semantics_version": 2}]
@@ -62,7 +73,13 @@ class _RoutePolicyDB:
             )
         if "SELECT route_policy_id, policy_json" in sql and "status = 'draft'" in sql:
             return (
-                [{"route_policy_id": "draft-1", "policy_json": self.draft_policy}]
+                [
+                    {
+                        "route_policy_id": "draft-1",
+                        "policy_json": self.draft_policy,
+                        "semantics_version": self.draft_semantics_version,
+                    }
+                ]
                 if self.draft_policy is not None
                 else []
             )
@@ -440,6 +457,50 @@ async def test_selector_draft_is_validated_and_stored_with_v3_semantics() -> Non
 
 
 @pytest.mark.asyncio
+async def test_v3_selector_draft_update_preserves_omitted_selector_and_member_lanes() -> None:
+    source = _selector_policy()
+    transaction = _RoutePolicyDB(
+        draft_policy=source,
+        draft_semantics_version=3,
+        member_rows=_selector_member_rows(),
+    )
+    prisma = _TransactionalRoutePolicyDB(transaction)
+
+    record = await RouteGroupRepository(prisma).save_draft_policy(
+        "support-route",
+        {"strategy": "weighted"},
+    )
+
+    assert record is not None
+    assert record.semantics_version == 3
+    assert record.policy_json["strategy"] == "weighted"
+    assert record.policy_json["selector"] == source["selector"]
+    assert record.policy_json["members"] == source["members"]
+    assert prisma.committed == 1
+
+
+@pytest.mark.asyncio
+async def test_v3_selector_draft_update_uses_explicit_null_to_remove_selector() -> None:
+    source = _selector_policy()
+    transaction = _RoutePolicyDB(
+        draft_policy=source,
+        draft_semantics_version=3,
+        member_rows=_selector_member_rows(),
+    )
+    prisma = _TransactionalRoutePolicyDB(transaction)
+
+    record = await RouteGroupRepository(prisma).save_draft_policy(
+        "support-route",
+        {"strategy": "weighted", "selector": None},
+    )
+
+    assert record is not None
+    assert "selector" not in record.policy_json
+    assert "members" not in record.policy_json
+    assert prisma.committed == 1
+
+
+@pytest.mark.asyncio
 async def test_selector_draft_preserves_opaque_stored_fields_and_reaches_activation_gate() -> None:
     transaction = _RoutePolicyDB(
         draft_policy={
@@ -519,6 +580,7 @@ async def test_policy_lifecycle_rejects_context_for_unsupported_group_mode(
     transaction = _RoutePolicyDB(
         draft_policy=context_policy if operation == "publish_latest_draft" else None,
         rollback_policy=context_policy if operation == "rollback" else None,
+        rollback_semantics_version=2,
         group_mode="rerank",
     )
     repository = RouteGroupRepository(_TransactionalRoutePolicyDB(transaction))

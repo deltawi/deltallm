@@ -56,6 +56,14 @@ export interface RoutePolicyMemberDocument {
   [opaqueField: string]: unknown;
 }
 
+export interface RoutePolicyContextDocument {
+  mode?: 'eligible-only' | 'smallest-sufficient';
+  unknown_capacity?: 'allow' | 'exclude';
+  default_output_tokens?: number;
+  safety_margin_tokens?: number;
+  [opaqueField: string]: unknown;
+}
+
 export interface RoutePolicyDocument {
   mode?: string | null;
   strategy?: string | null;
@@ -70,6 +78,7 @@ export interface RoutePolicyDocument {
     retryable_error_classes?: string[];
     [opaqueField: string]: unknown;
   };
+  context?: RoutePolicyContextDocument | null;
   selector?: RoutePolicySelector | null;
   [opaqueField: string]: unknown;
 }
@@ -118,6 +127,23 @@ export interface RoutePolicyMutationResponse extends MutationWarnings {
 
 export interface RollbackRoutePolicyResponse extends RoutePolicyMutationResponse {
   rolled_back_from_version: number;
+}
+
+export interface RoutePolicyCurrentResponse {
+  group_key: string;
+  policy: RoutePolicy | null;
+}
+
+export interface RoutePolicyHistoryResponse {
+  group_key: string;
+  policies: RoutePolicy[];
+}
+
+export interface RoutePolicyValidationResponse {
+  group_key: string;
+  valid: true;
+  policy: RoutePolicyDocument;
+  warnings: string[];
 }
 
 export interface RouteGroupWritePayload {
@@ -257,12 +283,12 @@ export const routeGroups = {
       { method: 'DELETE', signal },
     ),
   getPolicy: (groupKey: string, signal?: AbortSignal) =>
-    apiFetch<{ group_key: string; policy: RoutePolicy | null }>(
+    apiFetch<RoutePolicyCurrentResponse>(
       `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy`,
       { signal },
     ),
   listPolicies: (groupKey: string, signal?: AbortSignal) =>
-    apiFetch<{ group_key: string; policies: RoutePolicy[] }>(
+    apiFetch<RoutePolicyHistoryResponse>(
       `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policies`,
       { signal },
     ),
@@ -271,16 +297,14 @@ export const routeGroups = {
     payload: RoutePolicyDocument,
     signal?: AbortSignal,
   ) =>
-    apiFetch<{
-      group_key: string;
-      valid: boolean;
-      policy: RoutePolicyDocument;
-      warnings: string[];
-    }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/validate`, {
-      method: 'POST',
-      json: payload,
-      signal,
-    }),
+    apiFetch<RoutePolicyValidationResponse>(
+      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/validate`,
+      {
+        method: 'POST',
+        json: payload,
+        signal,
+      },
+    ),
   savePolicyDraft: (
     groupKey: string,
     payload: RoutePolicyDocument,

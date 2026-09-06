@@ -24,11 +24,14 @@ from src.api.admin.route_group_contracts import (
     RouteGroupDeleteResponse,
     RouteGroupMemberMutationResponse,
     RouteGroupMutationResponse,
+    RoutePolicyCurrentResponse,
     RoutePolicyDocumentRequest,
+    RoutePolicyHistoryResponse,
     RoutePolicySimulationRequest,
     RoutePolicySimulationResponse,
     RoutePolicyMutationResponse,
     RoutePolicyRollbackResponse,
+    RoutePolicyValidationResponse,
 )
 from src.api.admin.request_validation import BadRequestValidationRoute
 from src.db.prompt_registry import PromptRegistryRepository
@@ -963,6 +966,7 @@ async def delete_route_group_member(
 
 @router.get(
     "/ui/api/route-groups/{group_key}/policy",
+    response_model=RoutePolicyCurrentResponse,
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
 )
 async def get_route_group_policy(request: Request, group_key: str) -> dict[str, Any]:
@@ -978,6 +982,7 @@ async def get_route_group_policy(request: Request, group_key: str) -> dict[str, 
 
 @router.get(
     "/ui/api/route-groups/{group_key}/policies",
+    response_model=RoutePolicyHistoryResponse,
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
 )
 async def list_route_group_policies(request: Request, group_key: str) -> dict[str, Any]:
@@ -995,6 +1000,8 @@ async def list_route_group_policies(request: Request, group_key: str) -> dict[st
 
 @router.post(
     "/ui/api/route-groups/{group_key}/policy/validate",
+    response_model=RoutePolicyValidationResponse,
+    response_model_exclude_unset=True,
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
 )
 async def validate_route_group_policy(

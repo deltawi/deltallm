@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 
 from src.config import AppConfig
 from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.router.selection.policy import RouteSelectorActivationState
 from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
@@ -43,7 +44,10 @@ async def test_route_group_notification_refreshes_remote_replica_from_durable_st
     local_redis = Redis.from_url(os.environ["DELTALLM_TEST_REDIS_URL"], decode_responses=True)
     remote_redis = Redis.from_url(os.environ["DELTALLM_TEST_REDIS_URL"], decode_responses=True)
     channel = f"route-group-invalidation-{uuid4().hex}"
-    cache_key = f"deltallm:test:route-group:{uuid4().hex}"
+    keyspace = RouteGroupRuntimeRedisKeyspace(
+        application="deltallm-test",
+        environment=uuid4().hex,
+    )
     cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})
     repository = _MutableRouteGroupRepository(
         [{"key": "route-v1", "mode": "chat", "enabled": True, "members": []}]
@@ -52,7 +56,7 @@ async def test_route_group_notification_refreshes_remote_replica_from_durable_st
         remote_redis,
         l1_ttl_seconds=60,
         l2_ttl_seconds=300,
-        cache_key=cache_key,
+        keyspace=keyspace,
     )
     reloaded = asyncio.Event()
     observed: list[dict] = []
@@ -71,7 +75,7 @@ async def test_route_group_notification_refreshes_remote_replica_from_durable_st
         remote_apply_delay_seconds=0,
     )
     try:
-        await remote_redis.delete(cache_key)
+        await remote_redis.delete(keyspace.snapshot(1), keyspace.snapshot(2))
         await load_route_groups(repository, cfg, route_group_cache=cache)
         repository.groups = [{"key": "route-v2", "mode": "chat", "enabled": True, "members": []}]
         repository.revision = 2
@@ -86,7 +90,7 @@ async def test_route_group_notification_refreshes_remote_replica_from_durable_st
     finally:
         await local.close()
         await remote.close()
-        await remote_redis.delete(f"{cache_key}:r1", f"{cache_key}:r2")
+        await remote_redis.delete(keyspace.snapshot(1), keyspace.snapshot(2))
         await local_redis.aclose()
         await remote_redis.aclose()
 
@@ -114,7 +118,10 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
             return getattr(self.delegate, name)
 
     wrapper = WriteOutageRedis(redis)
-    cache_key = f"deltallm:test:route-group:{uuid4().hex}"
+    keyspace = RouteGroupRuntimeRedisKeyspace(
+        application="deltallm-test",
+        environment=uuid4().hex,
+    )
     cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})
     repository = _MutableRouteGroupRepository(
         [{"key": "route-v1", "mode": "chat", "enabled": True, "members": []}]
@@ -123,10 +130,10 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
         wrapper,
         l1_ttl_seconds=60,
         l2_ttl_seconds=300,
-        cache_key=cache_key,
+        keyspace=keyspace,
     )
     try:
-        await redis.delete(cache_key)
+        await redis.delete(keyspace.snapshot(1), keyspace.snapshot(2))
         await load_route_groups(repository, cfg, route_group_cache=cache)
         repository.groups = [{"key": "route-v2", "mode": "chat", "enabled": True, "members": []}]
         repository.revision = 2
@@ -140,7 +147,7 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
         assert await cache.invalidate(required_revision=2) is True
         _, recovered_source = await load_route_groups(repository, cfg, route_group_cache=cache)
         assert recovered_source == "db"
-        raw_envelope = await redis.get(f"{cache_key}:r2")
+        raw_envelope = await redis.get(keyspace.snapshot(2))
         assert raw_envelope is not None
         envelope = json.loads(raw_envelope)
         assert envelope["schema_version"] == 2
@@ -149,5 +156,5 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
         _, cached_source = await load_route_groups(repository, cfg, route_group_cache=cache)
         assert cached_source == "l2_cache"
     finally:
-        await redis.delete(f"{cache_key}:r1", f"{cache_key}:r2")
+        await redis.delete(keyspace.snapshot(1), keyspace.snapshot(2))
         await redis.aclose()

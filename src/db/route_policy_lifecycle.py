@@ -42,6 +42,12 @@ class RoutePolicyValidationContext:
     inventory: dict[str, PolicyMemberInventoryItem]
 
 
+@dataclass(frozen=True, slots=True)
+class StoredRoutePolicyDocument:
+    policy_json: dict[str, Any]
+    semantics_version: int
+
+
 def parse_policy_json(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -140,7 +146,15 @@ class RoutePolicyLifecycleMixin:
                 f"policy is incompatible with current route-group members: {exc}"
             ) from exc
         current = await self._latest_policy_document(group_id, status="published")
-        effective = merge_policy_document_for_write(current, normalized)
+        effective = merge_policy_document_for_write(
+            current.policy_json if current is not None else None,
+            normalized,
+            existing_semantics_version=(
+                current.semantics_version
+                if current is not None
+                else CURRENT_POLICY_SEMANTICS_VERSION
+            ),
+        )
         try:
             effective_normalized, _ = self._validate_policy_document(
                 effective,
@@ -208,6 +222,7 @@ class RoutePolicyLifecycleMixin:
             effective = merge_policy_document_for_write(
                 parse_policy_json(drafts[0].get("policy_json")),
                 normalized,
+                existing_semantics_version=int(drafts[0].get("semantics_version") or 1),
             )
             try:
                 self._validate_policy_document(
@@ -227,7 +242,15 @@ class RoutePolicyLifecycleMixin:
             )
 
         current = await self._latest_policy_document(group_id, status="published")
-        effective = merge_policy_document_for_write(current, normalized)
+        effective = merge_policy_document_for_write(
+            current.policy_json if current is not None else None,
+            normalized,
+            existing_semantics_version=(
+                current.semantics_version
+                if current is not None
+                else CURRENT_POLICY_SEMANTICS_VERSION
+            ),
+        )
         try:
             self._validate_policy_document(
                 effective,
@@ -421,10 +444,10 @@ class RoutePolicyLifecycleMixin:
         group_id: str,
         *,
         status: str,
-    ) -> dict[str, Any] | None:
+    ) -> StoredRoutePolicyDocument | None:
         rows = await self.prisma.query_raw(
             """
-            SELECT policy_json
+            SELECT policy_json, semantics_version
             FROM deltallm_routepolicy
             WHERE route_group_id = $1
               AND status = $2
@@ -434,7 +457,12 @@ class RoutePolicyLifecycleMixin:
             group_id,
             status,
         )
-        return parse_policy_json(rows[0].get("policy_json")) if rows else None
+        if not rows:
+            return None
+        return StoredRoutePolicyDocument(
+            policy_json=parse_policy_json(rows[0].get("policy_json")),
+            semantics_version=int(rows[0].get("semantics_version") or 1),
+        )
 
     async def _policy_document_by_id(self, policy_id: str) -> dict[str, Any] | None:
         rows = await self.prisma.query_raw(

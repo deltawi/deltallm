@@ -14,6 +14,7 @@ from src.db.route_groups import RouteGroupRepository, RouteGroupRuntimeSnapshot
 from src.route_group_config import ModelMode
 from src.route_policy_contract import RoutePolicyMember, validate_selector_assignments
 from src.router.policy_validation import PolicyMemberInventoryItem
+from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.router.selection.policy import (
     SELECTOR_POLICY_SEMANTICS_VERSION,
     RouteSelectorActivationState,
@@ -23,7 +24,6 @@ from src.router.selection.policy import (
 
 logger = logging.getLogger(__name__)
 ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION = 2
-ROUTE_GROUP_RUNTIME_CACHE_KEY = "deltallm:routegroup:v2:runtime"
 ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -80,12 +80,12 @@ class RouteGroupRuntimeCache:
         *,
         l1_ttl_seconds: int = 30,
         l2_ttl_seconds: int = 300,
-        cache_key: str = ROUTE_GROUP_RUNTIME_CACHE_KEY,
+        keyspace: RouteGroupRuntimeRedisKeyspace | None = None,
     ) -> None:
         self.redis = redis_client
         self.l1_ttl_seconds = max(1, int(l1_ttl_seconds))
         self.l2_ttl_seconds = max(1, int(l2_ttl_seconds))
-        self.cache_key = cache_key
+        self.keyspace = keyspace or RouteGroupRuntimeRedisKeyspace()
         self._l1_entry: _RuntimeCacheEntry | None = None
         self._epoch = 0
         self._required_revision = 0
@@ -215,7 +215,7 @@ class RouteGroupRuntimeCache:
         return True
 
     def _revision_key(self, revision: int) -> str:
-        return f"{self.cache_key}:r{revision}"
+        return self.keyspace.snapshot(revision)
 
     @staticmethod
     def _copy_snapshot(snapshot: RouteGroupRuntimeSnapshot) -> RouteGroupRuntimeSnapshot:
@@ -259,6 +259,8 @@ def route_groups_from_config(
             policy,
             semantics_version=SELECTOR_POLICY_SEMANTICS_VERSION,
         )
+        if policy.get("context") is None:
+            policy.pop("context", None)
         policy.pop("selector", None)
         for member in policy["members"]:
             member.pop("lane", None)

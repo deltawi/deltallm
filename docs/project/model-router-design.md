@@ -120,7 +120,9 @@ History is never rewritten. Validation and member merging always use the semanti
 with the revision. In particular, selector-shaped opaque data in a version 1 or 2 policy never
 becomes active merely because a newer binary reads or rolls it back. When a new version 3 revision
 is written, newly claimed `selector` and `lane` keys are replaced only by explicitly validated
-client data; they are not copied out of an older opaque document.
+client data; they are not copied out of an older opaque document. Updating an existing version 3
+document preserves an omitted selector and its member-lane assignments. An explicit
+`"selector": null` is the unambiguous deletion tombstone and removes both before validation.
 
 All other unknown stored fields continue to round-trip through draft and publication replacement.
 That is a deliberate compatibility exception to strict client-owned selector fields.
@@ -128,12 +130,12 @@ That is a deliberate compatibility exception to strict client-owned selector fie
 Runtime Route-Group snapshots carry explicit proof that the selector activation gate ran. The
 database repository and validated file configuration are the only authorities that can mint an
 `inactive` snapshot before PR 4. Redis is an optimization, not an authority: its bounded 4 MiB
-`deltallm:routegroup:v2:runtime:r<revision>` entries use a strict versioned envelope containing the
-schema version and selector-gate state. Missing, legacy, malformed, oversized, or incompatible
-envelopes are cache misses and reload PostgreSQL. A valid current envelope is still checked for an
-active selector and raises the typed activation error rather than falling back to configuration.
-The v1 cache namespace is left to expire naturally; PR 4 must bump the envelope and namespace when
-the activation state changes.
+`deltallm:<environment>:v2:route-group-runtime:r<revision>` entries are produced by the shared Redis
+key builder and use a strict versioned envelope containing the schema version and selector-gate
+state. Missing, legacy, malformed, oversized, or incompatible envelopes are cache misses and reload
+PostgreSQL. A valid current envelope is still checked for an active selector and raises the typed
+activation error rather than falling back to configuration. The previous cache namespace is left
+to expire naturally; PR 4 must bump the envelope and namespace when the activation state changes.
 
 ## Request order after activation
 
@@ -202,6 +204,7 @@ routing semantics:
 - workload mode and stored semantics version;
 - effective routing strategy;
 - normalized timeout and retry policy;
+- normalized version-aware context-routing policy;
 - selector kind, classifier, bounds, safe default, and rank-ordered lanes; and
 - ordered effective members with enabled state, weight, priority, and version-aware lane.
 

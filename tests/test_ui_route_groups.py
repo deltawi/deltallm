@@ -1165,6 +1165,34 @@ async def test_route_policy_openapi_exposes_typed_selector_contract(client):
         "post"
     ]["requestBody"]["content"]["application/json"]["schema"]
     assert request_schema["$ref"].endswith("/RoutePolicyDocumentRequest")
+    request_properties = schemas["RoutePolicyDocumentRequest"]["properties"]
+    assert request_properties["context"]["anyOf"][0]["$ref"].endswith("/RoutePolicyContextDocument")
+    assert request_properties["selector"]["anyOf"][0]["$ref"].endswith("/LLMTierSelectorPolicy")
+
+    paths = response.json()["paths"]
+    current_response = paths["/ui/api/route-groups/{group_key}/policy"]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    history_response = paths["/ui/api/route-groups/{group_key}/policies"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]["schema"]
+    validation_response = paths["/ui/api/route-groups/{group_key}/policy/validate"]["post"][
+        "responses"
+    ]["200"]["content"]["application/json"]["schema"]
+
+    assert current_response["$ref"].endswith("/RoutePolicyCurrentResponse")
+    assert history_response["$ref"].endswith("/RoutePolicyHistoryResponse")
+    assert validation_response["$ref"].endswith("/RoutePolicyValidationResponse")
+    assert (
+        schemas["RoutePolicyResponse"]["properties"]["policy_json"]["additionalProperties"] is True
+    )
+    validation_policy = schemas["RoutePolicyValidationResponse"]["properties"]["policy"]
+    assert validation_policy["$ref"].endswith("/RoutePolicyDocumentResponse")
+    response_properties = schemas["RoutePolicyDocumentResponse"]["properties"]
+    assert response_properties["context"]["anyOf"][0]["$ref"].endswith(
+        "/RoutePolicyContextDocument"
+    )
+    assert response_properties["selector"]["anyOf"][0]["$ref"].endswith("/LLMTierSelectorPolicy")
 
 
 @pytest.mark.asyncio

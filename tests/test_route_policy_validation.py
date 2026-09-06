@@ -325,6 +325,23 @@ def test_policy_write_distinguishes_omitted_context_from_explicit_deletion():
     assert "context" not in deleted
 
 
+def test_policy_write_distinguishes_omitted_selector_from_explicit_deletion():
+    selector = {"kind": "llm-tier", "classifier_deployment_id": "dep-a"}
+    members = [{"deployment_id": "dep-a", "lane": "economy"}]
+    existing = {"strategy": "weighted", "selector": selector, "members": members}
+
+    omitted = merge_policy_document_for_write(existing, {"strategy": "least-busy"})
+    deleted = merge_policy_document_for_write(
+        existing,
+        {"strategy": "least-busy", "selector": None},
+    )
+
+    assert omitted["selector"] == selector
+    assert omitted["members"] == members
+    assert "selector" not in deleted
+    assert "members" not in deleted
+
+
 def test_stored_selector_policy_validates_routing_projection_and_preserves_trust_boundary():
     payload = {
         "strategy": "least-busy",
@@ -423,6 +440,7 @@ def test_v3_write_does_not_promote_legacy_selector_shaped_opaque_fields():
             "strategy": "least-busy",
             "members": [{"deployment_id": "dep-a", "enabled": True}],
         },
+        existing_semantics_version=2,
     )
 
     assert merged == {

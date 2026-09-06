@@ -3665,10 +3665,82 @@
         "title": "RouteGroupMutationResponse",
         "type": "object"
       },
+      "RoutePolicyContextDocument": {
+        "additionalProperties": true,
+        "description": "Typed context-routing fields with forward-compatible opaque extensions.",
+        "properties": {
+          "default_output_tokens": {
+            "default": 1024,
+            "minimum": 0.0,
+            "title": "Default Output Tokens",
+            "type": "integer"
+          },
+          "mode": {
+            "default": "eligible-only",
+            "enum": [
+              "eligible-only",
+              "smallest-sufficient"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "safety_margin_tokens": {
+            "default": 256,
+            "minimum": 0.0,
+            "title": "Safety Margin Tokens",
+            "type": "integer"
+          },
+          "unknown_capacity": {
+            "default": "allow",
+            "enum": [
+              "allow",
+              "exclude"
+            ],
+            "title": "Unknown Capacity",
+            "type": "string"
+          }
+        },
+        "title": "RoutePolicyContextDocument",
+        "type": "object"
+      },
+      "RoutePolicyCurrentResponse": {
+        "properties": {
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePolicyResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "group_key",
+          "policy"
+        ],
+        "title": "RoutePolicyCurrentResponse",
+        "type": "object"
+      },
       "RoutePolicyDocumentRequest": {
         "additionalProperties": true,
         "description": "Typed latest policy shape with opaque compatibility for selector-free documents.",
         "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePolicyContextDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "members": {
             "anyOf": [
               {
@@ -3748,6 +3820,111 @@
           }
         },
         "title": "RoutePolicyDocumentRequest",
+        "type": "object"
+      },
+      "RoutePolicyDocumentResponse": {
+        "additionalProperties": true,
+        "description": "Normalized latest policy projection; unknown future fields remain readable.",
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePolicyContextDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "members": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RoutePolicyMember"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Members"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "retry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePolicyRetryDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selector": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LLMTierSelectorPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          },
+          "timeouts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePolicyTimeoutsDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RoutePolicyDocumentResponse",
+        "type": "object"
+      },
+      "RoutePolicyHistoryResponse": {
+        "properties": {
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "policies": {
+            "items": {
+              "$ref": "#/components/schemas/RoutePolicyResponse"
+            },
+            "title": "Policies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "group_key",
+          "policies"
+        ],
+        "title": "RoutePolicyHistoryResponse",
         "type": "object"
       },
       "RoutePolicyMember": {
@@ -3919,6 +4096,39 @@
           "published_by"
         ],
         "title": "RoutePolicyResponse",
+        "type": "object"
+      },
+      "RoutePolicyRetryDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "max_attempts": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Attempts"
+          },
+          "retryable_error_classes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retryable Error Classes"
+          }
+        },
+        "title": "RoutePolicyRetryDocument",
         "type": "object"
       },
       "RoutePolicyRollbackResponse": {
@@ -4296,6 +4506,67 @@
           "total_attempts"
         ],
         "title": "RoutePolicySimulationSummary",
+        "type": "object"
+      },
+      "RoutePolicyTimeoutsDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "global_ms": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Global Ms"
+          },
+          "global_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Global Seconds"
+          }
+        },
+        "title": "RoutePolicyTimeoutsDocument",
+        "type": "object"
+      },
+      "RoutePolicyValidationResponse": {
+        "properties": {
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RoutePolicyDocumentResponse"
+          },
+          "valid": {
+            "const": true,
+            "default": true,
+            "title": "Valid",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "group_key",
+          "policy"
+        ],
+        "title": "RoutePolicyValidationResponse",
         "type": "object"
       },
       "SchedulerBackfillRequest": {
@@ -26422,9 +26693,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Route Group Policies Ui Api Route Groups  Group Key  Policies Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/RoutePolicyHistoryResponse"
                 }
               }
             },
@@ -26530,9 +26799,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Route Group Policy Ui Api Route Groups  Group Key  Policy Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/RoutePolicyCurrentResponse"
                 }
               }
             },
@@ -27246,9 +27513,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Validate Route Group Policy Ui Api Route Groups  Group Key  Policy Validate Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/RoutePolicyValidationResponse"
                 }
               }
             },
