@@ -253,6 +253,127 @@ async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
 
 
 @pytest.mark.asyncio
+async def test_l2_cache_ignores_invalid_nested_snapshot_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "inactive",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "policy_semantics_version": "invalid",
+                    "members": [],
+                }
+            ],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+
+    result = await load_route_group_snapshot_result(repository, cfg, RouteGroupRuntimeCache(redis))
+
+    assert result.source == "db"
+    assert result.database_available is True
+    assert result.snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_unknown_nested_fields_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "inactive",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "members": [],
+                    "unknown_runtime_field": True,
+                }
+            ],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_member_lane_without_active_selector():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "inactive",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "policy_semantics_version": 3,
+                    "members": [{"deployment_id": "dep-a", "lane": "economy"}],
+                }
+            ],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_l2_cache_uses_config_only_after_durable_load_fails():
+    class SnapshotFailingRepository(_FakeRouteGroupRepository):
+        async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
+            self.calls += 1
+            raise RuntimeError("db snapshot unavailable")
+
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "inactive",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "policy_semantics_version": "invalid",
+                    "members": [],
+                }
+            ],
+        }
+    )
+    repository = SnapshotFailingRepository()
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+
+    result = await load_route_group_snapshot_result(repository, cfg, RouteGroupRuntimeCache(redis))
+
+    assert result.source == "config_db_unavailable"
+    assert result.database_available is False
+    assert result.snapshot.groups[0]["key"] == "config-fallback"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_l2_cache_ignores_oversized_envelope_and_reloads_durable_state():
     redis = _FakeRedis()
     redis.values[_runtime_cache_key(1)] = "x" * (ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES + 1)

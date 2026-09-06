@@ -13,7 +13,11 @@ from src.db.route_groups import RouteGroupRuntimeSnapshot
 from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.router.selection.policy import RouteSelectorActivationState
 from src.services.governance_invalidation import GovernanceInvalidationService
-from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
+from src.services.route_groups import (
+    ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+    RouteGroupRuntimeCache,
+    load_route_groups,
+)
 
 
 class _MutableRouteGroupRepository:
@@ -157,4 +161,60 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
         assert cached_source == "l2_cache"
     finally:
         await redis.delete(keyspace.snapshot(1), keyspace.snapshot(2))
+        await redis.aclose()
+
+
+@pytest.mark.skipif(
+    not os.getenv("DELTALLM_TEST_REDIS_URL"),
+    reason="DELTALLM_TEST_REDIS_URL is required for the Redis integration test",
+)
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_route_group_cache_repairs_invalid_nested_real_redis_snapshot() -> None:
+    redis = Redis.from_url(os.environ["DELTALLM_TEST_REDIS_URL"], decode_responses=True)
+    keyspace = RouteGroupRuntimeRedisKeyspace(
+        application="deltallm-test",
+        environment=uuid4().hex,
+    )
+    cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})
+    repository = _MutableRouteGroupRepository(
+        [{"key": "durable-route", "mode": "chat", "enabled": True, "members": []}]
+    )
+    cache = RouteGroupRuntimeCache(redis, keyspace=keyspace)
+    cache_key = keyspace.snapshot(1)
+    invalid_envelope = {
+        "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+        "selector_activation_state": "inactive",
+        "revision": 1,
+        "database_initialized": True,
+        "groups": [
+            {
+                "key": "invalid-cache",
+                "policy_semantics_version": "invalid",
+                "members": [],
+            }
+        ],
+    }
+
+    try:
+        await redis.set(cache_key, json.dumps(invalid_envelope))
+
+        groups, source = await load_route_groups(repository, cfg, route_group_cache=cache)
+
+        assert source == "db"
+        assert groups[0]["key"] == "durable-route"
+        assert repository.calls == 1
+
+        cache._l1_entry = None
+        cached_groups, cached_source = await load_route_groups(
+            repository,
+            cfg,
+            route_group_cache=cache,
+        )
+
+        assert cached_source == "l2_cache"
+        assert cached_groups[0]["key"] == "durable-route"
+        assert repository.calls == 1
+    finally:
+        await redis.delete(cache_key)
         await redis.aclose()

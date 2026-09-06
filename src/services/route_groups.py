@@ -5,9 +5,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 import logging
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from src.config import AppConfig
 from src.db.route_groups import RouteGroupRepository, RouteGroupRuntimeSnapshot
@@ -27,13 +27,57 @@ ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION = 2
 ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES = 4 * 1024 * 1024
 
 
+class _RouteGroupRuntimeCacheMember(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    deployment_id: str = Field(min_length=1)
+    enabled: bool = True
+    weight: int | None = None
+    priority: int | None = None
+    # Lanes are accepted only so the activation gate can reject stale active snapshots.
+    lane: str | None = None
+
+
+class _RouteGroupRuntimeCacheGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    key: str = Field(min_length=1)
+    mode: str | None = None
+    enabled: bool = True
+    strategy: str | None = None
+    policy_version: int | None = Field(default=None, ge=1)
+    policy_semantics_version: int | None = Field(default=None, ge=1)
+    timeouts: dict[str, object] | None = None
+    retry: dict[str, object] | None = None
+    context: dict[str, object] | None = None
+    default_prompt: dict[str, str] | None = None
+    access_groups: list[str] | None = None
+    members: list[_RouteGroupRuntimeCacheMember]
+    # These fields are never emitted by the current runtime projection. Accept them only
+    # so an old or injected active-selector snapshot reaches the fail-closed gate.
+    selector: dict[str, object] | None = None
+    policy_json: dict[str, object] | None = None
+
+    @model_validator(mode="after")
+    def validate_selector_sentinel_fields(self) -> Self:
+        policy = self.policy_json if self.policy_json is not None else {"selector": self.selector}
+        active_selector = (
+            self.policy_semantics_version or 1
+        ) >= SELECTOR_POLICY_SEMANTICS_VERSION and policy.get("selector") is not None
+        if (self.selector is not None or self.policy_json is not None) and not active_selector:
+            raise ValueError("selector sentinel fields require an active version 3 selector")
+        if not active_selector and any(member.lane is not None for member in self.members):
+            raise ValueError("cached member lanes require an active version 3 selector")
+        return self
+
+
 class _RouteGroupRuntimeCacheEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal[2]
     selector_activation_state: Literal["inactive"]
     revision: int = Field(ge=0)
-    groups: list[dict[str, Any]]
+    groups: list[_RouteGroupRuntimeCacheGroup]
     database_initialized: bool | None
 
 
@@ -158,31 +202,49 @@ class RouteGroupRuntimeCache:
             return None
         try:
             raw = await self.redis.get(self._revision_key(revision))
-            if not raw:
-                return None
+        except Exception as exc:
+            logger.debug(
+                "route group runtime cache L2 read unavailable: %s",
+                type(exc).__name__,
+                extra={"cache_tier": "l2", "cache_miss_reason": "redis_unavailable"},
+            )
+            return None
+        if not raw:
+            return None
+        try:
             serialized = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
             if len(serialized) > ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES:
                 logger.debug(
                     "ignored oversized route group runtime cache entry (%s bytes)",
                     len(serialized),
+                    extra={"cache_tier": "l2", "cache_miss_reason": "oversized"},
                 )
                 return None
             payload = _RouteGroupRuntimeCacheEnvelope.model_validate_json(serialized)
+            if payload.revision != revision:
+                logger.debug(
+                    "ignored route group runtime cache revision mismatch",
+                    extra={"cache_tier": "l2", "cache_miss_reason": "revision_mismatch"},
+                )
+                return None
+            snapshot = RouteGroupRuntimeSnapshot(
+                revision=revision,
+                groups=[
+                    group.model_dump(mode="python", exclude_unset=True) for group in payload.groups
+                ],
+                database_initialized=payload.database_initialized,
+                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            )
+            _ensure_runtime_snapshot_selector_activation_supported(snapshot)
+        except RouteSelectorActivationUnsupportedError:
+            raise
         except (TypeError, ValueError, ValidationError) as exc:
-            logger.debug("ignored invalid route group runtime cache envelope: %s", exc)
+            logger.debug(
+                "ignored invalid route group runtime cache envelope: %s",
+                type(exc).__name__,
+                extra={"cache_tier": "l2", "cache_miss_reason": "invalid_payload"},
+            )
             return None
-        except Exception as exc:
-            logger.debug("failed to read route group runtime cache from redis: %s", exc)
-            return None
-        if payload.revision != revision:
-            return None
-        snapshot = RouteGroupRuntimeSnapshot(
-            revision=revision,
-            groups=payload.groups,
-            database_initialized=payload.database_initialized,
-            selector_activation_state=RouteSelectorActivationState.INACTIVE,
-        )
-        _ensure_runtime_snapshot_selector_activation_supported(snapshot)
         return snapshot
 
     async def _write_l2(self, snapshot: RouteGroupRuntimeSnapshot) -> bool:
@@ -196,7 +258,7 @@ class RouteGroupRuntimeCache:
                 revision=snapshot.revision,
                 groups=snapshot.groups,
                 database_initialized=snapshot.database_initialized,
-            ).model_dump_json()
+            ).model_dump_json(exclude_unset=True)
             serialized_size = len(serialized.encode("utf-8"))
             if serialized_size > ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES:
                 logger.debug(
