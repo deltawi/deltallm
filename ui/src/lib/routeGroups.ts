@@ -20,6 +20,28 @@ export function routeGroupStrategyOptions(currentStrategy: string): string[] {
     : options;
 }
 
+export function supportsContextRouting(workloadMode: string): boolean {
+  return workloadMode === 'chat' || workloadMode === 'embedding';
+}
+
+function contextRoutingCompatibilityError(workloadMode: string): string {
+  return `Context routing is available only for chat and embedding route groups; current mode is ${workloadMode}.`;
+}
+
+export function validatePolicyContextCompatibility(
+  policy: Record<string, unknown>,
+  workloadMode: string,
+): string | null {
+  if (
+    !('context' in policy)
+    || policy.context === null
+    || supportsContextRouting(workloadMode)
+  ) {
+    return null;
+  }
+  return contextRoutingCompatibilityError(workloadMode);
+}
+
 export const RETRYABLE_ERROR_OPTIONS = [
   'timeout',
   'rate_limit',
@@ -31,6 +53,7 @@ export const RETRYABLE_ERROR_OPTIONS = [
 export type PolicyEditorMode = 'guided' | 'json';
 export type PolicyAction = 'validate' | 'save-draft' | 'publish-json' | 'publish-draft' | 'rollback' | null;
 export type GuidedMemberSelection = 'inherit' | 'explicit';
+export type GuidedContextMode = 'disabled' | 'eligible-only' | 'smallest-sufficient';
 
 export interface PolicyMemberOption {
   deployment_id: string;
@@ -47,6 +70,10 @@ export interface PolicyGuidedValues {
   timeoutMs: string;
   retryMaxAttempts: string;
   retryableErrors: string;
+  contextMode: GuidedContextMode;
+  contextUnknownCapacity: 'allow' | 'exclude';
+  contextDefaultOutputTokens: string;
+  contextSafetyMarginTokens: string;
 }
 
 export const GUIDED_POLICY_DEFAULTS: PolicyGuidedValues = {
@@ -57,6 +84,10 @@ export const GUIDED_POLICY_DEFAULTS: PolicyGuidedValues = {
   timeoutMs: '',
   retryMaxAttempts: '',
   retryableErrors: '',
+  contextMode: 'disabled',
+  contextUnknownCapacity: 'allow',
+  contextDefaultOutputTokens: '1024',
+  contextSafetyMarginTokens: '256',
 };
 
 export { mutationOutcome as routeGroupMutationOutcome } from './mutationOutcome';
@@ -149,6 +180,21 @@ export function parsePolicyTextLoose(raw: string): Record<string, unknown> | nul
   }
 }
 
+export function restoreDraftPolicyTombstones(
+  draftPolicy: Record<string, unknown>,
+  publishedPolicy: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const restored = { ...draftPolicy };
+  if (
+    publishedPolicy
+    && 'context' in publishedPolicy
+    && !('context' in draftPolicy)
+  ) {
+    restored.context = null;
+  }
+  return restored;
+}
+
 export function toGuidedPolicy(
   policy: Record<string, unknown>,
   memberOptions: PolicyMemberOption[],
@@ -161,6 +207,7 @@ export function toGuidedPolicy(
       : GUIDED_POLICY_DEFAULTS.strategy;
   const timeoutBlock = isObjectRecord(policy.timeouts) ? policy.timeouts : {};
   const retryBlock = isObjectRecord(policy.retry) ? policy.retry : {};
+  const contextBlock = isObjectRecord(policy.context) ? policy.context : null;
   const hasExplicitMembers = Array.isArray(policy.members);
   const memberEntries = hasExplicitMembers ? policy.members as unknown[] : [];
   const entriesById = new Map<string, unknown>();
@@ -185,6 +232,18 @@ export function toGuidedPolicy(
     timeoutMs: timeoutMilliseconds(timeoutBlock),
     retryMaxAttempts: toIntegerString(retryBlock.max_attempts, 0),
     retryableErrors: retryable.join(','),
+    contextMode: contextBlock?.mode === 'smallest-sufficient'
+      ? 'smallest-sufficient'
+      : contextBlock
+        ? 'eligible-only'
+        : 'disabled',
+    contextUnknownCapacity: contextBlock?.unknown_capacity === 'exclude' ? 'exclude' : 'allow',
+    contextDefaultOutputTokens: contextBlock
+      ? toIntegerString(contextBlock.default_output_tokens ?? 1024, 0)
+      : GUIDED_POLICY_DEFAULTS.contextDefaultOutputTokens,
+    contextSafetyMarginTokens: contextBlock
+      ? toIntegerString(contextBlock.safety_margin_tokens ?? 256, 0)
+      : GUIDED_POLICY_DEFAULTS.contextSafetyMarginTokens,
   };
 }
 
@@ -223,6 +282,7 @@ export function withGuidedPolicyStrategy(
 export function validateGuidedPolicy(
   guided: PolicyGuidedValues,
   memberOptions: PolicyMemberOption[],
+  workloadMode: string,
 ): string | null {
   const enabledIds = new Set(
     memberOptions.filter((member) => member.enabled).map((member) => member.deployment_id),
@@ -255,6 +315,17 @@ export function validateGuidedPolicy(
     (item) => !(RETRYABLE_ERROR_OPTIONS as readonly string[]).includes(item),
   );
   if (invalidRetryClass) return `Unsupported retryable error class: ${invalidRetryClass}.`;
+  if (guided.contextMode !== 'disabled') {
+    if (!supportsContextRouting(workloadMode)) {
+      return contextRoutingCompatibilityError(workloadMode);
+    }
+    if (parseIntegerString(guided.contextDefaultOutputTokens, 0) === null) {
+      return 'Default output tokens must be a non-negative integer.';
+    }
+    if (parseIntegerString(guided.contextSafetyMarginTokens, 0) === null) {
+      return 'Context safety margin must be a non-negative integer.';
+    }
+  }
   return null;
 }
 
@@ -310,6 +381,24 @@ export function buildPolicyFromGuided(
   else delete currentRetry.retryable_error_classes;
   if (Object.keys(currentRetry).length > 0) policy.retry = currentRetry;
   else delete policy.retry;
+
+  if (guided.contextMode === 'disabled') {
+    if ('context' in basePolicy) policy.context = null;
+    else delete policy.context;
+  } else {
+    const currentContext = isObjectRecord(policy.context) ? { ...policy.context } : {};
+    currentContext.mode = guided.contextMode;
+    currentContext.unknown_capacity = guided.contextUnknownCapacity;
+    currentContext.default_output_tokens = parseIntegerString(
+      guided.contextDefaultOutputTokens,
+      0,
+    );
+    currentContext.safety_margin_tokens = parseIntegerString(
+      guided.contextSafetyMarginTokens,
+      0,
+    );
+    policy.context = currentContext;
+  }
 
   return policy;
 }

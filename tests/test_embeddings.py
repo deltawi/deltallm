@@ -7,6 +7,10 @@ import httpx
 import pytest
 
 from src.callbacks import CallbackManager, CustomLogger
+from src.router.context_policy import (
+    estimate_embedding_context_input_tokens,
+    get_request_token_demand,
+)
 from src.router.router import Deployment
 
 
@@ -57,6 +61,51 @@ async def test_embeddings_runs_success_callback(client, test_app):
     assert recorder.success == 1
     usage = await test_app.state.router_state_backend.get_usage(deployment_id)
     assert usage == {"rpm": 1, "tpm": 2}
+
+
+@pytest.mark.asyncio
+async def test_embeddings_routes_multi_input_by_largest_logical_input(
+    client, test_app, monkeypatch
+):
+    inputs = ["short", "long input " * 100]
+    captured_contexts: list[dict] = []
+    router = test_app.state.router
+    original_select = router.select_deployment
+
+    async def capture_select(model_group, request_context):  # noqa: ANN001, ANN202
+        captured_contexts.append(request_context)
+        return await original_select(model_group, request_context)
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN202
+        del headers, timeout
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "embedding": [0.1], "index": index}
+                    for index, _ in enumerate(json["input"])
+                ],
+                "model": json["model"],
+                "usage": {"prompt_tokens": 10, "total_tokens": 10},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(router, "select_deployment", capture_select)
+    monkeypatch.setattr(test_app.state.http_client, "post", post)
+
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "text-embedding-3-small", "input": inputs},
+    )
+
+    assert response.status_code == 200
+    assert len(captured_contexts) == 1
+    demand = get_request_token_demand(captured_contexts[0])
+    assert demand is not None
+    assert demand.input_tokens == estimate_embedding_context_input_tokens(inputs)
 
 
 @pytest.mark.asyncio

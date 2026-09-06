@@ -266,8 +266,7 @@ async def _seed_batch_tenant_scopes(db: Any) -> _BatchTenantFixtureRows:
             _BATCH_TEST_ORGANIZATION_IDS
         )
         assert {
-            str(row["team_id"]): str(row["organization_id"])
-            for row in resolved_team_rows
+            str(row["team_id"]): str(row["organization_id"]) for row in resolved_team_rows
         } == dict(_BATCH_TEST_TEAM_ORGANIZATIONS)
 
     return _BatchTenantFixtureRows(
@@ -345,7 +344,9 @@ async def _seed_raw_batch_job(db: Any, *, input_file_id: str, batch_id: str, sta
     elif status_udt_name in {"DeltaLLM_BatchJobStatus", "DeltaLLM_BatchJobStatus_next"}:
         status_value_sql = f'$2::"{status_udt_name}"'
     else:  # pragma: no cover - defensive branch for unexpected schema drift in tests
-        raise AssertionError(f"unexpected deltallm_batch_job.status type in test setup: {status_udt_name}")
+        raise AssertionError(
+            f"unexpected deltallm_batch_job.status type in test setup: {status_udt_name}"
+        )
 
     await db.execute_raw(
         f"""
@@ -395,7 +396,9 @@ async def batch_db():
             or row.get("batch_completion_outbox") is None
             or row.get("batch_webhook_outbox") is None
         ):
-            pytest.skip("Batch tables are missing; run prisma migrate deploy before DB-backed batch tests")
+            pytest.skip(
+                "Batch tables are missing; run prisma migrate deploy before DB-backed batch tests"
+            )
         await _reset_batch_tables(db)
         tenant_fixture_rows = await _seed_batch_tenant_scopes(db)
         yield db
@@ -543,8 +546,12 @@ async def test_ownerless_batch_snapshot_survives_later_key_assignment(batch_db) 
         assert dict(event_rows[0]).get("owner_account_id") is None
     finally:
         await batch_db.execute_raw("DELETE FROM deltallm_spendlog_events WHERE id = $1", event_id)
-        await batch_db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", key_token)
-        await batch_db.execute_raw("DELETE FROM deltallm_platformaccount WHERE account_id = $1", account_id)
+        await batch_db.execute_raw(
+            "DELETE FROM deltallm_verificationtoken WHERE token = $1", key_token
+        )
+        await batch_db.execute_raw(
+            "DELETE FROM deltallm_platformaccount WHERE account_id = $1", account_id
+        )
 
 
 @pytest.mark.asyncio
@@ -618,7 +625,9 @@ async def test_batch_job_status_reconciliation_converts_legacy_enum_shape(batch_
             """
         )
         await batch_db.execute_raw('DROP TYPE "DeltaLLM_BatchJobStatus"')
-        await batch_db.execute_raw('ALTER TYPE "DeltaLLM_BatchJobStatus_legacy" RENAME TO "DeltaLLM_BatchJobStatus"')
+        await batch_db.execute_raw(
+            'ALTER TYPE "DeltaLLM_BatchJobStatus_legacy" RENAME TO "DeltaLLM_BatchJobStatus"'
+        )
         await _seed_raw_batch_job(
             batch_db,
             input_file_id=input_file_id,
@@ -673,7 +682,9 @@ async def test_batch_job_status_reconciliation_finishes_partial_next_type_cutove
             """
         )
         await batch_db.execute_raw('DROP TYPE "DeltaLLM_BatchJobStatus"')
-        await batch_db.execute_raw('ALTER TYPE "DeltaLLM_BatchJobStatus_legacy" RENAME TO "DeltaLLM_BatchJobStatus"')
+        await batch_db.execute_raw(
+            'ALTER TYPE "DeltaLLM_BatchJobStatus_legacy" RENAME TO "DeltaLLM_BatchJobStatus"'
+        )
         await batch_db.execute_raw(
             """
             CREATE TYPE "DeltaLLM_BatchJobStatus_next" AS ENUM (
@@ -707,7 +718,9 @@ async def test_batch_job_status_reconciliation_finishes_partial_next_type_cutove
             "validating",
             *list(BATCH_JOB_STATUS_VALUES),
         ]
-        assert await _enum_labels(batch_db, "DeltaLLM_BatchJobStatus_next") == list(BATCH_JOB_STATUS_VALUES)
+        assert await _enum_labels(batch_db, "DeltaLLM_BatchJobStatus_next") == list(
+            BATCH_JOB_STATUS_VALUES
+        )
 
         await _execute_batch_job_status_reconciliation(batch_db)
 
@@ -790,23 +803,26 @@ async def test_db_backed_stale_lease_sweeper_releases_only_expired_owned_leases(
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="active-lease",
-                request_body={"model": "m1", "input": "active"},
-                estimated_work_units=1,
-            ),
-            BatchItemCreate(
-                line_number=2,
-                custom_id="expired-lease",
-                request_body={"model": "m1", "input": "expired"},
-                estimated_work_units=1,
-            ),
-        ],
-    ) == 2
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="active-lease",
+                    request_body={"model": "m1", "input": "active"},
+                    estimated_work_units=1,
+                ),
+                BatchItemCreate(
+                    line_number=2,
+                    custom_id="expired-lease",
+                    request_body={"model": "m1", "input": "expired"},
+                    estimated_work_units=1,
+                ),
+            ],
+        )
+        == 2
+    )
     await repository.set_job_queued(job.batch_id, 2)
     now = datetime.now(tz=UTC)
     expired_at = now - timedelta(minutes=5)
@@ -913,17 +929,20 @@ async def test_db_backed_stale_lease_sweeper_ignores_terminal_parent_items(batch
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="terminal-expired-lease",
-                request_body={"model": "m1", "input": "done"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="terminal-expired-lease",
+                    request_body={"model": "m1", "input": "done"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
     expired_at = datetime.now(tz=UTC) - timedelta(minutes=5)
     await batch_db.execute_raw(
         """
@@ -1096,19 +1115,22 @@ async def test_db_backed_backfill_repairs_stale_tenant_scope_with_current_debug(
         },
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="c1",
-                request_body={"model": "m1", "input": "a"},
-                scheduling_model="m1",
-                scheduling_model_group="m1",
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="c1",
+                    request_body={"model": "m1", "input": "a"},
+                    scheduling_model="m1",
+                    scheduling_model_group="m1",
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
 
     result = await repository.backfill_scheduler_dimensions(limit=10)
 
@@ -1236,7 +1258,9 @@ async def test_db_backed_concurrent_batch_create_enforces_pending_cap(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "artifacts"))
@@ -1273,7 +1297,9 @@ async def test_db_backed_concurrent_batch_create_enforces_pending_cap(
     assert isinstance(failures[0], HTTPException)
     assert failures[0].status_code == 429
 
-    job_rows = await batch_db.query_raw("SELECT batch_id, status, total_items FROM deltallm_batch_job")
+    job_rows = await batch_db.query_raw(
+        "SELECT batch_id, status, total_items FROM deltallm_batch_job"
+    )
     item_rows = await batch_db.query_raw("SELECT item_id, batch_id FROM deltallm_batch_item")
     assert len(job_rows) == 1
     assert dict(job_rows[0])["status"] == "queued"
@@ -1288,7 +1314,9 @@ async def test_db_backed_batch_create_rolls_back_after_insert_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     class _FailingBatchRepository(BatchRepository):
         def __init__(self, prisma_client: Any, state: dict[str, int]) -> None:
@@ -1338,7 +1366,9 @@ async def test_db_backed_batch_create_persists_organization_ownership(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "artifacts"))
@@ -1393,7 +1423,9 @@ async def test_db_backed_batch_create_cutover_returns_normal_batch_object_and_qu
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-artifacts"))
@@ -1420,7 +1452,9 @@ async def test_db_backed_batch_create_cutover_returns_normal_batch_object_and_qu
     assert result.audit_metadata["create_path"] == "create_session"
     assert result.audit_metadata["idempotency_resolution"] == "not_requested"
 
-    session = await repository.create_sessions.get_session_by_target_batch_id(str(result.response["id"]))
+    session = await repository.create_sessions.get_session_by_target_batch_id(
+        str(result.response["id"])
+    )
     assert session is not None
     assert session.status == BatchCreateSessionStatus.COMPLETED
 
@@ -1446,7 +1480,9 @@ async def test_db_backed_batch_create_cutover_reuses_same_batch_for_same_idempot
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-idempotent-artifacts"))
@@ -1502,7 +1538,9 @@ async def test_db_backed_batch_create_cutover_rejects_idempotency_payload_mismat
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-idempotent-mismatch-artifacts"))
@@ -1552,7 +1590,9 @@ async def test_db_backed_batch_create_persists_encrypted_webhook_and_matches_ide
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
     cipher = BatchWebhookCipher(bytes(range(32)))
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-webhook-artifacts"))
@@ -1658,7 +1698,11 @@ async def _seed_finalizing_webhook_job(
     assert job is not None
     inserted = await repository.create_items(
         job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+        [
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            )
+        ],
     )
     assert inserted == 1
     item_status = {
@@ -2273,15 +2317,21 @@ async def test_db_backed_cleanup_skips_ownership_conflict_and_deletes_safe_jobs(
         safe_batch_id,
     )
 
-    assert await _drain_expired_terminal_jobs(
-        repository,
-        now=datetime.now(tz=UTC),
-        limit=100,
-    ) == 1
-    assert await repository.count_expired_terminal_job_ownership_conflicts(
-        now=datetime.now(tz=UTC),
-        limit=100,
-    ) == 1
+    assert (
+        await _drain_expired_terminal_jobs(
+            repository,
+            now=datetime.now(tz=UTC),
+            limit=100,
+        )
+        == 1
+    )
+    assert (
+        await repository.count_expired_terminal_job_ownership_conflicts(
+            now=datetime.now(tz=UTC),
+            limit=100,
+        )
+        == 1
+    )
     assert await repository.get_job(batch_id) is not None
     assert await repository.get_job(safe_batch_id) is None
     retained = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
@@ -2296,11 +2346,14 @@ async def test_db_backed_cleanup_skips_ownership_conflict_and_deletes_safe_jobs(
         """,
         batch_id,
     )
-    assert await _drain_expired_terminal_jobs(
-        repository,
-        now=datetime.now(tz=UTC),
-        limit=100,
-    ) == 1
+    assert (
+        await _drain_expired_terminal_jobs(
+            repository,
+            now=datetime.now(tz=UTC),
+            limit=100,
+        )
+        == 1
+    )
     assert await repository.get_job(batch_id) is None
 
 
@@ -2366,20 +2419,26 @@ async def test_db_backed_cleanup_skips_mixed_version_writer_then_repairs_next_pa
     writer_task = asyncio.create_task(_old_writer())
     await writer_locked.wait()
     try:
-        assert await _drain_expired_terminal_jobs(
-            repository,
-            now=datetime.now(tz=UTC),
-            limit=100,
-        ) == 0
+        assert (
+            await _drain_expired_terminal_jobs(
+                repository,
+                now=datetime.now(tz=UTC),
+                limit=100,
+            )
+            == 0
+        )
     finally:
         release_writer.set()
     await writer_task
 
-    assert await _drain_expired_terminal_jobs(
-        repository,
-        now=datetime.now(tz=UTC),
-        limit=100,
-    ) == 1
+    assert (
+        await _drain_expired_terminal_jobs(
+            repository,
+            now=datetime.now(tz=UTC),
+            limit=100,
+        )
+        == 1
+    )
     retained = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
     assert len(retained) == 1
     assert retained[0].created_by_team_id == "team-cleanup-race"
@@ -2424,9 +2483,10 @@ async def test_db_backed_terminal_webhook_reconciliation_preserves_snapshot_afte
     )
     drifted = await repository.get_job(batch_id)
     assert drifted is not None
-    assert before["payload_json"]["data"]["batch"]["failed_at"] != serialize_public_batch(
-        drifted
-    )["failed_at"]
+    assert (
+        before["payload_json"]["data"]["batch"]["failed_at"]
+        != serialize_public_batch(drifted)["failed_at"]
+    )
 
     reconciled = await repository.reconcile_job_webhook_config(
         batch_id=batch_id,
@@ -2445,9 +2505,7 @@ async def test_db_backed_terminal_webhook_reconciliation_preserves_snapshot_afte
         batch_id,
     )
     assert [dict(row) for row in after_rows] == [before]
-    assert before["payload_sha256"] == batch_webhook_event_payload_sha256(
-        before["payload_json"]
-    )
+    assert before["payload_sha256"] == batch_webhook_event_payload_sha256(before["payload_json"])
 
 
 @pytest.mark.asyncio
@@ -2935,7 +2993,9 @@ async def test_db_backed_batch_create_cutover_isolates_idempotency_by_team_withi
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-team-idempotency-artifacts"))
@@ -2996,7 +3056,9 @@ async def test_db_backed_batch_create_cutover_precheck_rejects_before_session_st
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     repository = BatchRepository(batch_db)
     storage_root = tmp_path / "cutover-precheck-artifacts"
@@ -3043,7 +3105,9 @@ async def test_db_backed_batch_create_cutover_precheck_rejects_before_session_st
     assert exc.value.status_code == 429
 
     session_rows = await batch_db.query_raw("SELECT session_id FROM deltallm_batch_create_session")
-    job_rows = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job ORDER BY batch_id ASC")
+    job_rows = await batch_db.query_raw(
+        "SELECT batch_id FROM deltallm_batch_job ORDER BY batch_id ASC"
+    )
     assert session_rows == []
     assert [dict(row) for row in job_rows] == [{"batch_id": "existing-batch"}]
 
@@ -3202,7 +3266,9 @@ async def test_db_backed_create_session_promotion_rolls_back_after_item_insert_f
     )
     promoter = BatchCreateSessionPromoter(repository=repository, staging=staging)
 
-    with pytest.raises(BatchCreatePromotionError, match="Failed to promote batch create session") as exc:
+    with pytest.raises(
+        BatchCreatePromotionError, match="Failed to promote batch create session"
+    ) as exc:
         await promoter.promote_session(session.session_id)
 
     assert exc.value.retryable is True
@@ -3481,7 +3547,9 @@ async def test_db_backed_create_session_promotion_is_not_claimable_before_commit
     tmp_path: Path,
 ) -> None:
     class _BlockingPromotionRepository(BatchRepository):
-        def __init__(self, prisma_client: Any, entered: asyncio.Event, release: asyncio.Event) -> None:
+        def __init__(
+            self, prisma_client: Any, entered: asyncio.Event, release: asyncio.Event
+        ) -> None:
             super().__init__(prisma_client)
             self.entered = entered
             self.release = release
@@ -3512,7 +3580,9 @@ async def test_db_backed_create_session_promotion_is_not_claimable_before_commit
     promotion_task = asyncio.create_task(promoter.promote_session(session.session_id))
     await entered.wait()
 
-    claimed_before_commit = await BatchRepository(batch_db).claim_next_job(worker_id="worker-before")
+    claimed_before_commit = await BatchRepository(batch_db).claim_next_job(
+        worker_id="worker-before"
+    )
     assert claimed_before_commit is None
 
     release.set()
@@ -3640,7 +3710,9 @@ async def test_db_backed_session_stager_compensates_artifact_on_session_insert_c
             ),
         )
 
-    assert [path for path in (tmp_path / "create-session-artifacts").rglob("*") if path.is_file()] == []
+    assert [
+        path for path in (tmp_path / "create-session-artifacts").rglob("*") if path.is_file()
+    ] == []
 
 
 @pytest.mark.asyncio
@@ -3849,8 +3921,7 @@ async def test_db_backed_create_session_cleanup_deletes_old_unreferenced_orphan_
     staging = BatchCreateArtifactStorageBackend(storage=storage)
     old_time = datetime.now(tz=UTC) - timedelta(hours=2)
     orphan_key = (
-        f"batch-create-stage/{old_time:%Y/%m/%d}/"
-        f"{old_time:%Y%m%dT%H%M%S%fZ}-manual-orphan.jsonl"
+        f"batch-create-stage/{old_time:%Y/%m/%d}/{old_time:%Y%m%dT%H%M%S%fZ}-manual-orphan.jsonl"
     )
     orphan_target = tmp_path / "create-session-artifacts" / orphan_key
     orphan_target.parent.mkdir(parents=True, exist_ok=True)
@@ -3947,10 +4018,14 @@ async def test_db_backed_batch_job_status_check_rejects_invalid_rows(batch_db) -
 
 
 @pytest.mark.asyncio
-async def test_db_backed_admin_expire_marks_retryable_session_expired_and_deletes_artifact(batch_db, tmp_path: Path) -> None:
+async def test_db_backed_admin_expire_marks_retryable_session_expired_and_deletes_artifact(
+    batch_db, tmp_path: Path
+) -> None:
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
-    staging = BatchCreateArtifactStorageBackend(storage=storage, storage_registry={"local": storage})
+    staging = BatchCreateArtifactStorageBackend(
+        storage=storage, storage_registry={"local": storage}
+    )
     session = await _seed_staged_create_session(
         repository=repository,
         staging=staging,
@@ -3982,10 +4057,14 @@ async def test_db_backed_admin_expire_marks_retryable_session_expired_and_delete
 
 
 @pytest.mark.asyncio
-async def test_db_backed_admin_expire_rejects_completed_session_without_touching_batch(batch_db, tmp_path: Path) -> None:
+async def test_db_backed_admin_expire_rejects_completed_session_without_touching_batch(
+    batch_db, tmp_path: Path
+) -> None:
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
-    staging = BatchCreateArtifactStorageBackend(storage=storage, storage_registry={"local": storage})
+    staging = BatchCreateArtifactStorageBackend(
+        storage=storage, storage_registry={"local": storage}
+    )
     input_file_id = await _seed_create_session_input_file(repository)
     batch = await repository.create_job(
         batch_id="batch-admin-completed",
@@ -4047,7 +4126,9 @@ async def test_db_backed_batch_create_session_admin_scope_blocks_other_team(
 ) -> None:
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
-    staging = BatchCreateArtifactStorageBackend(storage=storage, storage_registry={"local": storage})
+    staging = BatchCreateArtifactStorageBackend(
+        storage=storage, storage_registry={"local": storage}
+    )
     session = await _seed_staged_create_session(
         repository=repository,
         staging=staging,
@@ -4063,7 +4144,9 @@ async def test_db_backed_batch_create_session_admin_scope_blocks_other_team(
 
     class _AdminServiceStub:
         async def expire_session(self, session_id: str):  # noqa: ANN201
-            raise AssertionError(f"expire_session should not be called for forbidden session: {session_id}")
+            raise AssertionError(
+                f"expire_session should not be called for forbidden session: {session_id}"
+            )
 
     test_app.state.batch_create_session_admin_service = _AdminServiceStub()
 
@@ -4170,10 +4253,18 @@ async def test_db_backed_claim_items_are_disjoint_under_contention(batch_db) -> 
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
-            BatchItemCreate(line_number=3, custom_id="c3", request_body={"model": "m1", "input": "c"}),
-            BatchItemCreate(line_number=4, custom_id="c4", request_body={"model": "m1", "input": "d"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
+            BatchItemCreate(
+                line_number=3, custom_id="c3", request_body={"model": "m1", "input": "c"}
+            ),
+            BatchItemCreate(
+                line_number=4, custom_id="c4", request_body={"model": "m1", "input": "d"}
+            ),
         ],
     )
     assert inserted == 4
@@ -4219,10 +4310,18 @@ async def test_db_backed_claim_next_work_allows_multiple_slices_from_same_job(ba
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
-            BatchItemCreate(line_number=3, custom_id="c3", request_body={"model": "m1", "input": "c"}),
-            BatchItemCreate(line_number=4, custom_id="c4", request_body={"model": "m1", "input": "d"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
+            BatchItemCreate(
+                line_number=3, custom_id="c3", request_body={"model": "m1", "input": "c"}
+            ),
+            BatchItemCreate(
+                line_number=4, custom_id="c4", request_body={"model": "m1", "input": "d"}
+            ),
         ],
     )
     assert inserted == 4
@@ -4350,28 +4449,34 @@ async def test_db_backed_capacity_claim_skips_oversized_head_job(batch_db) -> No
     )
     assert oversized is not None
     assert fitting is not None
-    assert await repository.create_items(
-        oversized.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="oversized-1",
-                request_body={"model": "m1", "input": "large"},
-                estimated_work_units=10,
-            )
-        ],
-    ) == 1
-    assert await repository.create_items(
-        fitting.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="fitting-1",
-                request_body={"model": "m1", "input": "small"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            oversized.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="oversized-1",
+                    request_body={"model": "m1", "input": "large"},
+                    estimated_work_units=10,
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            fitting.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="fitting-1",
+                    request_body={"model": "m1", "input": "small"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(oversized.batch_id, 1)
     await repository.set_job_queued(fitting.batch_id, 1)
 
@@ -4430,14 +4535,28 @@ async def test_db_backed_capacity_claim_serializes_in_flight_count(batch_db) -> 
     )
     assert first_job is not None
     assert second_job is not None
-    assert await repository.create_items(
-        first_job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
-    ) == 1
-    assert await repository.create_items(
-        second_job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c2", request_body={"model": "m1", "input": "b"})],
-    ) == 1
+    assert (
+        await repository.create_items(
+            first_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            second_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="c2", request_body={"model": "m1", "input": "b"}
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(first_job.batch_id, 1)
     await repository.set_job_queued(second_job.batch_id, 1)
 
@@ -4518,14 +4637,28 @@ async def test_db_backed_capacity_claim_remains_work_conserving_across_workers(b
     )
     assert first_job is not None
     assert second_job is not None
-    assert await repository.create_items(
-        first_job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
-    ) == 1
-    assert await repository.create_items(
-        second_job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c2", request_body={"model": "m1", "input": "b"})],
-    ) == 1
+    assert (
+        await repository.create_items(
+            first_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            second_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="c2", request_body={"model": "m1", "input": "b"}
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(first_job.batch_id, 1)
     await repository.set_job_queued(second_job.batch_id, 1)
 
@@ -4604,28 +4737,34 @@ async def test_db_backed_capacity_claim_serializes_in_flight_work_units(batch_db
     )
     assert first_job is not None
     assert second_job is not None
-    assert await repository.create_items(
-        first_job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="c1",
-                request_body={"model": "m1", "input": "a"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
-    assert await repository.create_items(
-        second_job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="c2",
-                request_body={"model": "m1", "input": "b"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            first_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="c1",
+                    request_body={"model": "m1", "input": "a"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            second_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="c2",
+                    request_body={"model": "m1", "input": "b"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(first_job.batch_id, 1)
     await repository.set_job_queued(second_job.batch_id, 1)
 
@@ -4697,17 +4836,20 @@ async def test_db_backed_scheduler_flow_refresh_persists_tenant_backlog(batch_db
             expires_at=None,
         )
         assert job is not None
-        assert await repository.create_items(
-            job.batch_id,
-            [
-                BatchItemCreate(
-                    line_number=1,
-                    custom_id=custom_id,
-                    request_body={"model": "m1", "input": custom_id},
-                    estimated_work_units=2,
-                )
-            ],
-        ) == 1
+        assert (
+            await repository.create_items(
+                job.batch_id,
+                [
+                    BatchItemCreate(
+                        line_number=1,
+                        custom_id=custom_id,
+                        request_body={"model": "m1", "input": custom_id},
+                        estimated_work_units=2,
+                    )
+                ],
+            )
+            == 1
+        )
         await repository.set_job_queued(job.batch_id, 1)
 
     flows = await repository.refresh_scheduler_flows(service_tier="standard", model_group="m1")
@@ -4723,7 +4865,9 @@ async def test_db_backed_scheduler_flow_refresh_persists_tenant_backlog(batch_db
         ORDER BY tenant_scope_id ASC
         """
     )
-    assert [(row["tenant_scope_type"], row["tenant_scope_id"], row["active"]) for row in persisted] == [
+    assert [
+        (row["tenant_scope_type"], row["tenant_scope_id"], row["active"]) for row in persisted
+    ] == [
         ("team", "team-a", True),
         ("team", "team-b", True),
     ]
@@ -4746,23 +4890,26 @@ async def test_db_backed_scheduler_flow_refresh_excludes_active_leased_work(
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="leased",
-                request_body={"model": "m1", "input": "leased"},
-                estimated_work_units=2,
-            ),
-            BatchItemCreate(
-                line_number=2,
-                custom_id="queued",
-                request_body={"model": "m1", "input": "queued"},
-                estimated_work_units=3,
-            ),
-        ],
-    ) == 2
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="leased",
+                    request_body={"model": "m1", "input": "leased"},
+                    estimated_work_units=2,
+                ),
+                BatchItemCreate(
+                    line_number=2,
+                    custom_id="queued",
+                    request_body={"model": "m1", "input": "queued"},
+                    estimated_work_units=3,
+                ),
+            ],
+        )
+        == 2
+    )
     await repository.set_job_queued(job.batch_id, 2)
 
     claim = await repository.claim_next_work(
@@ -4811,24 +4958,27 @@ async def test_db_backed_tenant_queued_work_units_counts_future_deferred_pending
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="future",
-                request_body={"model": "m1", "input": "future"},
-                estimated_work_units=5,
-                not_before_at=datetime.now(tz=UTC) + timedelta(days=1),
-            ),
-            BatchItemCreate(
-                line_number=2,
-                custom_id="ready",
-                request_body={"model": "m1", "input": "ready"},
-                estimated_work_units=2,
-            ),
-        ],
-    ) == 2
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="future",
+                    request_body={"model": "m1", "input": "future"},
+                    estimated_work_units=5,
+                    not_before_at=datetime.now(tz=UTC) + timedelta(days=1),
+                ),
+                BatchItemCreate(
+                    line_number=2,
+                    custom_id="ready",
+                    request_body={"model": "m1", "input": "ready"},
+                    estimated_work_units=2,
+                ),
+            ],
+        )
+        == 2
+    )
     await repository.set_job_queued(job.batch_id, 2)
 
     queued_work_units = await repository.get_tenant_queued_work_units(
@@ -4858,17 +5008,20 @@ async def test_db_backed_fair_share_claim_repairs_legacy_raw_api_key_scope(
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="legacy-api-key-1",
-                request_body={"model": "m1", "input": "legacy"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="legacy-api-key-1",
+                    request_body={"model": "m1", "input": "legacy"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(job.batch_id, 1)
     await batch_db.execute_raw(
         """
@@ -4924,17 +5077,20 @@ async def test_db_backed_fair_share_claim_rotates_between_tenants(batch_db) -> N
             expires_at=None,
         )
         assert job is not None
-        assert await repository.create_items(
-            job.batch_id,
-            [
-                BatchItemCreate(
-                    line_number=1,
-                    custom_id=custom_id,
-                    request_body={"model": "m1", "input": custom_id},
-                    estimated_work_units=1,
-                )
-            ],
-        ) == 1
+        assert (
+            await repository.create_items(
+                job.batch_id,
+                [
+                    BatchItemCreate(
+                        line_number=1,
+                        custom_id=custom_id,
+                        request_body={"model": "m1", "input": custom_id},
+                        estimated_work_units=1,
+                    )
+                ],
+            )
+            == 1
+        )
         await repository.set_job_queued(job.batch_id, 1)
 
     first = await repository.claim_next_fair_share_work(
@@ -4984,17 +5140,20 @@ async def test_db_backed_fair_share_concurrent_claims_do_not_duplicate_flow_or_i
             expires_at=None,
         )
         assert job is not None
-        assert await repository.create_items(
-            job.batch_id,
-            [
-                BatchItemCreate(
-                    line_number=1,
-                    custom_id=f"{team_id}-1",
-                    request_body={"model": "m1", "input": team_id},
-                    estimated_work_units=1,
-                )
-            ],
-        ) == 1
+        assert (
+            await repository.create_items(
+                job.batch_id,
+                [
+                    BatchItemCreate(
+                        line_number=1,
+                        custom_id=f"{team_id}-1",
+                        request_body={"model": "m1", "input": team_id},
+                        estimated_work_units=1,
+                    )
+                ],
+            )
+            == 1
+        )
         await repository.set_job_queued(job.batch_id, 1)
 
     claim_dbs = []
@@ -5072,9 +5231,7 @@ async def test_db_backed_fair_share_concurrent_claims_do_not_duplicate_flow_or_i
         {
             "worker_id": f"w{worker_index}",
             "result": result.result,
-            "tenant_scope_id": (
-                result.claim.tenant_scope_id if result.claim is not None else None
-            ),
+            "tenant_scope_id": (result.claim.tenant_scope_id if result.claim is not None else None),
             "attempts": attempt_counts.get(worker_index, 0),
         }
         for worker_index, result in enumerate(results, start=1)
@@ -5096,10 +5253,9 @@ async def test_db_backed_fair_share_concurrent_claims_do_not_duplicate_flow_or_i
         ORDER BY tenant_scope_id ASC
         """
     )
-    assert {
-        str(row["tenant_scope_id"]): int(row["in_flight_items"])
-        for row in rows
-    } == {tenant: 1 for tenant in expected_tenants}
+    assert {str(row["tenant_scope_id"]): int(row["in_flight_items"]) for row in rows} == {
+        tenant: 1 for tenant in expected_tenants
+    }
     flow_rows = await batch_db.query_raw(
         """
         SELECT tenant_scope_id, skip_reason_summary
@@ -5168,17 +5324,20 @@ async def test_db_backed_worker_redis_unavailable_shadow_stays_non_mutating(batc
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="team-a-1",
-                request_body={"model": "m1", "input": "hello"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="team-a-1",
+                    request_body={"model": "m1", "input": "hello"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(job.batch_id, 1)
     flow_rows_before = await batch_db.query_raw(
         """
@@ -5278,28 +5437,34 @@ async def test_db_backed_size_aware_fair_share_claim_picks_small_job_inside_flow
     )
     assert large_job is not None
     assert small_job is not None
-    assert await repository.create_items(
-        large_job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="large-1",
-                request_body={"model": "m1", "input": "large"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
-    assert await repository.create_items(
-        small_job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="small-1",
-                request_body={"model": "m1", "input": "small"},
-                estimated_work_units=1,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            large_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="large-1",
+                    request_body={"model": "m1", "input": "large"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            small_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="small-1",
+                    request_body={"model": "m1", "input": "small"},
+                    estimated_work_units=1,
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(large_job.batch_id, 1)
     await repository.set_job_queued(small_job.batch_id, 1)
 
@@ -5386,29 +5551,35 @@ async def test_db_backed_size_aware_flow_selection_uses_ranked_head_job(batch_db
     assert oversized_job is not None
     assert fitting_job is not None
     assert peer_job is not None
-    assert await repository.create_items(
-        oversized_job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="oversized-1",
-                request_body={"model": "m1", "input": "large"},
-                estimated_work_units=10,
-            )
-        ],
-    ) == 1
-    for job, custom_id in ((fitting_job, "fitting-1"), (peer_job, "peer-1")):
-        assert await repository.create_items(
-            job.batch_id,
+    assert (
+        await repository.create_items(
+            oversized_job.batch_id,
             [
                 BatchItemCreate(
                     line_number=1,
-                    custom_id=custom_id,
-                    request_body={"model": "m1", "input": custom_id},
-                    estimated_work_units=1,
+                    custom_id="oversized-1",
+                    request_body={"model": "m1", "input": "large"},
+                    estimated_work_units=10,
                 )
             ],
-        ) == 1
+        )
+        == 1
+    )
+    for job, custom_id in ((fitting_job, "fitting-1"), (peer_job, "peer-1")):
+        assert (
+            await repository.create_items(
+                job.batch_id,
+                [
+                    BatchItemCreate(
+                        line_number=1,
+                        custom_id=custom_id,
+                        request_body={"model": "m1", "input": custom_id},
+                        estimated_work_units=1,
+                    )
+                ],
+            )
+            == 1
+        )
     await repository.set_job_queued(oversized_job.batch_id, 1)
     await repository.set_job_queued(fitting_job.batch_id, 1)
     await repository.set_job_queued(peer_job.batch_id, 1)
@@ -5473,17 +5644,20 @@ async def test_db_backed_size_aware_large_job_floor_claims_after_interval(batch_
     assert large_job is not None
     assert small_job is not None
     for job, custom_id in ((large_job, "large-1"), (small_job, "small-1")):
-        assert await repository.create_items(
-            job.batch_id,
-            [
-                BatchItemCreate(
-                    line_number=1,
-                    custom_id=custom_id,
-                    request_body={"model": "m1", "input": custom_id},
-                    estimated_work_units=1,
-                )
-            ],
-        ) == 1
+        assert (
+            await repository.create_items(
+                job.batch_id,
+                [
+                    BatchItemCreate(
+                        line_number=1,
+                        custom_id=custom_id,
+                        request_body={"model": "m1", "input": custom_id},
+                        estimated_work_units=1,
+                    )
+                ],
+            )
+            == 1
+        )
         await repository.set_job_queued(job.batch_id, 1)
 
     result = await repository.claim_next_fair_share_work(
@@ -5534,18 +5708,21 @@ async def test_db_backed_fair_share_preserves_weighted_tenant_share(batch_db) ->
             expires_at=None,
         )
         assert job is not None
-        assert await repository.create_items(
-            job.batch_id,
-            [
-                BatchItemCreate(
-                    line_number=line_number,
-                    custom_id=f"{team_id}-{line_number}",
-                    request_body={"model": "m1", "input": f"{team_id}-{line_number}"},
-                    estimated_work_units=1,
-                )
-                for line_number in range(1, 7)
-            ],
-        ) == 6
+        assert (
+            await repository.create_items(
+                job.batch_id,
+                [
+                    BatchItemCreate(
+                        line_number=line_number,
+                        custom_id=f"{team_id}-{line_number}",
+                        request_body={"model": "m1", "input": f"{team_id}-{line_number}"},
+                        estimated_work_units=1,
+                    )
+                    for line_number in range(1, 7)
+                ],
+            )
+            == 6
+        )
         await repository.set_job_queued(job.batch_id, 6)
 
     await repository.refresh_scheduler_flows(service_tier="standard", model_group="m1")
@@ -5600,17 +5777,20 @@ async def test_db_backed_fair_share_claim_uses_oversized_fallback_for_single_flo
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="oversized-1",
-                request_body={"model": "m1", "input": "large"},
-                estimated_work_units=10,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="oversized-1",
+                    request_body={"model": "m1", "input": "large"},
+                    estimated_work_units=10,
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(job.batch_id, 1)
 
     result = await repository.claim_next_fair_share_work(
@@ -5661,29 +5841,35 @@ async def test_db_backed_fair_share_claim_eventually_serves_oversized_tenant(
     )
     assert small_job is not None
     assert oversized_job is not None
-    assert await repository.create_items(
-        small_job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=line_number,
-                custom_id=f"small-{line_number}",
-                request_body={"model": "m1", "input": f"small-{line_number}"},
-                estimated_work_units=1,
-            )
-            for line_number in range(1, 8)
-        ],
-    ) == 7
-    assert await repository.create_items(
-        oversized_job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="oversized-1",
-                request_body={"model": "m1", "input": "large"},
-                estimated_work_units=10,
-            )
-        ],
-    ) == 1
+    assert (
+        await repository.create_items(
+            small_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=line_number,
+                    custom_id=f"small-{line_number}",
+                    request_body={"model": "m1", "input": f"small-{line_number}"},
+                    estimated_work_units=1,
+                )
+                for line_number in range(1, 8)
+            ],
+        )
+        == 7
+    )
+    assert (
+        await repository.create_items(
+            oversized_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="oversized-1",
+                    request_body={"model": "m1", "input": "large"},
+                    estimated_work_units=10,
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(small_job.batch_id, 7)
     await repository.set_job_queued(oversized_job.batch_id, 1)
 
@@ -5729,23 +5915,26 @@ async def test_db_backed_fair_share_claim_reports_tenant_in_flight_full(
         expires_at=None,
     )
     assert job is not None
-    assert await repository.create_items(
-        job.batch_id,
-        [
-            BatchItemCreate(
-                line_number=1,
-                custom_id="leased",
-                request_body={"model": "m1", "input": "leased"},
-                estimated_work_units=2,
-            ),
-            BatchItemCreate(
-                line_number=2,
-                custom_id="blocked",
-                request_body={"model": "m1", "input": "blocked"},
-                estimated_work_units=1,
-            ),
-        ],
-    ) == 2
+    assert (
+        await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id="leased",
+                    request_body={"model": "m1", "input": "leased"},
+                    estimated_work_units=2,
+                ),
+                BatchItemCreate(
+                    line_number=2,
+                    custom_id="blocked",
+                    request_body={"model": "m1", "input": "blocked"},
+                    estimated_work_units=1,
+                ),
+            ],
+        )
+        == 2
+    )
     await repository.set_job_queued(job.batch_id, 2)
     first_claim = await repository.claim_next_work(
         worker_id="w1",
@@ -5815,15 +6004,27 @@ async def test_db_backed_claim_next_work_rotates_to_unscheduled_small_job(batch_
     large_count = await repository.create_items(
         large.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="large-1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="large-2", request_body={"model": "m1", "input": "b"}),
-            BatchItemCreate(line_number=3, custom_id="large-3", request_body={"model": "m1", "input": "c"}),
-            BatchItemCreate(line_number=4, custom_id="large-4", request_body={"model": "m1", "input": "d"}),
+            BatchItemCreate(
+                line_number=1, custom_id="large-1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="large-2", request_body={"model": "m1", "input": "b"}
+            ),
+            BatchItemCreate(
+                line_number=3, custom_id="large-3", request_body={"model": "m1", "input": "c"}
+            ),
+            BatchItemCreate(
+                line_number=4, custom_id="large-4", request_body={"model": "m1", "input": "d"}
+            ),
         ],
     )
     small_count = await repository.create_items(
         small.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="small-1", request_body={"model": "m1", "input": "small"})],
+        [
+            BatchItemCreate(
+                line_number=1, custom_id="small-1", request_body={"model": "m1", "input": "small"}
+            )
+        ],
     )
     assert large_count == 4
     assert small_count == 1
@@ -5850,7 +6051,9 @@ async def test_db_backed_claim_next_work_rotates_to_unscheduled_small_job(batch_
 
 
 @pytest.mark.asyncio
-async def test_db_backed_claim_next_work_returns_none_when_oldest_items_row_locked(batch_db) -> None:
+async def test_db_backed_claim_next_work_returns_none_when_oldest_items_row_locked(
+    batch_db,
+) -> None:
     """selected_job picks the FIFO-oldest job under FOR KEY SHARE, then the
     locked_items LATERAL acquires FOR UPDATE SKIP LOCKED on its items. When
     the oldest job's job-row is unlocked but all of its items are row-locked
@@ -5890,14 +6093,28 @@ async def test_db_backed_claim_next_work_returns_none_when_oldest_items_row_lock
     )
     assert oldest is not None
     assert next_job is not None
-    assert await repository.create_items(
-        oldest.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="oldest-1", request_body={"model": "m1", "input": "a"})],
-    ) == 1
-    assert await repository.create_items(
-        next_job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"})],
-    ) == 1
+    assert (
+        await repository.create_items(
+            oldest.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="oldest-1", request_body={"model": "m1", "input": "a"}
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            next_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"}
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(oldest.batch_id, 1)
     await repository.set_job_queued(next_job.batch_id, 1)
 
@@ -5966,14 +6183,28 @@ async def test_db_backed_claim_next_work_skips_job_row_locked_oldest_job(batch_d
     )
     assert oldest is not None
     assert next_job is not None
-    assert await repository.create_items(
-        oldest.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="oldest-1", request_body={"model": "m1", "input": "a"})],
-    ) == 1
-    assert await repository.create_items(
-        next_job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"})],
-    ) == 1
+    assert (
+        await repository.create_items(
+            oldest.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="oldest-1", request_body={"model": "m1", "input": "a"}
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            next_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"}
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(oldest.batch_id, 1)
     await repository.set_job_queued(next_job.batch_id, 1)
 
@@ -6032,14 +6263,28 @@ async def test_db_backed_claim_next_work_skips_live_job_lease(batch_db) -> None:
     )
     assert leased is not None
     assert next_job is not None
-    assert await repository.create_items(
-        leased.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="leased-1", request_body={"model": "m1", "input": "a"})],
-    ) == 1
-    assert await repository.create_items(
-        next_job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"})],
-    ) == 1
+    assert (
+        await repository.create_items(
+            leased.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="leased-1", request_body={"model": "m1", "input": "a"}
+                )
+            ],
+        )
+        == 1
+    )
+    assert (
+        await repository.create_items(
+            next_job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"}
+                )
+            ],
+        )
+        == 1
+    )
     await repository.set_job_queued(leased.batch_id, 1)
     await repository.set_job_queued(next_job.batch_id, 1)
     await batch_db.execute_raw(
@@ -6064,7 +6309,9 @@ async def test_db_backed_claim_next_work_skips_live_job_lease(batch_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after_retry(batch_db) -> None:
+async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after_retry(
+    batch_db,
+) -> None:
     """A retryable failure sets not_before_at into the future via
     mark_item_failed(retryable=True, retry_delay_seconds>0). The next
     work-slice claim must skip that item (predicate excludes future
@@ -6086,8 +6333,12 @@ async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
         ],
     )
     assert inserted == 2
@@ -6133,7 +6384,9 @@ async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after
 
 
 @pytest.mark.asyncio
-async def test_db_backed_claim_next_work_does_not_strand_items_when_job_finalizing(batch_db) -> None:
+async def test_db_backed_claim_next_work_does_not_strand_items_when_job_finalizing(
+    batch_db,
+) -> None:
     """Race-symmetry guard for the updated_items / updated_job CTE dependency.
 
     If the only candidate job is no longer ('queued', 'in_progress'), the SQL must
@@ -6156,7 +6409,11 @@ async def test_db_backed_claim_next_work_does_not_strand_items_when_job_finalizi
     assert job is not None
     inserted = await repository.create_items(
         job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+        [
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            )
+        ],
     )
     assert inserted == 1
     await repository.set_job_queued(job.batch_id, inserted)
@@ -6213,12 +6470,15 @@ async def test_db_backed_diagnose_empty_work_claim_reports_not_before_future(bat
     assert inserted == 1
     await repository.set_job_queued(job.batch_id, inserted)
 
-    assert await repository.claim_next_work(
-        worker_id="w1",
-        max_items=1,
-        max_work_units=100,
-        lease_seconds=120,
-    ) is None
+    assert (
+        await repository.claim_next_work(
+            worker_id="w1",
+            max_items=1,
+            max_work_units=100,
+            lease_seconds=120,
+        )
+        is None
+    )
     assert await repository.diagnose_empty_work_claim() == "not_before_future"
 
 
@@ -6239,7 +6499,11 @@ async def test_db_backed_diagnose_empty_work_claim_reports_all_items_locked(batc
     assert job is not None
     inserted = await repository.create_items(
         job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="locked-1", request_body={"model": "m1", "input": "a"})],
+        [
+            BatchItemCreate(
+                line_number=1, custom_id="locked-1", request_body={"model": "m1", "input": "a"}
+            )
+        ],
     )
     assert inserted == 1
     await repository.set_job_queued(job.batch_id, inserted)
@@ -6287,7 +6551,9 @@ async def test_db_backed_diagnose_empty_work_claim_reports_locked_for_mixed_due_
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="locked-1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(
+                line_number=1, custom_id="locked-1", request_body={"model": "m1", "input": "a"}
+            ),
             BatchItemCreate(
                 line_number=2,
                 custom_id="future-1",
@@ -6340,12 +6606,18 @@ async def test_db_backed_expired_item_can_be_reclaimed_after_crash(batch_db) -> 
     assert job is not None
     inserted = await repository.create_items(
         job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+        [
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            )
+        ],
     )
     assert inserted == 1
     await repository.set_job_queued(job.batch_id, inserted)
 
-    first_claim = await repository.claim_items(batch_id=job.batch_id, worker_id="w1", limit=1, lease_seconds=120)
+    first_claim = await repository.claim_items(
+        batch_id=job.batch_id, worker_id="w1", limit=1, lease_seconds=120
+    )
     assert len(first_claim) == 1
     item = first_claim[0]
     await batch_db.execute_raw(
@@ -6357,7 +6629,9 @@ async def test_db_backed_expired_item_can_be_reclaimed_after_crash(batch_db) -> 
         item.item_id,
     )
 
-    reclaimed = await repository.claim_items(batch_id=job.batch_id, worker_id="w2", limit=1, lease_seconds=120)
+    reclaimed = await repository.claim_items(
+        batch_id=job.batch_id, worker_id="w2", limit=1, lease_seconds=120
+    )
     assert [row.item_id for row in reclaimed] == [item.item_id]
     updated = await repository.mark_item_completed(
         item_id=item.item_id,
@@ -6393,7 +6667,11 @@ async def test_db_backed_item_claim_epoch_fences_stale_completion_and_retry(batc
     assert job is not None
     inserted = await repository.create_items(
         job.batch_id,
-        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+        [
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            )
+        ],
     )
     assert inserted == 1
     await repository.set_job_queued(job.batch_id, inserted)
@@ -6428,11 +6706,14 @@ async def test_db_backed_item_claim_epoch_fences_stale_completion_and_retry(batc
     second_epoch = second_claim[0].claim_epoch
     assert second_epoch == first_epoch + 1
 
-    assert await repository.release_items_for_retry(
-        item_ids=[item_id],
-        worker_id="w1",
-        item_claim_epochs={item_id: first_epoch},
-    ) == []
+    assert (
+        await repository.release_items_for_retry(
+            item_ids=[item_id],
+            worker_id="w1",
+            item_claim_epochs={item_id: first_epoch},
+        )
+        == []
+    )
 
     stale_completed = await repository.mark_items_completed_bulk(
         items=[
@@ -6449,23 +6730,29 @@ async def test_db_backed_item_claim_epoch_fences_stale_completion_and_retry(batc
     )
     assert stale_completed is False
 
-    assert await repository.mark_item_failed(
-        item_id=item_id,
-        worker_id="w1",
-        error_body={"error": {"message": "stale retry"}},
-        last_error="stale retry",
-        retryable=True,
-        retry_delay_seconds=1,
-        claim_epoch=first_epoch,
-    ) is False
-    assert await repository.mark_item_failed(
-        item_id=item_id,
-        worker_id="w1",
-        error_body={"error": {"message": "stale terminal"}},
-        last_error="stale terminal",
-        retryable=False,
-        claim_epoch=first_epoch,
-    ) is False
+    assert (
+        await repository.mark_item_failed(
+            item_id=item_id,
+            worker_id="w1",
+            error_body={"error": {"message": "stale retry"}},
+            last_error="stale retry",
+            retryable=True,
+            retry_delay_seconds=1,
+            claim_epoch=first_epoch,
+        )
+        is False
+    )
+    assert (
+        await repository.mark_item_failed(
+            item_id=item_id,
+            worker_id="w1",
+            error_body={"error": {"message": "stale terminal"}},
+            last_error="stale terminal",
+            retryable=False,
+            claim_epoch=first_epoch,
+        )
+        is False
+    )
 
     current_completed = await repository.mark_items_completed_bulk(
         items=[
@@ -6499,7 +6786,9 @@ async def test_db_backed_item_claim_epoch_fences_stale_completion_and_retry(batc
 
 
 @pytest.mark.asyncio
-async def test_db_backed_bulk_completion_is_all_or_nothing_when_any_item_is_no_longer_owned(batch_db) -> None:
+async def test_db_backed_bulk_completion_is_all_or_nothing_when_any_item_is_no_longer_owned(
+    batch_db,
+) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
     job = await repository.create_job(
@@ -6516,14 +6805,20 @@ async def test_db_backed_bulk_completion_is_all_or_nothing_when_any_item_is_no_l
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
         ],
     )
     assert inserted == 2
     await repository.set_job_queued(job.batch_id, inserted)
 
-    claimed = await repository.claim_items(batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120)
+    claimed = await repository.claim_items(
+        batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120
+    )
     assert [item.line_number for item in claimed] == [1, 2]
 
     second_item_id = claimed[1].item_id
@@ -6575,7 +6870,9 @@ async def test_db_backed_bulk_completion_is_all_or_nothing_when_any_item_is_no_l
 
 
 @pytest.mark.asyncio
-async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_and_outbox_rows(batch_db) -> None:
+async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_and_outbox_rows(
+    batch_db,
+) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
     job = await repository.create_job(
@@ -6592,14 +6889,20 @@ async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_an
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
         ],
     )
     assert inserted == 2
     await repository.set_job_queued(job.batch_id, inserted)
 
-    claimed = await repository.claim_items(batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120)
+    claimed = await repository.claim_items(
+        batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120
+    )
     assert [item.line_number for item in claimed] == [1, 2]
 
     items = [
@@ -6665,8 +6968,18 @@ async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_an
     )
     expected_outbox_rows = sorted(
         [
-            {"item_id": claimed[0].item_id, "status": "queued", "attempt_count": 0, "max_attempts": 7},
-            {"item_id": claimed[1].item_id, "status": "queued", "attempt_count": 0, "max_attempts": 7},
+            {
+                "item_id": claimed[0].item_id,
+                "status": "queued",
+                "attempt_count": 0,
+                "max_attempts": 7,
+            },
+            {
+                "item_id": claimed[1].item_id,
+                "status": "queued",
+                "attempt_count": 0,
+                "max_attempts": 7,
+            },
         ],
         key=lambda row: row["item_id"],
     )
@@ -6674,7 +6987,9 @@ async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_an
 
 
 @pytest.mark.asyncio
-async def test_db_backed_bulk_completion_with_outbox_reports_already_completed_after_prior_commit(batch_db) -> None:
+async def test_db_backed_bulk_completion_with_outbox_reports_already_completed_after_prior_commit(
+    batch_db,
+) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
     job = await repository.create_job(
@@ -6691,14 +7006,20 @@ async def test_db_backed_bulk_completion_with_outbox_reports_already_completed_a
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
         ],
     )
     assert inserted == 2
     await repository.set_job_queued(job.batch_id, inserted)
 
-    claimed = await repository.claim_items(batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120)
+    claimed = await repository.claim_items(
+        batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120
+    )
     items = [
         {
             "item_id": claimed[0].item_id,
@@ -6740,7 +7061,9 @@ async def test_db_backed_bulk_completion_with_outbox_reports_already_completed_a
 
 
 @pytest.mark.asyncio
-async def test_db_backed_completion_outbox_reclaims_expired_processing_and_enforces_owner_cas(batch_db) -> None:
+async def test_db_backed_completion_outbox_reclaims_expired_processing_and_enforces_owner_cas(
+    batch_db,
+) -> None:
     repository = BatchRepository(batch_db)
     completion_ids = await repository.enqueue_completion_outbox_many(
         [
@@ -6754,7 +7077,9 @@ async def test_db_backed_completion_outbox_reclaims_expired_processing_and_enfor
     assert len(completion_ids) == 1
     completion_id = completion_ids[0]
 
-    claimed = await repository.claim_completion_outbox_due(worker_id="w1", lease_seconds=30, limit=10)
+    claimed = await repository.claim_completion_outbox_due(
+        worker_id="w1", lease_seconds=30, limit=10
+    )
 
     assert len(claimed) == 1
     assert claimed[0].completion_id == completion_id
@@ -6771,7 +7096,9 @@ async def test_db_backed_completion_outbox_reclaims_expired_processing_and_enfor
         completion_id,
     )
 
-    reclaimed = await repository.claim_completion_outbox_due(worker_id="w2", lease_seconds=30, limit=10)
+    reclaimed = await repository.claim_completion_outbox_due(
+        worker_id="w2", lease_seconds=30, limit=10
+    )
 
     assert len(reclaimed) == 1
     assert reclaimed[0].completion_id == completion_id
@@ -6810,7 +7137,9 @@ async def test_db_backed_finalization_retry_survives_restart(batch_db, tmp_path:
             if purpose == "batch_error" and self.fail_next_error_artifact:
                 self.fail_next_error_artifact = False
                 raise RuntimeError("simulated artifact failure")
-            return await self.delegate.write_lines_stream(purpose=purpose, filename=filename, lines=lines)
+            return await self.delegate.write_lines_stream(
+                purpose=purpose, filename=filename, lines=lines
+            )
 
         async def delete(self, storage_key: str) -> None:
             await self.delegate.delete(storage_key)
@@ -6831,8 +7160,12 @@ async def test_db_backed_finalization_retry_survives_restart(batch_db, tmp_path:
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
         ],
     )
     assert inserted == 2
@@ -6904,7 +7237,9 @@ async def test_db_backed_finalization_retry_survives_restart(batch_db, tmp_path:
     assert after_failure["locked_by"] is None
     assert after_failure["lease_expires_at"] is not None
 
-    file_rows = await batch_db.query_raw("SELECT file_id FROM deltallm_batch_file WHERE purpose IN ('batch_output', 'batch_error')")
+    file_rows = await batch_db.query_raw(
+        "SELECT file_id FROM deltallm_batch_file WHERE purpose IN ('batch_output', 'batch_error')"
+    )
     assert file_rows == []
 
     await batch_db.execute_raw(
@@ -6934,7 +7269,9 @@ async def test_db_backed_finalization_retry_survives_restart(batch_db, tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_db_backed_operator_marked_failed_batch_finalizes_as_failed(batch_db, tmp_path: Path) -> None:
+async def test_db_backed_operator_marked_failed_batch_finalizes_as_failed(
+    batch_db, tmp_path: Path
+) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
     job = await repository.create_job(
@@ -6952,8 +7289,12 @@ async def test_db_backed_operator_marked_failed_batch_finalizes_as_failed(batch_
     inserted = await repository.create_items(
         job.batch_id,
         [
-            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
-            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(
+                line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}
+            ),
+            BatchItemCreate(
+                line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}
+            ),
         ],
     )
     assert inserted == 2
@@ -7038,8 +7379,12 @@ async def test_db_backed_operator_marked_failed_batch_finalizes_as_failed(batch_
 
     service = BatchService(repository=repository, storage=storage)
     org_auth = UserAPIKeyAuth(api_key="key-b", organization_id="org-1")
-    output_content = await service.get_file_content(file_id=str(finalized["output_file_id"]), auth=org_auth)
-    error_content = await service.get_file_content(file_id=str(finalized["error_file_id"]), auth=org_auth)
+    output_content = await service.get_file_content(
+        file_id=str(finalized["output_file_id"]), auth=org_auth
+    )
+    error_content = await service.get_file_content(
+        file_id=str(finalized["error_file_id"]), auth=org_auth
+    )
     assert output_content
     assert error_content
 
@@ -7050,7 +7395,9 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     async def _fake_execute_embedding(request, payload, deployment):  # noqa: ANN001
         del request, payload, deployment
@@ -7109,7 +7456,7 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):  # noqa: ANN001
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):  # noqa: ANN001
             del model_group, deployment
             return deployment_obj
 
@@ -7204,12 +7551,18 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
 
     assert deleted_jobs == 1
     assert deleted_files == 1
-    remaining_local_files = [path for path in (tmp_path / "local-artifacts").rglob("*") if path.is_file()]
-    assert remaining_local_files == [tmp_path / "local-artifacts" / str(file_by_purpose["batch"]["storage_key"])]
+    remaining_local_files = [
+        path for path in (tmp_path / "local-artifacts").rglob("*") if path.is_file()
+    ]
+    assert remaining_local_files == [
+        tmp_path / "local-artifacts" / str(file_by_purpose["batch"]["storage_key"])
+    ]
     assert len(s3_client.objects) == 1
     remaining_s3_key = next(iter(s3_client.objects.keys()))[1]
     assert remaining_s3_key.startswith("prefix/batch-create-stage/")
-    remaining_jobs = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job WHERE batch_id = $1", batch_id)
+    remaining_jobs = await batch_db.query_raw(
+        "SELECT batch_id FROM deltallm_batch_job WHERE batch_id = $1", batch_id
+    )
     remaining_files = await batch_db.query_raw("SELECT file_id, purpose FROM deltallm_batch_file")
     assert remaining_jobs == []
     assert [dict(row) for row in remaining_files] == [
@@ -7223,7 +7576,9 @@ async def test_db_backed_grouped_embedding_execution_preserves_item_and_batch_to
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None
+    )
 
     async def _fake_execute_embedding(request, payload, deployment):  # noqa: ANN001
         del request, deployment
@@ -7283,7 +7638,7 @@ async def test_db_backed_grouped_embedding_execution_preserves_item_and_batch_to
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):  # noqa: ANN001
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):  # noqa: ANN001
             del model_group, deployment
             return deployment_obj
 

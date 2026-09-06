@@ -86,6 +86,8 @@ class RoutePolicySimulationDeploymentOutcome(BaseModel):
 
 class RoutePolicySimulationRequest(BaseModel):
     iterations: int = Field(default=100, ge=1, le=5000)
+    input_tokens: int = Field(default=0, ge=0)
+    requested_output_tokens: int | None = Field(default=None, ge=0)
     policy: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     user_id: str = Field(default="policy-simulation", min_length=1, max_length=256)

@@ -159,10 +159,55 @@ function numOrUndef(val: string): number | undefined {
   return val ? Number(val) : undefined;
 }
 
-function positiveIntOrUndef(val: string): number | undefined {
-  if (!val) return undefined;
-  const parsed = Number(val);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+export type OptionalPositiveIntegerResult =
+  | { kind: 'blank' }
+  | { kind: 'valid'; value: number }
+  | { kind: 'invalid' };
+
+export type ContextCapacityField =
+  | 'max_context_window'
+  | 'max_input_tokens'
+  | 'max_output_tokens';
+
+export function parseOptionalPositiveInteger(val: string): OptionalPositiveIntegerResult {
+  const normalized = val.trim();
+  if (!normalized) return { kind: 'blank' };
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return { kind: 'invalid' };
+  return { kind: 'valid', value: parsed };
+}
+
+function positiveIntOrUndef(val: string, fieldName: string): number | undefined {
+  const result = parseOptionalPositiveInteger(val);
+  if (result.kind === 'blank') return undefined;
+  if (result.kind === 'invalid') {
+    throw new Error(`${fieldName} must be a positive safe integer.`);
+  }
+  return result.value;
+}
+
+export function validateContextCapacityFields(
+  form: ModelFormValues,
+): Partial<Record<ContextCapacityField, string>> {
+  const fields: Array<[ContextCapacityField, string]> = form.mode === 'chat'
+    ? [
+      ['max_context_window', 'Context Window'],
+      ['max_input_tokens', 'Max Input Tokens'],
+      ['max_output_tokens', 'Max Output Tokens'],
+    ]
+    : form.mode === 'embedding'
+      ? [
+        ['max_context_window', 'Context Window'],
+        ['max_input_tokens', 'Max Input Tokens'],
+      ]
+      : [];
+  const errors: Partial<Record<ContextCapacityField, string>> = {};
+  for (const [field, label] of fields) {
+    if (parseOptionalPositiveInteger(form[field]).kind === 'invalid') {
+      errors[field] = `${label} must be a whole number greater than or equal to 1.`;
+    }
+  }
+  return errors;
 }
 
 function objectRecordOrEmpty(val: unknown): Record<string, unknown> {
@@ -204,13 +249,22 @@ function buildChatBatchingPayload(form: ModelFormValues): Record<string, unknown
     return { mode: 'disabled' };
   }
 
-  const maxInFlight = positiveIntOrUndef(form.chat_batching_max_in_flight);
+  const maxInFlight = positiveIntOrUndef(
+    form.chat_batching_max_in_flight,
+    'Chat Batch Max In-Flight',
+  );
   if (form.chat_batching_mode === 'sync_microbatch') {
     return {
       mode: 'sync_microbatch',
       max_in_flight: maxInFlight,
-      upstream_max_batch_size: positiveIntOrUndef(form.chat_batching_upstream_max_batch_size),
-      max_total_input_tokens: positiveIntOrUndef(form.chat_batching_max_total_input_tokens),
+      upstream_max_batch_size: positiveIntOrUndef(
+        form.chat_batching_upstream_max_batch_size,
+        'Chat Batch Upstream Max Size',
+      ),
+      max_total_input_tokens: positiveIntOrUndef(
+        form.chat_batching_max_total_input_tokens,
+        'Chat Batch Max Total Input Tokens',
+      ),
     };
   }
 
@@ -226,8 +280,14 @@ function buildChatBatchingPayload(form: ModelFormValues): Record<string, unknown
 
 function buildBatchCapacityPayload(form: ModelFormValues): Record<string, unknown> | undefined {
   const payload: Record<string, unknown> = {};
-  const maxInFlight = positiveIntOrUndef(form.batch_capacity_max_in_flight);
-  const maxClaimWorkUnits = positiveIntOrUndef(form.batch_capacity_max_claim_work_units);
+  const maxInFlight = positiveIntOrUndef(
+    form.batch_capacity_max_in_flight,
+    'Scheduler Max In-Flight',
+  );
+  const maxClaimWorkUnits = positiveIntOrUndef(
+    form.batch_capacity_max_claim_work_units,
+    'Scheduler Max Claim Work Units',
+  );
   const capacityFraction = numOrUndef(form.batch_capacity_capacity_fraction);
 
   if (maxInFlight !== undefined) {
@@ -250,6 +310,17 @@ function commaSeparatedListOrUndef(val: string): string[] | undefined {
 
 export function strOrEmpty(val: unknown): string {
   return val != null ? String(val) : '';
+}
+
+function positiveIntegerStringOrEmpty(val: unknown): string {
+  if (typeof val === 'number' && Number.isSafeInteger(val) && val >= 1) {
+    return String(val);
+  }
+  if (typeof val === 'string') {
+    const parsed = parseOptionalPositiveInteger(val);
+    return parsed.kind === 'valid' ? String(parsed.value) : '';
+  }
+  return '';
 }
 
 function toModelMode(value: unknown): ModelMode {
@@ -311,15 +382,19 @@ export function buildModelPayload(
     model_info.output_cost_per_token = numOrUndef(form.output_cost_per_token);
     model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
     model_info.output_cost_per_token_cache_hit = numOrUndef(form.output_cost_per_token_cache_hit);
-    model_info.max_tokens = numOrUndef(form.max_context_window);
-    model_info.max_input_tokens = numOrUndef(form.max_input_tokens);
-    model_info.max_output_tokens = numOrUndef(form.max_output_tokens);
+    model_info.max_tokens = positiveIntOrUndef(form.max_context_window, 'Context Window');
+    model_info.max_input_tokens = positiveIntOrUndef(form.max_input_tokens, 'Max Input Tokens');
+    model_info.max_output_tokens = positiveIntOrUndef(form.max_output_tokens, 'Max Output Tokens');
   } else if (form.mode === 'embedding') {
     model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
     model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
     model_info.output_vector_size = numOrUndef(form.output_vector_size);
-    model_info.max_tokens = numOrUndef(form.max_context_window);
-    model_info.upstream_max_batch_inputs = positiveIntOrUndef(form.upstream_max_batch_inputs);
+    model_info.max_tokens = positiveIntOrUndef(form.max_context_window, 'Context Window');
+    model_info.max_input_tokens = positiveIntOrUndef(form.max_input_tokens, 'Max Input Tokens');
+    model_info.upstream_max_batch_inputs = positiveIntOrUndef(
+      form.upstream_max_batch_inputs,
+      'Batch Worker Upstream Max Inputs',
+    );
   } else if (form.mode === 'image_generation') {
     model_info.input_cost_per_image = numOrUndef(form.input_cost_per_image);
   } else if (form.mode === 'audio_speech') {
@@ -424,9 +499,9 @@ export function formFromModel(
     output_cost_per_token: strOrEmpty(mi.output_cost_per_token),
     input_cost_per_token_cache_hit: strOrEmpty(mi.input_cost_per_token_cache_hit),
     output_cost_per_token_cache_hit: strOrEmpty(mi.output_cost_per_token_cache_hit),
-    max_context_window: strOrEmpty(mi.max_tokens),
-    max_input_tokens: strOrEmpty(mi.max_input_tokens),
-    max_output_tokens: strOrEmpty(mi.max_output_tokens),
+    max_context_window: positiveIntegerStringOrEmpty(mi.max_tokens),
+    max_input_tokens: positiveIntegerStringOrEmpty(mi.max_input_tokens),
+    max_output_tokens: positiveIntegerStringOrEmpty(mi.max_output_tokens),
     output_vector_size: strOrEmpty(mi.output_vector_size),
     upstream_max_batch_inputs: strOrEmpty(mi.upstream_max_batch_inputs),
     input_cost_per_image: strOrEmpty(mi.input_cost_per_image),

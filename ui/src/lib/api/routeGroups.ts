@@ -109,6 +109,8 @@ export type RoutePolicySimulationOutcome = 'success' | 'timeout' | 'rate_limit' 
 
 export interface RoutePolicySimulationRequest {
   iterations?: number;
+  input_tokens?: number;
+  requested_output_tokens?: number | null;
   policy?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
   user_id?: string;

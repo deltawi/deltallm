@@ -37,7 +37,8 @@ from src.providers.base import (
     validate_provider_success_payload,
 )
 from src.providers.resolution import resolve_provider, resolve_upstream_model
-from src.router import ROUTING_MODE_CONTEXT_KEY
+from src.router import ROUTING_MODE_CONTEXT_KEY, require_initial_deployment
+from src.router.context_policy import RequestTokenDemand, set_request_token_demand
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
@@ -278,9 +279,18 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         "user_id": auth.user_id or auth.api_key,
         ROUTING_MODE_CONTEXT_KEY: "embedding",
     }
-    primary = app_router.require_deployment(
+    set_request_token_demand(
+        request_context,
+        RequestTokenDemand(
+            input_tokens=preflight.context_input_tokens,
+            requested_output_tokens=0,
+        ),
+    )
+    primary = await require_initial_deployment(
+        router=app_router,
+        failover_manager=routing_runtime.failover_manager,
         model_group=model_group,
-        deployment=await app_router.select_deployment(model_group, request_context),
+        request_context=request_context,
     )
     failover_kwargs = route_failover_kwargs(request_context)
     capture_initial_route_decision(request, request_context)

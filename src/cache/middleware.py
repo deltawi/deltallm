@@ -283,13 +283,13 @@ class CacheMiddleware(BaseHTTPMiddleware):
         else:
             return None
 
-        _auth, _payload, prepared_data, _callbacks, _guardrails = await run_text_preflight(
+        prepared = await run_text_preflight(
             request=request,
             payload=payload,
             request_data=canonical_data,
             routing_runtime=routing_runtime,
         )
-        return dict(prepared_data)
+        return dict(prepared.request_data)
 
     def _should_cache(self, request: Request) -> bool:
         return request.method.upper() == "POST" and request.url.path in self.enabled_endpoints

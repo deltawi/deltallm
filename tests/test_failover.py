@@ -48,8 +48,14 @@ from src.router import (
     RoutingStrategy,
     get_failover_attempt_context,
     get_failover_original_error,
+    require_initial_deployment,
 )
 from src.router.health_policy import affects_deployment_health
+from src.router.context_policy import (
+    ContextRoutingPolicy,
+    RequestTokenDemand,
+    set_request_token_demand,
+)
 from src.router.router import Deployment
 from tests.conftest import FakeRedis
 
@@ -124,6 +130,272 @@ def _planner(
         config=config or RouterConfig(),
         deployment_registry=registry,
     )
+
+
+@pytest.mark.asyncio
+async def test_failover_does_not_attempt_context_ineligible_primary():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    primary.model_info["max_tokens"] = 8_000
+    planner = _planner(
+        state,
+        {"group-a": [primary]},
+        config=RouterConfig(
+            route_group_policies={
+                "group-a": RouteGroupPolicy(
+                    context=ContextRoutingPolicy(safety_margin_tokens=0),
+                )
+            }
+        ),
+    )
+    manager = FailoverManager(
+        config=FallbackConfig(),
+        candidate_planner=planner,
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    request_context: dict[str, object] = {}
+    set_request_token_demand(
+        request_context,
+        RequestTokenDemand(input_tokens=8_000, requested_output_tokens=1_000),
+    )
+    attempts = 0
+
+    async def run(_deployment: Deployment) -> str:
+        nonlocal attempts
+        attempts += 1
+        return "unexpected"
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        await manager.execute_with_failover(
+            primary,
+            "group-a",
+            run,
+            routing_context=request_context,
+        )
+
+    assert exc_info.value.code == "context_length_exceeded"
+    assert attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_local_context_rejection_selects_configured_context_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = RedisStateBackend(redis=None)
+    state_reads = {"health": 0, "cooldown": 0}
+    get_health_batch = state.get_health_batch
+    get_cooldown_batch = state.get_cooldown_batch
+
+    async def count_health_reads(health_refs):  # noqa: ANN001, ANN202
+        state_reads["health"] += 1
+        return await get_health_batch(health_refs)
+
+    async def count_cooldown_reads(health_refs):  # noqa: ANN001, ANN202
+        state_reads["cooldown"] += 1
+        return await get_cooldown_batch(health_refs)
+
+    monkeypatch.setattr(state, "get_health_batch", count_health_reads)
+    monkeypatch.setattr(state, "get_cooldown_batch", count_cooldown_reads)
+    primary = _deployment("dep-primary")
+    primary.model_info["max_tokens"] = 8_000
+    fallback = _deployment("dep-context-fallback")
+    fallback.model_info["max_tokens"] = 32_000
+    context_policy = ContextRoutingPolicy(safety_margin_tokens=0)
+    planner = _planner(
+        state,
+        {"group-a": [primary], "context-group": [fallback]},
+        config=RouterConfig(
+            route_group_policies={
+                "group-a": RouteGroupPolicy(context=context_policy),
+            }
+        ),
+    )
+    manager = FailoverManager(
+        config=FallbackConfig(
+            context_window_fallbacks={"group-a": ["context-group"]},
+        ),
+        candidate_planner=planner,
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    request_context: dict[str, object] = {ROUTING_MODE_CONTEXT_KEY: "chat"}
+    set_request_token_demand(
+        request_context,
+        RequestTokenDemand(input_tokens=9_000, requested_output_tokens=1_000),
+    )
+
+    selected = await require_initial_deployment(
+        router=planner,
+        failover_manager=manager,
+        model_group="group-a",
+        request_context=request_context,
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        return "fallback-ok"
+
+    result, served = await manager.execute_with_failover(
+        selected,
+        "group-a",
+        run,
+        return_deployment=True,
+        routing_context=request_context,
+    )
+
+    assert selected is fallback
+    assert result == "fallback-ok"
+    assert served is fallback
+    assert attempts == [fallback.deployment_id]
+    assert request_context["route_decision"]["reason"] == "context_fallback_selected"
+    assert request_context["route_decision"]["primary_rejection_reason"] == (
+        "context_capacity_exceeded"
+    )
+    event = manager.get_recent_fallback_events()[0]
+    assert event["model_group"] == "group-a"
+    assert event["from_deployment"] is None
+    assert event["to_deployment"] == fallback.deployment_id
+    assert event["reason"] == "context_capacity_exceeded"
+    assert event["error_classification"] == "context_window_exceeded"
+    assert event["success"] is True
+    assert state_reads == {"health": 2, "cooldown": 2}
+
+
+@pytest.mark.asyncio
+async def test_local_context_rejection_raises_when_context_fallback_is_also_too_small():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    primary.model_info["max_tokens"] = 8_000
+    fallback = _deployment("dep-context-fallback")
+    fallback.model_info["max_tokens"] = 9_000
+    context_policy = ContextRoutingPolicy(safety_margin_tokens=0)
+    planner = _planner(
+        state,
+        {"group-a": [primary], "context-group": [fallback]},
+        config=RouterConfig(
+            route_group_policies={
+                "group-a": RouteGroupPolicy(context=context_policy),
+            }
+        ),
+    )
+    manager = FailoverManager(
+        config=FallbackConfig(
+            context_window_fallbacks={"group-a": ["context-group"]},
+        ),
+        candidate_planner=planner,
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    request_context: dict[str, object] = {ROUTING_MODE_CONTEXT_KEY: "chat"}
+    set_request_token_demand(
+        request_context,
+        RequestTokenDemand(input_tokens=9_000, requested_output_tokens=1_000),
+    )
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        await require_initial_deployment(
+            router=planner,
+            failover_manager=manager,
+            model_group="group-a",
+            request_context=request_context,
+        )
+
+    assert exc_info.value.code == "context_length_exceeded"
+    assert request_context["route_decision"]["reason"] == "context_capacity_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_local_context_fallback_transient_unavailability_returns_service_unavailable():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    primary.model_info["max_tokens"] = 8_000
+    fallback = _deployment("dep-context-fallback")
+    fallback.model_info["max_tokens"] = 32_000
+    await state.apply_manual_cooldown(fallback.health_ref, 60, "test")
+    planner = _planner(
+        state,
+        {"group-a": [primary], "context-group": [fallback]},
+        config=RouterConfig(
+            route_group_policies={
+                "group-a": RouteGroupPolicy(context=ContextRoutingPolicy(safety_margin_tokens=0)),
+            }
+        ),
+    )
+    manager = FailoverManager(
+        config=FallbackConfig(
+            context_window_fallbacks={"group-a": ["context-group"]},
+        ),
+        candidate_planner=planner,
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    request_context: dict[str, object] = {ROUTING_MODE_CONTEXT_KEY: "chat"}
+    set_request_token_demand(
+        request_context,
+        RequestTokenDemand(input_tokens=9_000, requested_output_tokens=1_000),
+    )
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await require_initial_deployment(
+            router=planner,
+            failover_manager=manager,
+            model_group="group-a",
+            request_context=request_context,
+        )
+
+    assert exc_info.value.code == NO_HEALTHY_DEPLOYMENTS_CODE
+    assert request_context["route_decision"]["reason"] == "no_eligible_candidates"
+    assert request_context["route_decision"]["primary_rejection_reason"] == (
+        "context_capacity_exceeded"
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_context_fallback_unknown_capacity_preserves_unavailable_error():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    primary.model_info["max_tokens"] = 8_000
+    fallback = _deployment("dep-context-fallback")
+    planner = _planner(
+        state,
+        {"group-a": [primary], "context-group": [fallback]},
+        config=RouterConfig(
+            route_group_policies={
+                "group-a": RouteGroupPolicy(
+                    context=ContextRoutingPolicy(
+                        unknown_capacity="exclude",
+                        safety_margin_tokens=0,
+                    )
+                ),
+            }
+        ),
+    )
+    manager = FailoverManager(
+        config=FallbackConfig(
+            context_window_fallbacks={"group-a": ["context-group"]},
+        ),
+        candidate_planner=planner,
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    request_context: dict[str, object] = {ROUTING_MODE_CONTEXT_KEY: "chat"}
+    set_request_token_demand(
+        request_context,
+        RequestTokenDemand(input_tokens=9_000, requested_output_tokens=1_000),
+    )
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await require_initial_deployment(
+            router=planner,
+            failover_manager=manager,
+            model_group="group-a",
+            request_context=request_context,
+        )
+
+    assert exc_info.value.code == NO_HEALTHY_DEPLOYMENTS_CODE
+    assert request_context["route_decision"]["reason"] == "context_capacity_unknown"
 
 
 @pytest.mark.asyncio

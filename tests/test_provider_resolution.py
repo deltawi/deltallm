@@ -9,6 +9,7 @@ from src.providers.resolution import (
     provider_from_model,
     provider_supports_mode,
     resolve_provider,
+    resolve_provider_required_chat_output_tokens,
     resolve_upstream_model,
 )
 
@@ -22,6 +23,31 @@ def test_resolve_provider_falls_back_to_model_prefix() -> None:
     params = {"model": "openai/gpt-4o-mini"}
     assert resolve_provider(params) == "openai"
     assert provider_from_model("anthropic/claude-sonnet-4") == "anthropic"
+
+
+def test_resolve_provider_required_chat_output_tokens_matches_anthropic_payload() -> None:
+    params = {
+        "provider": "anthropic",
+        "model": "anthropic/claude-sonnet-4",
+        "max_tokens": 4096,
+    }
+
+    assert resolve_provider_required_chat_output_tokens(params, 512) == 512
+    assert resolve_provider_required_chat_output_tokens(params, None) == 4096
+    assert (
+        resolve_provider_required_chat_output_tokens(
+            {"provider": "anthropic", "model": "anthropic/claude-sonnet-4"},
+            None,
+        )
+        == 1024
+    )
+    assert (
+        resolve_provider_required_chat_output_tokens(
+            {"provider": "openai", "model": "openai/gpt-4o-mini"},
+            None,
+        )
+        is None
+    )
 
 
 def test_provider_supports_mode_unknown_is_permissive() -> None:

@@ -697,6 +697,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                 strategy = policy_json["strategy"]
             timeouts = policy_json.get("timeouts")
             retry = policy_json.get("retry")
+            context = policy_json.get("context")
             raw_members = row.get("members")
             if isinstance(raw_members, str):
                 try:
@@ -734,6 +735,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                     else None,
                     "timeouts": timeouts if isinstance(timeouts, dict) else None,
                     "retry": retry if isinstance(retry, dict) else None,
+                    "context": context if isinstance(context, dict) else None,
                     "default_prompt": _extract_default_prompt(metadata),
                     "access_groups": metadata.get("access_groups")
                     if isinstance(metadata, dict)

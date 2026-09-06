@@ -89,6 +89,8 @@ GET /health/fallback-events?limit=50
 
 Returns recent in-process fallback events. `limit` is capped at 200. This journal is bounded
 diagnostic history, not a durable audit log or cluster-wide event stream.
+For a context fallback selected before any provider attempt, `from_deployment` is `null` because
+the primary route group was rejected locally rather than represented by a failed deployment.
 
 ## Prometheus metrics
 

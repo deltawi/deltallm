@@ -319,16 +319,46 @@ def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-def _normalize_model_info_or_400(model_info: dict[str, Any]) -> dict[str, Any]:
+def _normalize_model_info_or_400(
+    model_info: dict[str, Any],
+    *,
+    existing_model_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     normalized = dict(model_info)
-    if "access_groups" not in normalized:
-        return normalized
-    try:
-        normalized["access_groups"] = normalize_access_group_list(
-            normalized.get("access_groups"), strict=True
+    if "access_groups" in normalized:
+        try:
+            normalized["access_groups"] = normalize_access_group_list(
+                normalized.get("access_groups"), strict=True
+            )
+        except InvalidAccessGroupError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    for field_name in ("max_tokens", "max_input_tokens", "max_output_tokens"):
+        value = normalized.get(field_name)
+        if value is None:
+            continue
+        existing_value = (existing_model_info or {}).get(field_name, _MISSING)
+        preserves_legacy_value = bool(
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value < 1
+            and isinstance(existing_value, int)
+            and not isinstance(existing_value, bool)
+            and value == existing_value
         )
-    except InvalidAccessGroupError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        if isinstance(value, str):
+            candidate = value.strip()
+            if candidate and candidate.isascii() and candidate.isdigit():
+                parsed = int(candidate)
+                if parsed > 0:
+                    normalized[field_name] = parsed
+                    continue
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            continue
+        if not preserves_legacy_value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"model_info.{field_name} must be a positive integer",
+            )
     return normalized
 
 
@@ -397,7 +427,15 @@ def _normalized_model_payload_or_400(
             status_code=status.HTTP_400_BAD_REQUEST, detail="model_info must be an object"
         )
 
-    return model_name, named_credential_id, params, _normalize_model_info_or_400(model_info)
+    return (
+        model_name,
+        named_credential_id,
+        params,
+        _normalize_model_info_or_400(
+            model_info,
+            existing_model_info=existing_model_info,
+        ),
+    )
 
 
 def _merged_model_params(

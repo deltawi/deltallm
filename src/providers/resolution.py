@@ -150,6 +150,20 @@ def resolve_provider(params: Mapping[str, object] | None) -> str:
     return provider_from_model(str(params.get("model") or ""))
 
 
+def resolve_provider_required_chat_output_tokens(
+    params: Mapping[str, object] | None,
+    requested_output_tokens: int | None,
+) -> int | None:
+    """Resolve output tokens that a provider adapter will always send."""
+
+    if requested_output_tokens is not None:
+        return requested_output_tokens
+    if resolve_provider(params) != "anthropic":
+        return None
+    configured = (params or {}).get("max_tokens")
+    return int(configured or 1024)
+
+
 def resolve_upstream_model(
     params: Mapping[str, object] | None, fallback_model: str | None = None
 ) -> str:

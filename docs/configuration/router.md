@@ -45,6 +45,10 @@ router_settings:
     - key: search-embeddings
       mode: embedding
       strategy: weighted
+      context:
+        mode: smallest-sufficient
+        unknown_capacity: allow
+        safety_margin_tokens: 256
       members:
         - deployment_id: embeddings-primary
           weight: 3
@@ -133,6 +137,10 @@ Route-group policies currently support:
 - `timeouts.global_ms` or `timeouts.global_seconds`
 - `retry.max_attempts`
 - `retry.retryable_error_classes`
+- `context.mode`
+- `context.unknown_capacity`
+- `context.default_output_tokens`
+- `context.safety_margin_tokens`
 
 Legacy mode aliases accepted on input:
 
@@ -148,6 +156,67 @@ remains readable and rollback-safe. When `members` is omitted, the policy inheri
 enabled members. Newly saved policies treat an explicit list as authoritative. Policies created
 before this semantics version retain their legacy widening behavior, including when rolled back. A
 policy can disable an eligible member but cannot reactivate a group member disabled by an operator.
+
+### Context-capacity routing
+
+Context routing is disabled unless a route-group policy contains a `context` object. It uses the
+existing deployment `model_info.max_tokens`, `model_info.max_input_tokens`, and
+`model_info.max_output_tokens` fields.
+
+For upgrade compatibility, existing non-positive values in those fields are treated as
+unknown capacity. New admin API and UI writes require positive integers; opening and
+saving a legacy deployment through the UI removes a non-positive sentinel unless the
+operator supplies a positive replacement.
+
+Policy writes distinguish omission from explicit deletion. Omitting `context` preserves the
+currently stored block so older clients do not erase policy they do not understand. Send
+`"context": null` to disable context routing and remove the stored block. Non-negative token
+settings must be exact integers; fractional JSON numbers are rejected rather than truncated.
+
+Context policies are valid only for route groups whose workload mode is `chat` or `embedding`.
+Configuration and admin-policy validation reject context policies for image, audio, and rerank
+groups rather than accepting an inactive policy.
+
+Example:
+
+```json
+{
+  "strategy": "least-busy",
+  "context": {
+    "mode": "smallest-sufficient",
+    "unknown_capacity": "allow",
+    "default_output_tokens": 1024,
+    "safety_margin_tokens": 256
+  }
+}
+```
+
+`eligible-only` removes deployments that cannot fit the estimated request and then preserves the
+configured strategy's order. `smallest-sufficient` additionally prefers the smallest known
+sufficient context tier while retaining larger eligible deployments for failover. `unknown_capacity`
+defaults to `allow` for upgrade compatibility; use `exclude` only after every member has accurate
+capacity metadata.
+
+The input estimate is computed once from the final normalized payload after prompt rendering,
+pre-call hooks, and guardrails. It is the gateway's fast character-based token estimate, not a
+provider tokenizer result, so keep a non-zero safety margin. Output demand uses the request's
+explicit `max_tokens`, then any output limit the selected provider adapter must send (including
+Anthropic's deployment `deltallm_params.max_tokens` or its 1024-token protocol default), then the
+deployment's `model_info.default_params.max_tokens`, then the policy default. Embeddings use zero
+output demand. Multi-phase MCP chat requests recompute demand between model phases and invalidate
+only their request-local candidate plan.
+
+Known insufficient capacity enters the existing `context_window_fallbacks` chain before any
+provider call. The initiating route group's context policy is applied to every deployment in that
+chain even when a fallback group has no context block. If no configured context fallback is
+eligible, the gateway returns `400` with code
+`context_length_exceeded`. If a capable deployment exists but is unhealthy or cooled down, the
+existing no-healthy-deployments `503` behavior remains. The filter adds no SQL, Redis, or network
+calls; it operates on the in-memory policy snapshot and deployment metadata after the router's
+existing batched state reads.
+
+The ownership, migration, rollback, and latency decisions are recorded in the
+[context-capacity routing decision](../project/context-routing-design.md).
 
 ## Fallback Configuration
 

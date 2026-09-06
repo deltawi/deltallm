@@ -23,7 +23,10 @@ from src.providers.base import (
     validate_provider_success_payload,
 )
 from src.providers.healthcheck import is_provider_healthy
-from src.providers.resolution import resolve_upstream_model
+from src.providers.resolution import (
+    resolve_provider_required_chat_output_tokens,
+    resolve_upstream_model,
+)
 
 _CONTEXT_IDENTIFIERS = frozenset(
     {
@@ -222,8 +225,10 @@ class AnthropicAdapter(ProviderAdapter):
         payload: dict[str, Any] = {
             "model": upstream_model or canonical_request.model,
             "messages": anthropic_messages or [{"role": "user", "content": ""}],
-            "max_tokens": canonical_request.max_tokens
-            or int(provider_config.get("max_tokens") or 1024),
+            "max_tokens": resolve_provider_required_chat_output_tokens(
+                provider_config,
+                canonical_request.max_tokens,
+            ),
         }
         if system_messages:
             payload["system"] = "\n\n".join(system_messages)

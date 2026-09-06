@@ -51,6 +51,10 @@ router_settings:
   #   - key: search-embeddings
   #     mode: embedding
   #     strategy: weighted
+  #     context:
+  #       mode: smallest-sufficient
+  #       unknown_capacity: allow
+  #       safety_margin_tokens: 256
   #     members:
   #       - deployment_id: embeddings-primary
   #         weight: 3

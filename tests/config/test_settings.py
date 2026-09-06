@@ -830,6 +830,64 @@ def test_route_group_config_preserves_omitted_legacy_workload_mode():
     assert group.mode is None
 
 
+def test_route_group_config_validates_context_routing_policy():
+    group = RouteGroupConfig.model_validate(
+        {
+            "key": "support-fast",
+            "context": {
+                "mode": "smallest-sufficient",
+                "unknown_capacity": "exclude",
+                "default_output_tokens": 2048,
+                "safety_margin_tokens": 512,
+            },
+        }
+    )
+
+    assert group.context is not None
+    assert group.context.mode == "smallest-sufficient"
+    assert group.context.unknown_capacity == "exclude"
+    assert group.context.default_output_tokens == 2048
+
+
+def test_route_group_config_rejects_context_for_unsupported_explicit_mode():
+    with pytest.raises(ValueError, match="route group mode 'rerank'"):
+        RouteGroupConfig.model_validate(
+            {
+                "key": "rerank-route",
+                "mode": "rerank",
+                "context": {"mode": "eligible-only"},
+            }
+        )
+
+
+def test_route_group_config_rejects_unknown_context_keys():
+    with pytest.raises(ValueError, match="unknown_capcity"):
+        RouteGroupConfig.model_validate(
+            {
+                "key": "support-fast",
+                "mode": "chat",
+                "context": {"unknown_capcity": "exclude"},
+            }
+        )
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_model_info_preserves_legacy_non_positive_context_capacity(value: int):
+    model_info = ModelInfo.model_validate({"max_tokens": value})
+
+    assert model_info.max_tokens == value
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_context_capacity_config_rejects_booleans(value: bool):
+    with pytest.raises(ValueError, match="positive integer"):
+        ModelInfo.model_validate({"max_tokens": value})
+    with pytest.raises(ValueError, match="non-negative integers"):
+        RouteGroupConfig.model_validate(
+            {"key": "support-fast", "context": {"safety_margin_tokens": value}}
+        )
+
+
 @pytest.mark.parametrize(
     "value",
     [

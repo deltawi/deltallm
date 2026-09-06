@@ -895,6 +895,89 @@
         "title": "EmbeddingRequest",
         "type": "object"
       },
+      "FallbackEventResponse": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "error_classification": {
+            "title": "Error Classification",
+            "type": "string"
+          },
+          "error_message": {
+            "title": "Error Message",
+            "type": "string"
+          },
+          "from_deployment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Deployment"
+          },
+          "model_group": {
+            "title": "Model Group",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "number"
+          },
+          "to_deployment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Deployment"
+          }
+        },
+        "required": [
+          "timestamp",
+          "model_group",
+          "from_deployment",
+          "to_deployment",
+          "reason",
+          "error_classification",
+          "error_message",
+          "attempt",
+          "success"
+        ],
+        "title": "FallbackEventResponse",
+        "type": "object"
+      },
+      "FallbackEventsResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/FallbackEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "FallbackEventsResponse",
+        "type": "object"
+      },
       "ForgotPasswordRequest": {
         "properties": {
           "email": {
@@ -3707,6 +3790,32 @@
         "title": "RoutePolicySimulationAttempt",
         "type": "object"
       },
+      "RoutePolicySimulationDeploymentOutcome": {
+        "properties": {
+          "deployment_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "success",
+              "timeout",
+              "rate_limit",
+              "unavailable"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "outcome"
+        ],
+        "title": "RoutePolicySimulationDeploymentOutcome",
+        "type": "object"
+      },
       "RoutePolicySimulationPrompt": {
         "properties": {
           "label": {
@@ -3740,6 +3849,81 @@
           "route_preferences"
         ],
         "title": "RoutePolicySimulationPrompt",
+        "type": "object"
+      },
+      "RoutePolicySimulationRequest": {
+        "properties": {
+          "input_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "iterations": {
+            "default": 100,
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Iterations",
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/RoutePolicySimulationDeploymentOutcome"
+            },
+            "maxItems": 500,
+            "title": "Outcomes",
+            "type": "array"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy"
+          },
+          "prompt_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Ref"
+          },
+          "requested_output_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Output Tokens"
+          },
+          "user_id": {
+            "default": "policy-simulation",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "title": "RoutePolicySimulationRequest",
         "type": "object"
       },
       "RoutePolicySimulationResponse": {
@@ -6702,7 +6886,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FallbackEventsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -26694,8 +26880,7 @@
               "schema": {
                 "anyOf": [
                   {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/RoutePolicySimulationRequest"
                   },
                   {
                     "type": "null"
@@ -26716,6 +26901,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid simulation request"
           },
           "422": {
             "content": {

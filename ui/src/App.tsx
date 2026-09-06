@@ -22,12 +22,9 @@ import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
 import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
-import ModelEdit from './pages/ModelEdit';
-import ModelCreate from './pages/ModelCreate';
 import NamedCredentials from './pages/NamedCredentials';
 import AuditLogs from './pages/AuditLogs';
 import RouteGroups from './pages/RouteGroups';
-import RouteGroupDetail from './pages/RouteGroupDetail';
 import PromptRegistry from './pages/PromptRegistry';
 import PromptTemplateDetail from './pages/PromptTemplateDetail';
 import MCPServers from './pages/MCPServers';
@@ -45,6 +42,9 @@ const Organizations = lazy(() => import('./pages/Organizations'));
 const OrganizationDetail = lazy(() => import('./pages/OrganizationDetail'));
 const OrganizationCreate = lazy(() => import('./pages/OrganizationCreate'));
 const TeamCreate = lazy(() => import('./pages/TeamCreate'));
+const RouteGroupDetail = lazy(() => import('./pages/RouteGroupDetail'));
+const ModelCreate = lazy(() => import('./pages/ModelCreate'));
+const ModelEdit = lazy(() => import('./pages/ModelEdit'));
 
 class RouteChunkBoundary extends Component<
   { children: ReactNode },
@@ -193,14 +193,14 @@ function AppRoutes() {
       <Route element={<Layout />}>
         <Route path="/" element={uiAccess.dashboard ? <Dashboard /> : <Navigate to={defaultRoute} replace />} />
         <Route path="/models" element={uiAccess.models ? <Models /> : <Navigate to="/" replace />} />
-        <Route path="/models/new" element={uiAccess.model_admin ? <ModelCreate /> : <Navigate to="/models" replace />} />
+        <Route path="/models/new" element={uiAccess.model_admin ? <ChunkedRoute><ModelCreate /></ChunkedRoute> : <Navigate to="/models" replace />} />
         <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
-        <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ModelEdit /> : <Navigate to="/models" replace />} />
+        <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ChunkedRoute><ModelEdit /></ChunkedRoute> : <Navigate to="/models" replace />} />
         <Route path="/tiers" element={uiAccess.tiers ? <Tiers /> : <Navigate to="/" replace />} />
         <Route path="/tiers/:tierId" element={uiAccess.tiers ? <TierDetail /> : <Navigate to="/" replace />} />
         <Route path="/named-credentials" element={uiAccess.named_credentials ? <NamedCredentials /> : <Navigate to="/" replace />} />
         <Route path="/route-groups" element={uiAccess.route_groups ? <RouteGroups /> : <Navigate to="/" replace />} />
-        <Route path="/route-groups/:groupKey" element={uiAccess.route_groups ? <RouteGroupDetail /> : <Navigate to="/" replace />} />
+        <Route path="/route-groups/:groupKey" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/prompts" element={uiAccess.prompts ? <PromptRegistry /> : <Navigate to="/" replace />} />
         <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
         <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <MCPServers /> : <Navigate to="/" replace />} />

@@ -457,7 +457,8 @@ deltallm_settings:
 ```
 
 - `fallbacks`: used for general failures such as timeouts, rate limits, and provider errors
-- `context_window_fallbacks`: used when the input is too large for the first model
+- `context_window_fallbacks`: used when the input is too large for the first model, including when
+  context-capacity metadata proves that locally before a provider attempt
 - `content_policy_fallbacks`: used when a provider rejects the content for policy reasons
 
 The provider adapter classifies context-window and content-policy failures from documented provider

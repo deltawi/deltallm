@@ -151,6 +151,8 @@ test('policy simulation panel covers permission, loading, results, stale, error,
     assert.equal(typeof requests[1].init?.body, 'string');
     const requestBody = JSON.parse(String(requests[1].init?.body));
     assert.deepEqual(requestBody.outcomes, []);
+    assert.equal(requestBody.input_tokens, 0);
+    assert.equal(requestBody.requested_output_tokens, null);
     await act(async () => {
       requests[1].reject(new Error('simulation unavailable'));
       await Promise.resolve();

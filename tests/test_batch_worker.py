@@ -39,7 +39,11 @@ from src.guardrails.exceptions import GuardrailViolationError
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 from src.models.errors import ServiceUnavailableError
+from src.models.requests import ChatCompletionRequest
 from src.models.responses import UserAPIKeyAuth
+from src.rate_limit_policy import estimate_tokens
+from src.router import Router
+from src.router.context_policy import RequestTokenDemand, get_request_token_demand
 from src.router.execution import ProviderAttemptResult, attach_failover_attempt_context
 
 
@@ -366,7 +370,7 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -385,6 +389,14 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
             if return_deployment:
                 return data, primary_deployment
             return data
+
+        async def select_context_fallback_for_local_rejection(
+            self,
+            model_group: str,
+            routing_context: dict,
+        ) -> None:
+            del model_group, routing_context
+            return None
 
     deployment_obj = deployment
     repo = _FakeRepository()
@@ -532,7 +544,7 @@ async def test_batch_worker_processes_chat_item_with_chat_batch_accounting(monke
             router_contexts.append(request_context)
             return "dep-chat"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -628,6 +640,11 @@ async def test_batch_worker_processes_chat_item_with_chat_batch_accounting(monke
 
     await worker._process_item(job, item)
 
+    assert len(router_contexts) == 1
+    token_demand = router_contexts[0].pop("context_token_demand")
+    assert isinstance(token_demand, RequestTokenDemand)
+    assert token_demand.input_tokens > 0
+    assert token_demand.requested_output_tokens is None
     assert router_contexts == [
         {
             "metadata": {"tags": ["batch-blue"]},
@@ -678,7 +695,7 @@ async def test_batch_worker_logs_chat_request_failure_with_batch_metadata(monkey
             del model_group, request_context
             return "dep-chat"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -900,25 +917,42 @@ def _build_chat_batch_worker(
     )
 
     class _Router:
+        def __init__(self) -> None:
+            self.select_contexts: list[dict] = []
+
         def resolve_model_group(self, model: str) -> str:
             return model
 
         async def select_deployment(self, model_group: str, request_context: dict) -> object:
-            del model_group, request_context
+            del model_group
+            self.select_contexts.append(request_context)
             return deployment
 
-        def require_deployment(self, model_group: str, deployment: object):
+        def require_deployment(self, model_group: str, deployment: object, **_kwargs: object):
             del model_group
             return deployment
 
     class _Failover:
         def __init__(self) -> None:
             self.aggregate_health_errors: list[Exception] = []
+            self.calls: list[dict] = []
+            self.context_fallback: object | None = None
+
+        async def select_context_fallback_for_local_rejection(
+            self,
+            model_group: str,
+            routing_context: dict,
+        ) -> object | None:
+            del model_group
+            if self.context_fallback is not None:
+                routing_context["route_decision"]["reason"] = "context_fallback_selected"
+            return self.context_fallback
 
         async def execute_with_failover(
             self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs
         ):
-            del model_group, kwargs
+            del model_group
+            self.calls.append(kwargs)
             data = await execute(primary_deployment)
             if isinstance(data, ProviderAttemptResult):
                 self.aggregate_health_errors.append(data.health_error)
@@ -1078,6 +1112,146 @@ async def test_batch_chat_guardrail_rejection_is_terminal_item_failure(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_batch_chat_context_capacity_rejection_is_terminal_item_failure(monkeypatch):
+    class _ContextRejectingRouter:
+        deployment_registry = {"gpt-oss": []}
+
+        def __init__(self) -> None:
+            self.selected_context: dict | None = None
+            self.required_context: dict | None = None
+
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> None:
+            assert model_group == "gpt-oss"
+            self.selected_context = request_context
+            request_context["route_decision"] = {"reason": "context_capacity_exceeded"}
+            return None
+
+        def require_deployment(
+            self,
+            model_group: str,
+            deployment: object,
+            *,
+            request_context: dict | None = None,
+        ) -> object:
+            self.required_context = request_context
+            return Router.require_deployment(
+                self,  # type: ignore[arg-type]
+                model_group,
+                deployment,  # type: ignore[arg-type]
+                request_context=request_context,
+            )
+
+    execute_calls: list[str] = []
+    _patch_fake_chat_execute(monkeypatch, execute_calls)
+    router = _ContextRejectingRouter()
+    repo = _FailureRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={
+            "provider": "vllm",
+            "model": "gpt-oss",
+            "api_base": "http://localhost:9090/v1",
+        },
+        repository=repo,
+        state_overrides={"router": router},
+    )
+
+    await worker._process_item(
+        _build_chat_batch_job(),
+        _build_chat_batch_item("chat-1", "request beyond context capacity"),
+    )
+
+    assert execute_calls == []
+    assert router.required_context is router.selected_context
+    assert router.required_context is not None
+    assert get_request_token_demand(router.required_context) is not None
+    assert len(repo.failed_calls) == 1
+    error_body = repo.failed_calls[0]["error_body"]
+    assert error_body["retryable"] is False
+    assert error_body["retry_category"] == "invalid_request"
+    assert error_body["terminal_reason"] == "not_retryable"
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_local_context_rejection_uses_context_fallback(monkeypatch):
+    class _ContextRejectingRouter:
+        deployment_registry = {"gpt-oss": []}
+
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> None:
+            assert model_group == "gpt-oss"
+            request_context["route_decision"] = {"reason": "context_capacity_exceeded"}
+            return None
+
+        def require_deployment(
+            self,
+            model_group: str,
+            deployment: object,
+            *,
+            request_context: dict | None = None,
+        ) -> object:
+            return Router.require_deployment(
+                self,  # type: ignore[arg-type]
+                model_group,
+                deployment,  # type: ignore[arg-type]
+                request_context=request_context,
+            )
+
+    fallback = SimpleNamespace(
+        deployment_id="dep-context-fallback",
+        deltallm_params={
+            "provider": "vllm",
+            "model": "gpt-oss",
+            "api_base": "http://localhost:9090/v1",
+        },
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.002,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.001},
+    )
+    execute_calls: list[str] = []
+    _patch_fake_chat_execute(monkeypatch, execute_calls)
+    worker, repo = _build_chat_batch_worker(
+        deployment_params=fallback.deltallm_params,
+        state_overrides={"router": _ContextRejectingRouter()},
+    )
+    worker.app.state.failover_manager.context_fallback = fallback
+
+    await worker._process_item(
+        _build_chat_batch_job(),
+        _build_chat_batch_item("chat-1", "fits fallback"),
+    )
+
+    assert execute_calls == ["fits fallback"]
+    assert len(repo.completed_calls) == 1
+    routing_context = worker.app.state.failover_manager.calls[0]["routing_context"]
+    assert routing_context["route_decision"]["reason"] == "context_fallback_selected"
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_context_estimate_matches_canonical_online_serialization():
+    item = _build_chat_batch_item("chat-1", "hello")
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={
+            "provider": "vllm",
+            "model": "gpt-oss",
+            "api_base": "http://localhost:9090/v1",
+        },
+    )
+
+    prepared = await worker._prepare_item_for_execution(_build_chat_batch_job(), item)
+    demand = get_request_token_demand(prepared.request_context)
+    validated = ChatCompletionRequest.model_validate(item.request_body)
+
+    assert demand is not None
+    assert demand.input_tokens == estimate_tokens(item.request_body)
+    assert demand.input_tokens < estimate_tokens(validated.model_dump(exclude_none=True))
+
+
+@pytest.mark.asyncio
 async def test_batch_chat_releases_max_parallel_slot_after_provider_failure(monkeypatch):
     token_hash = "a" * 64
 
@@ -1227,6 +1401,8 @@ async def test_batch_worker_sync_microbatches_compatible_chat_items():
                 for index, _ in enumerate(requests)
             ]
 
+    short_content = "hello"
+    long_content = "world " * 100
     worker, repo = _build_chat_batch_worker(
         deployment_params={
             "provider": "vllm",
@@ -1243,15 +1419,30 @@ async def test_batch_worker_sync_microbatches_compatible_chat_items():
         _build_chat_batch_job(),
         [
             _build_chat_batch_item(
-                "chat-1", "hello", request_overrides={"metadata": {"tenant": "shared"}}
+                "chat-1",
+                short_content,
+                request_overrides={"metadata": {"tenant": "shared"}},
             ),
             _build_chat_batch_item(
-                "chat-2", "world", request_overrides={"metadata": {"tenant": "shared"}}
+                "chat-2",
+                long_content,
+                request_overrides={"metadata": {"tenant": "shared"}},
             ),
         ],
     )
 
-    assert executor.calls == [["hello", "world"]]
+    assert executor.calls == [[short_content, long_content]]
+    item_demands = [
+        get_request_token_demand(context) for context in worker.app.state.router.select_contexts
+    ]
+    failover_demand = get_request_token_demand(
+        worker.app.state.failover_manager.calls[0]["routing_context"]
+    )
+    assert all(demand is not None for demand in item_demands)
+    assert failover_demand is not None
+    assert failover_demand.input_tokens == max(
+        demand.input_tokens for demand in item_demands if demand is not None
+    )
     assert len(repo.completed_calls) == 2
     assert [
         call["response_body"]["choices"][0]["message"]["content"] for call in repo.completed_calls
@@ -1346,7 +1537,7 @@ async def test_batch_worker_sync_microbatch_uses_failover_served_deployment():
             del model_group, request_context
             return primary
 
-        def require_deployment(self, model_group: str, deployment: object):
+        def require_deployment(self, model_group: str, deployment: object, **_kwargs: object):
             del model_group
             return deployment
 
@@ -1484,7 +1675,7 @@ async def test_batch_worker_sync_microbatch_primary_failure_with_unsupported_fal
             del model_group, request_context
             return primary
 
-        def require_deployment(self, model_group: str, deployment: object):
+        def require_deployment(self, model_group: str, deployment: object, **_kwargs: object):
             del model_group
             return deployment
 
@@ -1668,7 +1859,7 @@ async def test_batch_worker_sync_microbatch_unsupported_fallback_respects_max_in
             del model_group, request_context
             return primary
 
-        def require_deployment(self, model_group: str, deployment: object):
+        def require_deployment(self, model_group: str, deployment: object, **_kwargs: object):
             del model_group
             return deployment
 
@@ -1772,7 +1963,7 @@ async def test_batch_worker_sync_microbatch_validates_response_inside_served_att
             del model_group, request_context
             return primary
 
-        def require_deployment(self, model_group: str, deployment: object):
+        def require_deployment(self, model_group: str, deployment: object, **_kwargs: object):
             del model_group
             return deployment
 
@@ -2252,7 +2443,7 @@ async def test_batch_worker_uses_post_construction_hook_patches(monkeypatch):
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -2412,7 +2603,7 @@ async def test_batch_worker_process_item_uses_worker_prepare_override(monkeypatc
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -2544,7 +2735,7 @@ async def test_batch_worker_normalizes_single_item_embedding_usage(monkeypatch):
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -3193,7 +3384,7 @@ async def test_batch_worker_keeps_completed_state_when_side_effects_fail(monkeyp
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -3335,7 +3526,7 @@ async def test_batch_worker_keeps_completed_state_when_passive_health_success_ho
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -3476,7 +3667,7 @@ async def test_batch_worker_keeps_completed_state_when_router_usage_hook_fails(m
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -3613,7 +3804,7 @@ async def test_batch_worker_enforces_budget_before_provider_execution(monkeypatc
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -3744,7 +3935,7 @@ async def test_batch_worker_uses_structured_last_failover_attempt_for_internal_a
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -3891,7 +4082,7 @@ async def test_batch_worker_keeps_failed_state_when_passive_health_failure_hook_
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -4038,7 +4229,7 @@ async def test_batch_worker_keeps_failed_state_when_failure_logging_hook_raises(
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -4278,7 +4469,7 @@ async def test_batch_worker_marks_item_failed_when_route_selection_raises():
             del model_group, request_context
             raise RuntimeError("routing unavailable")
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             raise AssertionError("require_deployment should not be reached when selection fails")
 
@@ -4461,7 +4652,7 @@ async def test_batch_worker_processes_items_with_bounded_concurrency(monkeypatch
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -4787,7 +4978,7 @@ async def test_batch_worker_skips_spend_logging_when_item_completion_loses_owner
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -5475,7 +5666,7 @@ async def test_batch_worker_renews_job_and_item_leases_during_long_execution(mon
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 
@@ -5653,7 +5844,7 @@ async def test_second_worker_reclaims_expired_in_progress_item_after_crash(monke
             del model_group, request_context
             return "dep-1"
 
-        def require_deployment(self, model_group: str, deployment: str):
+        def require_deployment(self, model_group: str, deployment: str, **_kwargs: object):
             del model_group, deployment
             return deployment_obj
 

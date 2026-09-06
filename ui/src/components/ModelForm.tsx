@@ -17,6 +17,8 @@ import {
   EMPTY_FORM,
   MODE_OPTIONS,
   buildModelPayload,
+  validateContextCapacityFields,
+  type ContextCapacityField,
   type ChatBatchingMode,
   type ModelFormValues,
   type ModelMode,
@@ -202,7 +204,13 @@ interface ModelFormProps {
 }
 
 const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary";
-type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base' | 'named_credential_id';
+type RequiredField =
+  | 'model_name'
+  | 'provider'
+  | 'model'
+  | 'api_base'
+  | 'named_credential_id'
+  | ContextCapacityField;
 const CHAT_BATCHING_MODES: { value: ChatBatchingMode; label: string }[] = [
   { value: '', label: 'Default concurrent' },
   { value: 'disabled', label: 'Disabled' },
@@ -212,6 +220,42 @@ const CHAT_BATCHING_MODES: { value: ChatBatchingMode; label: string }[] = [
 
 function inputClasses(hasError = false): string {
   return `${inputClass} ${hasError ? 'border-red-300 bg-red-50/40 focus:ring-red-500' : ''}`;
+}
+
+function ContextCapacityInput({
+  id,
+  label,
+  value,
+  placeholder,
+  error,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  placeholder: string;
+  error?: string;
+  onChange: (value: string) => void;
+}) {
+  const errorId = `${id}-error`;
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <input
+        id={id}
+        type="number"
+        min="1"
+        step="1"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={inputClasses(Boolean(error))}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+      />
+      {error ? <p id={errorId} className="mt-1 text-xs text-red-600">{error}</p> : null}
+    </div>
+  );
 }
 
 function FieldLabel({ label, required = false }: { label: string; required?: boolean }) {
@@ -226,7 +270,7 @@ function FieldLabel({ label, required = false }: { label: string; required?: boo
 function validatePositiveInteger(value: string, label: string, minimum = 1): string | null {
   if (!value.trim()) return null;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum) {
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
     return `${label} must be a whole number greater than or equal to ${minimum}.`;
   }
   return null;
@@ -296,6 +340,9 @@ export default function ModelForm({
     [form.provider, mode],
   );
   const modelSuggestionListId = useId();
+  const contextWindowInputId = useId();
+  const maxInputTokensInputId = useId();
+  const maxOutputTokensInputId = useId();
 
   const providerPresets = providerPresetResponse?.data || [];
   const availableNamedCredentials = namedCredentialResponse?.data || [];
@@ -374,6 +421,14 @@ export default function ModelForm({
   const applyMode = (nextMode: ModelMode) => {
     invalidateLiveDiscovery();
     setForm((current) => ({ ...current, mode: nextMode }));
+    setFieldErrors((current) => {
+      const next = { ...current };
+      delete next.max_context_window;
+      delete next.max_input_tokens;
+      delete next.max_output_tokens;
+      return next;
+    });
+    if (validationError) setValidationError(null);
   };
 
   const updateProviderCredentialField = (
@@ -495,6 +550,12 @@ export default function ModelForm({
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors);
       setValidationError('Fill in the required fields highlighted below.');
+      return;
+    }
+    const contextCapacityErrors = validateContextCapacityFields(form);
+    if (Object.keys(contextCapacityErrors).length > 0) {
+      setFieldErrors(contextCapacityErrors);
+      setValidationError('Fix the context capacity settings highlighted below.');
       return;
     }
     if (mode === 'embedding' && form.upstream_max_batch_inputs.trim()) {
@@ -940,20 +1001,11 @@ export default function ModelForm({
                 <label className="block text-sm font-medium text-gray-700 mb-1">Max Tokens / Request</label>
                 <input type="number" value={form.max_tokens} onChange={(e) => setForm({ ...form, max_tokens: e.target.value })} placeholder="4096" className={inputClass} />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Context Window</label>
-                <input type="number" value={form.max_context_window} onChange={(e) => setForm({ ...form, max_context_window: e.target.value })} placeholder="128000" className={inputClass} />
-              </div>
+              <ContextCapacityInput id={contextWindowInputId} label="Context Window" value={form.max_context_window} onChange={(value) => { setForm({ ...form, max_context_window: value }); clearValidation('max_context_window'); }} placeholder="128000" error={fieldErrors.max_context_window} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Max Input Tokens</label>
-                <input type="number" value={form.max_input_tokens} onChange={(e) => setForm({ ...form, max_input_tokens: e.target.value })} placeholder="e.g. 128000" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Max Output Tokens</label>
-                <input type="number" value={form.max_output_tokens} onChange={(e) => setForm({ ...form, max_output_tokens: e.target.value })} placeholder="e.g. 4096" className={inputClass} />
-              </div>
+              <ContextCapacityInput id={maxInputTokensInputId} label="Max Input Tokens" value={form.max_input_tokens} onChange={(value) => { setForm({ ...form, max_input_tokens: value }); clearValidation('max_input_tokens'); }} placeholder="e.g. 128000" error={fieldErrors.max_input_tokens} />
+              <ContextCapacityInput id={maxOutputTokensInputId} label="Max Output Tokens" value={form.max_output_tokens} onChange={(value) => { setForm({ ...form, max_output_tokens: value }); clearValidation('max_output_tokens'); }} placeholder="e.g. 4096" error={fieldErrors.max_output_tokens} />
             </div>
             <div className="border-t border-gray-100 pt-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1046,10 +1098,8 @@ export default function ModelForm({
         <CollapsibleCard title="Embedding Settings">
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Context Window</label>
-                <input type="number" value={form.max_context_window} onChange={(e) => setForm({ ...form, max_context_window: e.target.value })} placeholder="8192" className={inputClass} />
-              </div>
+              <ContextCapacityInput id={contextWindowInputId} label="Context Window" value={form.max_context_window} onChange={(value) => { setForm({ ...form, max_context_window: value }); clearValidation('max_context_window'); }} placeholder="8192" error={fieldErrors.max_context_window} />
+              <ContextCapacityInput id={maxInputTokensInputId} label="Max Input Tokens" value={form.max_input_tokens} onChange={(value) => { setForm({ ...form, max_input_tokens: value }); clearValidation('max_input_tokens'); }} placeholder="e.g. 8192" error={fieldErrors.max_input_tokens} />
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Output Vector Size</label>
                 <input type="number" value={form.output_vector_size} onChange={(e) => setForm({ ...form, output_vector_size: e.target.value })} placeholder="1536" className={inputClass} />

@@ -426,6 +426,7 @@ class RoutePolicyLifecycleMixin:
             policy_json,
             available_members=inventory,
             semantics_version=semantics_version,
+            workload_mode=rows[0].get("group_mode"),
         )
         effective_members = merge_policy_members(
             [

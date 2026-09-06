@@ -6,10 +6,12 @@ import {
   effectivePolicyMemberIds,
   LEGACY_TAG_ROUTING_STRATEGY,
   reconcileGuidedPolicyMembers,
+  restoreDraftPolicyTombstones,
   ROUTE_GROUP_STRATEGY_OPTIONS,
   routeGroupStrategyOptions,
   toGuidedPolicy,
   validateGuidedPolicy,
+  validatePolicyContextCompatibility,
   withGuidedPolicyStrategy,
   type PolicyMemberOption,
 } from '../src/lib/routeGroups';
@@ -38,6 +40,13 @@ test('guided policy round-trips weights, fallback order, zero retries, and opaqu
     ],
     retry: { max_attempts: 0, server_retry_hint: true },
     timeouts: { global_ms: 9000, provider_budget_ms: 8000 },
+    context: {
+      mode: 'smallest-sufficient',
+      unknown_capacity: 'exclude',
+      default_output_tokens: 2048,
+      safety_margin_tokens: 512,
+      server_capacity_source: 'catalog',
+    },
     server_policy_hint: 'preserved',
   };
 
@@ -47,6 +56,8 @@ test('guided policy round-trips weights, fallback order, zero retries, and opaqu
   assert.deepEqual(guided.memberIds, ['dep-b', 'dep-a']);
   assert.deepEqual(guided.memberWeights, { 'dep-a': '5', 'dep-b': '7', 'dep-off': '' });
   assert.equal(guided.retryMaxAttempts, '0');
+  assert.equal(guided.contextMode, 'smallest-sufficient');
+  assert.equal(guided.contextUnknownCapacity, 'exclude');
 
   const rebuilt = buildPolicyFromGuided(base, {
     ...guided,
@@ -65,6 +76,7 @@ test('guided policy round-trips weights, fallback order, zero retries, and opaqu
   assert.deepEqual(rebuilt.retry, { max_attempts: 0, server_retry_hint: true });
   assert.deepEqual(rebuilt.timeouts, { global_ms: 9000, provider_budget_ms: 8000 });
   assert.equal(rebuilt.server_policy_hint, 'preserved');
+  assert.deepEqual(rebuilt.context, base.context);
   assert.equal('mode' in rebuilt, false);
 });
 
@@ -76,7 +88,7 @@ test('explicit empty membership stays empty and is rejected locally', () => {
   const reconciled = reconcileGuidedPolicyMembers(guided, MEMBERS);
   assert.deepEqual(reconciled.memberIds, []);
   assert.equal(
-    validateGuidedPolicy(reconciled, MEMBERS),
+    validateGuidedPolicy(reconciled, MEMBERS, 'chat'),
     'Select at least one enabled deployment.',
   );
   assert.deepEqual(buildPolicyFromGuided({}, reconciled).members, []);
@@ -133,11 +145,12 @@ test('guided validation matches backend integer and retry-class constraints', ()
     ...toGuidedPolicy({ members: [{ deployment_id: 'dep-a' }] }, MEMBERS),
     memberWeights: { 'dep-a': '0' },
   };
-  assert.match(validateGuidedPolicy(guided, MEMBERS) || '', /greater than or equal to 1/);
+  assert.match(validateGuidedPolicy(guided, MEMBERS, 'chat') || '', /greater than or equal to 1/);
   assert.match(
     validateGuidedPolicy(
       { ...guided, memberWeights: { 'dep-a': '1' }, retryableErrors: '5xx' },
       MEMBERS,
+      'chat',
     ) || '',
     /Unsupported retryable error class/,
   );
@@ -154,4 +167,88 @@ test('guided timeout normalizes seconds to its single millisecond control', () =
     global_ms: 1500,
     server_timeout_hint: true,
   });
+});
+
+test('guided context routing is opt-in and validates non-negative token controls', () => {
+  const disabled = toGuidedPolicy({}, MEMBERS);
+  assert.equal(disabled.contextMode, 'disabled');
+  assert.equal('context' in buildPolicyFromGuided({}, disabled), false);
+
+  const enabled = {
+    ...disabled,
+    contextMode: 'eligible-only' as const,
+    contextDefaultOutputTokens: '1024',
+    contextSafetyMarginTokens: '256',
+  };
+  assert.deepEqual(buildPolicyFromGuided({}, enabled).context, {
+    mode: 'eligible-only',
+    unknown_capacity: 'allow',
+    default_output_tokens: 1024,
+    safety_margin_tokens: 256,
+  });
+  assert.match(
+    validateGuidedPolicy(
+      { ...enabled, contextSafetyMarginTokens: '-1' },
+      MEMBERS,
+      'chat',
+    ) || '',
+    /safety margin/,
+  );
+  assert.match(validateGuidedPolicy(enabled, MEMBERS, 'rerank') || '', /current mode is rerank/);
+  assert.match(
+    validatePolicyContextCompatibility({ context: {} }, 'image_generation') || '',
+    /current mode is image_generation/,
+  );
+  assert.equal(validatePolicyContextCompatibility({ context: {} }, 'embedding'), null);
+  assert.equal(validatePolicyContextCompatibility({ context: null }, 'rerank'), null);
+});
+
+test('guided context disable emits an explicit tombstone without retaining opaque fields', () => {
+  const base = {
+    strategy: 'weighted',
+    context: {
+      mode: 'smallest-sufficient',
+      server_capacity_source: 'catalog',
+    },
+  };
+  const guided = { ...toGuidedPolicy(base, MEMBERS), contextMode: 'disabled' as const };
+
+  assert.deepEqual(buildPolicyFromGuided(base, guided), {
+    strategy: 'weighted',
+    context: null,
+  });
+});
+
+test('saved draft restores context deletion tombstone before direct publication', () => {
+  const published = {
+    strategy: 'weighted',
+    context: {
+      mode: 'eligible-only',
+      unknown_capacity: 'exclude',
+    },
+  };
+  const storedDraft = { strategy: 'least-busy', server_policy_hint: 'keep-me' };
+
+  const editableDraft = restoreDraftPolicyTombstones(storedDraft, published);
+  const guided = toGuidedPolicy(editableDraft, MEMBERS);
+  const publishDocument = buildPolicyFromGuided(editableDraft, guided);
+
+  assert.deepEqual(editableDraft, {
+    strategy: 'least-busy',
+    server_policy_hint: 'keep-me',
+    context: null,
+  });
+  assert.equal(guided.contextMode, 'disabled');
+  assert.equal(publishDocument.context, null);
+  assert.equal(publishDocument.server_policy_hint, 'keep-me');
+});
+
+test('draft without context stays omission when the published policy has no context', () => {
+  const storedDraft = { strategy: 'weighted' };
+
+  assert.deepEqual(
+    restoreDraftPolicyTombstones(storedDraft, { strategy: 'least-busy' }),
+    storedDraft,
+  );
+  assert.deepEqual(restoreDraftPolicyTombstones(storedDraft, null), storedDraft);
 });

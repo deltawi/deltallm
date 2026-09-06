@@ -13,6 +13,7 @@ from src.main import create_app
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = PROJECT_ROOT / "docs" / "api" / "openapi.json"
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put", "trace"}
+RUNTIME_ONLY_PATHS = frozenset({"/{full_path}"})
 
 
 def _parse_args() -> argparse.Namespace:
@@ -41,10 +42,22 @@ def _operation_ids(schema: dict[str, object]) -> dict[str, list[str]]:
     return locations
 
 
+def _exclude_runtime_only_paths(schema: dict[str, object]) -> None:
+    paths = schema.get("paths")
+    if not isinstance(paths, dict):
+        return
+    for path in RUNTIME_ONLY_PATHS:
+        paths.pop(path, None)
+
+
 def generate_openapi() -> tuple[str, int, int]:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         schema = create_app().openapi()
+
+    # The SPA catch-all exists only when a local UI bundle is present. It is
+    # runtime static serving, not part of the public API contract.
+    _exclude_runtime_only_paths(schema)
 
     duplicate_warnings = [
         str(item.message) for item in caught if "Duplicate Operation ID" in str(item.message)

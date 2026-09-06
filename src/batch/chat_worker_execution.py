@@ -41,7 +41,16 @@ from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, MCPToolDefinition
 from src.providers.base import map_standard_provider_error, sanitize_provider_proxy_error
 from src.providers.resolution import resolve_provider
-from src.router import ProviderAttemptResult, ROUTING_MODE_CONTEXT_KEY
+from src.router import (
+    ProviderAttemptResult,
+    ROUTING_MODE_CONTEXT_KEY,
+    require_initial_deployment,
+)
+from src.router.context_policy import (
+    RequestTokenDemand,
+    build_combined_request_context,
+    set_request_token_demand,
+)
 from src.router.execution import (
     attach_failover_attempt_context,
     get_failover_attempt_context,
@@ -104,13 +113,22 @@ class ChatWorkerExecutionMixin:
             "user_id": preflight.auth.user_id or preflight.auth.api_key or "batch-worker",
             ROUTING_MODE_CONTEXT_KEY: "chat",
         }
+        set_request_token_demand(
+            request_context,
+            RequestTokenDemand(
+                input_tokens=preflight.context_input_tokens,
+                requested_output_tokens=chat_request.max_tokens,
+            ),
+        )
         app_router = routing_generation.router
         model_group = app_router.resolve_model_group(chat_request.model)
         await self._raise_if_model_group_deferred(model_group)
 
-        primary_deployment = app_router.require_deployment(
+        primary_deployment = await require_initial_deployment(
+            router=app_router,
+            failover_manager=routing_generation.failover_manager,
             model_group=model_group,
-            deployment=await app_router.select_deployment(model_group, request_context),
+            request_context=request_context,
         )
         return _PreparedChatItem(
             item=item,
@@ -684,6 +702,9 @@ class ChatWorkerExecutionMixin:
         batch_id = job.batch_id
         chunk_size = len(prepared_items)
         first_item = prepared_items[0]
+        failover_routing_context = build_combined_request_context(
+            [prepared.request_context for prepared in prepared_items]
+        )
         chat_settings = settings or resolve_chat_batching_settings(
             first_item.primary_deployment.deltallm_params
         )
@@ -773,7 +794,7 @@ class ChatWorkerExecutionMixin:
                     model_group=first_item.model_group,
                     execute=_execute_for_deployment,
                     return_deployment=True,
-                    routing_context=first_item.request_context,
+                    routing_context=failover_routing_context,
                     **first_item.failover_kwargs,
                 ),
                 lease_lost_event=item_lease_lost,

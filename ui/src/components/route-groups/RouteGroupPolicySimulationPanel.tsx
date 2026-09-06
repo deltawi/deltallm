@@ -81,6 +81,8 @@ export default function RouteGroupPolicySimulationPanel({
   promptRef = null,
 }: RouteGroupPolicySimulationPanelProps) {
   const [iterations, setIterations] = useState('100');
+  const [inputTokens, setInputTokens] = useState('0');
+  const [requestedOutputTokens, setRequestedOutputTokens] = useState('');
   const [tags, setTags] = useState('');
   const [inputError, setInputError] = useState<string | null>(null);
   const effectiveMemberIds = useMemo(
@@ -116,6 +118,8 @@ export default function RouteGroupPolicySimulationPanel({
     policy,
     promptRef,
     iterations,
+    inputTokens,
+    requestedOutputTokens,
     tags,
     outcomes: scenarioOutcomes,
   });
@@ -135,10 +139,20 @@ export default function RouteGroupPolicySimulationPanel({
       setInputError('Iterations must be an integer from 1 to 5000.');
       return;
     }
+    if (!/^\d+$/.test(inputTokens)) {
+      setInputError('Input tokens must be a non-negative integer.');
+      return;
+    }
+    if (requestedOutputTokens && !/^\d+$/.test(requestedOutputTokens)) {
+      setInputError('Requested output tokens must be a non-negative integer.');
+      return;
+    }
     const normalizedTags = tags.split(',').map((tag) => tag.trim()).filter(Boolean);
     setInputError(null);
     void simulation.run({
       iterations: parsedIterations,
+      input_tokens: Number(inputTokens),
+      requested_output_tokens: requestedOutputTokens ? Number(requestedOutputTokens) : null,
       policy,
       prompt_ref: promptRef,
       metadata: normalizedTags.length > 0 ? { tags: normalizedTags } : {},
@@ -200,6 +214,29 @@ export default function RouteGroupPolicySimulationPanel({
             value={tags}
             onChange={(event) => setTags(event.target.value)}
             placeholder="vip, production"
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-slate-700">Estimated input tokens</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={inputTokens}
+            onChange={(event) => setInputTokens(event.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+          />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-slate-700">Requested output tokens</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={requestedOutputTokens}
+            onChange={(event) => setRequestedOutputTokens(event.target.value)}
+            placeholder="Use policy default"
             className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
           />
         </label>

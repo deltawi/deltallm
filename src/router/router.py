@@ -7,7 +7,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any, Sequence, cast
 
-from src.config import ModelMode
+from src.config import ModelMode, validate_context_routing_workload_mode
+from src.metrics import increment_router_context_decision
 from src.models.errors import (
     ModelNotFoundError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
@@ -28,6 +29,18 @@ from src.router.callable_key_ownership import resolve_enabled_route_group_owners
 from src.router.health_state import (
     DeploymentHealthRef,
     build_deployment_health_ref,
+)
+from src.router.context_policy import (
+    ContextRoutingPolicy,
+    context_capacity_error,
+    context_rejection_reason,
+    context_routing_metrics_enabled,
+    filter_context_candidates,
+    get_request_context_routing_policy,
+    get_request_token_demand,
+    order_context_candidates,
+    parse_context_routing_policy,
+    set_request_context_routing_policy,
 )
 from src.router.registry import DeploymentRegistryStore
 from src.router.route_group_validation import (
@@ -113,6 +126,7 @@ class RouteGroupPolicy:
     timeout_seconds: float | None = None
     retry_max_attempts: int | None = None
     retryable_error_classes: frozenset[str] | None = None
+    context: ContextRoutingPolicy | None = None
 
     def failover_overrides(self) -> dict[str, Any]:
         overrides: dict[str, Any] = {}
@@ -186,6 +200,17 @@ class Router:
             selected_deployment_id=selected.deployment_id if selected is not None else None,
             reason=reason,
         )
+        if (
+            policy is not None
+            and policy.context is not None
+            and context_routing_metrics_enabled(request_context)
+        ):
+            outcome = {
+                "selected": "selected",
+                "context_capacity_exceeded": "capacity_exceeded",
+                "context_capacity_unknown": "capacity_unknown",
+            }.get(reason, "unavailable")
+            increment_router_context_decision(outcome=outcome)
         return selected
 
     async def plan_deployments(
@@ -240,7 +265,17 @@ class Router:
 
         for group in pending:
             healthy = self._filter_healthy(group.candidates, health, cooldowns)
+            policy = self.config.route_group_policies.get(group.model_group)
+            context_policy = get_request_context_routing_policy(request_context)
+            if context_policy is None and policy is not None:
+                context_policy = policy.context
+            demand = get_request_token_demand(request_context)
+            configured = self._apply_filters(list(group.candidates), request_context)
+            context_eligible, configured_context_evaluations = filter_context_candidates(
+                configured, demand, context_policy
+            )
             filtered = self._apply_filters(healthy, request_context)
+            filtered, _ = filter_context_candidates(filtered, demand, context_policy)
             if self.config.enable_pre_call_checks:
                 filtered = self._apply_pre_call_checks(filtered, state_snapshot.usage or {})
             ordered = await group.strategy_impl.order(
@@ -248,6 +283,7 @@ class Router:
                 request_context,
                 state_snapshot,
             )
+            ordered = order_context_candidates(list(ordered), demand, context_policy)
             cached[group.model_group] = RouteCandidatePlan(
                 model_group=group.model_group,
                 strategy=group.strategy.value,
@@ -255,6 +291,16 @@ class Router:
                 candidate_count=len(group.candidates),
                 healthy_count=len(healthy),
                 filtered_count=len(filtered),
+                rejection_reason=(
+                    context_rejection_reason(configured_context_evaluations)
+                    if not filtered
+                    else None
+                ),
+                context_eligible_count=(
+                    len(context_eligible)
+                    if context_policy is not None and demand is not None
+                    else None
+                ),
             )
 
         return {group: cached[group] for group in groups}
@@ -466,6 +512,10 @@ class Router:
     def _attach_route_policy_context(
         request_context: dict[str, Any], policy: RouteGroupPolicy | None
     ) -> None:
+        set_request_context_routing_policy(
+            request_context,
+            policy.context if policy is not None else None,
+        )
         if policy is None:
             request_context.pop("route_policy", None)
             return
@@ -514,8 +564,18 @@ class Router:
             filtered_count,
         )
 
-    def require_deployment(self, model_group: str, deployment: Deployment | None) -> Deployment:
+    def require_deployment(
+        self,
+        model_group: str,
+        deployment: Deployment | None,
+        *,
+        request_context: dict[str, Any] | None = None,
+    ) -> Deployment:
         if deployment is None:
+            decision = request_context.get("route_decision") if request_context else None
+            reason = decision.get("reason") if isinstance(decision, dict) else None
+            if reason == "context_capacity_exceeded":
+                raise context_capacity_error(model_group)
             if model_group in self.deployment_registry:
                 raise ServiceUnavailableError(
                     message=f"No healthy deployments available for model '{model_group}'",
@@ -622,6 +682,9 @@ def build_route_group_policies(
         policy_version = group.get("policy_version")
         timeouts = group.get("timeouts")
         retry = group.get("retry")
+        context = parse_context_routing_policy(group.get("context"))
+        if context is not None:
+            validate_context_routing_workload_mode(group.get("mode"))
         policies[key] = RouteGroupPolicy(
             workload_mode=normalize_route_group_mode(group.get("mode")),
             strategy=strategy,
@@ -629,6 +692,7 @@ def build_route_group_policies(
             timeout_seconds=_extract_timeout_seconds(timeouts),
             retry_max_attempts=_extract_retry_max_attempts(retry),
             retryable_error_classes=_extract_retryable_error_classes(retry),
+            context=context,
         )
     return policies
 
