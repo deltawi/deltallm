@@ -1030,6 +1030,37 @@ async def test_route_group_policy_api_validates_and_saves_selector_draft(client,
     assert draft.json()["policy"]["semantics_version"] == 3
     assert draft.json()["policy"]["policy_json"]["members"][0]["lane"] == "economy"
 
+    member_update = await client.post(
+        "/ui/api/route-groups/selector-route/policy/draft",
+        headers=headers,
+        json={
+            "members": [
+                {"deployment_id": "dep-a", "weight": 7},
+                {"deployment_id": "dep-b"},
+            ]
+        },
+    )
+
+    assert member_update.status_code == 200
+    assert member_update.json()["policy"]["policy_json"]["members"] == [
+        {"deployment_id": "dep-a", "enabled": True, "weight": 7, "lane": "economy"},
+        {"deployment_id": "dep-b", "enabled": True, "lane": "quality"},
+    ]
+
+    selector_removal = await client.post(
+        "/ui/api/route-groups/selector-route/policy/draft",
+        headers=headers,
+        json={"selector": None},
+    )
+
+    assert selector_removal.status_code == 200
+    removed_policy = selector_removal.json()["policy"]["policy_json"]
+    assert "selector" not in removed_policy
+    assert removed_policy["members"] == [
+        {"deployment_id": "dep-a", "enabled": True, "weight": 7},
+        {"deployment_id": "dep-b", "enabled": True},
+    ]
+
 
 @pytest.mark.asyncio
 async def test_route_group_policy_api_rejects_selector_publication(client, test_app):

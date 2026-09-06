@@ -227,6 +227,12 @@ zero, and an omitted `default_lane` normalizes to the highest-ranked lane. Selec
 an explicit member list, an enabled same-group chat classifier, and one valid lane for every enabled
 answer member.
 
+For an existing version 3 selector draft, omitting `selector` preserves it. A member-only update
+may omit existing lane assignments; DeltaLLM preserves those lanes by deployment ID while treating
+the submitted member list as authoritative. Use `"selector": null` to disable selection. That
+removes the selector and all member lanes without discarding the member list, enabled flags,
+weights, priorities, or server-owned member metadata.
+
 In the contract-only delivery stage (PRs 1–3 of issue #304), the API can validate and save a selector
 draft, but publish, rollback activation, deterministic simulation, database runtime loading, and
 file-config runtime loading reject it explicitly. PR 4 is the activation boundary. There is no

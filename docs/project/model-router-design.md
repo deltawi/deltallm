@@ -121,8 +121,12 @@ with the revision. In particular, selector-shaped opaque data in a version 1 or 
 becomes active merely because a newer binary reads or rolls it back. When a new version 3 revision
 is written, newly claimed `selector` and `lane` keys are replaced only by explicitly validated
 client data; they are not copied out of an older opaque document. Updating an existing version 3
-document preserves an omitted selector and its member-lane assignments. An explicit
-`"selector": null` is the unambiguous deletion tombstone and removes both before validation.
+document preserves an omitted selector. If that update supplies an authoritative member list,
+omitted lane assignments are preserved by deployment ID while removed members stay removed and
+new members without a historical lane are rejected; adding them requires resubmitting the selector
+with complete assignments. An explicit `"selector": null` is the unambiguous deletion tombstone:
+it removes the selector and every member `lane`, but preserves the authoritative member list and
+its non-lane settings when the update omits `members`.
 
 All other unknown stored fields continue to round-trip through draft and publication replacement.
 That is a deliberate compatibility exception to strict client-owned selector fields.

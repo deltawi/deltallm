@@ -480,8 +480,88 @@ async def test_v3_selector_draft_update_preserves_omitted_selector_and_member_la
 
 
 @pytest.mark.asyncio
+async def test_v3_selector_draft_member_update_preserves_omitted_lanes() -> None:
+    source = _selector_policy()
+    source["members"][0]["server_assignment"] = "stable"
+    transaction = _RoutePolicyDB(
+        draft_policy=source,
+        draft_semantics_version=3,
+        member_rows=_selector_member_rows(),
+    )
+    prisma = _TransactionalRoutePolicyDB(transaction)
+
+    record = await RouteGroupRepository(prisma).save_draft_policy(
+        "support-route",
+        {
+            "members": [
+                {"deployment_id": "dep-a", "weight": 7},
+                {"deployment_id": "dep-b"},
+            ]
+        },
+    )
+
+    assert record is not None
+    assert record.policy_json["selector"] == source["selector"]
+    assert record.policy_json["members"] == [
+        {
+            "server_assignment": "stable",
+            "deployment_id": "dep-a",
+            "enabled": True,
+            "weight": 7,
+            "lane": "economy",
+        },
+        {"deployment_id": "dep-b", "enabled": True, "lane": "quality"},
+    ]
+    assert prisma.committed == 1
+
+
+@pytest.mark.asyncio
+async def test_v3_selector_draft_rejects_new_member_without_lane() -> None:
+    source = _selector_policy()
+    member_rows = _selector_member_rows()
+    member_rows.append(
+        {
+            "group_key": "support-route",
+            "group_mode": "chat",
+            "deployment_id": "dep-new",
+            "enabled": True,
+            "deployment_mode": "chat",
+        }
+    )
+    transaction = _RoutePolicyDB(
+        draft_policy=source,
+        draft_semantics_version=3,
+        member_rows=member_rows,
+    )
+    prisma = _TransactionalRoutePolicyDB(transaction)
+
+    with pytest.raises(RoutePolicyStateConflictError, match="exactly one lane"):
+        await RouteGroupRepository(prisma).save_draft_policy(
+            "support-route",
+            {
+                "members": [
+                    {"deployment_id": "dep-a"},
+                    {"deployment_id": "dep-b"},
+                    {"deployment_id": "dep-new"},
+                ]
+            },
+        )
+
+    assert transaction.executions == []
+    assert prisma.rolled_back == 1
+
+
+@pytest.mark.asyncio
 async def test_v3_selector_draft_update_uses_explicit_null_to_remove_selector() -> None:
     source = _selector_policy()
+    source["members"][1].update(
+        {
+            "enabled": False,
+            "weight": 2,
+            "priority": 1,
+            "server_assignment": "stable",
+        }
+    )
     transaction = _RoutePolicyDB(
         draft_policy=source,
         draft_semantics_version=3,
@@ -496,7 +576,16 @@ async def test_v3_selector_draft_update_uses_explicit_null_to_remove_selector() 
 
     assert record is not None
     assert "selector" not in record.policy_json
-    assert "members" not in record.policy_json
+    assert record.policy_json["members"] == [
+        {"deployment_id": "dep-a"},
+        {
+            "deployment_id": "dep-b",
+            "enabled": False,
+            "weight": 2,
+            "priority": 1,
+            "server_assignment": "stable",
+        },
+    ]
     assert prisma.committed == 1
 
 

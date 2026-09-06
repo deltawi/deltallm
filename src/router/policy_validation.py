@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Any
 
 from pydantic import ValidationError
@@ -51,6 +52,12 @@ class PolicyMemberInventoryItem:
     deployment_id: str
     enabled: bool = True
     workload_mode: str | None = None
+
+
+class _SelectorWriteIntent(StrEnum):
+    OMITTED = "omitted"
+    REPLACED = "replaced"
+    REMOVED = "removed"
 
 
 def _normalize_int(value: Any, field_name: str, *, minimum: int = 0) -> int:
@@ -219,41 +226,85 @@ def merge_policy_document_for_write(
         if existing_semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
         else None
     )
+    selector_write_intent = _selector_write_intent(replacement)
     selector = merge_selector_policy_block(existing_selector, replacement)
     if selector is None:
         merged.pop("selector", None)
     else:
         merged["selector"] = selector
 
-    replacement_members = replacement.get("members")
-    if isinstance(replacement_members, list):
-        current_members = current.get("members")
-        current_member_list = current_members if isinstance(current_members, list) else []
-        current_by_id = {
-            str(member.get("deployment_id") or ""): member
-            for member in current_member_list
-            if isinstance(member, dict) and str(member.get("deployment_id") or "")
-        }
-        preserved_members: list[dict[str, Any]] = []
-        for replacement_member in replacement_members:
-            if not isinstance(replacement_member, dict):
-                continue
-            deployment_id = str(replacement_member.get("deployment_id") or "")
-            current_member = current_by_id.get(deployment_id, {})
-            member = {
-                key: deepcopy(value)
-                for key, value in current_member.items()
-                if key not in POLICY_MEMBER_KEYS
-            }
-            member.update(deepcopy(replacement_member))
-            preserved_members.append(member)
-        merged["members"] = preserved_members
-    elif selector is not None and "members" not in replacement:
-        current_members = current.get("members")
-        if isinstance(current_members, list):
-            merged["members"] = deepcopy(current_members)
+    _merge_policy_members_for_write(
+        merged=merged,
+        current=current,
+        replacement=replacement,
+        selector_write_intent=selector_write_intent,
+        existing_selector_owned=isinstance(existing_selector, dict),
+    )
 
     return merged
+
+
+def _selector_write_intent(replacement: Mapping[str, Any]) -> _SelectorWriteIntent:
+    if "selector" not in replacement:
+        return _SelectorWriteIntent.OMITTED
+    if replacement.get("selector") is None:
+        return _SelectorWriteIntent.REMOVED
+    return _SelectorWriteIntent.REPLACED
+
+
+def _merge_policy_members_for_write(
+    *,
+    merged: dict[str, Any],
+    current: Mapping[str, Any],
+    replacement: Mapping[str, Any],
+    selector_write_intent: _SelectorWriteIntent,
+    existing_selector_owned: bool,
+) -> None:
+    current_members = current.get("members")
+    current_member_list = current_members if isinstance(current_members, list) else []
+    replacement_members = replacement.get("members")
+    if not isinstance(replacement_members, list):
+        if (
+            "members" not in replacement
+            and existing_selector_owned
+            and selector_write_intent is not _SelectorWriteIntent.REPLACED
+        ):
+            preserved_members = deepcopy(current_member_list)
+            if selector_write_intent is _SelectorWriteIntent.REMOVED:
+                for member in preserved_members:
+                    if isinstance(member, dict):
+                        member.pop("lane", None)
+            merged["members"] = preserved_members
+        return
+
+    current_by_id = {
+        str(member.get("deployment_id") or ""): member
+        for member in current_member_list
+        if isinstance(member, dict) and str(member.get("deployment_id") or "")
+    }
+    preserved_members: list[dict[str, Any]] = []
+    for replacement_member in replacement_members:
+        if not isinstance(replacement_member, dict):
+            continue
+        deployment_id = str(replacement_member.get("deployment_id") or "")
+        current_member = current_by_id.get(deployment_id, {})
+        member = {
+            key: deepcopy(value)
+            for key, value in current_member.items()
+            if key not in POLICY_MEMBER_KEYS
+        }
+        member.update(deepcopy(replacement_member))
+        if (
+            existing_selector_owned
+            and selector_write_intent is _SelectorWriteIntent.OMITTED
+            and "lane" not in replacement_member
+            and "lane" in current_member
+        ):
+            member["lane"] = deepcopy(current_member["lane"])
+        if selector_write_intent is _SelectorWriteIntent.REMOVED:
+            member.pop("lane", None)
+        preserved_members.append(member)
+    merged["members"] = preserved_members
 
 
 def merge_context_policy_block(
