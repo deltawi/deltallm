@@ -6,11 +6,13 @@ from typing import cast
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.api.admin.endpoints.organization_deletion_schemas import (
+    OrganizationDeletionExpediteRequest,
+    OrganizationDeletionExpediteResponse,
     OrganizationDeletionJobResponse,
     OrganizationDeletionPlanResponse,
     OrganizationDeletionRequest,
 )
-from src.auth.roles import Permission
+from src.auth.roles import Permission, has_platform_permission
 from src.middleware.admin import require_admin_permission
 from src.middleware.platform_auth import get_platform_auth_context
 from src.db.organization_deletion_records import OrganizationDeletionJobRecord
@@ -27,6 +29,8 @@ from src.services.organization_deletion_types import OrganizationDeletionPlan
 
 router = APIRouter(tags=["Admin Organization Deletion"])
 _PLATFORM_ADMIN_DEPENDENCY = [Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]
+_EXPEDITE_AUTHORIZATION = require_admin_permission(Permission.ORG_DELETE_EXPEDITE)
+_EXPEDITE_DEPENDENCY = [Depends(_EXPEDITE_AUTHORIZATION)]
 _RESTORABLE_PHASES = frozenset({"cancel_pending", "cancel_batches", "wait_for_batches"})
 
 
@@ -60,7 +64,11 @@ def _http_error(exc: OrganizationDeletionError) -> HTTPException:
     )
 
 
-def _plan_response(plan: OrganizationDeletionPlan) -> OrganizationDeletionPlanResponse:
+def _plan_response(
+    plan: OrganizationDeletionPlan,
+    *,
+    can_request: bool | None = None,
+) -> OrganizationDeletionPlanResponse:
     record = plan.record
     return OrganizationDeletionPlanResponse(
         organization_id=record.organization_id,
@@ -122,7 +130,7 @@ def _plan_response(plan: OrganizationDeletionPlan) -> OrganizationDeletionPlanRe
         recovery_window_hours=plan.recovery_window_hours,
         lifecycle_protocol_version=ORGANIZATION_LIFECYCLE_PROTOCOL_VERSION,
         requests_enabled=plan.requests_enabled,
-        can_request=plan.can_request,
+        can_request=plan.can_request if can_request is None else can_request,
         plan_token=plan.plan_token,
     )
 
@@ -137,6 +145,7 @@ def _job_response(
         job.status in {"pending", "processing", "waiting", "failed"}
         and job.phase in _RESTORABLE_PHASES
         and job.not_before_at is not None
+        and job.expedited_at is None
         and now < job.not_before_at
     )
     return OrganizationDeletionJobResponse(
@@ -154,6 +163,8 @@ def _job_response(
         updated_at=job.updated_at,
         completed_at=job.completed_at,
         restored_at=job.restored_at,
+        expedited_at=job.expedited_at,
+        recovery_window_waived=job.expedited_at is not None,
         restore_allowed=restore_allowed,
         immediate_invalidation_succeeded=immediate_invalidation_succeeded,
     )
@@ -161,18 +172,26 @@ def _job_response(
 
 @router.get(
     "/ui/api/organizations/{organization_id}/deletion-plan",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
     response_model=OrganizationDeletionPlanResponse,
 )
 async def get_organization_deletion_plan(
     request: Request,
     organization_id: str,
+    auth_source: str = Depends(_EXPEDITE_AUTHORIZATION),
 ) -> OrganizationDeletionPlanResponse:
     try:
         plan = await _service(request).preview(organization_id)
     except OrganizationDeletionError as exc:
         raise _http_error(exc) from exc
-    return _plan_response(plan)
+    platform_context = get_platform_auth_context(request)
+    caller_can_request = auth_source in {"master_key", "master_session"} or bool(
+        platform_context is not None
+        and has_platform_permission(platform_context.role, Permission.PLATFORM_ADMIN)
+    )
+    return _plan_response(
+        plan,
+        can_request=plan.can_request and caller_can_request,
+    )
 
 
 @router.post(
@@ -221,7 +240,7 @@ async def request_organization_deletion(
 
 @router.get(
     "/ui/api/organizations/{organization_id}/deletion-requests/{deletion_job_id}",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
+    dependencies=_EXPEDITE_DEPENDENCY,
     response_model=OrganizationDeletionJobResponse,
 )
 async def get_organization_deletion_request(
@@ -237,6 +256,50 @@ async def get_organization_deletion_request(
     except OrganizationDeletionError as exc:
         raise _http_error(exc) from exc
     return _job_response(job)
+
+
+@router.post(
+    "/ui/api/organizations/{organization_id}/deletion-requests/{deletion_job_id}/expedite",
+    dependencies=_EXPEDITE_DEPENDENCY,
+    response_model=OrganizationDeletionExpediteResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def expedite_organization_deletion_request(
+    request: Request,
+    organization_id: str,
+    deletion_job_id: str,
+    payload: OrganizationDeletionExpediteRequest,
+    idempotency_key: str = Header(
+        min_length=1,
+        max_length=200,
+        alias="Idempotency-Key",
+    ),
+) -> OrganizationDeletionExpediteResponse:
+    if not payload.acknowledge_immediate_irreversible_deletion:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "organization_deletion_expedite_acknowledgement_required",
+                "message": "Immediate irreversible deletion must be acknowledged",
+            },
+        )
+    platform_context = get_platform_auth_context(request)
+    try:
+        result = await _service(request).expedite(
+            organization_id=organization_id,
+            deletion_job_id=deletion_job_id,
+            confirmation_name=payload.confirmation_name,
+            idempotency_key=idempotency_key,
+            expedited_by_account_id=(
+                platform_context.account_id if platform_context is not None else None
+            ),
+        )
+    except OrganizationDeletionError as exc:
+        raise _http_error(exc) from exc
+    return OrganizationDeletionExpediteResponse(
+        **_job_response(result.job).model_dump(mode="python"),
+        idempotency_resolution=result.idempotency_resolution,
+    )
 
 
 @router.post(
@@ -270,7 +333,7 @@ async def restore_organization_deletion_request(
 
 @router.post(
     "/ui/api/organizations/{organization_id}/deletion-requests/{deletion_job_id}/retry",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
+    dependencies=_EXPEDITE_DEPENDENCY,
     response_model=OrganizationDeletionJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )

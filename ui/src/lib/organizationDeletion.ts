@@ -79,6 +79,8 @@ export type OrganizationDeletionJob = {
   updated_at: string | null;
   completed_at: string | null;
   restored_at: string | null;
+  expedited_at: string | null;
+  recovery_window_waived: boolean;
   restore_allowed: boolean;
   immediate_invalidation_succeeded?: boolean | null;
 };
@@ -92,6 +94,15 @@ export type OrganizationDeletionRequest = {
     owned_prompt_templates: 'delete';
     owned_route_groups: 'delete';
   };
+};
+
+export type OrganizationDeletionExpediteRequest = {
+  confirmation_name: string;
+  acknowledge_immediate_irreversible_deletion: boolean;
+};
+
+export type OrganizationDeletionExpediteResponse = OrganizationDeletionJob & {
+  idempotency_resolution: 'applied' | 'replayed';
 };
 
 function basePath(organizationId: string): string {
@@ -125,6 +136,21 @@ export const organizationDeletion = {
       `${basePath(organizationId)}/${encodeURIComponent(deletionJobId)}/restore`,
       { method: 'POST', signal },
     ),
+  expedite: (
+    organizationId: string,
+    deletionJobId: string,
+    payload: OrganizationDeletionExpediteRequest,
+    idempotencyKey: string,
+    signal: AbortSignal,
+  ) => apiFetch<OrganizationDeletionExpediteResponse>(
+    `${basePath(organizationId)}/${encodeURIComponent(deletionJobId)}/expedite`,
+    {
+      method: 'POST',
+      signal,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      json: payload,
+    },
+  ),
   retry: (organizationId: string, deletionJobId: string, signal: AbortSignal) =>
     apiFetch<OrganizationDeletionJob>(
       `${basePath(organizationId)}/${encodeURIComponent(deletionJobId)}/retry`,

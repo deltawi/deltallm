@@ -24,7 +24,7 @@ from src.services.organization_deletion import (
 class _FakeTransaction:
     def __init__(self, repository: _FakeRepository) -> None:
         self.repository = repository
-        self.snapshot: tuple[dict, dict, int, list] | None = None
+        self.snapshot: tuple[dict, dict, int, list, list] | None = None
 
     async def __aenter__(self) -> _FakeRepository:
         self.snapshot = (
@@ -32,6 +32,7 @@ class _FakeTransaction:
             deepcopy(self.repository.jobs),
             self.repository.generation,
             deepcopy(self.repository.outbox),
+            deepcopy(self.repository.expedite_audits),
         )
         return self.repository
 
@@ -43,6 +44,7 @@ class _FakeTransaction:
                 self.repository.jobs,
                 self.repository.generation,
                 self.repository.outbox,
+                self.repository.expedite_audits,
             ) = self.snapshot
         return False
 
@@ -64,6 +66,7 @@ class _FakeRepository:
         self.jobs: dict[str, OrganizationDeletionJobRecord] = {}
         self.generation = 0
         self.outbox: list[dict[str, str]] = []
+        self.expedite_audits: list[dict[str, object]] = []
         self.plan_reads = 0
         self.change_impact_on_read: int | None = None
         self.external_mcp_dependencies = 0
@@ -197,6 +200,41 @@ class _FakeRepository:
         )
         return True
 
+    async def expedite_job(
+        self,
+        *,
+        organization_id: str,
+        deletion_job_id: str,
+        expedited_by_account_id: str | None,
+        idempotency_key: str,
+        request_hash: str,
+    ):  # noqa: ANN201
+        job = self.jobs[deletion_job_id]
+        expedited_at = datetime.now(tz=UTC)
+        if (
+            job.expedited_at is not None
+            or job.status not in {"pending", "processing", "waiting"}
+            or job.phase not in {"cancel_pending", "cancel_batches", "wait_for_batches"}
+            or job.not_before_at is None
+            or job.not_before_at <= expedited_at
+        ):
+            return None
+        expedited = OrganizationDeletionJobRecord(
+            **{
+                **job.__dict__,
+                "not_before_at": expedited_at,
+                "next_attempt_at": min(job.next_attempt_at or expedited_at, expedited_at),
+                "expedited_at": expedited_at,
+                "expedited_by_account_id": expedited_by_account_id,
+                "expedite_previous_not_before_at": job.not_before_at,
+                "expedite_idempotency_key": idempotency_key,
+                "expedite_request_hash": request_hash,
+            }
+        )
+        self.jobs[deletion_job_id] = expedited
+        self.organizations[organization_id]["deletion_not_before_at"] = expedited_at
+        return expedited
+
 
 class _FakeOutboxRepository:
     fail = False
@@ -269,6 +307,10 @@ def deletion_service(monkeypatch):  # noqa: ANN001, ANN201
     async def _record_audit(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
         del args, kwargs
 
+    async def _record_expedite_audit(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        del args
+        repository.expedite_audits.append(dict(kwargs))
+
     monkeypatch.setattr(
         "src.services.organization_deletion.record_lifecycle_mutation_audit",
         _record_audit,
@@ -276,6 +318,10 @@ def deletion_service(monkeypatch):  # noqa: ANN001, ANN201
     monkeypatch.setattr(
         "src.services.organization_deletion_request.record_lifecycle_mutation_audit",
         _record_audit,
+    )
+    monkeypatch.setattr(
+        "src.services.organization_deletion.record_deletion_expedite_audit",
+        _record_expedite_audit,
     )
     return (
         OrganizationDeletionService(
@@ -539,6 +585,293 @@ async def test_restore_reactivates_before_irreversible_phase(deletion_service) -
     assert repository.organizations["org-1"]["lifecycle_state"] == "active"
     assert repository.generation == 2
     assert cache.calls[-1] == ("org-1", "organization_deletion_restored")
+
+
+@pytest.mark.asyncio
+async def test_expedite_waives_only_the_recovery_deadline(deletion_service) -> None:  # noqa: ANN001
+    service, repository, cache = deletion_service
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name="Acme",
+        plan_token=preview.plan_token,
+        idempotency_key="request-1",
+        requested_by_account_id="account-1",
+    )
+    original_deadline = requested.job.not_before_at
+    waiting_job = OrganizationDeletionJobRecord(
+        **{
+            **requested.job.__dict__,
+            "status": "waiting",
+            "phase": "wait_for_batches",
+            "next_attempt_at": datetime.now(tz=UTC) + timedelta(minutes=5),
+        }
+    )
+    repository.jobs[waiting_job.deletion_job_id] = waiting_job
+
+    before = datetime.now(tz=UTC)
+    expedited = await service.expedite(
+        organization_id="org-1",
+        deletion_job_id=waiting_job.deletion_job_id,
+        confirmation_name="Acme",
+        idempotency_key="expedite-1",
+        expedited_by_account_id="account-2",
+    )
+    after = datetime.now(tz=UTC)
+
+    assert original_deadline is not None
+    assert expedited.idempotency_resolution == "applied"
+    assert expedited.job.status == "waiting"
+    assert expedited.job.phase == "wait_for_batches"
+    assert expedited.job.not_before_at is not None
+    assert before <= expedited.job.not_before_at <= after
+    assert expedited.job.next_attempt_at == expedited.job.not_before_at
+    assert expedited.job.expedite_previous_not_before_at == original_deadline
+    assert expedited.job.expedited_by_account_id == "account-2"
+    assert repository.organizations["org-1"]["deletion_not_before_at"] == (
+        expedited.job.not_before_at
+    )
+    assert repository.organizations["org-1"]["lifecycle_state"] == "deletion_pending"
+    assert repository.generation == 1
+    assert cache.calls == [("org-1", "organization_deletion_requested")]
+    assert repository.expedite_audits[0]["job"].expedited_by_account_id == "account-2"
+    assert repository.expedite_audits[0]["job"].expedite_previous_not_before_at == (
+        original_deadline
+    )
+
+
+@pytest.mark.asyncio
+async def test_expedite_replays_after_job_progress_without_duplicate_audit(
+    deletion_service,  # noqa: ANN001
+) -> None:
+    service, repository, _cache = deletion_service
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name="Acme",
+        plan_token=preview.plan_token,
+        idempotency_key="request-replay",
+        requested_by_account_id="account-1",
+    )
+    first = await service.expedite(
+        organization_id="org-1",
+        deletion_job_id=requested.job.deletion_job_id,
+        confirmation_name="Acme",
+        idempotency_key="expedite-replay",
+        expedited_by_account_id="account-2",
+    )
+    repository.jobs[first.job.deletion_job_id] = OrganizationDeletionJobRecord(
+        **{**first.job.__dict__, "status": "completed", "phase": "completed"}
+    )
+    del repository.organizations["org-1"]
+
+    replay = await service.expedite(
+        organization_id="org-1",
+        deletion_job_id=requested.job.deletion_job_id,
+        confirmation_name="Acme",
+        idempotency_key="expedite-replay",
+        expedited_by_account_id="account-2",
+    )
+
+    assert replay.idempotency_resolution == "replayed"
+    assert replay.job.status == "completed"
+    assert len(repository.expedite_audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_expedite_rejects_reused_or_replaced_idempotency_key(
+    deletion_service,  # noqa: ANN001
+) -> None:
+    service, _repository, _cache = deletion_service
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name="Acme",
+        plan_token=preview.plan_token,
+        idempotency_key="request-conflict",
+        requested_by_account_id="account-1",
+    )
+    await service.expedite(
+        organization_id="org-1",
+        deletion_job_id=requested.job.deletion_job_id,
+        confirmation_name="Acme",
+        idempotency_key="expedite-conflict",
+    )
+
+    with pytest.raises(OrganizationDeletionConflictError) as changed_request:
+        await service.expedite(
+            organization_id="org-1",
+            deletion_job_id=requested.job.deletion_job_id,
+            confirmation_name="Different name",
+            idempotency_key="expedite-conflict",
+        )
+    assert changed_request.value.code == "organization_deletion_expedite_idempotency_conflict"
+
+    with pytest.raises(OrganizationDeletionConflictError) as changed_key:
+        await service.expedite(
+            organization_id="org-1",
+            deletion_job_id=requested.job.deletion_job_id,
+            confirmation_name="Acme",
+            idempotency_key="expedite-replacement",
+        )
+    assert changed_key.value.code == "organization_deletion_already_expedited"
+
+
+@pytest.mark.asyncio
+async def test_failed_job_must_be_retried_before_expedite(deletion_service) -> None:  # noqa: ANN001
+    service, repository, _cache = deletion_service
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name="Acme",
+        plan_token=preview.plan_token,
+        idempotency_key="request-failed",
+        requested_by_account_id="account-1",
+    )
+    repository.jobs[requested.job.deletion_job_id] = OrganizationDeletionJobRecord(
+        **{**requested.job.__dict__, "status": "failed"}
+    )
+    repository.organizations["org-1"]["lifecycle_state"] = "deletion_failed"
+
+    with pytest.raises(OrganizationDeletionConflictError) as rejected:
+        await service.expedite(
+            organization_id="org-1",
+            deletion_job_id=requested.job.deletion_job_id,
+            confirmation_name="Acme",
+            idempotency_key="expedite-failed",
+        )
+    assert rejected.value.code == "organization_deletion_expedite_requires_retry"
+
+    await service.retry_failed(
+        organization_id="org-1",
+        deletion_job_id=requested.job.deletion_job_id,
+    )
+    expedited = await service.expedite(
+        organization_id="org-1",
+        deletion_job_id=requested.job.deletion_job_id,
+        confirmation_name="Acme",
+        idempotency_key="expedite-failed",
+    )
+    assert expedited.idempotency_resolution == "applied"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("organization_name", ["منظمة", "Café ☕", "组织🚀"])
+async def test_non_ascii_confirmation_names_are_supported(
+    deletion_service,  # noqa: ANN001
+    organization_name: str,
+) -> None:
+    service, repository, _cache = deletion_service
+    repository.organizations["org-1"]["organization_name"] = organization_name
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name=organization_name,
+        plan_token=preview.plan_token,
+        idempotency_key="request-unicode",
+        requested_by_account_id="account-1",
+    )
+
+    expedited = await service.expedite(
+        organization_id="org-1",
+        deletion_job_id=requested.job.deletion_job_id,
+        confirmation_name=organization_name,
+        idempotency_key="expedite-unicode",
+    )
+
+    assert expedited.idempotency_resolution == "applied"
+
+
+@pytest.mark.asyncio
+async def test_expedite_audit_failure_rolls_back_deadlines(
+    deletion_service,  # noqa: ANN001
+    monkeypatch,
+) -> None:
+    service, repository, _cache = deletion_service
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name="Acme",
+        plan_token=preview.plan_token,
+        idempotency_key="request-1",
+        requested_by_account_id="account-1",
+    )
+    original_deadline = requested.job.not_before_at
+
+    async def _fail_audit(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        del args, kwargs
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(
+        "src.services.organization_deletion.record_deletion_expedite_audit",
+        _fail_audit,
+    )
+
+    with pytest.raises(OrganizationDeletionUnavailableError):
+        await service.expedite(
+            organization_id="org-1",
+            deletion_job_id=requested.job.deletion_job_id,
+            confirmation_name="Acme",
+            idempotency_key="expedite-audit-failure",
+        )
+
+    assert repository.jobs[requested.job.deletion_job_id].not_before_at == original_deadline
+    assert repository.organizations["org-1"]["deletion_not_before_at"] == original_deadline
+    assert repository.expedite_audits == []
+
+
+@pytest.mark.asyncio
+async def test_expedite_rejects_wrong_confirmation_name(deletion_service) -> None:  # noqa: ANN001
+    service, repository, _cache = deletion_service
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name="Acme",
+        plan_token=preview.plan_token,
+        idempotency_key="request-1",
+        requested_by_account_id="account-1",
+    )
+
+    with pytest.raises(OrganizationDeletionValidationError):
+        await service.expedite(
+            organization_id="org-1",
+            deletion_job_id=requested.job.deletion_job_id,
+            confirmation_name="Wrong organization",
+            idempotency_key="expedite-wrong-name",
+        )
+
+    assert repository.jobs[requested.job.deletion_job_id].not_before_at == (
+        requested.job.not_before_at
+    )
+    assert repository.expedite_audits == []
+
+
+@pytest.mark.asyncio
+async def test_expedite_rejects_irreversible_phase(deletion_service) -> None:  # noqa: ANN001
+    service, repository, _cache = deletion_service
+    preview = await service.preview("org-1")
+    requested = await service.request_deletion(
+        organization_id="org-1",
+        confirmation_name="Acme",
+        plan_token=preview.plan_token,
+        idempotency_key="request-1",
+        requested_by_account_id="account-1",
+    )
+    repository.jobs[requested.job.deletion_job_id] = OrganizationDeletionJobRecord(
+        **{**requested.job.__dict__, "phase": "resolve_owned_assets"}
+    )
+    repository.organizations["org-1"]["lifecycle_state"] = "purging"
+
+    with pytest.raises(OrganizationDeletionConflictError) as exc_info:
+        await service.expedite(
+            organization_id="org-1",
+            deletion_job_id=requested.job.deletion_job_id,
+            confirmation_name="Acme",
+            idempotency_key="expedite-too-late",
+        )
+
+    assert exc_info.value.code == "organization_deletion_expedite_not_allowed"
+    assert repository.expedite_audits == []
 
 
 @pytest.mark.asyncio

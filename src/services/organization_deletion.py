@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,15 +12,20 @@ from src.db.organization_deletion_repository import OrganizationDeletionReposito
 from src.db.organization_deletion_worker_repository import (
     OrganizationDeletionWorkerRepository,
 )
-from src.services.organization_deletion_audit import record_lifecycle_mutation_audit
+from src.services.organization_deletion_audit import (
+    record_deletion_expedite_audit,
+    record_lifecycle_mutation_audit,
+)
 from src.services.organization_deletion_request import OrganizationDeletionRequestWriter
 from src.services.organization_deletion_tokens import (
+    build_deletion_expedite_request_hash,
     build_deletion_plan_token,
     build_deletion_request_hash,
 )
 from src.services.organization_deletion_types import (
     OrganizationDeletionConflictError,
     OrganizationDeletionError,
+    OrganizationDeletionExpediteResult,
     OrganizationDeletionMutationResult,
     OrganizationDeletionNotFoundError,
     OrganizationDeletionPlan,
@@ -157,6 +163,87 @@ class OrganizationDeletionService:
         if job is None:
             raise OrganizationDeletionNotFoundError("Organization deletion request not found")
         return job
+
+    async def expedite(
+        self,
+        *,
+        organization_id: str,
+        deletion_job_id: str,
+        confirmation_name: str,
+        idempotency_key: str,
+        expedited_by_account_id: str | None = None,
+    ) -> OrganizationDeletionExpediteResult:
+        organization_id = self._normalize_id(organization_id, "organization_id")
+        deletion_job_id = self._normalize_id(deletion_job_id, "deletion_job_id")
+        confirmation_name = self._normalize_id(confirmation_name, "confirmation_name")
+        idempotency_key = self._normalize_id(idempotency_key, "Idempotency-Key")
+        if len(idempotency_key) > 200:
+            raise OrganizationDeletionValidationError("Idempotency-Key is too long")
+        request_hash = build_deletion_expedite_request_hash(
+            organization_id=organization_id,
+            deletion_job_id=deletion_job_id,
+            confirmation_name=confirmation_name,
+        )
+        try:
+            async with self._transaction() as tx:
+                repository = self.repository.with_db(tx)
+                job = await repository.get_job(
+                    organization_id=organization_id,
+                    deletion_job_id=deletion_job_id,
+                    for_update=True,
+                )
+                if job is None:
+                    raise OrganizationDeletionNotFoundError(
+                        "Organization deletion request not found"
+                    )
+                replay = self._resolve_expedite_replay(
+                    job,
+                    idempotency_key=idempotency_key,
+                    request_hash=request_hash,
+                )
+                if replay is not None:
+                    return replay
+                self._require_expedite_allowed(job)
+                organization = await repository.get_organization_for_update(organization_id)
+                if (
+                    organization is None
+                    or str(organization.get("deletion_job_id") or "") != deletion_job_id
+                    or str(organization.get("lifecycle_state") or "") != "deletion_pending"
+                ):
+                    raise OrganizationDeletionConflictError(
+                        "Organization deletion can no longer be expedited",
+                        code="organization_deletion_expedite_not_allowed",
+                    )
+                self.request_writer.require_confirmation_name(
+                    organization,
+                    confirmation_name=confirmation_name,
+                )
+                expedited = await repository.expedite_job(
+                    organization_id=organization_id,
+                    deletion_job_id=deletion_job_id,
+                    expedited_by_account_id=expedited_by_account_id,
+                    idempotency_key=idempotency_key,
+                    request_hash=request_hash,
+                )
+                if expedited is None:
+                    raise OrganizationDeletionConflictError(
+                        "Organization deletion can no longer be expedited",
+                        code="organization_deletion_expedite_not_allowed",
+                    )
+                await record_deletion_expedite_audit(
+                    tx,
+                    job=expedited,
+                )
+                return OrganizationDeletionExpediteResult(
+                    job=expedited,
+                    idempotency_resolution="applied",
+                )
+        except OrganizationDeletionError:
+            raise
+        except Exception as exc:
+            raise OrganizationDeletionUnavailableError(
+                "Organization deletion could not be expedited"
+            ) from exc
 
     async def restore(
         self,
@@ -310,12 +397,66 @@ class OrganizationDeletionService:
             job.status not in {"pending", "processing", "waiting", "failed"}
             or job.phase not in _RESTORABLE_PHASES
             or job.not_before_at is None
+            or job.expedited_at is not None
             or now >= job.not_before_at
         ):
             raise OrganizationDeletionConflictError(
                 "Organization can no longer be restored",
                 code="organization_deletion_restore_closed",
             )
+
+    @staticmethod
+    def _require_expedite_allowed(
+        job: OrganizationDeletionJobRecord,
+    ) -> None:
+        if job.status == "failed":
+            raise OrganizationDeletionConflictError(
+                "Retry the failed organization deletion before waiving its recovery window",
+                code="organization_deletion_expedite_requires_retry",
+            )
+        if (
+            job.status not in {"pending", "processing", "waiting"}
+            or job.phase not in _RESTORABLE_PHASES
+            or job.not_before_at is None
+        ):
+            raise OrganizationDeletionConflictError(
+                "Organization deletion can no longer be expedited",
+                code="organization_deletion_expedite_not_allowed",
+            )
+
+    @staticmethod
+    def _resolve_expedite_replay(
+        job: OrganizationDeletionJobRecord,
+        *,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> OrganizationDeletionExpediteResult | None:
+        if job.expedited_at is None:
+            return None
+        stored_key = job.expedite_idempotency_key
+        stored_hash = job.expedite_request_hash
+        if stored_key is None or stored_hash is None:
+            raise OrganizationDeletionUnavailableError(
+                "Organization deletion expedite provenance is incomplete"
+            )
+        same_key = hmac.compare_digest(
+            stored_key.encode("utf-8"),
+            idempotency_key.encode("utf-8"),
+        )
+        if same_key and hmac.compare_digest(stored_hash, request_hash):
+            return OrganizationDeletionExpediteResult(
+                job=job,
+                idempotency_resolution="replayed",
+            )
+        if same_key:
+            raise OrganizationDeletionConflictError(
+                "Idempotency-Key was already used with a different expedite request",
+                code="organization_deletion_expedite_idempotency_conflict",
+            )
+        raise OrganizationDeletionConflictError(
+            "The organization deletion recovery window was already waived",
+            code="organization_deletion_already_expedited",
+        )
 
     async def _enqueue_invalidation(
         self,
@@ -390,6 +531,7 @@ class OrganizationDeletionService:
 __all__ = [
     "OrganizationDeletionConflictError",
     "OrganizationDeletionError",
+    "OrganizationDeletionExpediteResult",
     "OrganizationDeletionMutationResult",
     "OrganizationDeletionNotFoundError",
     "OrganizationDeletionPlan",

@@ -76,12 +76,30 @@ def build_deletion_request_hash(
     )
 
 
+def build_deletion_expedite_request_hash(
+    *,
+    organization_id: str,
+    deletion_job_id: str,
+    confirmation_name: str,
+) -> str:
+    return _digest(
+        {
+            "action": "organization_deletion_expedite",
+            "version": 1,
+            "organization_id": organization_id,
+            "deletion_job_id": deletion_job_id,
+            "confirmation_name": confirmation_name,
+        }
+    )
+
+
 def _digest(payload: dict[str, object]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 __all__ = [
+    "build_deletion_expedite_request_hash",
     "build_deletion_plan_snapshot",
     "build_deletion_plan_token",
     "build_deletion_request_hash",

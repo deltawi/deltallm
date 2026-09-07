@@ -112,7 +112,8 @@ def _scope_has_team_permission(scope: Any, team_id: str | None, permission: str)
 
 def build_organization_capabilities(scope: Any, organization: dict[str, Any]) -> dict[str, bool]:
     organization_id = str(organization.get("organization_id") or "").strip()
-    is_active = str(organization.get("lifecycle_state") or "").strip().lower() == "active"
+    lifecycle_state = str(organization.get("lifecycle_state") or "").strip().lower()
+    is_active = lifecycle_state == "active"
     can_edit = is_active and _scope_has_org_permission(
         scope, organization_id, Permission.ORG_UPDATE
     )
@@ -128,6 +129,8 @@ def build_organization_capabilities(scope: Any, organization: dict[str, Any]) ->
         "manage_members": can_edit,
         "manage_assets": can_manage_assets,
         "manage_service_policy": can_manage_assets,
+        "expedite_deletion": lifecycle_state in {"deletion_pending", "deletion_failed"}
+        and _scope_has_org_permission(scope, organization_id, Permission.ORG_DELETE_EXPEDITE),
         "view_usage": _scope_has_org_permission(scope, organization_id, Permission.SPEND_READ),
     }
 

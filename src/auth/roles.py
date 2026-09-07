@@ -49,6 +49,7 @@ class Permission:
     PLATFORM_ADMIN = "platform.admin"
     ORG_READ = "org.read"
     ORG_UPDATE = "org.update"
+    ORG_DELETE_EXPEDITE = "org.delete.expedite"
     TEAM_READ = "team.read"
     TEAM_UPDATE = "team.update"
     USER_READ = "user.read"
@@ -80,17 +81,34 @@ ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.SPEND_READ_SELF,
     },
     OrganizationRole.OWNER: {
-        Permission.ORG_READ, Permission.ORG_UPDATE, Permission.SPEND_READ,
-        Permission.SPEND_READ_SELF, Permission.AUDIT_READ,
-        Permission.TEAM_READ, Permission.TEAM_UPDATE,
-        Permission.KEY_READ, Permission.KEY_UPDATE, Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF,
-        Permission.USER_READ, Permission.USER_UPDATE,
+        Permission.ORG_READ,
+        Permission.ORG_UPDATE,
+        Permission.ORG_DELETE_EXPEDITE,
+        Permission.SPEND_READ,
+        Permission.SPEND_READ_SELF,
+        Permission.AUDIT_READ,
+        Permission.TEAM_READ,
+        Permission.TEAM_UPDATE,
+        Permission.KEY_READ,
+        Permission.KEY_UPDATE,
+        Permission.KEY_REVOKE,
+        Permission.KEY_CREATE_SELF,
+        Permission.USER_READ,
+        Permission.USER_UPDATE,
     },
     OrganizationRole.ADMIN: {
-        Permission.ORG_READ, Permission.ORG_UPDATE,
-        Permission.TEAM_READ, Permission.TEAM_UPDATE,
-        Permission.KEY_READ, Permission.KEY_UPDATE, Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF,
-        Permission.USER_READ, Permission.USER_UPDATE, Permission.AUDIT_READ,
+        Permission.ORG_READ,
+        Permission.ORG_UPDATE,
+        Permission.ORG_DELETE_EXPEDITE,
+        Permission.TEAM_READ,
+        Permission.TEAM_UPDATE,
+        Permission.KEY_READ,
+        Permission.KEY_UPDATE,
+        Permission.KEY_REVOKE,
+        Permission.KEY_CREATE_SELF,
+        Permission.USER_READ,
+        Permission.USER_UPDATE,
+        Permission.AUDIT_READ,
         Permission.SPEND_READ_SELF,
     },
     OrganizationRole.BILLING: {

@@ -4,8 +4,10 @@ Organizations are the top-level tenant and budget boundary in the admin UI.
 
 ![Organizations](images/organizations.png)
 
-**Access:** platform admin or `org.read` for authorized organizations. Creation and durable
-deletion are platform-admin actions; scoped edits require `org.update` for that organization. See
+**Access:** platform admin or `org.read` for authorized organizations. Creation, starting deletion,
+and restoration are platform-admin actions; scoped edits require `org.update`. Organization owners
+and administrators can waive or retry an existing deletion with `org.delete.expedite` for that
+organization. See
 [Access requirements](access-requirements.md) and [Tenancy and access](../concepts/tenancy-and-access.md).
 
 ## What this page manages
@@ -28,14 +30,19 @@ deletion are platform-admin actions; scoped edits require `org.update` for that 
 
 Platform administrators see a **Danger zone** on the organization overview. **Delete organization** first shows the complete impact, requires the exact organization name and an explicit running-work acknowledgement, then schedules durable cleanup. Access is revoked immediately; permanent deletion waits for the configured recovery window.
 
-The same panel shows cleanup progress, restore while the operation remains reversible, and retry if automatic cleanup exhausts its attempts. Organization owners and organization administrators cannot use these controls. See [Organization Deletion](../features/organization-deletion.md) for retained history and operational behavior.
+The same panel shows cleanup progress, restore while the operation remains reversible, and retry if
+automatic cleanup exhausts its attempts. Organization owners and organization administrators see
+the existing job for their organization and can choose **Delete permanently now** or **Retry
+cleanup**; they cannot start deletion or restore it. See [Organization
+Deletion](../features/organization-deletion.md) for retained history and operational behavior.
 
 The organization header and list show the authoritative lifecycle state:
 
 - **Active** — runtime access and administrative changes are available according to the viewer's permissions.
 - **Deletion pending** — access and administrative changes are disabled immediately. The displayed “no earlier than” time is the beginning of permanent cleanup, not the time at which access is disabled. A platform administrator can restore the organization while cleanup remains reversible.
 - **Purging** — irreversible permanent cleanup has started and restore is no longer available.
-- **Deletion failed** — access remains disabled and a platform administrator must retry cleanup from the Danger zone.
+- **Deletion failed** — access remains disabled; an organization owner, organization administrator,
+  or platform administrator must retry cleanup from the Danger zone.
 
 Mutation controls such as Edit, Add Team, Add Member, Asset Access, and tier assignment changes are unavailable whenever the lifecycle state is not **Active**.
 

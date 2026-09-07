@@ -260,11 +260,41 @@ def test_organization_capabilities_require_an_explicit_active_lifecycle() -> Non
 
     assert active["manage_assets"] is True
     assert active["manage_service_policy"] is True
+    assert active["expedite_deletion"] is False
     assert missing["edit"] is False
     assert missing["add_team"] is False
     assert missing["manage_members"] is False
     assert missing["manage_assets"] is False
     assert missing["manage_service_policy"] is False
+    assert missing["expedite_deletion"] is False
+
+
+def test_organization_expedite_capability_is_tenant_scoped_and_survives_reversible_state() -> None:
+    scope = AuthScope(
+        is_platform_admin=False,
+        org_ids=["org-1", "org-2"],
+        org_permissions_by_id={
+            "org-1": {Permission.ORG_READ, Permission.ORG_DELETE_EXPEDITE},
+            "org-2": {Permission.ORG_READ},
+        },
+    )
+
+    pending = build_organization_capabilities(
+        scope,
+        {"organization_id": "org-1", "lifecycle_state": "deletion_pending"},
+    )
+    other = build_organization_capabilities(
+        scope,
+        {"organization_id": "org-2", "lifecycle_state": "deletion_pending"},
+    )
+    purging = build_organization_capabilities(
+        scope,
+        {"organization_id": "org-1", "lifecycle_state": "purging"},
+    )
+
+    assert pending["expedite_deletion"] is True
+    assert other["expedite_deletion"] is False
+    assert purging["expedite_deletion"] is False
 
 
 @pytest.mark.asyncio
@@ -563,6 +593,7 @@ async def test_get_organization_returns_capabilities(client, test_app, monkeypat
         "manage_members": True,
         "manage_assets": False,
         "manage_service_policy": False,
+        "expedite_deletion": False,
         "view_usage": False,
     }
 
@@ -615,6 +646,7 @@ async def test_get_inactive_organization_disables_mutation_capabilities(
         "manage_members": False,
         "manage_assets": False,
         "manage_service_policy": False,
+        "expedite_deletion": True,
         "view_usage": True,
     }
 
