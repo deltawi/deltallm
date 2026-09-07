@@ -358,9 +358,9 @@ Run the smallest focused checks first, then the broader gate required by risk.
 | Change | Required verification |
 | --- | --- |
 | Python behavior | `uv run ruff check <touched paths>`, `uv run ruff format --check <touched paths>`, and focused `uv run pytest ...`; full relevant suite for shared code |
-| Auth, tenant scope, billing, routing, config, cache, streaming | Focused failure/denial/cancellation tests plus the full affected integration suite |
-| Redis atomicity/degradation | Unit tests and real Redis concurrency/TTL/outage/recovery coverage |
-| Database/schema | `uv run prisma generate --schema=./prisma/schema.prisma`, migration on fresh and upgrade DBs, repository/integration tests |
+| Auth, tenant scope, billing, routing, config, cache, streaming | Focused failure/denial/cancellation tests plus the full affected `app` and real-dependency suites; `-m integration` alone does not cover application-route tests |
+| Redis atomicity/degradation | Focused fake-based tests and the affected `redis` suite with real concurrency/TTL/outage/recovery coverage |
+| Database/schema | `uv run prisma generate --schema=./prisma/schema.prisma`, migration on fresh and upgrade DBs, and affected `postgres` tests in addition to repository-fake tests |
 | Hot data-plane dependency path | Before/after SQL/Redis/network call counts, timeout/overload tests, representative query plans, and constant-arrival latency/queue evidence |
 | Hard budget/quota | Multi-replica concurrent reservation, retry/idempotency, crash/reclaim, reconciliation, and fail-mode tests against real PostgreSQL/Redis as applicable |
 | Production capacity/autoscaling | Checked deployment-wide pool/connection/worker arithmetic, Helm/schema rejection tests, and scale/overload evidence using the declared saturation signal |
@@ -368,9 +368,37 @@ Run the smallest focused checks first, then the broader gate required by risk.
 | API shape used by UI | Backend contract test, frontend type/adapter test, and production UI build |
 | Helm/config | Helm lint/template for base, eval, and production values plus relevant `tests/helm` tests |
 | Container/release | Image build, non-root startup, migration-job behavior, health smoke, graceful termination |
+| Test classification, shared fixtures, or CI selection | Classifier regression tests, full collection with `--dependency-lane-report`, exhaustive and mutually exclusive lane selection, affected lane execution, and workflow/gate review |
 | Docs only | Link/path review, command/config parity check, and `git diff --check` |
 
-Additional rules:
+### Test dependency lanes
+
+Every collected Python test MUST belong to exactly one primary dependency lane. [The classifier](tests/dependency_lanes.py) owns selection, [pytest configuration](pyproject.toml) registers markers with strict-marker checking, and [CI](.github/workflows/ci.yml) owns lane execution and dependency setup. Classify by the dependency actually exercised, not by filenames, feature area, or a desired runtime budget.
+
+| Primary lane | Scope | Runtime dependency |
+| --- | --- | --- |
+| `hermetic` | Focused domain/service/component behavior and fake repositories without the shared full-app fixture | No real PostgreSQL, Redis, or Helm dependency; temporary files and local test helpers are permitted |
+| `app` | In-process FastAPI application routes and lifecycle through the shared `test_app` fixture, with fake adapters/stores | No real PostgreSQL or Redis service |
+| `postgres` | Real SQL, Prisma, constraints, transactions, and locking | Migrated test PostgreSQL via `DATABASE_URL` |
+| `redis` | Real Lua, cross-client coordination, TTL, outage, and recovery behavior | Test Redis; set both `REDIS_URL` and `DELTALLM_TEST_REDIS_URL` to that instance |
+| `helm` | Chart schema, rendering, and deployment profiles | Helm CLI and built chart dependencies |
+
+- Without an explicit primary marker, the shared `test_app` fixture (including transitive fixture use) selects `app`; otherwise the fallback is `hermetic`. Explicit markers take precedence, but MUST reflect actual dependencies. Multiple primary lanes on one test are a collection error.
+- Real PostgreSQL, Redis, and Helm tests MUST declare their matching primary marker, normally as module-level `pytestmark = pytest.mark.postgres`, `pytest.mark.redis`, or `pytest.mark.helm`. When the classifier detects infrastructure use in a module, every test in that module must carry the matching marker; split independent fake-only tests into another module when useful.
+- The infrastructure guard recognizes specific client-use patterns in test-module source and the `tests/helm` path; it is not a complete dependency analyzer. Imported helpers or new client construction patterns do not remove the explicit-marker requirement. Extend detection and classifier regression tests when introducing a new infrastructure access pattern.
+- A module using multiple real dependencies must be split where the behaviors are independent. If a behavior genuinely needs multiple services together, deliberately extend the classifier, marker registration, CI provisioning, and documentation together; do not replace necessary real-service coverage with fakes to fit a lane.
+- `integration` is an aggregate selector for `postgres`, `redis`, and `helm`, not a sixth primary lane and not a substitute for `app` coverage.
+- Use `uv run pytest -q -m <lane>` for a lane and `uv run pytest --collect-only -qq --dependency-lane-report` to inspect classification. Counts are derived from collection, not maintained filename lists or fixed totals. Keep classifier behavior covered in `tests/test_dependency_lanes.py`.
+- All lanes currently require installed Python development dependencies and a generated Prisma client for full-suite collection, even when their execution needs no database: `uv sync --frozen --extra dev`, then `uv run prisma generate --schema=./prisma/schema.prisma`. See [CONTRIBUTING.md](CONTRIBUTING.md#testing) and the workflow for service-specific setup and commands. Use isolated test services, never production databases or Redis instances.
+
+### CI coverage and runtime safeguards
+
+- CI MUST execute all five Python lanes. Each job provisions only its required services; migration-path verification remains an independent PostgreSQL job using `scripts/verify_migration_paths.py`, not a replacement for the `postgres` test lane. Preserve fresh, last-release, and shared-feature migration checks and Helm lint/template checks for base, eval, and production values.
+- Preserve the compatibility check named `test`: it runs even when dependencies fail and succeeds only when both Python matrix lanes, PostgreSQL tests, Redis tests, migration verification, and Helm succeed. Failed, skipped, or cancelled dependency jobs MUST NOT produce a successful aggregate. Keep UI unit tests/build and Ruff as separate CI gates; `test` alone does not cover them.
+- Lane or workflow changes MUST preserve exhaustive, non-overlapping Python coverage and the aggregate dependency list. Do not silently drop tests through filename allowlists, ignore lists, marker changes, optional-service skips in provisioned CI jobs, or a condition that bypasses a required gate.
+- Use the per-lane `--durations` output to investigate slow tests and repeated setup. Improve dependency isolation, setup, or parallel execution while preserving behavioral coverage; growing runtime alone is not a reason to delete tests, weaken assertions, or move required regression coverage off pull requests.
+
+### Additional verification rules
 
 - Test discovery SHOULD be automatic and new runners MUST NOT introduce a hard-coded filename list. Until the current UI runner is migrated, register every new UI test in `ui/scripts/run-unit-tests.mjs` in the same change and verify that it actually executes.
 - Distributed correctness uses real PostgreSQL/Redis integration tests in addition to fakes.
@@ -408,7 +436,7 @@ Audit date: **2026-08-16**. Code revision inspected: **`e1e7420cf9be`**. This sn
 - Static bundle/SPA serving is split between `src/ui/routes.py` and `src/main.py`; do not add a third path, and consolidate ownership when this boundary is touched.
 - UI contracts contain substantial `any`; `useApi.refetch` is synchronous/non-awaitable; routes are eagerly bundled. New code adds no `any`, no false `await refetch`, and no initial-bundle growth.
 - At the audit revision, `npm --prefix ui run test:unit` passed 62 tests, `npm --prefix ui run build` produced an initial bundle about 409 KB gzip, and `npm --prefix ui run lint` reported 295 findings. These are dated baselines, not current claims. Changed UI files MUST have zero lint errors; record full-lint and bundle deltas until checked-in automated budgets replace the manual baseline.
-- CI has strong backend/PostgreSQL/Redis/Helm coverage but currently builds the UI without running its tests/lint, and the UI runner lists test files manually. Do not add undiscovered tests; move toward automatic discovery and full UI gates.
+- Testing/CI follow-up (2026-09-07): CI now runs the five dependency lanes and migration-path verification separately, and `ui-build` runs UI unit tests before the production build. Full UI lint is still not a CI gate, and the UI runner still lists test files manually. Preserve the coverage and aggregate-check guarantees in section 18; do not add undiscovered UI tests, and move toward automatic discovery and the remaining UI lint gate. This focused update does not refresh the other audit baselines.
 - Docker/Railway dependency installation can drift from the tested `uv.lock`; container variants are duplicated. Dependency/build changes MUST reduce or at least not widen that gap.
 - Production hardening gaps include root containers, mutable default image tags, per-pod migration startup, incomplete proxy/cookie trust, unauthenticated detailed diagnostics, and high-cardinality identity metrics. Do not copy these defaults into new surfaces.
 - Some persisted credential/config fields are plaintext or insufficiently redacted. New secrets use references/encryption and write-only APIs; touching an old secret path must not expose it further.
