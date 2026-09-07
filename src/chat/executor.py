@@ -14,6 +14,7 @@ from src.models.requests import ChatCompletionRequest
 from src.metrics import observe_request_phase
 from src.providers.base import ProviderAdapter, read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
+from src.providers.chat_hop import HopOutcome, HopPhase, execute_chat_hop
 from src.providers.resolution import provider_supports_stream_usage_request, resolve_provider
 from src.providers.signing import apply_request_signing
 from src.router.router import Deployment
@@ -65,13 +66,7 @@ async def execute_chat(
     transform_started = perf_counter()
     params = deployment.deltallm_params
     upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
-    adapter, api_base, endpoint, headers, timeout = (
-        upstream.adapter,
-        upstream.api_base,
-        upstream.endpoint,
-        upstream.headers,
-        upstream.timeout,
-    )
+    adapter, timeout = upstream.adapter, upstream.timeout
     upstream_request = _upstream_chat_request(payload)
     upstream_payload = await adapter.translate_request(upstream_request, params)
 
@@ -89,64 +84,16 @@ async def execute_chat(
     )
 
     upstream_start = perf_counter()
-    request_url = f"{api_base}{endpoint}"
-    signed_headers, body_override = apply_request_signing(
+    canonical = await execute_chat_hop(
+        client=request.app.state.http_client,
+        upstream=upstream,
         params=params,
-        method="POST",
-        url=request_url,
-        headers=headers,
-        json_body=upstream_payload,
+        payload=upstream_payload,
+        model_name=payload.model,
+        timeout=build_upstream_request_timeout_for_request(request, timeout),
+        observer=_observe_answer_hop,
     )
-    request_timeout = build_upstream_request_timeout_for_request(request, timeout)
-    http_started = perf_counter()
-    try:
-        if body_override is not None:
-            response = await request.app.state.http_client.post(
-                request_url,
-                headers=signed_headers,
-                content=body_override,
-                timeout=request_timeout,
-            )
-        else:
-            response = await request.app.state.http_client.post(
-                request_url,
-                headers=signed_headers,
-                json=upstream_payload,
-                timeout=request_timeout,
-            )
-    except Exception:
-        observe_request_phase(
-            route="chat_completions",
-            phase="upstream_http",
-            outcome="error",
-            response_kind="nonstream",
-            latency_seconds=perf_counter() - http_started,
-        )
-        raise
-    observe_request_phase(
-        route="chat_completions",
-        phase="upstream_http",
-        outcome="error" if response.status_code >= 400 else "success",
-        response_kind="nonstream",
-        latency_seconds=perf_counter() - http_started,
-    )
-    if response.status_code >= 400:
-        status_exc = httpx.HTTPStatusError(
-            f"Upstream chat call failed with status {response.status_code}",
-            request=httpx.Request("POST", request_url),
-            response=response,
-        )
-        raise adapter.map_error(status_exc)
-    response_transform_started = perf_counter()
-    canonical = await adapter.translate_success_response(response, payload.model)
     canonical_payload = canonical.model_dump(mode="json")
-    observe_request_phase(
-        route="chat_completions",
-        phase="upstream_transform",
-        outcome="success",
-        response_kind="nonstream",
-        latency_seconds=perf_counter() - response_transform_started,
-    )
 
     if record_usage:
         router_state_backend = getattr(request.app.state, "router_state_backend", None)
@@ -166,6 +113,16 @@ async def execute_chat(
                 latency_seconds=perf_counter() - usage_started,
             )
     return canonical_payload, (perf_counter() - upstream_start) * 1000
+
+
+def _observe_answer_hop(phase: HopPhase, outcome: HopOutcome, latency: float) -> None:
+    observe_request_phase(
+        route="chat_completions",
+        phase=phase,
+        outcome=outcome,
+        response_kind="nonstream",
+        latency_seconds=latency,
+    )
 
 
 async def open_stream_with_first_chunk(

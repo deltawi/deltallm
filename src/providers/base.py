@@ -424,6 +424,25 @@ class ProviderAdapter(ABC):
         except Exception as exc:
             raise invalid_provider_response_error() from exc
 
+    async def translate_single_success_response(
+        self, response: httpx.Response, model_name: str
+    ) -> ChatCompletionResponse:
+        """Opt-in single-result contract without changing ordinary answer translation."""
+        payload = parse_provider_json_response(response)
+        try:
+            self.validate_single_result_payload(payload)
+            canonical = await self.translate_response(payload, model_name)
+            if len(canonical.choices) != 1:
+                raise invalid_provider_response_error()
+            return canonical
+        except ProxyError:
+            raise
+        except Exception as exc:
+            raise invalid_provider_response_error() from exc
+
+    def validate_single_result_payload(self, payload: object) -> None:
+        """Adapters that collapse results or finish states validate before translation."""
+
     @abstractmethod
     async def translate_stream(
         self,
