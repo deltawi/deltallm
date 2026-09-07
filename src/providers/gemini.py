@@ -131,6 +131,21 @@ class GeminiAdapter(ProviderAdapter):
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
 
+    def validate_single_result_payload(self, payload: object) -> None:
+        candidates = payload.get("candidates") if isinstance(payload, dict) else None
+        if not isinstance(candidates, list) or len(candidates) != 1:
+            raise invalid_provider_response_error()
+        candidate = candidates[0]
+        content = candidate.get("content") if isinstance(candidate, dict) else None
+        if not isinstance(content, dict) or content.get("role") != "model":
+            raise invalid_provider_response_error()
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list) or any(
+            not isinstance(part, dict) or set(part) != {"text"} or not isinstance(part["text"], str)
+            for part in parts
+        ):
+            raise invalid_provider_response_error()
+
     async def translate_request(
         self,
         canonical_request: ChatCompletionRequest,

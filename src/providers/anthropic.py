@@ -172,6 +172,21 @@ def _chat_tool_choice_to_anthropic(tool_choice: Any) -> dict[str, Any] | None:
 class AnthropicAdapter(ProviderAdapter):
     provider_name = "anthropic"
 
+    def validate_single_result_payload(self, payload: object) -> None:
+        if not isinstance(payload, dict) or payload.get("role") != "assistant":
+            raise invalid_provider_response_error()
+        stop = payload.get("stop_reason") if isinstance(payload, dict) else None
+        if stop not in ("end_turn", "stop_sequence", "max_tokens", "tool_use"):
+            raise invalid_provider_response_error()
+        blocks = payload.get("content") if isinstance(payload, dict) else None
+        if not isinstance(blocks, list) or any(
+            not isinstance(block, dict)
+            or block.get("type") not in ("text", "tool_use")
+            or (block.get("type") == "text" and not isinstance(block.get("text"), str))
+            for block in blocks
+        ):
+            raise invalid_provider_response_error()
+
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
 

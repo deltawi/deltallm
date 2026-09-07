@@ -20,6 +20,7 @@ from src.providers.base import (
 from src.providers.healthcheck import is_provider_healthy
 from src.providers.openai_compatible import (
     translate_openai_compatible_stream,
+    validate_openai_single_result,
     validate_openai_compatible_chat_success,
 )
 from src.providers.resolution import (
@@ -61,6 +62,9 @@ _CONTENT_MESSAGE_MARKERS = (
 
 class OpenAIAdapter(ProviderAdapter):
     provider_name = "openai"
+
+    def validate_single_result_payload(self, payload: object) -> None:
+        validate_openai_single_result(payload)
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client

@@ -28,7 +28,9 @@ activation point only after PR 4 supplies the complete safe execution path.
 | Route-policy normalization and group/member validation | `src/router/policy_validation.py` |
 | Policy history, publish, and rollback transactions | `src/db/route_policy_lifecycle.py` |
 | Immutable database runtime snapshot | `src/db/route_groups.py` |
-| Request-scoped selector service and result | `src/router/selection/` in PR 2 |
+| Projection, prompt, exact parser, decision, and request-local lifecycle | `src/router/selection/` |
+| Shared direct chat resolution, signing/send/translation, bounded response | `src/providers/chat_upstream.py`, `src/providers/chat_hop.py`, existing adapters |
+| Classifier-only request preparation, concrete target, and usage receipt | `src/router/selection/provider.py` |
 | Hard eligibility and candidate planning | Existing router candidate owners in PR 4 |
 | Provider capacity, spend, cache identity, and telemetry | Existing subsystem owners in PR 3 |
 
@@ -166,9 +168,10 @@ to expire naturally; PR 4 must bump the envelope and namespace when the activati
 PR 4 must preserve this order for chat, Responses, streaming, and managed continuation paths:
 
 ```text
-authenticate and authorize
-  -> caller rate-limit and budget admission
-  -> prompt rendering, hooks, guardrails, and request validation
+dependency-free ingress admission and authentication
+  -> cheap authenticated preflight capacity
+  -> prompt rendering, hooks, guardrails, and transformed request validation
+  -> final-model authorization, caller rate-limit and budget admission
   -> deterministic workload/capability/residency/context eligibility
   -> whole-response cache lookup
   -> at most one bounded selector provider call on cache miss
@@ -192,7 +195,7 @@ tenant/model authorization, loosen residency or tag constraints, exceed context 
 limits, or select an arbitrary deployment. Classifier failures are isolated from answer-member
 health and must not cool down answer deployments.
 
-PR 1 deliberately fails closed before activation:
+PRs 1–3 deliberately fail closed before activation:
 
 - saving and validating a selector draft is supported;
 - direct publish and publish-latest-draft reject selector semantics explicitly;
@@ -203,6 +206,122 @@ PR 1 deliberately fails closed before activation:
 
 Silent acceptance is forbidden. PR 4 removes this temporary guard only after execution, cache,
 capacity, accounting, deadline, cancellation, and telemetry prerequisites are connected.
+
+## PR 2 isolated selector implementation
+
+PR 2 implements a testable prerequisite, **not a live routing feature**. Nothing in bootstrap,
+public endpoints, fallback planning, streaming, Responses, MCP, Batch, or simulation constructs the
+selector service. Existing version-3 publication/runtime guards and fingerprints are unchanged.
+There is no shadow execution, process-wide decision cache, new database schema, or Redis key.
+
+### Bounded input and output
+
+The pure projector accepts an already transformed and validated canonical chat request plus its
+caller-computed token estimate. It inspects at most the newest 64 message positions and the first
+four positions for system context, with at most 256 content blocks across the projection. It uses
+the newest actual user message; it never substitutes an assistant or tool result. It retains up to
+1,024 system-context characters and four recent user/assistant snippets totaling at most 2,048
+characters. It carries only bounded token/tool counts, response-format kind, modality flags, and
+explicit truncation/incomplete-feature flags. It never copies tool definitions, arguments/results,
+media URLs/bytes, caller model IDs, credentials, tenant identifiers, metadata, or sampling settings.
+
+Prompt contract version 1 has a fixed system instruction; all variable content, including lane
+descriptions and request instructions, is quoted JSON data in a separate user message. The complete
+message-content budget includes the system instruction, every lane, the JSON envelope, and escaping.
+Newest-user text is allocated first, then system/recent context, using deterministic prefix/suffix
+truncation. If even the envelope cannot fit (including valid policies with a 256-character limit),
+selection defaults with `input_budget_insufficient` and makes no HTTP call. Missing/blank user input
+and invalid Unicode have separate fixed default reasons. These controls limit routing authority;
+they do not claim to eliminate semantic prompt injection or prove classification quality.
+
+The provider bridge creates a fresh request for one non-streaming completion with a 64-token output
+limit. It omits tools, caller defaults/metadata/sampling, and deployment `default_params`. Portable
+mode requests JSON in the prompt and validates locally. Temperature zero and native JSON-object mode
+require an explicit immutable provider capability profile; unknown capabilities omit these controls.
+There is no selector-specific provider-name catalog. Existing adapters retain token-field conversion,
+authentication, signing, and native wire translation.
+
+The exact parser accepts only a JSON object with one string field, `lane`, matching a configured ID.
+It rejects duplicate/extra keys, arrays/scalars, multiple objects, fences, coercion, unknown IDs, and
+UTF-8 output over 256 bytes. It never repairs output. Rank comes exclusively from validated policy.
+The bridge requires one completed plain-text assistant result with no tools/refusal/truncation;
+provider-owned opt-in checks reject information that native normalization would otherwise discard.
+Ordinary answer translation does not opt into these stricter checks.
+
+### Provider ownership and resource bounds
+
+The existing answer executor and classifier bridge share a single extracted direct-hop primitive.
+The legacy Request-based resolver remains a compatibility facade over the Request-free resolver and
+the existing adapter registry. The answer facade retains parameter defaults, serialization, metrics
+labels/counts, and router-usage accounting. Its normal HTTP buffering and call count do not change.
+The response-transform timing now measures canonical adapter translation, with final JSON model
+serialization remaining in the answer facade; no extra phase observation is emitted.
+
+The classifier receives an immutable snapshot of one concrete deployment's allowlisted scalar
+provider configuration. PR 4 must prove its authoritative membership/access/capability eligibility
+before binding it. The bridge checks the requested deployment ID against that binding and performs
+no alias lookup, public gateway call, fallback, or retry. It borrows the bootstrap-owned client and
+adapters and never creates/closes a client. The canonical client has zero transport retries; bounded
+hops explicitly disable redirects even if a borrowed client has redirect following enabled.
+
+The translated request body is capped at 256 KiB; response wire bytes are capped at 64 KiB before
+translation. Content-Length is only an early check, never the authority. Transport streaming bounds
+a non-streaming model response, not SSE. Identity encoding is requested; unexpected compression is
+rejected before decoding, while the existing error-body hook remains in place. Responses are closed
+on success, failure, timeout, and cancellation. Cleanup is inline with a maximum 50 ms close grace,
+never a detached task; this small resource-release allowance can follow deadline cancellation but
+does not permit additional provider/answer work. A failed close is recorded with fixed redacted
+messages; an ordinary cleanup error cannot replace the primary failure. Cancellation arriving
+during cleanup propagates even after a classified read failure, aborting the owner and its joiners
+without retaining or returning a default decision. A close failure without a prior failure becomes
+`transport_error`. No answer deployment is cooled down by this isolated service.
+
+### One decision per outer operation
+
+`RequestSelectorState` owns `NEW -> RUNNING -> DECIDED | ABORTED`. Its first caller runs inline and
+claims ownership before awaiting. At most eight duplicates may join one completion Future. Only
+that notification is shielded from a joiner's cancellation; the provider/owner is never shielded.
+Overflow is a typed local error. Owner cancellation closes the hop, aborts state, and wakes joiners
+with cancellation; a cancelled joiner does not cancel the owner. Aborted states never retry.
+
+Completed immutable decisions retain lane, policy-derived minimum rank, fixed cause, latency,
+source policy version/fingerprint, prompt-contract version, and bounded usage. Repeated calls reuse
+the exact decision even when supplied another payload/group policy; original identity is retained.
+Separate outer operations never share decisions. State retains no request, prompt, raw completion,
+HTTP response, or exception traceback. A notification carries no exception object.
+
+The existing parent `RequestDeadline` is shared unchanged. Projection, request translation, HTTP,
+and parsing use the earlier parent/selector expiry, with checks around bounded synchronous work.
+Connect/pool/write/read limits are clamped to configured limits and the remaining budget. Local
+selector timeout may default only while the parent is live. Parent expiry and caller cancellation
+always propagate; expired operations cannot return a success/default. Unexpected invocation errors
+and gateway authorization, budget, tenancy, or durability failures are not classified as provider
+defaults. Future integration remains responsible for sanitized outer error handling.
+
+Usage is explicitly `not_attempted`, `reported`, or `unknown`, never invented zero. Valid normalized
+usage survives a failed lane parse and is retained in request state when observed. Invalid/unusable
+provider envelopes and interrupted hops have unknown usage. PR 3 must attach canonical admission,
+frozen pricing/attribution, stable component idempotency, and durable incurred-cost finalization,
+including cancellation/unknown-usage recovery. In-memory single-attempt ownership does not provide
+cross-process billing durability. PR 4 must propagate state across actual retries/streams/MCP and
+enforce upward-only candidate eligibility. These are prerequisites to activation, not PR 2 claims.
+
+### Regression budget
+
+PR 2 adds zero production selector calls and zero selector-free SQL/Redis/provider calls, pools,
+workers, or tasks. An isolated selector invocation performs zero SQL/Redis/filesystem I/O and at
+most one provider HTTP request. A reused decision, insufficient input, or expired-before-start
+operation performs no provider request. Structural tests enforce dependency direction, absent
+production wiring, and the new-module/function size bounds. Provider mocks cover native adapters,
+response bounds, signing, parameter isolation, cancellation, cleanup, and no replay.
+
+The reproducible comparison profile is `tests/performance/selector_free_profile.yaml`, served by
+the real gateway against disposable local PostgreSQL/Redis and `selector_free_mock.py`. The
+`run_selector_free_profile` module reuses the canonical constant-arrival generator: 10 RPS for
+60 seconds, maximum 32 in flight, 10-second client timeout, one warmup plus three measured rounds
+per revision. It records raw samples, offered/received rates, in-flight slope, provider/SQL/Redis
+counts, phase timings, and latency distributions. This is a PR-level parity check, not the proposed
+50-RPS release certificate, streaming/TTFT certification, or a claim about real-model savings.
 
 ## Capacity, latency, and accounting budget
 
@@ -367,3 +486,133 @@ provider call.
 The feature branch remains based on `de2af0b8`; refreshed `origin/main` is `d628f169` (two commits
 ahead of that base). No rebase, push, or merge was performed. Reconcile that branch divergence
 before integration with main.
+
+## PR 2 verification record — 2026-09-07
+
+Implementation branch: `issue-304-pr2-selector-service`; integration base:
+`feature/issue-304-model-router` at `aa221e8d7a29474aa7dad0a8a315c1ec00fcdc1a`.
+No commit, push, merge, or remote checklist update is part of this implementation handoff.
+PR 1's separately identified P2 remains: the selector-free policy response member DTO can reject
+legacy deployment IDs longer than 256 characters. This PR does not change or close that issue.
+
+| Verification | Result |
+| --- | --- |
+| Pre-extraction chat/provider/Responses compatibility baseline | 235 passed |
+| Expanded shared-path compatibility run | 323 passed |
+| Full backend suite, `uv run pytest -q --tb=short --disable-warnings` | 3,896 passed, 205 environment-gated skips; 265.15 seconds |
+| Final selector plus deterministic answer-facade tests | 139 passed; includes tests added after full-suite collection |
+| Same answer-facade probe preloaded from actual PR 1 source | 3 passed; same request, response, phase counts, and usage writes |
+| Required real PostgreSQL/Redis suites | 37 passed, no skips |
+| Ruff check and format check, all touched Python paths | Passed |
+| Public OpenAPI artifact check | Current; 215 paths, 280 operations |
+| Strict MkDocs build and `git diff --check` | Passed |
+
+The real-service run used disposable PostgreSQL 16 and Redis 7, with all 85 existing migrations
+applied. It ran `tests/db/test_route_policy_selector_integration.py`,
+`tests/db/test_route_policy_publication_invariants.py`, and
+`tests/test_route_group_redis_integration.py` with explicit local dependency URLs. Other
+environment-gated full-suite skips are not counted as integration proof. No schema, dependency
+lockfile, UI, Helm, configuration contract, policy semantics, cache envelope, or activation-gate
+file changed. Existing Python 3.14/Pydantic compatibility warnings were not suppressed by code edits.
+
+### Sequential constant-arrival measurements
+
+Both revisions used the same locked Python 3.14 environment, one real API process, local
+PostgreSQL/Redis, `config_only` selector-free model routing, response cache disabled, the same
+local-only master test key, and a fixed one-token mock with no artificial delay. Each revision had
+one 60-second warmup followed by three 60-second measured rounds at 10 RPS, with 32 maximum in
+flight and a 10-second client timeout. All six measured rounds received 600/600 HTTP 200s, sustained
+10 started/completed RPS, and had zero generator drops. Observed in-flight maxima were 1–4 with
+zero one-second sampled in-flight slope; this is not an internal queue-depth measurement.
+
+| Revision / measured round | p50 ms | p95 ms | p99 ms | SQL calls in window | Provider calls |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Base / 1 | 16.90 | 19.17 | 20.40 | 2,463 | 600 |
+| Base / 2 | 17.21 | 20.92 | 45.95 | 2,462 | 600 |
+| Base / 3 | 16.90 | 19.49 | 21.81 | 2,459 | 600 |
+| PR 2 / 1 | 24.59 | 44.12 | 49.39 | 2,464 | 600 |
+| PR 2 / 2 | 21.27 | 44.83 | 51.89 | 2,462 | 600 |
+| PR 2 / 3 | 30.56 | 46.62 | 63.50 | 2,462 | 600 |
+
+Every round recorded exactly 600 upstream HTTP observations, 600 router-usage observations, and
+1,200 transform observations. Redis recorded 1,800 EVALs and 1,800 MULTI/EXEC pairs per round on
+both revisions. Whole-process SQL/Redis counters also include existing polling, TTL maintenance,
+and connection setup, so small window differences are not presented as exact per-request counts.
+The deterministic facade probe separately establishes zero new SQL/Redis work, one HTTP request,
+and exactly one existing usage write on success (zero when disabled or on provider error).
+
+These sequential latency results **crossed the investigation threshold**; they are retained, not
+discarded or relabeled as a pass. Mean prompt-phase time increased from 3.54 to 5.41 ms and budget
+time from 3.73 to 6.65 ms, despite neither phase changing. Mean provider HTTP time increased from
+1.18 to 2.49 ms. Host inspection showed substantial competing VM, security-agent, and other CPU
+activity. This suggested shared-host drift, not sufficient evidence by itself to dismiss a regression.
+
+### Alternating control and interpretation
+
+A separately recorded control ran both revisions simultaneously on the same host/dependencies,
+alternating requests between ports 59442 (base) and 59440 (PR 2). It used a 10-second warmup and one
+60-second measured run at 10 total RPS: 5 RPS and 300 requests per revision. No test suite was
+running during this control. Both revisions returned 300/300 HTTP 200s, with no drops and a combined
+maximum in flight of one.
+
+| Alternating control | Mean ms | p50 ms | p95 ms | p99 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Base | 18.02 | 17.48 | 22.28 | 27.74 |
+| PR 2 | 18.14 | 17.61 | 21.73 | 27.14 |
+
+The control did not reproduce a PR 2 tail-latency regression and supports the host-drift
+explanation. It does not replace the original 10-RPS-per-revision measurements or certify a release
+SLO. The extraction-parity investigation is recorded with that limitation; selector quality,
+real-provider latency, streaming/TTFT, production capacity, and net savings remain unqualified.
+
+Raw JSONL samples and JSON summaries, including both warmups and the alternating control, are
+retained outside the source tree at `/private/tmp/deltallm-pr2-profile.O1aJIY` on the implementation
+host. Sequential measured run IDs are `09174ba8ce1444d2b4b5cf3eac4eaf21`,
+`9f6d3f5251b34ab29c697fdd220a7deb`, `c0afb37d45ae485ab1d6a99950e2ea9a`,
+`0c2a4f1812974675ae934fbe0d6f0cda`, `0f44dd500dfb4c1ab833ac37483243f7`, and
+`ed1c19939c444837af5669ad582c7ed4`; the control is `6742c48db45f409197b1efa5cc4292e9`.
+
+To reproduce, use disposable loopback PostgreSQL/Redis with `pg_stat_statements` enabled, apply
+existing migrations, and start `tests.performance.selector_free_mock:app` on 59441. Configure each
+gateway with `tests/performance/selector_free_profile.yaml`, explicit local `DATABASE_URL`,
+`REDIS_URL`, corresponding `DELTALLM_*` settings, and matching local-only master/salt values. Run
+each revision on 59440 with `DELTALLM_LOAD_API_KEY` set to that test key:
+
+```sh
+uv run python -m tests.performance.run_selector_free_profile --label before --output-dir /tmp/pr2-profile
+uv run python -m tests.performance.run_selector_free_profile --label after --output-dir /tmp/pr2-profile
+```
+
+For the separate control, keep PR 2 on 59440, start the base on 59442, then run
+`uv run python -m tests.performance.compare_selector_free_gateways --output-dir /tmp/pr2-profile`.
+The harness borrows the repository's canonical constant-arrival generator and rejects non-loopback
+SQL/Redis measurement URLs. Its data-plane traffic always targets the fixed loopback gateway/mock.
+
+### Cancellation review follow-up
+
+The review found that an external cancellation during cleanup of a rejected provider response
+could be swallowed and converted into a reusable default decision. The cleanup boundary now
+suppresses only ordinary cleanup errors; cancellation propagates into the existing request-state
+owner, which aborts and wakes joiners without caching a decision or allowing another provider call.
+No tenant scope, public contract, admission/accounting owner, activation guard, cleanup grace,
+dependency call count, or normal answer path changes. There is no new await, retry, client, or task.
+The earlier performance evidence and its limitations remain unchanged; load and real-service
+PostgreSQL/Redis profiles were not rerun for this exception-only correction.
+
+The new event-barrier tests reproduced four failures before the fix (observed/declared oversized
+bodies, unexpected encoding, and transport read failure), with the existing-cancellation control
+passing. After the fix, this focused command passed all 65 tests:
+
+```sh
+uv run pytest tests/router/selection/test_cleanup_cancellation.py tests/router/selection/test_provider.py tests/router/selection/test_request_state.py -q --tb=short --disable-warnings
+```
+
+The tests assert owner/joiner cancellation, terminal `ABORTED` state, unknown usage, no retained
+decision/exception, no replay, inline cleanup completion, and continued borrowed-client ownership.
+An additional control verifies that an ordinary close failure cannot replace an existing
+cancellation. Ruff check and format check passed for `src/providers/chat_hop.py` and
+`tests/router/selection/test_cleanup_cancellation.py`.
+
+The post-fix full backend command `uv run pytest -q --tb=short --disable-warnings` passed
+3,908 tests with 205 environment-gated skips and 26,946 warnings in 271.87 seconds. Skipped tests
+are not counted as real-service integration proof. `git diff --check` also passed.
