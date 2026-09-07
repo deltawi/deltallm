@@ -47,6 +47,11 @@ class OrganizationDeletionRequest(_StrictModel):
     options: OrganizationDeletionOptions = Field(default_factory=OrganizationDeletionOptions)
 
 
+class OrganizationDeletionExpediteRequest(_StrictModel):
+    confirmation_name: str = Field(min_length=1, max_length=256)
+    acknowledge_immediate_irreversible_deletion: bool
+
+
 class OrganizationDeletionCountsResponse(BaseModel):
     teams: int = Field(ge=0)
     api_keys: int = Field(ge=0)
@@ -110,5 +115,11 @@ class OrganizationDeletionJobResponse(BaseModel):
     updated_at: datetime | None
     completed_at: datetime | None
     restored_at: datetime | None
+    expedited_at: datetime | None
+    recovery_window_waived: bool
     restore_allowed: bool
     immediate_invalidation_succeeded: bool | None = None
+
+
+class OrganizationDeletionExpediteResponse(OrganizationDeletionJobResponse):
+    idempotency_resolution: Literal["applied", "replayed"]

@@ -1597,6 +1597,11 @@
             "title": "Edit",
             "type": "boolean"
           },
+          "expedite_deletion": {
+            "default": false,
+            "title": "Expedite Deletion",
+            "type": "boolean"
+          },
           "manage_assets": {
             "default": false,
             "title": "Manage Assets",
@@ -1784,7 +1789,28 @@
         "title": "OrganizationDeletionCountsResponse",
         "type": "object"
       },
-      "OrganizationDeletionJobResponse": {
+      "OrganizationDeletionExpediteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge_immediate_irreversible_deletion": {
+            "title": "Acknowledge Immediate Irreversible Deletion",
+            "type": "boolean"
+          },
+          "confirmation_name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Confirmation Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation_name",
+          "acknowledge_immediate_irreversible_deletion"
+        ],
+        "title": "OrganizationDeletionExpediteRequest",
+        "type": "object"
+      },
+      "OrganizationDeletionExpediteResponse": {
         "properties": {
           "attempt_count": {
             "minimum": 0.0,
@@ -1817,6 +1843,26 @@
           },
           "deletion_job_id": {
             "title": "Deletion Job Id",
+            "type": "string"
+          },
+          "expedited_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expedited At"
+          },
+          "idempotency_resolution": {
+            "enum": [
+              "applied",
+              "replayed"
+            ],
+            "title": "Idempotency Resolution",
             "type": "string"
           },
           "immediate_invalidation_succeeded": {
@@ -1895,6 +1941,10 @@
             "title": "Progress",
             "type": "object"
           },
+          "recovery_window_waived": {
+            "title": "Recovery Window Waived",
+            "type": "boolean"
+          },
           "restore_allowed": {
             "title": "Restore Allowed",
             "type": "boolean"
@@ -1951,6 +2001,199 @@
           "updated_at",
           "completed_at",
           "restored_at",
+          "expedited_at",
+          "recovery_window_waived",
+          "restore_allowed",
+          "idempotency_resolution"
+        ],
+        "title": "OrganizationDeletionExpediteResponse",
+        "type": "object"
+      },
+      "OrganizationDeletionJobResponse": {
+        "properties": {
+          "attempt_count": {
+            "minimum": 0.0,
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "deletion_job_id": {
+            "title": "Deletion Job Id",
+            "type": "string"
+          },
+          "expedited_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expedited At"
+          },
+          "immediate_invalidation_succeeded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Immediate Invalidation Succeeded"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_error_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Detail"
+          },
+          "max_attempts": {
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "not_before_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not Before At"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "cancel_pending",
+              "cancel_batches",
+              "wait_for_batches",
+              "resolve_owned_assets",
+              "purge_sensitive_history",
+              "remove_scoped_access",
+              "revoke_credentials",
+              "remove_tenant_state",
+              "finalize",
+              "completed",
+              "restored"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "progress": {
+            "additionalProperties": true,
+            "title": "Progress",
+            "type": "object"
+          },
+          "recovery_window_waived": {
+            "title": "Recovery Window Waived",
+            "type": "boolean"
+          },
+          "restore_allowed": {
+            "title": "Restore Allowed",
+            "type": "boolean"
+          },
+          "restored_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restored At"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "processing",
+              "waiting",
+              "completed",
+              "failed",
+              "restored"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "deletion_job_id",
+          "organization_id",
+          "status",
+          "phase",
+          "progress",
+          "not_before_at",
+          "attempt_count",
+          "max_attempts",
+          "last_error_code",
+          "last_error_detail",
+          "created_at",
+          "updated_at",
+          "completed_at",
+          "restored_at",
+          "expedited_at",
+          "recovery_window_waived",
           "restore_allowed"
         ],
         "title": "OrganizationDeletionJobResponse",
@@ -20107,6 +20350,133 @@
           }
         },
         "summary": "Get Organization Deletion Request",
+        "tags": [
+          "Admin Organization Deletion"
+        ]
+      }
+    },
+    "/ui/api/organizations/{organization_id}/deletion-requests/{deletion_job_id}/expedite": {
+      "post": {
+        "operationId": "expedite_organization_deletion_request_ui_api_organizations__organization_id__deletion_requests__deletion_job_id__expedite_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deletion_job_id",
+            "required": true,
+            "schema": {
+              "title": "Deletion Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationDeletionExpediteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationDeletionExpediteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Expedite Organization Deletion Request",
         "tags": [
           "Admin Organization Deletion"
         ]

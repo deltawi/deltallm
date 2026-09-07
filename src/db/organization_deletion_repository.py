@@ -8,6 +8,7 @@ from uuid import uuid4
 from src.db.organization_deletion_queries import ORGANIZATION_DELETION_PLAN_SQL
 from src.db.organization_deletion_records import (
     ORGANIZATION_DELETION_JOB_COLUMNS,
+    ORGANIZATION_DELETION_JOB_COLUMNS_FROM_JOB_ALIAS,
     OrganizationDeletionJobRecord,
     OrganizationDeletionPlanRecord,
 )
@@ -161,6 +162,71 @@ class OrganizationDeletionRepository:
         )
         return bool(rows)
 
+    async def expedite_job(
+        self,
+        *,
+        organization_id: str,
+        deletion_job_id: str,
+        expedited_by_account_id: str | None,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> OrganizationDeletionJobRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH decision AS (
+                SELECT clock_timestamp() AS expedited_at
+            )
+            UPDATE deltallm_organizationdeletionjob AS j
+            SET expedited_at = decision.expedited_at,
+                expedited_by_account_id = $3,
+                expedite_previous_not_before_at = j.not_before_at,
+                expedite_idempotency_key = $4,
+                expedite_request_hash = $5,
+                not_before_at = decision.expedited_at,
+                next_attempt_at = CASE
+                    WHEN j.status IN ('pending', 'waiting')
+                    THEN LEAST(j.next_attempt_at, decision.expedited_at)
+                    ELSE j.next_attempt_at
+                END,
+                updated_at = decision.expedited_at
+            FROM decision
+            WHERE j.organization_id = $1
+              AND j.deletion_job_id = $2
+              AND j.status IN ('pending', 'processing', 'waiting')
+              AND j.phase IN ('cancel_pending', 'cancel_batches', 'wait_for_batches')
+              AND j.expedited_at IS NULL
+              AND j.not_before_at > decision.expedited_at
+            RETURNING {ORGANIZATION_DELETION_JOB_COLUMNS_FROM_JOB_ALIAS}
+            """,
+            organization_id,
+            deletion_job_id,
+            expedited_by_account_id,
+            idempotency_key,
+            request_hash,
+        )
+        if not rows:
+            return None
+        job = OrganizationDeletionJobRecord.from_row(dict(rows[0]))
+        organization_rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_organizationtable
+            SET deletion_not_before_at = $3::timestamptz,
+                updated_at = NOW()
+            WHERE organization_id = $1
+              AND deletion_job_id = $2
+              AND lifecycle_state = 'deletion_pending'
+            RETURNING organization_id
+            """,
+            organization_id,
+            deletion_job_id,
+            job.expedited_at,
+        )
+        if not organization_rows:
+            raise RuntimeError("organization deletion expedite target is missing")
+        return job
+
     async def restore_organization(self, *, organization_id: str, deletion_job_id: str) -> bool:
         if self.prisma is None:
             return False
@@ -176,6 +242,16 @@ class OrganizationDeletionRepository:
             WHERE organization_id = $1
               AND deletion_job_id = $2
               AND lifecycle_state IN ('deletion_pending', 'deletion_failed')
+              AND EXISTS (
+                  SELECT 1
+                  FROM deltallm_organizationdeletionjob job
+                  WHERE job.deletion_job_id = $2
+                    AND job.organization_id = $1
+                    AND job.status IN ('pending', 'processing', 'waiting', 'failed')
+                    AND job.phase IN ('cancel_pending', 'cancel_batches', 'wait_for_batches')
+                    AND job.expedited_at IS NULL
+                    AND job.not_before_at > clock_timestamp()
+              )
             RETURNING organization_id
             """,
             organization_id,
@@ -193,6 +269,9 @@ class OrganizationDeletionRepository:
                 locked_by = NULL, lease_expires_at = NULL, updated_at = NOW()
             WHERE deletion_job_id = $1
               AND status IN ('pending', 'processing', 'waiting', 'failed')
+              AND phase IN ('cancel_pending', 'cancel_batches', 'wait_for_batches')
+              AND expedited_at IS NULL
+              AND not_before_at > clock_timestamp()
             RETURNING deletion_job_id
             """,
             deletion_job_id,

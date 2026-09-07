@@ -233,25 +233,12 @@ class OrganizationDeletionWorker:
 
     async def _wait_for_batches(self, job: OrganizationDeletionJobRecord) -> None:
         active_batches = await self.cleanup_repository.active_batch_count(job.organization_id)
-        now = datetime.now(tz=UTC)
-        deadline_reached = job.not_before_at is not None and now >= job.not_before_at
-        if active_batches > 0 or not deadline_reached:
-            await self.repository.mark_waiting(
-                job,
-                worker_id=self.worker_id,
-                next_attempt_at=now + timedelta(seconds=self.config.waiting_poll_seconds),
-                progress={
-                    "active_batches": active_batches,
-                    "recovery_window_elapsed": deadline_reached,
-                },
-            )
-            return
-        await self.repository.advance_phase(
+        await self.repository.settle_batch_wait(
             job,
             worker_id=self.worker_id,
-            next_phase="resolve_owned_assets",
-            progress={"active_batches": 0, "recovery_window_elapsed": True},
-            mark_organization_purging=True,
+            active_batches=active_batches,
+            requested_recheck_at=datetime.now(tz=UTC)
+            + timedelta(seconds=self.config.waiting_poll_seconds),
         )
 
     async def _resolve_owned_assets(self, job: OrganizationDeletionJobRecord) -> None:

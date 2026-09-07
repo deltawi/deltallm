@@ -515,6 +515,7 @@ export default function OrganizationDetail() {
   const canManageMembers = Boolean(org?.capabilities?.manage_members);
   const canManageAssets = Boolean(org?.capabilities?.manage_assets) && !isTierAuthoritative;
   const canManageServicePolicy = Boolean(org?.capabilities?.manage_service_policy);
+  const canExpediteOrganizationDeletion = Boolean(org?.capabilities?.expedite_deletion);
   const spend = org?.spend || 0;
   const budget = org?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
@@ -1244,11 +1245,14 @@ export default function OrganizationDetail() {
                 </div>
               )}
 
-              {isPlatformAdmin && orgId && (
+              {(isPlatformAdmin || canExpediteOrganizationDeletion) && orgId && (
                 <Suspense fallback={<div className="rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-500">Loading deletion controls…</div>}>
                   <OrganizationDeletionPanel
+                    key={orgId}
                     organizationId={orgId}
                     organizationName={orgName}
+                    canManageLifecycle={isPlatformAdmin}
+                    canExpedite={isPlatformAdmin || canExpediteOrganizationDeletion}
                     onLifecycleChange={handleLifecycleChange}
                   />
                 </Suspense>

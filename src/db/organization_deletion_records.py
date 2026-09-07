@@ -39,6 +39,11 @@ ORGANIZATION_DELETION_JOB_COLUMNS = """
     options,
     progress,
     not_before_at,
+    expedited_at,
+    expedited_by_account_id,
+    expedite_previous_not_before_at,
+    expedite_idempotency_key,
+    expedite_request_hash,
     attempt_count,
     max_attempts,
     next_attempt_at,
@@ -66,6 +71,11 @@ ORGANIZATION_DELETION_JOB_COLUMNS_FROM_JOB_ALIAS = """
     j.options,
     j.progress,
     j.not_before_at,
+    j.expedited_at,
+    j.expedited_by_account_id,
+    j.expedite_previous_not_before_at,
+    j.expedite_idempotency_key,
+    j.expedite_request_hash,
     j.attempt_count,
     j.max_attempts,
     j.next_attempt_at,
@@ -196,6 +206,11 @@ class OrganizationDeletionJobRecord:
     options: dict[str, object] = field(default_factory=dict)
     progress: dict[str, object] = field(default_factory=dict)
     not_before_at: datetime | None = None
+    expedited_at: datetime | None = None
+    expedited_by_account_id: str | None = None
+    expedite_previous_not_before_at: datetime | None = None
+    expedite_idempotency_key: str | None = None
+    expedite_request_hash: str | None = None
     attempt_count: int = 0
     max_attempts: int = 20
     next_attempt_at: datetime | None = None
@@ -216,6 +231,9 @@ class OrganizationDeletionJobRecord:
             "locked_by",
             "last_error_code",
             "last_error_detail",
+            "expedited_by_account_id",
+            "expedite_idempotency_key",
+            "expedite_request_hash",
         )
         values: dict[str, object] = {
             name: str(row[name]) if row.get(name) is not None else None for name in optional_text
@@ -232,6 +250,10 @@ class OrganizationDeletionJobRecord:
             options=parse_json_object(row.get("options")),
             progress=parse_json_object(row.get("progress")),
             not_before_at=parse_datetime(row.get("not_before_at")),
+            expedited_at=parse_datetime(row.get("expedited_at")),
+            expedite_previous_not_before_at=parse_datetime(
+                row.get("expedite_previous_not_before_at")
+            ),
             attempt_count=int(row.get("attempt_count") or 0),
             max_attempts=int(row.get("max_attempts") or 20),
             next_attempt_at=parse_datetime(row.get("next_attempt_at")),

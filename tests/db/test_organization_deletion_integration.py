@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -395,13 +396,12 @@ async def test_durable_worker_removes_tenant_state_and_retains_history() -> None
             deletion_job_id=requested.job.deletion_job_id,
             retried_by_account_id=account_id,
         )
-        await db.execute_raw(
-            """
-            UPDATE deltallm_organizationdeletionjob
-            SET not_before_at = NOW() - INTERVAL '1 second', next_attempt_at = NOW()
-            WHERE deletion_job_id = $1
-            """,
-            requested.job.deletion_job_id,
+        await service.expedite(
+            organization_id=organization_id,
+            deletion_job_id=requested.job.deletion_job_id,
+            confirmation_name="Deletion integration tenant",
+            idempotency_key=f"expedite-{suffix}",
+            expedited_by_account_id=account_id,
         )
         worker = OrganizationDeletionWorker(
             repository=worker_repository,
@@ -468,6 +468,7 @@ async def test_durable_worker_removes_tenant_state_and_retains_history() -> None
         assert [row["action"] for row in audit_rows] == [
             AuditAction.ADMIN_ORGANIZATION_DELETION_REQUEST.value,
             AuditAction.ADMIN_ORGANIZATION_DELETION_RETRY.value,
+            AuditAction.ADMIN_ORGANIZATION_DELETION_EXPEDITE.value,
             AuditAction.SYSTEM_ORGANIZATION_DELETION_COMPLETE.value,
         ]
         with pytest.raises(Exception, match="permanently tombstoned"):
@@ -619,6 +620,149 @@ async def test_cleanup_page_rolls_back_when_lease_expires_before_progress_commit
         await db.execute_raw(
             "DELETE FROM deltallm_promptrenderlog WHERE prompt_render_log_id = $1",
             prompt_render_log_id,
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_organizationdeletionjob WHERE deletion_job_id = $1",
+            deletion_job_id,
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_organizationtable WHERE organization_id = $1",
+            organization_id,
+        )
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_expedite_wins_against_worker_claim_with_stale_deadline_snapshot() -> None:
+    db = await connect_prisma()
+    suffix = uuid4().hex
+    organization_id = f"org-expedite-race-{suffix}"
+    deletion_job_id = str(uuid4())
+    worker_entered_wait = asyncio.Event()
+    release_worker = asyncio.Event()
+    worker_task: asyncio.Task[int] | None = None
+
+    class _BarrierCleanupRepository:
+        async def active_batch_count(self, requested_organization_id: str) -> int:
+            assert requested_organization_id == organization_id
+            worker_entered_wait.set()
+            await release_worker.wait()
+            return 0
+
+    try:
+        await db.execute_raw(
+            """
+            INSERT INTO deltallm_organizationtable (
+                organization_id, organization_name, lifecycle_state,
+                lifecycle_version, deletion_requested_at, deletion_not_before_at,
+                deletion_job_id, created_at, updated_at
+            ) VALUES (
+                $1, 'Expedite race fixture', 'deletion_pending',
+                1, NOW(), NOW() + INTERVAL '1 hour', $2, NOW(), NOW()
+            )
+            """,
+            organization_id,
+            deletion_job_id,
+        )
+        await db.execute_raw(
+            """
+            INSERT INTO deltallm_organizationdeletionjob (
+                deletion_job_id, organization_id, status, phase,
+                idempotency_key, request_hash, plan_token, plan_snapshot,
+                options, progress, not_before_at, next_attempt_at,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, 'pending', 'wait_for_batches', $3,
+                'request-hash', 'plan-token', '{}'::jsonb, '{}'::jsonb,
+                '{}'::jsonb, NOW() + INTERVAL '1 hour', NOW(), NOW(), NOW()
+            )
+            """,
+            deletion_job_id,
+            organization_id,
+            f"request-{suffix}",
+        )
+        worker_repository = OrganizationDeletionWorkerRepository(db)
+        worker = OrganizationDeletionWorker(
+            repository=worker_repository,
+            cleanup_repository=_BarrierCleanupRepository(),  # type: ignore[arg-type]
+            worker_id=f"expedite-race-worker-{suffix}",
+            config=OrganizationDeletionWorkerConfig(
+                lease_seconds=30,
+                record_timeout_seconds=10,
+                waiting_poll_seconds=10,
+            ),
+        )
+        worker_task = asyncio.create_task(worker.process_once())
+        await asyncio.wait_for(worker_entered_wait.wait(), timeout=5)
+
+        repository = OrganizationDeletionRepository(db)
+        service = OrganizationDeletionService(
+            repository=repository,
+            cache_invalidation_service=None,
+        )
+        expedited = await service.expedite(
+            organization_id=organization_id,
+            deletion_job_id=deletion_job_id,
+            confirmation_name="Expedite race fixture",
+            idempotency_key=f"expedite-{suffix}",
+        )
+        assert not await repository.restore_organization(
+            organization_id=organization_id,
+            deletion_job_id=deletion_job_id,
+        )
+        assert not await repository.mark_job_restored(
+            deletion_job_id=deletion_job_id,
+        )
+        release_worker.set()
+
+        assert expedited.idempotency_resolution == "applied"
+        assert expedited.job.expedited_at is not None
+        assert expedited.job.expedite_previous_not_before_at is not None
+        assert await asyncio.wait_for(worker_task, timeout=5) == 1
+        replayed = await service.expedite(
+            organization_id=organization_id,
+            deletion_job_id=deletion_job_id,
+            confirmation_name="Expedite race fixture",
+            idempotency_key=f"expedite-{suffix}",
+        )
+        assert replayed.idempotency_resolution == "replayed"
+        state_rows = await db.query_raw(
+            """
+            SELECT job.status, job.phase, job.expedited_at,
+                   job.expedite_previous_not_before_at,
+                   job.next_attempt_at <= clock_timestamp() AS due,
+                   organization.lifecycle_state,
+                   (
+                     SELECT COUNT(*)::int
+                     FROM deltallm_auditevent audit
+                     WHERE audit.organization_id = job.organization_id
+                       AND audit.action = 'ADMIN_ORGANIZATION_DELETION_EXPEDITE'
+                   ) AS expedite_audit_count
+            FROM deltallm_organizationdeletionjob job
+            JOIN deltallm_organizationtable organization
+              ON organization.organization_id = job.organization_id
+            WHERE job.deletion_job_id = $1
+            """,
+            deletion_job_id,
+        )
+        assert dict(state_rows[0]) == {
+            "status": "pending",
+            "phase": "resolve_owned_assets",
+            "expedited_at": expedited.job.expedited_at.isoformat(),
+            "expedite_previous_not_before_at": (
+                expedited.job.expedite_previous_not_before_at.isoformat()
+            ),
+            "due": True,
+            "lifecycle_state": "purging",
+            "expedite_audit_count": 1,
+        }
+    finally:
+        release_worker.set()
+        if worker_task is not None and not worker_task.done():
+            await asyncio.gather(worker_task, return_exceptions=True)
+        await db.execute_raw(
+            "DELETE FROM deltallm_auditevent WHERE organization_id = $1",
+            organization_id,
         )
         await db.execute_raw(
             "DELETE FROM deltallm_organizationdeletionjob WHERE deletion_job_id = $1",

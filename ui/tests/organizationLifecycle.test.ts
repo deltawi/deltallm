@@ -54,6 +54,7 @@ test('organization lifecycle normalization fails closed for old and future API r
       manage_members: true,
       manage_assets: true,
       manage_service_policy: true,
+      expedite_deletion: true,
       view_usage: true,
     },
     service_policy: {},
@@ -67,6 +68,7 @@ test('organization lifecycle normalization fails closed for old and future API r
     manage_members: false,
     manage_assets: false,
     manage_service_policy: false,
+    expedite_deletion: false,
     view_usage: false,
   });
 });
@@ -111,6 +113,7 @@ test('organization lifecycle transition disables mutations before refresh and re
       manage_members: true,
       manage_assets: true,
       manage_service_policy: true,
+      expedite_deletion: true,
       view_usage: true,
     },
   });
@@ -121,6 +124,7 @@ test('organization lifecycle transition disables mutations before refresh and re
   assert.equal(pending.lifecycle_state, 'deletion_pending');
   assert.equal(pending.capabilities.edit, false);
   assert.equal(pending.capabilities.add_team, false);
+  assert.equal(pending.capabilities.expedite_deletion, false);
 
   const restored = reconcileOrganizationLifecycleTransition(pending, {
     lifecycleState: 'active',
@@ -129,6 +133,19 @@ test('organization lifecycle transition disables mutations before refresh and re
   assert.equal(restored.deletion_not_before_at, null);
   assert.equal(restored.capabilities.edit, false);
   assert.equal(restored.capabilities.add_team, false);
+  assert.equal(restored.capabilities.expedite_deletion, false);
+});
+
+test('deletion-pending responses retain the scoped expedite capability', () => {
+  const pending = normalizeOrganizationRecord({
+    organization_id: 'org-1',
+    lifecycle_state: 'deletion_pending',
+    service_policy: {},
+    capabilities: { view: true, expedite_deletion: true },
+  });
+
+  assert.equal(pending.capabilities.expedite_deletion, true);
+  assert.equal(pending.capabilities.edit, false);
 });
 
 test('organization refresh is awaitable and preserves last-good data on failure', async () => {
@@ -226,6 +243,8 @@ test('deletion job progress maps to the parent lifecycle state', () => {
     updated_at: null,
     completed_at: null,
     restored_at: null,
+    expedited_at: null,
+    recovery_window_waived: false,
     restore_allowed: true,
     ...overrides,
   });

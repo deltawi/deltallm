@@ -163,7 +163,9 @@ general_settings:
   # Optional performance and auth-cache tuning
   api_key_auth_cache_ttl_seconds: 300
   # Organization deletion immediately revokes tenant access, cancels pending
-  # work, waits through a recovery window, then purges bounded pages.
+  # work, waits through a recovery window, then purges bounded pages. A platform
+  # administrator or an owner/admin of the target organization can explicitly
+  # waive the remaining window for one deletion job.
   organization_lifecycle_auth_max_staleness_seconds: 3
   organization_lifecycle_auth_cache_max_entries: 10000
   organization_deletion_recovery_window_hours: 168

@@ -19,7 +19,7 @@ glass work. Normal operators should use named accounts and the narrowest suitabl
 | Prompt Registry | Platform admin | Template/version/label/binding mutation is platform admin | [Admin API](../api/admin.md) |
 | MCP Servers | Platform admin or `key.read` | Server/binding/policy mutation requires `org.update`; approvals require `key.update` | [MCP API](../api/mcp.md) |
 | API Keys | `key.read`, `key.update`, or eligible `key.create_self` | Scope and ownership filter every action; self-service policy can narrow creation | [Authentication](../features/authentication.md) |
-| Organizations | Platform admin or `org.read` | Create/delete is platform admin; scoped edits require `org.update` | [Tenancy](../concepts/tenancy-and-access.md) |
+| Organizations | Platform admin or `org.read` | Starting/restoring deletion is platform admin; organization owners/admins can waive an existing job's recovery window with `org.delete.expedite` | [Tenancy](../concepts/tenancy-and-access.md) |
 | Teams | Platform admin or `team.read` | Create/edit requires platform or applicable organization/team update capability | [Tenancy](../concepts/tenancy-and-access.md) |
 | People & Access | Platform admin | Account, invite, and membership administration is platform-wide | [Authentication](../features/authentication.md) |
 | Usage & Spend | Platform admin or enabled spend-read scope | Server filters platform, organization, team, or self views | [Budgets and spend](../features/budgets.md) |

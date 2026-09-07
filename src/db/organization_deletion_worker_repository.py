@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 
 from src.db.organization_deletion_cleanup_repository import CleanupPageResult
 from src.db.organization_deletion_records import (
@@ -132,114 +131,89 @@ class OrganizationDeletionWorkerRepository(OrganizationDeletionWorkerFinalizatio
         )
         return [OrganizationDeletionJobRecord.from_row(dict(row)) for row in rows]
 
-    async def advance_phase(
+    async def settle_batch_wait(
         self,
         job: OrganizationDeletionJobRecord,
         *,
         worker_id: str,
-        next_phase: str,
-        progress: dict[str, object] | None = None,
-        next_attempt_at: datetime | None = None,
-        mark_organization_purging: bool = False,
-    ) -> bool:
+        active_batches: int,
+        requested_recheck_at: datetime,
+    ) -> Literal["waiting", "advanced"]:
         if self.prisma is None:
-            return False
+            raise OrganizationDeletionClaimLost("organization deletion repository is unavailable")
         async with self.prisma.tx() as tx:
             rows = await tx.query_raw(
                 """
-                UPDATE deltallm_organizationdeletionjob
-                SET phase = $4,
-                    status = 'pending',
-                    progress = COALESCE(progress, '{}'::jsonb) || $5::jsonb,
-                    next_attempt_at = COALESCE($6::timestamptz, NOW()),
+                WITH decision AS (
+                    SELECT clock_timestamp() AS decided_at
+                )
+                UPDATE deltallm_organizationdeletionjob AS job
+                SET phase = CASE
+                        WHEN $4::integer = 0
+                             AND job.not_before_at <= decision.decided_at
+                        THEN 'resolve_owned_assets'
+                        ELSE job.phase
+                    END,
+                    status = CASE
+                        WHEN $4::integer = 0
+                             AND job.not_before_at <= decision.decided_at
+                        THEN 'pending'
+                        ELSE 'waiting'
+                    END,
+                    progress = COALESCE(job.progress, '{}'::jsonb) || jsonb_build_object(
+                        'active_batches', $4::integer,
+                        'recovery_window_elapsed', job.not_before_at <= decision.decided_at
+                    ),
+                    next_attempt_at = CASE
+                        WHEN $4::integer = 0
+                             AND job.not_before_at <= decision.decided_at
+                        THEN decision.decided_at
+                        WHEN $4::integer = 0
+                        THEN LEAST($5::timestamptz, job.not_before_at)
+                        ELSE $5::timestamptz
+                    END,
                     locked_by = NULL,
                     lease_expires_at = NULL,
-                    last_error_code = NULL,
-                    last_error_detail = NULL,
-                    updated_at = NOW()
-                WHERE deletion_job_id = $1
-                  AND status = 'processing'
-                  AND locked_by = $2
-                  AND claim_epoch = $3
-                  AND lease_expires_at > clock_timestamp()
-                RETURNING organization_id
+                    updated_at = decision.decided_at
+                FROM decision
+                WHERE job.deletion_job_id = $1
+                  AND job.status = 'processing'
+                  AND job.phase = 'wait_for_batches'
+                  AND job.locked_by = $2
+                  AND job.claim_epoch = $3
+                  AND job.lease_expires_at > decision.decided_at
+                RETURNING job.organization_id, job.phase
                 """,
                 job.deletion_job_id,
                 worker_id,
                 job.claim_epoch,
-                next_phase,
-                json.dumps(progress or {}),
-                next_attempt_at,
+                max(0, int(active_batches)),
+                requested_recheck_at,
             )
             if not rows:
-                return False
-            if mark_organization_purging:
-                organization_rows = await tx.query_raw(
-                    """
-                    UPDATE deltallm_organizationtable
-                    SET lifecycle_state = 'purging',
-                        lifecycle_version = lifecycle_version + 1,
-                        updated_at = NOW()
-                    WHERE organization_id = $1
-                      AND deletion_job_id = $2
-                      AND lifecycle_state = 'deletion_pending'
-                    RETURNING organization_id
-                    """,
-                    job.organization_id,
-                    job.deletion_job_id,
+                raise OrganizationDeletionClaimLost(
+                    "organization deletion claim expired during batch wait"
                 )
-                if not organization_rows:
-                    already_purging = await tx.query_raw(
-                        """
-                        SELECT organization_id
-                        FROM deltallm_organizationtable
-                        WHERE organization_id = $1
-                          AND deletion_job_id = $2
-                          AND lifecycle_state = 'purging'
-                        FOR SHARE
-                        """,
-                        job.organization_id,
-                        job.deletion_job_id,
-                    )
-                    if not already_purging:
-                        raise RuntimeError("organization could not enter irreversible deletion")
-                else:
-                    await self.with_db(tx)._increment_lifecycle_generation()
-            return True
-
-    async def mark_waiting(
-        self,
-        job: OrganizationDeletionJobRecord,
-        *,
-        worker_id: str,
-        next_attempt_at: datetime,
-        progress: dict[str, object] | None = None,
-    ) -> bool:
-        if self.prisma is None:
-            return False
-        rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_organizationdeletionjob
-            SET status = 'waiting',
-                progress = COALESCE(progress, '{}'::jsonb) || $4::jsonb,
-                next_attempt_at = $5::timestamptz,
-                locked_by = NULL,
-                lease_expires_at = NULL,
-                updated_at = NOW()
-            WHERE deletion_job_id = $1
-              AND status = 'processing'
-              AND locked_by = $2
-              AND claim_epoch = $3
-              AND lease_expires_at > clock_timestamp()
-            RETURNING deletion_job_id
-            """,
-            job.deletion_job_id,
-            worker_id,
-            job.claim_epoch,
-            json.dumps(progress or {}),
-            next_attempt_at,
-        )
-        return bool(rows)
+            if str(rows[0].get("phase") or "") != "resolve_owned_assets":
+                return "waiting"
+            organization_rows = await tx.query_raw(
+                """
+                UPDATE deltallm_organizationtable
+                SET lifecycle_state = 'purging',
+                    lifecycle_version = lifecycle_version + 1,
+                    updated_at = NOW()
+                WHERE organization_id = $1
+                  AND deletion_job_id = $2
+                  AND lifecycle_state = 'deletion_pending'
+                RETURNING organization_id
+                """,
+                job.organization_id,
+                job.deletion_job_id,
+            )
+            if not organization_rows:
+                raise RuntimeError("organization could not enter irreversible deletion")
+            await self.with_db(tx)._increment_lifecycle_generation()
+            return "advanced"
 
     async def mark_retry(
         self,

@@ -258,7 +258,7 @@ Recommended steady state:
 |---------|---------|-------------|
 | `organization_lifecycle_auth_max_staleness_seconds` | `3` | Maximum process-local organization-state staleness on authenticated data-plane requests |
 | `organization_lifecycle_auth_cache_max_entries` | `10000` | Maximum organization lifecycle records cached per process |
-| `organization_deletion_recovery_window_hours` | `168` | Minimum delay before irreversible cleanup begins |
+| `organization_deletion_recovery_window_hours` | `168` | Default recovery delay for new deletion jobs; a platform administrator or an owner/admin of the target organization can explicitly waive the remaining delay per job |
 | `organization_deletion_max_attempts` | `20` | Phase claim attempts before the job requires an administrator retry |
 | `organization_deletion_requests_enabled` | `false` | Startup-only rollout gate for creating new deletion jobs; enable only after every replica is lifecycle-protocol v2 aware |
 | `organization_deletion_worker_enabled` | `true` | Enables durable organization cleanup claims in this process role |

@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CURRENT_SCHEMA = REPO_ROOT / "prisma" / "schema.prisma"
 DATABASE_NAME_PATTERN = re.compile(r"\Adeltallm_migration_verify_[a-z0-9_]+\Z")
 UPGRADE_ORGANIZATION_ID = "migration-upgrade-fixture-org"
+UPGRADE_DELETION_JOB_ID = "migration-upgrade-fixture-deletion-job"
 UPGRADE_PROMPT_RENDER_ID = "migration-upgrade-fixture-render"
 UPGRADE_EMAIL_ID = "migration-upgrade-fixture-email"
 UPGRADE_SPEND_EVENT_ID = "migration-upgrade-fixture-spend"
@@ -189,6 +190,24 @@ INSERT INTO deltallm_organizationtable
 VALUES
   ('migration-upgrade-fixture-id', '{UPGRADE_ORGANIZATION_ID}',
    'Migration upgrade fixture', TRUE);
+
+INSERT INTO deltallm_organizationdeletionjob
+  (deletion_job_id, organization_id, status, phase, idempotency_key,
+   request_hash, plan_token, plan_snapshot, options, progress,
+   not_before_at, next_attempt_at, created_at, updated_at)
+VALUES
+  ('{UPGRADE_DELETION_JOB_ID}', '{UPGRADE_ORGANIZATION_ID}', 'waiting',
+   'wait_for_batches', 'migration-upgrade-request', 'request-hash',
+   'plan-token', '{{}}'::jsonb, '{{}}'::jsonb, '{{}}'::jsonb,
+   NOW() + INTERVAL '1 day', NOW() + INTERVAL '1 minute', NOW(), NOW());
+
+UPDATE deltallm_organizationtable
+SET lifecycle_state = 'deletion_pending',
+    lifecycle_version = lifecycle_version + 1,
+    deletion_requested_at = NOW(),
+    deletion_not_before_at = NOW() + INTERVAL '1 day',
+    deletion_job_id = '{UPGRADE_DELETION_JOB_ID}'
+WHERE organization_id = '{UPGRADE_ORGANIZATION_ID}';
 
 INSERT INTO deltallm_promptrenderlog
   (prompt_render_log_id, request_id, status, variables)
@@ -405,6 +424,30 @@ BEGIN
   IF to_regclass('public._deltallm_model_name_restore_20260823') IS NOT NULL THEN
     RAISE EXCEPTION 'temporary model-name restore table was not removed';
   END IF;
+  IF (
+    SELECT count(*)
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'deltallm_organizationdeletionjob'
+      AND column_name IN (
+        'expedited_at', 'expedited_by_account_id',
+        'expedite_previous_not_before_at', 'expedite_idempotency_key',
+        'expedite_request_hash'
+      )
+  ) <> 5 THEN
+    RAISE EXCEPTION 'organization deletion expedite provenance columns are missing';
+  END IF;
+  IF (
+    SELECT count(*)
+    FROM pg_constraint
+    WHERE conname IN (
+      'deltallm_orgdeletionjob_expedite_marker_check',
+      'deltallm_orgdeletionjob_expedite_key_check',
+      'deltallm_orgdeletionjob_expedite_hash_check'
+    )
+  ) <> 3 THEN
+    RAISE EXCEPTION 'organization deletion expedite constraints are missing';
+  END IF;
 END
 $migration_verify$;
 """,
@@ -429,6 +472,21 @@ BEGIN
     AND audit_content_policy_version = 0;
   IF fixture_count <> 1 THEN
     RAISE EXCEPTION 'organization upgrade fixture was not preserved';
+  END IF;
+
+  SELECT count(*) INTO fixture_count
+  FROM deltallm_organizationdeletionjob
+  WHERE deletion_job_id = '{UPGRADE_DELETION_JOB_ID}'
+    AND organization_id = '{UPGRADE_ORGANIZATION_ID}'
+    AND status = 'waiting'
+    AND phase = 'wait_for_batches'
+    AND expedited_at IS NULL
+    AND expedited_by_account_id IS NULL
+    AND expedite_previous_not_before_at IS NULL
+    AND expedite_idempotency_key IS NULL
+    AND expedite_request_hash IS NULL;
+  IF fixture_count <> 1 THEN
+    RAISE EXCEPTION 'pre-expedite deletion job was not preserved by upgrade';
   END IF;
 
   SELECT count(*) INTO fixture_count
@@ -549,6 +607,19 @@ BEGIN
   END IF;
   IF to_regclass('public._deltallm_model_name_restore_20260823') IS NOT NULL THEN
     RAISE EXCEPTION 'temporary model-name restore table was not removed';
+  END IF;
+  IF (
+    SELECT count(*)
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'deltallm_organizationdeletionjob'
+      AND column_name IN (
+        'expedited_at', 'expedited_by_account_id',
+        'expedite_previous_not_before_at', 'expedite_idempotency_key',
+        'expedite_request_hash'
+      )
+  ) <> 5 THEN
+    RAISE EXCEPTION 'organization deletion expedite upgrade columns are missing';
   END IF;
 END
 $migration_verify$;
