@@ -206,7 +206,7 @@ async def test_database_selector_gate_never_falls_back_to_config():
 
 
 @pytest.mark.asyncio
-async def test_l2_cached_selector_snapshot_is_explicitly_rejected():
+async def test_l2_cached_selector_snapshot_reloads_durable_authority():
     redis = _FakeRedis()
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
@@ -226,8 +226,18 @@ async def test_l2_cached_selector_snapshot_is_explicitly_rejected():
     )
     cache = RouteGroupRuntimeCache(redis)
 
+    repository = _FakeRouteGroupRepository([{"key": "durable", "members": []}])
+    snapshot, source = await cache.get_snapshot(repository)
+    assert source == "db"
+    assert snapshot.groups == repository.groups
+    assert repository.calls == 1
+    assert redis.setex_calls == 1
+
+    await cache.invalidate()
+    # Once PostgreSQL itself carries the selector, the durable gate still fails closed.
+    redis.values[_runtime_cache_key(1)] = "invalid"
     with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
-        await cache.get_snapshot(_FakeRouteGroupRepository())
+        await cache.get_snapshot(_SelectorBlockedRepository())
 
 
 @pytest.mark.asyncio
