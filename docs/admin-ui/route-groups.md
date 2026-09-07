@@ -129,6 +129,20 @@ Embedding deployment forms expose both **Context Window** and **Max Input Tokens
 those values during unrelated edits.
 The feature is inactive when the policy control is disabled.
 
+## Model-router Policy Drafts
+
+The optional model-router contract currently supports validation and draft storage only; selector
+publication and runtime activation remain explicitly unsupported until the execution prerequisites
+land. See the [model router design](../project/model-router-design.md) for the versioned contract.
+
+For policy writes, `members` can be omitted but cannot be null. An existing version 3 selector and
+its member assignments are preserved when omitted. Unknown authored policy/member fields and
+coerced member values are rejected whenever the resulting policy retains a selector. Explicit
+`selector: null` removes it and its lanes; `lane: null` does not reuse an old assignment.
+`/policy/validate` checks the submitted document on its own, while draft and publication writes also
+validate the effective merged policy against current database membership. Invalid inputs return
+HTTP 400; incompatible stored policy state returns HTTP 409.
+
 ## Legacy Policy Mode Aliases
 
 Older clients may send these aliases:

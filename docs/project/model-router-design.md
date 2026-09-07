@@ -123,13 +123,27 @@ is written, newly claimed `selector` and `lane` keys are replaced only by explic
 client data; they are not copied out of an older opaque document. Updating an existing version 3
 document preserves an omitted selector. If that update supplies an authoritative member list,
 omitted lane assignments are preserved by deployment ID while removed members stay removed and
-new members without a historical lane are rejected; adding them requires resubmitting the selector
-with complete assignments. An explicit `"selector": null` is the unambiguous deletion tombstone:
+new members without a historical lane must supply an explicit assignment. An explicit
+`"lane": null` does not inherit an old lane and is rejected for an enabled answer member.
+An explicit `"selector": null` is the unambiguous deletion tombstone:
 it removes the selector and every member `lane`, but preserves the authoritative member list and
 its non-lane settings when the update omits `members`.
 
 All other unknown stored fields continue to round-trip through draft and publication replacement.
 That is a deliberate compatibility exception to strict client-owned selector fields.
+
+Mutation requests retain their original values, unknown keys, and field presence through the HTTP
+and service boundaries. The repository locks the group, loads the latest draft (falling back to the
+published revision) or the published revision for direct publication, validates authored fields
+according to the effective selector, merges, and validates assignments against current database
+membership before writing. A typed write result carries authoritative normalization warnings to
+the API. No extra inference I/O or provider call is introduced. Standalone `/policy/validate`
+validates the submitted document only; it does not implicitly inherit a stored draft.
+
+`members` may be omitted but cannot be null. Invalid authored fields return HTTP 400, including
+typed request validation, without echoing submitted values. Incompatible effective policy state
+returns HTTP 409. Selector/context null tombstones and legacy selector-free normalization remain
+supported. Publish/rollback preserve the explicit unsupported-selector activation error.
 
 Runtime Route-Group snapshots carry explicit proof that the selector activation gate ran. The
 database repository and validated file configuration are the only authorities that can mint an
@@ -137,8 +151,14 @@ database repository and validated file configuration are the only authorities th
 `deltallm:<environment>:v2:route-group-runtime:r<revision>` entries are produced by the shared Redis
 key builder and use a strict versioned envelope containing the schema version and selector-gate
 state. Missing, legacy, malformed, oversized, or incompatible envelopes are cache misses and reload
-PostgreSQL. A valid current envelope is still checked for an active selector and raises the typed
-activation error rather than falling back to configuration. The previous cache namespace is left
+PostgreSQL. Selector, policy JSON, or lane fields are incompatible with this inactive projection
+and therefore also cause a cache miss. Only the durable loader can raise an activation error;
+that error never falls back to file configuration. Owned mode, strategy, timeout, retry, and context
+values are validated before a cache hit. Opaque nested extensions and valid historical numeric
+strings retain their meaning. Invalid groups reject the entire envelope. Read and write failures
+emit redacted structured logs and a fixed-reason `deltallm_route_group_cache_failures_total`
+counter; repair failure does not fail a valid durable read. Cache schema v2 remains compatible for
+valid entries. The previous cache namespace is left
 to expire naturally; PR 4 must bump the envelope and namespace when the activation state changes.
 
 ## Request order after activation
@@ -276,3 +296,74 @@ project data needed to decide whether a trained/local selector is worthwhile.
 4. Real-time chat/Responses integration and direct publish activation.
 5. Admin UI, explicit evaluation, canary, and operator workflows.
 6. Batch parity, performance qualification, and final support matrix.
+
+## PR 1 review remediation — 2026-09-07
+
+The four review findings are addressed within PR 1. The local commit slices are policy writes and
+HTTP contracts, cache validation/recovery, real-service regression tests, and documentation.
+
+- [x] Preserve authored values until locked effective-selector validation, including inherited
+  selectors, unknown keys, and omitted-versus-null lane assignments.
+- [x] Treat selector-bearing or otherwise incompatible Redis projections as observable misses;
+  retain the fail-closed activation gate for PostgreSQL and file configuration.
+- [x] Validate owned nested cache fields, retain valid historical representations and opaque
+  extensions, and use the same schema for writes without failing valid durable reads.
+- [x] Reject null member lists with HTTP 400 and retain the established selector-free context
+  normalization and authorization contract.
+- [x] Exercise PostgreSQL transaction serialization, history/rollback semantics, selector removal,
+  durable activation rejection, and cross-replica Redis repair/TTL/outage recovery.
+- [x] Regenerate OpenAPI and verify frontend request/error adapters and production build.
+
+Verification was run in `.worktrees/issue-304-model-router`:
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Full backend | `uv run pytest -q --tb=short --disable-warnings` | 3,758 passed; 205 environment-gated skips; 26,142 warnings; 264.73 seconds |
+| Final request regressions, including additional authorization and simulation checks | `uv run pytest tests/test_route_policy_write_contract.py -q --tb=short --disable-warnings` | 24 passed |
+| Focused policy/cache/API follow-up | `uv run pytest tests/db/test_route_policy_partial_writes.py tests/db/test_route_policy_repository.py tests/test_route_policy_write_contract.py tests/services/test_route_group_cache_contract.py tests/test_ui_route_groups.py -q --tb=short --disable-warnings` | 147 passed before the four final request tests were added |
+| Real PostgreSQL/Redis | `uv run pytest tests/db/test_route_policy_selector_integration.py tests/db/test_route_policy_publication_invariants.py tests/test_route_group_redis_integration.py -q --tb=short --disable-warnings` | 37 passed; no skips |
+| Prisma client | `uv run prisma generate --schema=./prisma/schema.prisma` | Passed |
+| Fresh isolated test database | `uv run prisma migrate deploy --schema=./prisma/schema.prisma` | All 85 migrations applied; no schema changes in this remediation |
+| UI tests | `npm --prefix ui run test:unit` | 198 passed |
+| UI production build | `npm --prefix ui run build` | Passed; initial JavaScript 379.46 KB gzip and RouteGroupDetail 19.33 KB gzip, both unchanged |
+| Full UI lint | `npm --prefix ui run lint` | Existing baseline unchanged: 118 errors and 4 warnings |
+| Touched UI lint, from `ui/` | `./node_modules/.bin/eslint tests/routeGroupsApi.test.ts src/lib/api/routeGroups.ts` | Passed, zero findings |
+| API artifact | `uv run python scripts/docs/export_openapi.py --check` | Current; 215 paths, 280 operations |
+| Docs | `uv run mkdocs build --strict --site-dir /tmp/deltallm-pr1-fixes-docs` | Passed |
+| Whitespace | `git diff --check` | Passed |
+
+Both `uv run ruff check` and `uv run ruff format --check` passed on these 19 Python paths:
+
+```text
+src/api/admin/endpoints/route_groups.py
+src/api/admin/request_validation.py
+src/api/admin/route_group_contracts.py
+src/db/route_policy_lifecycle.py
+src/router/policy_validation.py
+src/services/route_groups.py
+src/services/route_policy_publication.py
+src/services/route_group_cache_contract.py
+src/metrics/route_group_cache.py
+tests/db/test_route_policy_publication_invariants.py
+tests/db/test_route_policy_repository.py
+tests/db/test_route_policy_partial_writes.py
+tests/db/test_route_policy_selector_integration.py
+tests/services/test_route_groups.py
+tests/services/test_route_policy_publication.py
+tests/services/test_route_group_cache_contract.py
+tests/test_route_group_redis_integration.py
+tests/test_ui_route_groups.py
+tests/test_route_policy_write_contract.py
+```
+
+Real-service tests used disposable PostgreSQL 15 and Redis 7 containers, with `DATABASE_URL` and
+`DELTALLM_TEST_REDIS_URL` explicitly targeting those instances. They did not use a shared database.
+The full backend run intentionally left other environment-gated integration suites skipped;
+the 37 required real-service regressions ran separately without skips. The measured cache budget
+remains one durable revision read per load, no Redis/snapshot read on an L1 hit, one Redis GET on an
+L2 hit, and one durable snapshot read plus at most one SETEX on a miss. There is no retry loop or
+provider call.
+
+The feature branch remains based on `de2af0b8`; refreshed `origin/main` is `d628f169` (two commits
+ahead of that base). No rebase, push, or merge was performed. Reconcile that branch divergence
+before integration with main.
