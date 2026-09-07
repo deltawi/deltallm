@@ -21,6 +21,8 @@ import { routeGroups } from '../lib/api';
 import type { RouteGroup } from '../lib/api';
 import { routeGroupMutationOutcome, ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
 import { useApi } from '../lib/hooks';
+import { routeGroupDetailPath } from '../lib/routeGroupRoutes';
+import { useRouteGroupMutationScope } from '../lib/useRouteGroupMutationScope';
 import { useToast } from '../components/ToastProvider';
 import { useBranding } from '../lib/brandingContext';
 
@@ -207,6 +209,7 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 export default function RouteGroups() {
+  const mutations = useRouteGroupMutationScope();
   const { branding } = useBranding();
   const navigate = useNavigate();
   const { pushToast } = useToast();
@@ -217,7 +220,7 @@ export default function RouteGroups() {
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<RouteGroup | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [form, setForm] = useState({ group_key: '', name: '', mode: 'chat' });
 
@@ -244,13 +247,16 @@ export default function RouteGroups() {
       return;
     }
     setFormError(null);
+    const operation = mutations.begin();
+    if (!operation) return;
     setCreating(true);
     try {
       const created = await routeGroups.create({
         group_key: groupKey,
         name: form.name.trim() || null,
         mode: form.mode,
-      });
+      }, operation.signal);
+      if (!mutations.isCurrent(operation)) return;
       setCreateOpen(false);
       resetForm();
       const outcome = routeGroupMutationOutcome(
@@ -258,27 +264,32 @@ export default function RouteGroups() {
         created.warnings,
       );
       pushToast({ tone: outcome.tone, title: 'Model group created', message: outcome.message });
-      navigate(`/route-groups/${created.group_key}`);
+      navigate(routeGroupDetailPath(created.route_group_id));
     } catch (error: unknown) {
+      if (!mutations.isCurrent(operation)) return;
       pushToast({ tone: 'error', title: 'Create failed', message: mutationErrorMessage(error, 'Failed to create model group.') });
     } finally {
-      setCreating(false);
+      if (mutations.finish(operation)) setCreating(false);
     }
   };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    setDeletingKey(deleteTarget);
+    const operation = mutations.begin();
+    if (!operation) return;
+    setDeletingKey(deleteTarget.route_group_id);
     try {
-      const result = await routeGroups.delete(deleteTarget);
-      const outcome = routeGroupMutationOutcome(`"${deleteTarget}" was deleted.`, result.warnings);
+      const result = await routeGroups.delete(deleteTarget.route_group_id, operation.signal);
+      if (!mutations.isCurrent(operation)) return;
+      const outcome = routeGroupMutationOutcome(`"${deleteTarget.group_key}" was deleted.`, result.warnings);
       pushToast({ tone: outcome.tone, title: 'Model group deleted', message: outcome.message });
       setDeleteTarget(null);
       refetch();
     } catch (error: unknown) {
+      if (!mutations.isCurrent(operation)) return;
       pushToast({ tone: 'error', title: 'Delete failed', message: mutationErrorMessage(error, 'Failed to delete model group.') });
     } finally {
-      setDeletingKey(null);
+      if (mutations.finish(operation)) setDeletingKey(null);
     }
   };
 
@@ -389,7 +400,7 @@ export default function RouteGroups() {
           {!loading && groups.map((g, i) => (
             <div
               key={g.group_key}
-              onClick={() => navigate(`/route-groups/${g.group_key}`)}
+              onClick={() => navigate(routeGroupDetailPath(g.route_group_id))}
               className={`group grid cursor-pointer items-center gap-4 px-4 py-3 transition hover:bg-blue-50/40 ${i < groups.length - 1 ? 'border-b border-gray-100' : ''}`}
               style={{ gridTemplateColumns: '1fr 130px 110px 110px 72px 48px' }}
             >
@@ -431,8 +442,8 @@ export default function RouteGroups() {
               {/* Actions */}
               <div className="flex items-center justify-end gap-1 opacity-0 transition group-hover:opacity-100">
                 <button
-                  onClick={(e) => { e.stopPropagation(); setDeleteTarget(g.group_key); }}
-                  disabled={deletingKey === g.group_key}
+                  onClick={(e) => { e.stopPropagation(); setDeleteTarget(g); }}
+                  disabled={deletingKey === g.route_group_id}
                   className="rounded-lg p-1 hover:bg-red-50 disabled:opacity-40"
                   title="Delete group"
                 >
@@ -493,7 +504,7 @@ export default function RouteGroups() {
       <ConfirmDialog
         open={!!deleteTarget}
         title="Delete model group"
-        description={deleteTarget ? `Delete "${deleteTarget}"? This removes all members and policy history references for this group.` : ''}
+        description={deleteTarget ? `Delete "${deleteTarget.group_key}"? This removes all members and policy history references for this group.` : ''}
         confirmLabel="Delete Group"
         destructive
         confirming={!!deletingKey}

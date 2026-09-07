@@ -30,6 +30,10 @@ from src.api.admin.route_group_contracts import (
     RoutePolicyRollbackResponse,
 )
 from src.api.admin.request_validation import BadRequestValidationRoute
+from src.api.admin.route_group_dependencies import (
+    route_group_context,
+    route_group_repository as _repository_or_503,
+)
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.db.route_groups import RouteGroupRepository
@@ -76,19 +80,9 @@ logger = logging.getLogger(__name__)
 _ALLOWED_BINDING_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user"}
 
 
-def _repository_or_503(request: Request) -> RouteGroupRepository:
-    repository = getattr(request.app.state, "route_group_repository", None)
-    if repository is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Route group repository unavailable",
-        )
-    return repository
-
-
 def _mutation_service(request: Request) -> RouteGroupMutationService:
     service = getattr(request.app.state, "route_group_mutation_service", None)
-    if isinstance(service, RouteGroupMutationService):
+    if isinstance(service, RouteGroupMutationService) and route_group_context(request) is None:
         return service
     return RouteGroupMutationService(
         route_groups=_repository_or_503(request),

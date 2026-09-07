@@ -6,7 +6,7 @@ import {
 } from './api';
 
 interface SimulationIdentity {
-  groupKey: string;
+  routeGroupId: string;
   fingerprint: string;
 }
 
@@ -16,13 +16,13 @@ interface SimulationResult extends SimulationIdentity {
 
 function sameIdentity(
   identity: SimulationIdentity | null,
-  groupKey: string,
+  routeGroupId: string,
   fingerprint: string,
 ): boolean {
-  return identity?.groupKey === groupKey && identity.fingerprint === fingerprint;
+  return identity?.routeGroupId === routeGroupId && identity.fingerprint === fingerprint;
 }
 
-export function useRoutePolicySimulation(groupKey: string, fingerprint: string) {
+export function useRoutePolicySimulation(routeGroupId: string, fingerprint: string) {
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [pending, setPending] = useState<SimulationIdentity | null>(null);
@@ -44,19 +44,19 @@ export function useRoutePolicySimulation(groupKey: string, fingerprint: string) 
     requestIdRef.current += 1;
     controllerRef.current?.abort();
     controllerRef.current = null;
-  }, [groupKey, fingerprint]);
+  }, [routeGroupId, fingerprint]);
 
   const run = useCallback(async (request: RoutePolicySimulationRequest) => {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     const requestId = ++requestIdRef.current;
-    const identity = { groupKey, fingerprint };
+    const identity = { routeGroupId, fingerprint };
     setPending(identity);
     setError(null);
 
     try {
-      const data = await routeGroups.simulatePolicy(groupKey, request, controller.signal);
+      const data = await routeGroups.simulatePolicy(routeGroupId, request, controller.signal);
       if (
         requestId !== requestIdRef.current
         || !mountedRef.current
@@ -75,7 +75,7 @@ export function useRoutePolicySimulation(groupKey: string, fingerprint: string) 
       if (requestId === requestIdRef.current && mountedRef.current) setPending(null);
       if (controllerRef.current === controller) controllerRef.current = null;
     }
-  }, [fingerprint, groupKey]);
+  }, [fingerprint, routeGroupId]);
 
   const reset = useCallback(() => {
     requestIdRef.current += 1;
@@ -89,8 +89,8 @@ export function useRoutePolicySimulation(groupKey: string, fingerprint: string) 
   return {
     data: result?.data ?? null,
     error,
-    loading: sameIdentity(pending, groupKey, fingerprint),
-    stale: result !== null && !sameIdentity(result, groupKey, fingerprint),
+    loading: sameIdentity(pending, routeGroupId, fingerprint),
+    stale: result !== null && !sameIdentity(result, routeGroupId, fingerprint),
     run,
     reset,
   };

@@ -107,7 +107,7 @@ interface RouteGroupAdvancedTabProps {
   onDeleteBinding: (binding: PromptBinding) => void;
 
   /* Routing Policy */
-  groupKey: string;
+  routeGroupId: string;
   workloadMode: string;
   guidedPolicy: PolicyGuidedValues;
   members: RouteGroupMemberDetail[];
@@ -163,7 +163,7 @@ export default function RouteGroupAdvancedTab({
   onBindingFormChange,
   onSaveBinding,
   onDeleteBinding,
-  groupKey,
+  routeGroupId,
   workloadMode,
   guidedPolicy,
   members,
@@ -513,7 +513,7 @@ export default function RouteGroupAdvancedTab({
       >
         <div className="px-5 py-5">
           <RouteGroupPolicySimulationPanel
-            groupKey={groupKey}
+            routeGroupId={routeGroupId}
             policy={simulationPolicy}
             policyError={simulationPolicyError}
             members={members}

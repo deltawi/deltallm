@@ -1,3 +1,5 @@
+import type { Paginated, Pagination } from './api/pagination';
+export type { Paginated, Pagination } from './api/pagination';
 import { apiFetch, withQuery } from './api/transport';
 import {
   organizationRecordsApi,
@@ -24,15 +26,6 @@ export function reportingRequestInit(signal: AbortSignal, forceRefresh = false):
     : { signal };
 }
 
-export interface Pagination {
-  total: number;
-  limit: number;
-  offset: number;
-  has_more: boolean;
-  after_line_number?: number | null;
-  next_after_line_number?: number | null;
-}
-
 export interface SpendLogsPagination {
   total?: number;
   limit: number;
@@ -41,11 +34,6 @@ export interface SpendLogsPagination {
   has_more: boolean;
   next_cursor?: string | null;
   mode?: 'offset' | 'cursor';
-}
-
-export interface Paginated<T> {
-  data: T[];
-  pagination: Pagination;
 }
 
 export interface HealthResponse {
@@ -846,110 +834,7 @@ export type {
   RoutePolicySimulationSelection,
 } from './api/routeGroups';
 
-export interface PromptTemplate {
-  prompt_template_id: string;
-  template_key: string;
-  name: string;
-  description: string | null;
-  owner_scope: string | null;
-  metadata: Record<string, unknown> | null;
-  version_count: number;
-  label_count: number;
-  binding_count: number;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface PromptVersion {
-  prompt_version_id: string;
-  prompt_template_id: string;
-  template_key: string;
-  version: number;
-  status: string;
-  template_body: Record<string, unknown>;
-  variables_schema: Record<string, unknown> | null;
-  model_hints: Record<string, unknown> | null;
-  route_preferences: Record<string, unknown> | null;
-  published_at?: string | null;
-  published_by?: string | null;
-  archived_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface PromptLabel {
-  prompt_label_id: string;
-  prompt_template_id: string;
-  template_key: string;
-  label: string;
-  prompt_version_id: string;
-  version: number;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface PromptBinding {
-  prompt_binding_id: string;
-  scope_type: 'key' | 'team' | 'org' | 'group';
-  scope_id: string;
-  prompt_template_id: string;
-  template_key: string;
-  label: string;
-  priority: number;
-  enabled: boolean;
-  metadata: Record<string, unknown> | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface PromptResolutionCandidate {
-  template_key?: string;
-  [key: string]: unknown;
-}
-
-export const promptRegistry = {
-  listTemplates: (params?: { search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<PromptTemplate>>(withQuery('/ui/api/prompt-registry/templates', params)),
-  getTemplate: (templateKey: string) =>
-    apiFetch<{ template: PromptTemplate; versions: PromptVersion[]; labels: PromptLabel[]; bindings: PromptBinding[] }>(
-      `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`
-    ),
-  createTemplate: (payload: object) =>
-    apiFetch<PromptTemplate>('/ui/api/prompt-registry/templates', { method: 'POST', json: payload }),
-  updateTemplate: (templateKey: string, payload: object) =>
-    apiFetch<PromptTemplate>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'PUT', json: payload }),
-  deleteTemplate: (templateKey: string) =>
-    apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'DELETE' }),
-  createVersion: (templateKey: string, payload: object) =>
-    apiFetch<PromptVersion>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/versions`, { method: 'POST', json: payload }),
-  publishVersion: (templateKey: string, version: number) =>
-    apiFetch<PromptVersion>(
-      `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/versions/${encodeURIComponent(String(version))}/publish`,
-      { method: 'POST' }
-    ),
-  listLabels: (templateKey: string) =>
-    apiFetch<PromptLabel[]>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`),
-  assignLabel: (templateKey: string, payload: object) =>
-    apiFetch<PromptLabel>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`, { method: 'POST', json: payload }),
-  deleteLabel: (templateKey: string, label: string) =>
-    apiFetch<{ deleted: boolean }>(
-      `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels/${encodeURIComponent(label)}`,
-      { method: 'DELETE' }
-    ),
-  listBindings: (params?: { scope_type?: string; scope_id?: string; template_key?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<PromptBinding>>(withQuery('/ui/api/prompt-registry/bindings', params)),
-  upsertBinding: (payload: object) =>
-    apiFetch<PromptBinding>('/ui/api/prompt-registry/bindings', { method: 'POST', json: payload }),
-  deleteBinding: (bindingId: string) =>
-    apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE' }),
-  dryRunRender: (payload: object) =>
-    apiFetch<Record<string, unknown>>('/ui/api/prompt-registry/render', { method: 'POST', json: payload }),
-  previewResolution: (payload: object) =>
-    apiFetch<{
-      winner: PromptResolutionCandidate | null;
-      candidates: PromptResolutionCandidate[];
-    }>('/ui/api/prompt-registry/preview-resolution', { method: 'POST', json: payload }),
-};
+export * from './api/promptRegistry';
 
 export interface Tier {
   tier_id: string;

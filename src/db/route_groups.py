@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.db.route_group_identity import (
+    RouteGroupIdentity,
+    RouteGroupIdentityNotFoundError,
+    RouteGroupLookup,
+)
 from src.db.route_policy_lifecycle import (
     RoutePolicyLifecycleMixin,
     RoutePolicyRecord,
@@ -128,7 +133,17 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         self._use_transactions = use_transactions
 
     def with_db(self, prisma_client: Any) -> RouteGroupRepository:
-        return RouteGroupRepository(prisma_client, use_transactions=False)
+        repository = RouteGroupRepository(prisma_client, use_transactions=False)
+        repository._identity = self._identity
+        return repository
+
+    def for_identity(self, identity: RouteGroupIdentity) -> RouteGroupRepository:
+        repository = RouteGroupRepository(self.prisma, use_transactions=self._use_transactions)
+        repository._identity = identity
+        return repository
+
+    async def get_group_by_id(self, route_group_id: str) -> RouteGroupRecord | None:
+        return await self._get_group(RouteGroupLookup("route_group_id", route_group_id))
 
     def supports_transactions(self) -> bool:
         return bool(
@@ -188,11 +203,14 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         return [self._to_group_record(row) for row in rows], total
 
     async def get_group(self, group_key: str) -> RouteGroupRecord | None:
+        return await self._get_group(self._group_lookup(group_key))
+
+    async def _get_group(self, lookup: RouteGroupLookup) -> RouteGroupRecord | None:
         if self.prisma is None:
             return None
 
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT
                 g.route_group_id,
                 g.group_key,
@@ -209,10 +227,10 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                     WHERE m.route_group_id = g.route_group_id
                 ) AS member_count
             FROM deltallm_routegroup g
-            WHERE g.group_key = $1
+            WHERE g.{lookup.column} = $1
             LIMIT 1
             """,
-            group_key,
+            lookup.value,
         )
         if not rows:
             return None
@@ -221,14 +239,15 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
     async def get_default_prompt(self, group_key: str) -> dict[str, str] | None:
         if self.prisma is None:
             return None
+        lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT metadata
             FROM deltallm_routegroup
-            WHERE group_key = $1
+            WHERE {lookup.column} = $1
             LIMIT 1
             """,
-            group_key,
+            lookup.value,
         )
         if not rows:
             return None
@@ -325,7 +344,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                 enabled = $5,
                 metadata = $6::jsonb,
                 updated_at = NOW()
-            WHERE group_key = $1
+            WHERE route_group_id = $1
             RETURNING route_group_id, group_key, name, mode, routing_strategy, enabled, metadata, created_at, updated_at,
                 (
                     SELECT COUNT(*)::int
@@ -333,7 +352,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                     WHERE m.route_group_id = deltallm_routegroup.route_group_id
                 ) AS member_count
             """,
-            group_key,
+            group_id,
             name,
             mode,
             routing_strategy,
@@ -365,10 +384,10 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         rows = await self.prisma.query_raw(
             """
             DELETE FROM deltallm_routegroup
-            WHERE group_key = $1
+            WHERE route_group_id = $1
             RETURNING route_group_id
             """,
-            group_key,
+            group_id,
         )
         if not rows:
             return False
@@ -390,8 +409,9 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         clauses: list[str] = []
         params: list[Any] = []
         if group_key:
-            params.append(group_key)
-            clauses.append(f"g.group_key = ${len(params)}")
+            lookup = self._group_lookup(group_key)
+            params.append(lookup.value)
+            clauses.append(f"g.{lookup.column} = ${len(params)}")
         if scope_type:
             params.append(scope_type)
             clauses.append(f"b.scope_type = ${len(params)}")
@@ -524,15 +544,16 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         if self.prisma is None:
             return []
 
+        lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT m.membership_id, m.route_group_id, m.deployment_id, m.enabled, m.weight, m.priority, m.created_at, m.updated_at
             FROM deltallm_routegroupmember m
             JOIN deltallm_routegroup g ON g.route_group_id = m.route_group_id
-            WHERE g.group_key = $1
+            WHERE g.{lookup.column} = $1
             ORDER BY m.created_at ASC, m.deployment_id ASC
             """,
-            group_key,
+            lookup.value,
         )
         return [self._to_member_record(row) for row in rows]
 
@@ -608,11 +629,11 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             DELETE FROM deltallm_routegroupmember m
             USING deltallm_routegroup g
             WHERE g.route_group_id = m.route_group_id
-              AND g.group_key = $1
+              AND g.route_group_id = $1
               AND m.deployment_id = $2
             RETURNING m.membership_id
             """,
-            group_key,
+            group_id,
             deployment_id,
         )
         if not rows:
@@ -678,6 +699,14 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             """,
             ROUTING_RUNTIME_STATE_KEY,
         )
+        # Validate against this query's snapshot, before its IDs are discarded.
+        # A separate existence check could race with deletion and key reuse.
+        if self._identity is not None and not any(
+            row.get("route_group_id") == self._identity.route_group_id
+            and row.get("group_key") == self._identity.group_key
+            for row in groups
+        ):
+            raise RouteGroupIdentityNotFoundError("Route group not found")
         if not groups:
             return RouteGroupRuntimeSnapshot(revision=0, groups=[])
 
@@ -816,14 +845,15 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             ) from exc
 
     async def _resolve_group_id(self, group_key: str) -> str | None:
+        lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT route_group_id
             FROM deltallm_routegroup
-            WHERE group_key = $1
+            WHERE {lookup.column} = $1
             LIMIT 1
             """,
-            group_key,
+            lookup.value,
         )
         if not rows:
             return None
