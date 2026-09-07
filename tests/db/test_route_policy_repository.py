@@ -297,12 +297,12 @@ async def test_publish_policy_locks_group_and_preserves_opaque_fields() -> None:
     )
 
     assert record is not None
-    assert record.policy_json == {
+    assert record.policy.policy_json == {
         "server_revision": 4,
         "strategy": "least-busy",
         "retry": {"server_classification": "strict", "max_attempts": 1},
     }
-    assert record.semantics_version == 3
+    assert record.policy.semantics_version == 3
     assert prisma.started == 1
     assert prisma.committed == 1
     assert prisma.rolled_back == 0
@@ -327,7 +327,7 @@ async def test_publish_policy_does_not_allow_client_to_overwrite_opaque_fields()
     )
 
     assert record is not None
-    assert record.policy_json["server_revision"] == 4
+    assert record.policy.policy_json["server_revision"] == 4
 
 
 @pytest.mark.asyncio
@@ -357,9 +357,9 @@ async def test_publish_policy_uses_null_to_delete_context_without_ambiguous_omis
     )
 
     assert omitted is not None
-    assert omitted.policy_json["context"] == existing["context"]
+    assert omitted.policy.policy_json["context"] == existing["context"]
     assert deleted is not None
-    assert "context" not in deleted.policy_json
+    assert "context" not in deleted.policy.policy_json
 
 
 @pytest.mark.asyncio
@@ -436,7 +436,7 @@ async def test_draft_update_preserves_opaque_fields() -> None:
     )
 
     assert record is not None
-    assert record.policy_json == {"server_revision": 8, "strategy": "least-busy"}
+    assert record.policy.policy_json == {"server_revision": 8, "strategy": "least-busy"}
     assert prisma.committed == 1
 
 
@@ -451,8 +451,8 @@ async def test_selector_draft_is_validated_and_stored_with_v3_semantics() -> Non
     )
 
     assert record is not None
-    assert record.semantics_version == 3
-    assert record.policy_json["selector"]["default_lane"] == "quality"
+    assert record.policy.semantics_version == 3
+    assert record.policy.policy_json["selector"]["default_lane"] == "quality"
     assert prisma.committed == 1
 
 
@@ -472,10 +472,10 @@ async def test_v3_selector_draft_update_preserves_omitted_selector_and_member_la
     )
 
     assert record is not None
-    assert record.semantics_version == 3
-    assert record.policy_json["strategy"] == "weighted"
-    assert record.policy_json["selector"] == source["selector"]
-    assert record.policy_json["members"] == source["members"]
+    assert record.policy.semantics_version == 3
+    assert record.policy.policy_json["strategy"] == "weighted"
+    assert record.policy.policy_json["selector"] == source["selector"]
+    assert record.policy.policy_json["members"] == source["members"]
     assert prisma.committed == 1
 
 
@@ -501,8 +501,8 @@ async def test_v3_selector_draft_member_update_preserves_omitted_lanes() -> None
     )
 
     assert record is not None
-    assert record.policy_json["selector"] == source["selector"]
-    assert record.policy_json["members"] == [
+    assert record.policy.policy_json["selector"] == source["selector"]
+    assert record.policy.policy_json["members"] == [
         {
             "server_assignment": "stable",
             "deployment_id": "dep-a",
@@ -575,8 +575,8 @@ async def test_v3_selector_draft_update_uses_explicit_null_to_remove_selector() 
     )
 
     assert record is not None
-    assert "selector" not in record.policy_json
-    assert record.policy_json["members"] == [
+    assert "selector" not in record.policy.policy_json
+    assert record.policy.policy_json["members"] == [
         {"deployment_id": "dep-a"},
         {
             "deployment_id": "dep-b",
@@ -608,12 +608,12 @@ async def test_selector_draft_preserves_opaque_stored_fields_and_reaches_activat
     record = await repository.save_draft_policy("support-route", _selector_policy())
 
     assert record is not None
-    assert record.policy_json["server_revision"] == 8
-    assert record.policy_json["members"][0]["server_assignment"] == "stable"
-    assert record.policy_json["selector"]["default_lane"] == "quality"
+    assert record.policy.policy_json["server_revision"] == 8
+    assert record.policy.policy_json["members"][0]["server_assignment"] == "stable"
+    assert record.policy.policy_json["selector"]["default_lane"] == "quality"
     assert sum("COALESCE(d.model_info->>'mode'" in sql for sql, _ in transaction.calls) == 1
 
-    transaction.draft_policy = record.policy_json
+    transaction.draft_policy = record.policy.policy_json
     transaction.draft_semantics_version = 3
     transaction.executions.clear()
     with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
@@ -674,7 +674,8 @@ async def test_policy_lifecycle_rejects_context_for_unsupported_group_mode(
     )
     repository = RouteGroupRepository(_TransactionalRoutePolicyDB(transaction))
 
-    with pytest.raises(RoutePolicyStateConflictError, match="route group mode 'rerank'"):
+    error = ValueError if operation in {"publish", "save_draft"} else RoutePolicyStateConflictError
+    with pytest.raises(error, match="route group mode 'rerank'"):
         if operation == "publish":
             await repository.publish_policy("support-route", context_policy)
         elif operation == "save_draft":

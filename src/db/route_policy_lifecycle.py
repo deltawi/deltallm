@@ -10,11 +10,15 @@ from src.router.policy_validation import (
     PolicyMemberInventoryItem,
     merge_policy_document_for_write,
     merge_policy_members,
+    normalize_route_policy_write_fields,
     validate_route_policy,
     validate_stored_route_policy,
 )
 from src.router.route_group_validation import validate_route_group_member_modes
-from src.router.selection.policy import ensure_selector_activation_supported
+from src.router.selection.policy import (
+    SELECTOR_POLICY_SEMANTICS_VERSION,
+    ensure_selector_activation_supported,
+)
 
 
 class RoutePolicyStateConflictError(ValueError):
@@ -33,6 +37,12 @@ class RoutePolicyRecord:
     published_by: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RoutePolicyWriteResult:
+    policy: RoutePolicyRecord
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +123,7 @@ class RoutePolicyLifecycleMixin:
         policy_json: dict[str, Any],
         *,
         published_by: str | None = None,
-    ) -> RoutePolicyRecord | None:
+    ) -> RoutePolicyWriteResult | None:
         if self.prisma is None:
             return None
         self.require_transactions("publish_policy")
@@ -130,58 +140,34 @@ class RoutePolicyLifecycleMixin:
         policy_json: dict[str, Any],
         *,
         published_by: str | None,
-    ) -> RoutePolicyRecord | None:
+    ) -> RoutePolicyWriteResult | None:
         group_id = await self._lock_group_id(group_key)
         if group_id is None:
             return None
         context = await self._load_policy_validation_context(group_id)
-        try:
-            normalized, _ = self._validate_policy_document(
-                policy_json,
-                context=context,
-                semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
-            )
-        except ValueError as exc:
-            raise RoutePolicyStateConflictError(
-                f"policy is incompatible with current route-group members: {exc}"
-            ) from exc
         current = await self._latest_policy_document(group_id, status="published")
-        effective = merge_policy_document_for_write(
-            current.policy_json if current is not None else None,
-            normalized,
-            existing_semantics_version=(
-                current.semantics_version
-                if current is not None
-                else CURRENT_POLICY_SEMANTICS_VERSION
-            ),
+        effective, warnings = self._prepare_policy_write(
+            policy_json,
+            current=current,
+            context=context,
         )
-        try:
-            effective_normalized, _ = self._validate_policy_document(
-                effective,
-                context=context,
-                semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
-                stored_document=True,
-            )
-        except ValueError as exc:
-            raise RoutePolicyStateConflictError(
-                f"policy is incompatible with current route-group members: {exc}"
-            ) from exc
         ensure_selector_activation_supported(
-            effective_normalized,
+            effective,
             semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
         )
-        return await self._replace_published_policy(
+        policy = await self._replace_published_policy(
             group_id,
             effective,
             semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             published_by=published_by,
         )
+        return RoutePolicyWriteResult(policy, warnings) if policy is not None else None
 
     async def save_draft_policy(
         self,
         group_key: str,
         policy_json: dict[str, Any],
-    ) -> RoutePolicyRecord | None:
+    ) -> RoutePolicyWriteResult | None:
         if self.prisma is None:
             return None
         self.require_transactions("save_draft_policy")
@@ -192,21 +178,11 @@ class RoutePolicyLifecycleMixin:
         self,
         group_key: str,
         policy_json: dict[str, Any],
-    ) -> RoutePolicyRecord | None:
+    ) -> RoutePolicyWriteResult | None:
         group_id = await self._lock_group_id(group_key)
         if group_id is None:
             return None
         context = await self._load_policy_validation_context(group_id)
-        try:
-            normalized, _ = self._validate_policy_document(
-                policy_json,
-                context=context,
-                semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
-            )
-        except ValueError as exc:
-            raise RoutePolicyStateConflictError(
-                f"draft is incompatible with current route-group members: {exc}"
-            ) from exc
         drafts = await self.prisma.query_raw(
             """
             SELECT route_policy_id, policy_json, semantics_version
@@ -219,37 +195,60 @@ class RoutePolicyLifecycleMixin:
             group_id,
         )
         if drafts:
-            effective = merge_policy_document_for_write(
-                parse_policy_json(drafts[0].get("policy_json")),
-                normalized,
-                existing_semantics_version=int(drafts[0].get("semantics_version") or 1),
+            current = StoredRoutePolicyDocument(
+                policy_json=parse_policy_json(drafts[0].get("policy_json")),
+                semantics_version=int(drafts[0].get("semantics_version") or 1),
             )
-            try:
-                self._validate_policy_document(
-                    effective,
-                    context=context,
-                    semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
-                    stored_document=True,
-                )
-            except ValueError as exc:
-                raise RoutePolicyStateConflictError(
-                    f"draft is incompatible with current route-group members: {exc}"
-                ) from exc
-            return await self._update_draft(
+        else:
+            current = await self._latest_policy_document(group_id, status="published")
+        effective, warnings = self._prepare_policy_write(
+            policy_json,
+            current=current,
+            context=context,
+        )
+        if drafts:
+            policy = await self._update_draft(
                 str(drafts[0]["route_policy_id"]),
                 effective,
                 semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             )
+        else:
+            policy = await self._insert_policy(
+                group_id,
+                "draft",
+                effective,
+                semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
+                published_by=None,
+            )
+        return RoutePolicyWriteResult(policy, warnings) if policy is not None else None
 
-        current = await self._latest_policy_document(group_id, status="published")
+    def _prepare_policy_write(
+        self,
+        policy_json: dict[str, Any],
+        *,
+        current: StoredRoutePolicyDocument | None,
+        context: RoutePolicyValidationContext,
+    ) -> tuple[dict[str, Any], tuple[str, ...]]:
+        if not isinstance(policy_json, dict):
+            raise ValueError("policy payload must be an object")
+        current_semantics = (
+            current.semantics_version if current else CURRENT_POLICY_SEMANTICS_VERSION
+        )
+        existing_selector = (
+            current.policy_json.get("selector")
+            if current and current_semantics >= SELECTOR_POLICY_SEMANTICS_VERSION
+            else None
+        )
+        selector_enabled = policy_json.get("selector", existing_selector) is not None
+        normalized, warnings = normalize_route_policy_write_fields(
+            policy_json,
+            selector_enabled=selector_enabled,
+            workload_mode=context.group_mode,
+        )
         effective = merge_policy_document_for_write(
             current.policy_json if current is not None else None,
             normalized,
-            existing_semantics_version=(
-                current.semantics_version
-                if current is not None
-                else CURRENT_POLICY_SEMANTICS_VERSION
-            ),
+            existing_semantics_version=current_semantics,
         )
         try:
             self._validate_policy_document(
@@ -260,15 +259,9 @@ class RoutePolicyLifecycleMixin:
             )
         except ValueError as exc:
             raise RoutePolicyStateConflictError(
-                f"draft is incompatible with current route-group members: {exc}"
+                f"policy is incompatible with current route-group members: {exc}"
             ) from exc
-        return await self._insert_policy(
-            group_id,
-            "draft",
-            effective,
-            semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
-            published_by=None,
-        )
+        return effective, tuple(warnings)
 
     async def publish_latest_draft(
         self,

@@ -33,7 +33,10 @@ from src.api.admin.route_group_contracts import (
     RoutePolicyRollbackResponse,
     RoutePolicyValidationResponse,
 )
-from src.api.admin.request_validation import BadRequestValidationRoute
+from src.api.admin.request_validation import (
+    BadRequestValidationRoute,
+    PolicyBadRequestValidationRoute,
+)
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.db.route_groups import RouteGroupRepository
@@ -76,6 +79,10 @@ from src.services.route_group_mutations import RouteGroupMutationService
 from src.services.route_groups import RouteGroupRuntimeCache
 
 router = APIRouter(tags=["Admin Route Groups"])
+policy_router = APIRouter(
+    route_class=PolicyBadRequestValidationRoute,
+    responses={400: {"description": "Invalid policy input or unsupported selector activation"}},
+)
 logger = logging.getLogger(__name__)
 
 _ALLOWED_BINDING_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user"}
@@ -461,7 +468,6 @@ def _policy_publication_service(request: Request) -> RoutePolicyPublicationServi
     return RoutePolicyPublicationService(
         route_groups=_repository_or_503(request),
         refresh_runtime=refresh_runtime,
-        deployment_modes=deployment_modes_by_id(model_entries(request.app)),
     )
 
 
@@ -998,7 +1004,7 @@ async def list_route_group_policies(request: Request, group_key: str) -> dict[st
     }
 
 
-@router.post(
+@policy_router.post(
     "/ui/api/route-groups/{group_key}/policy/validate",
     response_model=RoutePolicyValidationResponse,
     response_model_exclude_unset=True,
@@ -1020,7 +1026,7 @@ async def validate_route_group_policy(
     return {"group_key": group_key, "valid": True, "policy": normalized, "warnings": warnings}
 
 
-@router.post(
+@policy_router.post(
     "/ui/api/route-groups/{group_key}/policy/draft",
     response_model=RoutePolicyMutationResponse,
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
@@ -1034,22 +1040,19 @@ async def save_route_group_policy_draft(
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
     document = payload.to_policy_document()
-    normalized, warnings = _validate_policy_payload(
-        document,
-        available_members=await _resolve_policy_members(request, repository, group_key),
-        workload_mode=group.mode,
-    )
     try:
-        policy = await repository.save_draft_policy(group_key, normalized)
+        result = await repository.save_draft_policy(group_key, document)
     except RoutePolicyStateConflictError as exc:
         _raise_route_policy_conflict(exc)
-    if policy is None:
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
     response = {
         "group_key": group_key,
-        "policy": _policy_response_payload(policy),
-        "warnings": warnings,
+        "policy": _policy_response_payload(result.policy),
+        "warnings": list(result.warnings),
     }
     await emit_admin_mutation_audit(
         request=request,
@@ -1063,7 +1066,7 @@ async def save_route_group_policy_draft(
     return response
 
 
-@router.post(
+@policy_router.post(
     "/ui/api/route-groups/{group_key}/policy/publish",
     response_model=RoutePolicyMutationResponse,
     dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
@@ -1176,7 +1179,7 @@ router.add_api_route(
 )
 
 
-@router.put(
+@policy_router.put(
     "/ui/api/route-groups/{group_key}/policy",
     response_model=RoutePolicyMutationResponse,
     deprecated=True,
@@ -1198,3 +1201,6 @@ async def publish_route_group_policy(
         payload.to_policy_document(),
         latest_draft=False,
     )
+
+
+router.include_router(policy_router)

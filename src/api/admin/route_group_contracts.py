@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from copy import deepcopy
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from src.route_policy_contract import LLMTierSelectorPolicy, RoutePolicyMember
 
@@ -90,14 +99,27 @@ class RoutePolicyDocumentRequest(BaseModel):
 
     mode: object | None = None
     strategy: object | None = None
-    members: list[RoutePolicyMember | dict[str, object]] | object | None = None
+    members: list[RoutePolicyMember | dict[str, object]] = Field(default_factory=list)
     timeouts: dict[str, object] | object | None = None
     retry: dict[str, object] | object | None = None
-    context: RoutePolicyContextDocument | None = None
+    context: RoutePolicyContextDocument | dict[str, object] | None = None
     selector: LLMTierSelectorPolicy | None = None
+    _document: dict[str, Any] = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def preserve_authored_document(
+        cls, value: Any, handler: ModelWrapValidatorHandler[Self]
+    ) -> Self:
+        result = handler(value)
+        # Inherited-selector strictness is decided under the repository's group lock.
+        # Transport normalization must not erase values, unknown keys, or tombstones.
+        if isinstance(value, dict):
+            result._document = deepcopy(value)
+        return result
 
     def to_policy_document(self) -> dict[str, Any]:
-        return self.model_dump(mode="python", exclude_unset=True)
+        return deepcopy(self._document)
 
 
 class RoutePolicyTimeoutsDocument(BaseModel):

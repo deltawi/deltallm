@@ -8,6 +8,12 @@ import pytest
 
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.prompt_registry import PromptResolvedRecord
+from src.db.route_policy_lifecycle import (
+    RoutePolicyValidationContext,
+    RoutePolicyWriteResult,
+    StoredRoutePolicyDocument,
+)
+from src.db.route_groups import RouteGroupRepository
 from src.db.route_groups import (
     RouteGroupBindingRecord,
     RouteGroupMemberRecord,
@@ -17,11 +23,14 @@ from src.db.route_groups import (
 from src.router import FallbackConfig, build_deployment_registry
 from src.router.policy_validation import (
     CURRENT_POLICY_SEMANTICS_VERSION,
-    merge_policy_document_for_write,
+    PolicyMemberInventoryItem,
     merge_policy_members,
 )
 from src.router.runtime_generation import rebuild_routing_runtime_generation
-from src.router.selection.policy import RouteSelectorActivationUnsupportedError
+from src.router.selection.policy import (
+    RouteSelectorActivationUnsupportedError,
+    ensure_selector_activation_supported,
+)
 from src.services.asset_ownership import owner_scope_from_metadata
 from src.services.asset_scopes import normalize_scope_type
 from src.services.callable_targets import build_callable_target_catalog
@@ -62,6 +71,10 @@ def _selector_policy_payload() -> dict[str, Any]:
 
 
 def _set_selector_model_inventory(test_app: Any, *, classifier_mode: str = "chat") -> None:
+    test_app.state.route_group_repository.deployment_modes = {
+        "dep-a": classifier_mode,
+        "dep-b": "chat",
+    }
     test_app.state.model_registry = {
         "selector-test": [
             {
@@ -308,15 +321,36 @@ class _FakeRouteGroupRepository:
             )
         return runtime_groups
 
+    def _prepare_policy_write(self, group_key: str, document: dict):  # noqa: ANN201
+        current = self.policies.get(group_key)
+        return RouteGroupRepository(None)._prepare_policy_write(
+            document,
+            current=(
+                StoredRoutePolicyDocument(current.policy_json, current.semantics_version)
+                if current
+                else None
+            ),
+            context=RoutePolicyValidationContext(
+                group_key=group_key,
+                group_mode=self.groups[group_key].mode,
+                inventory={
+                    member.deployment_id: PolicyMemberInventoryItem(
+                        deployment_id=member.deployment_id,
+                        enabled=member.enabled,
+                        workload_mode=self.deployment_modes.get(member.deployment_id, "chat"),
+                    )
+                    for member in self.members.get(group_key, [])
+                },
+            ),
+        )
+
+    deployment_modes: dict[str, str] = {}
+
     async def save_draft_policy(self, group_key: str, policy_json: dict):  # noqa: ANN001, ANN201
         group = self.groups.get(group_key)
         if group is None:
             return None
-        current = self.policies.get(group_key)
-        effective = merge_policy_document_for_write(
-            current.policy_json if current is not None else None,
-            policy_json,
-        )
+        effective, warnings = self._prepare_policy_write(group_key, policy_json)
         self._policy_counter += 1
         policy = RoutePolicyRecord(
             route_policy_id=f"p-{self._policy_counter}",
@@ -328,16 +362,15 @@ class _FakeRouteGroupRepository:
             published_by=None,
         )
         self.policies[group_key] = policy
-        return policy
+        return RoutePolicyWriteResult(policy, warnings)
 
     async def publish_policy(self, group_key: str, policy_json: dict, *, published_by=None):  # noqa: ANN001, ANN201
         group = self.groups.get(group_key)
         if group is None:
             return None
-        current = self.policies.get(group_key)
-        effective = merge_policy_document_for_write(
-            current.policy_json if current is not None else None,
-            policy_json,
+        effective, warnings = self._prepare_policy_write(group_key, policy_json)
+        ensure_selector_activation_supported(
+            effective, semantics_version=CURRENT_POLICY_SEMANTICS_VERSION
         )
         self._policy_counter += 1
         policy = RoutePolicyRecord(
@@ -350,7 +383,7 @@ class _FakeRouteGroupRepository:
             published_by=published_by,
         )
         self.policies[group_key] = policy
-        return policy
+        return RoutePolicyWriteResult(policy, warnings)
 
     async def publish_latest_draft(self, group_key: str, *, published_by=None):  # noqa: ANN001, ANN201
         policy = self.policies.get(group_key)

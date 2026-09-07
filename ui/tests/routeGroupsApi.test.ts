@@ -4,6 +4,44 @@ import test from 'node:test';
 import { routeGroups, type RoutePolicy } from '../src/lib/api';
 import { routeGroupMutationOutcome } from '../src/lib/routeGroups';
 
+test('route-group partial writes retain tombstones and omit untouched fields', async () => {
+  const originalFetch = globalThis.fetch;
+  const documents: unknown[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    documents.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ warnings: [] }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    await routeGroups.savePolicyDraft('support', {
+      members: [{ deployment_id: 'dep-a', lane: null }],
+    });
+    await routeGroups.publishPolicy('support', { selector: null, context: null });
+    assert.deepEqual(documents, [
+      { members: [{ deployment_id: 'dep-a', lane: null }] },
+      { selector: null, context: null },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('route-group policy input errors preserve the server error message', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    detail: 'Invalid route policy request fields or types',
+  }), { status: 400, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    await assert.rejects(
+      routeGroups.savePolicyDraft('support', { selector: null }),
+      /Invalid route policy request fields or types/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('route-group policy responses preserve semantics and post-commit warnings', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({

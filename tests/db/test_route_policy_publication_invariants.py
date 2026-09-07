@@ -154,7 +154,7 @@ async def test_concurrent_publications_serialize_versions_and_preserve_one_publi
 
         assert first is not None
         assert second is not None
-        assert {first.version, second.version} == {1, 2}
+        assert {first.policy.version, second.policy.version} == {1, 2}
         rows = await first_db.query_raw(
             """
             SELECT version, status, policy_json

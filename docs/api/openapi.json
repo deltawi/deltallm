@@ -3737,32 +3737,29 @@
                 "$ref": "#/components/schemas/RoutePolicyContextDocument"
               },
               {
-                "type": "null"
-              }
-            ]
-          },
-          "members": {
-            "anyOf": [
-              {
-                "items": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/RoutePolicyMember"
-                    },
-                    {
-                      "additionalProperties": true,
-                      "type": "object"
-                    }
-                  ]
-                },
-                "type": "array"
+                "additionalProperties": true,
+                "type": "object"
               },
-              {},
               {
                 "type": "null"
               }
             ],
-            "title": "Members"
+            "title": "Context"
+          },
+          "members": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/RoutePolicyMember"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              ]
+            },
+            "title": "Members",
+            "type": "array"
           },
           "mode": {
             "anyOf": [
@@ -26920,6 +26917,9 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Invalid policy input or unsupported selector activation"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -27035,6 +27035,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid policy input or unsupported selector activation"
           },
           "422": {
             "content": {
@@ -27158,6 +27161,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid policy input or unsupported selector activation"
           },
           "422": {
             "content": {
@@ -27518,6 +27524,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid policy input or unsupported selector activation"
           },
           "422": {
             "content": {

@@ -4,8 +4,14 @@ from dataclasses import dataclass
 
 import pytest
 
-from src.db.route_policy_lifecycle import RoutePolicyRecord
-from src.router.policy_validation import CURRENT_POLICY_SEMANTICS_VERSION
+from src.db.route_policy_lifecycle import (
+    RoutePolicyRecord,
+    RoutePolicyWriteResult,
+    RoutePolicyValidationContext,
+)
+from src.db.route_groups import RouteGroupRepository
+from src.router.policy_validation import CURRENT_POLICY_SEMANTICS_VERSION, PolicyMemberInventoryItem
+from src.router.selection.policy import ensure_selector_activation_supported
 from src.services.route_policy_publication import (
     RoutePolicyPublicationNotFoundError,
     RoutePolicyPublicationService,
@@ -31,6 +37,7 @@ class _Repository:
         self.draft_calls = 0
         self.draft_exists = True
         self.group_mode = "chat"
+        self.deployment_modes = {"dep-a": "chat", "dep-b": "chat"}
 
     async def get_group(self, group_key: str) -> _Group | None:
         del group_key
@@ -46,9 +53,32 @@ class _Repository:
         policy_json: dict[str, object],
         *,
         published_by: str | None = None,
-    ) -> RoutePolicyRecord:
+    ) -> RoutePolicyWriteResult | None:
+        if not self.group_exists:
+            return None
+        effective, warnings = RouteGroupRepository(None)._prepare_policy_write(
+            policy_json,
+            current=None,
+            context=RoutePolicyValidationContext(
+                group_key=group_key,
+                group_mode=self.group_mode,
+                inventory={
+                    member.deployment_id: PolicyMemberInventoryItem(
+                        member.deployment_id,
+                        member.enabled,
+                        self.deployment_modes.get(member.deployment_id),
+                    )
+                    for member in self.members
+                },
+            ),
+        )
+        ensure_selector_activation_supported(
+            effective, semantics_version=CURRENT_POLICY_SEMANTICS_VERSION
+        )
         self.document_calls.append(policy_json)
-        return _policy(group_key, policy_json, published_by=published_by)
+        return RoutePolicyWriteResult(
+            _policy(group_key, effective, published_by=published_by), warnings
+        )
 
     async def publish_latest_draft(
         self,
@@ -100,7 +130,8 @@ async def test_document_publication_normalizes_alias_and_refreshes_once() -> Non
         published_by="admin_api",
     )
 
-    assert repository.document_calls == [{"strategy": "priority-based-routing"}]
+    assert repository.document_calls == [{"mode": "fallback"}]
+    assert result.policy.policy_json == {"strategy": "priority-based-routing"}
     assert repository.draft_calls == 0
     assert result.policy.published_by == "admin_api"
     assert result.warnings == (
@@ -143,7 +174,6 @@ async def test_selector_publication_is_rejected_before_repository_or_refresh() -
     service = RoutePolicyPublicationService(
         route_groups=repository,
         refresh_runtime=refresh,
-        deployment_modes={"dep-a": "chat", "dep-b": "chat"},
     )
 
     with pytest.raises(ValueError, match="cannot be activated"):
@@ -183,10 +213,10 @@ async def test_selector_publication_rejects_unknown_or_nonchat_classifier_mode(
     deployment_modes = {"dep-b": "chat"}
     if classifier_mode is not None:
         deployment_modes["dep-a"] = classifier_mode
+    repository.deployment_modes = deployment_modes
     service = RoutePolicyPublicationService(
         route_groups=repository,
         refresh_runtime=refresh,
-        deployment_modes=deployment_modes,
     )
 
     with pytest.raises(ValueError, match="classifier must reference a chat deployment"):

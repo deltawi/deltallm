@@ -60,6 +60,13 @@ class _SelectorWriteIntent(StrEnum):
     REMOVED = "removed"
 
 
+class PolicyValidationKind(StrEnum):
+    CLIENT_DOCUMENT = "client_document"
+    STORED_DOCUMENT = "stored_document"
+    SELECTOR_WRITE_FIELDS = "selector_write_fields"
+    LEGACY_WRITE_FIELDS = "legacy_write_fields"
+
+
 def _normalize_int(value: Any, field_name: str, *, minimum: int = 0) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{field_name} must be an integer")
@@ -385,7 +392,7 @@ def _validate_policy_members(
     stored_document: bool,
 ) -> None:
     members = normalized.get("members")
-    if members is None:
+    if "members" not in normalized:
         return
     if not isinstance(members, list):
         raise ValueError("members must be a list")
@@ -407,8 +414,11 @@ def _validate_policy_members(
             try:
                 strict_member = RoutePolicyMember.model_validate(selector_member)
             except ValidationError as exc:
-                raise ValueError(f"members[{idx}] is invalid: {exc}") from exc
+                messages = "; ".join(error["msg"] for error in exc.errors(include_input=False))
+                raise ValueError(f"members[{idx}] is invalid: {messages}") from exc
             member = strict_member.model_dump(mode="python", exclude_none=True)
+            if "lane" in raw_member:
+                member["lane"] = strict_member.lane
             deployment_id = strict_member.deployment_id
             if deployment_id in seen_member_ids:
                 raise ValueError(f"members[{idx}].deployment_id is duplicated")
@@ -482,7 +492,8 @@ def _validate_selector(
             available_members=available_members,
         )
     except ValidationError as exc:
-        raise ValueError(f"selector is invalid: {exc}") from exc
+        messages = "; ".join(error["msg"] for error in exc.errors(include_input=False))
+        raise ValueError(f"selector is invalid: {messages}") from exc
 
     normalized["selector"] = selector.model_dump(mode="json")
 
@@ -658,14 +669,15 @@ def _validate_route_policy_document(
     available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
     semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
     workload_mode: object | None = None,
-    stored_document: bool,
+    validation_kind: PolicyValidationKind,
 ) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("policy payload must be an object")
     selector_enabled = (
         semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
         and payload.get("selector") is not None
-    )
+    ) or validation_kind is PolicyValidationKind.SELECTOR_WRITE_FIELDS
+    stored_document = validation_kind is PolicyValidationKind.STORED_DOCUMENT
     if semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION:
         allowed_policy_keys = ALLOWED_POLICY_KEYS
     elif semantics_version >= CONTEXT_POLICY_SEMANTICS_VERSION:
@@ -692,6 +704,20 @@ def _validate_route_policy_document(
     _validate_policy_timeouts(normalized, warnings)
     _validate_policy_retry(normalized, warnings)
     _validate_context_policy(normalized, warnings, workload_mode=workload_mode)
+    if validation_kind in {
+        PolicyValidationKind.SELECTOR_WRITE_FIELDS,
+        PolicyValidationKind.LEGACY_WRITE_FIELDS,
+    }:
+        if normalized.get("selector") is not None:
+            try:
+                normalized["selector"] = LLMTierSelectorPolicy.model_validate(
+                    normalized["selector"]
+                ).model_dump(mode="json")
+            except ValidationError as exc:
+                raise ValueError("selector has invalid fields or types") from exc
+        _apply_policy_mode(normalized, normalized.get("members", []), warnings, mode=mode)
+        normalized.pop("mode", None)
+        return normalized, warnings
     active_members = _validate_member_pool(
         normalized,
         available_members,
@@ -722,7 +748,7 @@ def validate_route_policy(
         available_members=available_members,
         semantics_version=semantics_version,
         workload_mode=workload_mode,
-        stored_document=False,
+        validation_kind=PolicyValidationKind.CLIENT_DOCUMENT,
     )
 
 
@@ -740,5 +766,20 @@ def validate_stored_route_policy(
         available_members=available_members,
         semantics_version=semantics_version,
         workload_mode=workload_mode,
-        stored_document=True,
+        validation_kind=PolicyValidationKind.STORED_DOCUMENT,
+    )
+
+
+def normalize_route_policy_write_fields(
+    payload: dict[str, Any], *, selector_enabled: bool, workload_mode: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate authored fields before merging; assignments need the locked durable base."""
+    return _validate_route_policy_document(
+        payload,
+        workload_mode=workload_mode,
+        validation_kind=(
+            PolicyValidationKind.SELECTOR_WRITE_FIELDS
+            if selector_enabled
+            else PolicyValidationKind.LEGACY_WRITE_FIELDS
+        ),
     )
