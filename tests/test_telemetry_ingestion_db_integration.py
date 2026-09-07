@@ -27,6 +27,9 @@ except Exception:  # pragma: no cover
     Prisma = None  # type: ignore[assignment]
 
 
+pytestmark = pytest.mark.postgres
+
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 

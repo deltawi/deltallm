@@ -9,6 +9,9 @@ import pytest
 import yaml
 
 
+pytestmark = pytest.mark.helm
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELM_CHART_DIR = REPO_ROOT / "deploy" / "kubernetes" / "helm"
 HELM = shutil.which("helm")
@@ -45,7 +48,9 @@ def _render(*args: str) -> list[dict[str, Any]]:
         capture_output=True,
         text=True,
     )
-    return [document for document in yaml.safe_load_all(result.stdout) if isinstance(document, dict)]
+    return [
+        document for document in yaml.safe_load_all(result.stdout) if isinstance(document, dict)
+    ]
 
 
 def _config_maps(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:

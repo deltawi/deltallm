@@ -27,6 +27,9 @@ from src.services.organization_deletion_worker import (
 from tests.db.tier_migration_helpers import connect_prisma
 
 
+pytestmark = pytest.mark.postgres
+
+
 async def _seed_tenant(
     db,  # noqa: ANN001
     *,

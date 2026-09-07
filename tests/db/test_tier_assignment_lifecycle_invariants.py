@@ -14,6 +14,9 @@ from tests.db.tier_migration_helpers import seed_tier
 from tests.db.tier_migration_helpers import seed_tier_version
 
 
+pytestmark = pytest.mark.postgres
+
+
 def _relative_timestamp(*, days: int) -> datetime:
     return (datetime.now(UTC) + timedelta(days=days)).replace(tzinfo=None)
 

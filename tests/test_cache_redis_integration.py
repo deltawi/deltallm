@@ -13,6 +13,9 @@ from src.cache.backends.redis import RedisBackend
 from src.cache.streaming import StreamingCacheHandler
 
 
+pytestmark = pytest.mark.redis
+
+
 @pytest.mark.skipif(
     not os.getenv("DELTALLM_TEST_REDIS_URL"),
     reason="DELTALLM_TEST_REDIS_URL is required for the Redis integration test",

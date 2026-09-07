@@ -14,6 +14,9 @@ from tests.db.tier_migration_helpers import require_tier_schema
 from tests.db.tier_migration_helpers import seed_tier
 
 
+pytestmark = pytest.mark.postgres
+
+
 @pytest.mark.asyncio
 async def test_clone_tier_version_copies_pool_and_policy_rows_against_postgres() -> None:
     db = await connect_prisma()

@@ -62,6 +62,9 @@ except Exception:  # pragma: no cover
     Prisma = None  # type: ignore[assignment]
 
 
+pytestmark = pytest.mark.postgres
+
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 BATCH_JOB_STATUS_RECONCILIATION_MIGRATION_PATH = (
     Path(__file__).resolve().parents[1]

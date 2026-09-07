@@ -13,6 +13,9 @@ from tests.db.tier_migration_helpers import seed_tier as _seed_tier
 from tests.db.tier_migration_helpers import seed_tier_version as _seed_tier_version
 
 
+pytestmark = pytest.mark.postgres
+
+
 @pytest.mark.asyncio
 async def test_tier_version_creation_constraints_reject_invalid_rows() -> None:
     db = await _connect_prisma()
