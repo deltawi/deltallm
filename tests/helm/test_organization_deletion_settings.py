@@ -11,6 +11,9 @@ import yaml
 from src.models.organization_lifecycle import ORGANIZATION_LIFECYCLE_PROTOCOL_VERSION
 
 
+pytestmark = pytest.mark.helm
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELM_CHART_DIR = REPO_ROOT / "deploy" / "kubernetes" / "helm"
 HELM = shutil.which("helm")

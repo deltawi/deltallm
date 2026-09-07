@@ -6,9 +6,17 @@ on:
   pull_request:
     branches: [main, master, feature/org-tiers]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ui-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: ui
@@ -25,12 +33,49 @@ jobs:
       - name: Install UI dependencies
         run: npm ci
 
+      - name: Run UI unit tests
+        run: npm run test:unit
+
       - name: Build UI
         run: npm run build
 
-  test:
+  python-tests:
+    name: Python tests (${{ matrix.lane }})
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [hermetic, app]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Generate Prisma client
+        run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Run ${{ matrix.lane }} tests
+        env:
+          DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only-0000
+          DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
+        run: >-
+          uv run pytest -q -m "${{ matrix.lane }}"
+          --durations=25 --durations-min=0.5
+
+  postgres-tests:
+    name: Python tests (postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:15
@@ -48,7 +93,43 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-      
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Generate Prisma client
+        run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Apply Prisma migrations
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
+        run: uv run prisma migrate deploy --schema=./prisma/schema.prisma
+
+      - name: Run PostgreSQL tests
+        env:
+          CI: 'true'
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
+          DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only-0000
+          DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
+        run: >-
+          uv run pytest -q -m postgres
+          --durations=25 --durations-min=0.5
+
+  redis-tests:
+    name: Python tests (redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
       redis:
         image: redis:7
         credentials:
@@ -61,7 +142,52 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Generate Prisma client
+        run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Run Redis tests
+        env:
+          REDIS_URL: redis://localhost:6379/0
+          DELTALLM_TEST_REDIS_URL: redis://localhost:6379/0
+        run: >-
+          uv run pytest -q -m redis -rs
+          --durations=25 --durations-min=0.5
+
+  migration-paths:
+    name: PostgreSQL migration paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:15
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deltallm_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,7 +202,7 @@ jobs:
         uses: astral-sh/setup-uv@v3
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
 
       - name: Generate Prisma client
         run: uv run prisma generate --schema=./prisma/schema.prisma
@@ -86,35 +212,28 @@ jobs:
           MIGRATION_TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: uv run python scripts/verify_migration_paths.py
 
-      - name: Apply Prisma migrations
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
-        run: uv run prisma migrate deploy --schema=./prisma/schema.prisma
-
-      - name: Run Redis integration tests
-        env:
-          DELTALLM_TEST_REDIS_URL: redis://localhost:6379/0
-        run: >-
-          uv run pytest -v -rs
-          tests/services/test_tier_fair_share_redis_integration.py
-          tests/test_router_redis_cutover_integration.py
-          tests/test_router_redis_integration.py
-
-      - name: Run tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
-          REDIS_URL: redis://localhost:6379/0
-          DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only-0000
-          DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
-        run: uv run pytest -v --ignore=tests/test_provider_presets_smoke.py
-
   helm:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Generate Prisma client
+        run: uv run prisma generate --schema=./prisma/schema.prisma
 
       - name: Validate chart
         run: |
@@ -158,8 +277,36 @@ jobs:
             --set runtime.redis.url="${VALID_REDIS_URL}" \
             > /dev/null
 
+      - name: Run Helm tests
+        run: >-
+          uv run pytest -q -m helm -rs
+          --durations=25 --durations-min=0.5
+
+  test:
+    name: test
+    if: ${{ always() }}
+    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all Python test lanes passed
+        env:
+          APP_AND_HERMETIC: ${{ needs.python-tests.result }}
+          POSTGRES: ${{ needs.postgres-tests.result }}
+          REDIS: ${{ needs.redis-tests.result }}
+          MIGRATIONS: ${{ needs.migration-paths.result }}
+          HELM: ${{ needs.helm.result }}
+        run: |
+          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM"; do
+            if [ "$result" != success ]; then
+              echo "Required test job finished with status: $result"
+              exit 1
+            fi
+          done
+
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -172,7 +319,7 @@ jobs:
         uses: astral-sh/setup-uv@v3
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
 
       - name: Run linter
         run: uv run ruff check .

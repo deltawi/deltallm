@@ -14,6 +14,9 @@ from src.services.route_group_mutations import RouteGroupMutationService
 from tests.db.tier_migration_helpers import connect_prisma, seed_organization
 
 
+pytestmark = pytest.mark.postgres
+
+
 async def _require_route_policy_schema(db) -> None:  # noqa: ANN001
     rows = await db.query_raw(
         "SELECT to_regclass('public.deltallm_routepolicy')::text AS relation_name"

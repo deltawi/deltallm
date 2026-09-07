@@ -10,6 +10,9 @@ from src.services.model_deployments import build_model_registry_from_records
 from tests.db.tier_migration_helpers import connect_prisma
 
 
+pytestmark = pytest.mark.postgres
+
+
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_database_and_registry_preserve_implicit_model_group_members() -> None:

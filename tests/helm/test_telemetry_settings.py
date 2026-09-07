@@ -8,6 +8,9 @@ import pytest
 import yaml
 
 
+pytestmark = pytest.mark.helm
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELM_CHART_DIR = REPO_ROOT / "deploy" / "kubernetes" / "helm"
 HELM = shutil.which("helm")

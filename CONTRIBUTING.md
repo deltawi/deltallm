@@ -107,16 +107,54 @@ See [Local Development](README.md#local-development) in the README for more deta
 - Ensure existing tests pass
 - Use `pytest` for running tests
 
+Every Python test belongs to exactly one dependency lane. Pytest assigns `app`
+automatically when a test uses the shared `test_app` fixture and assigns
+`hermetic` when no other lane applies. A test module that opens a real
+infrastructure client must declare its lane for every test in that module,
+normally with a module-level `pytestmark`.
+
+| Lane | What it exercises | Required dependency |
+| --- | --- | --- |
+| `hermetic` | Domain, service, repository-fake, and focused component behavior | None outside the Python process |
+| `app` | The complete in-process FastAPI route graph with fake adapters and stores | None outside the Python process |
+| `postgres` | SQL, constraints, transactions, locking, and Prisma behavior | Migrated PostgreSQL plus the generated Prisma client |
+| `redis` | Lua, cross-client coordination, reconnect, TTL, and outage behavior | Real Redis through `DELTALLM_TEST_REDIS_URL` |
+| `helm` | Chart schema, rendering, and deployment profiles | Helm CLI and built chart dependencies |
+
+The `integration` marker remains an aggregate selector for the `postgres`,
+`redis`, and `helm` lanes. It is not a primary lane.
+
 ```bash
 # Run all tests
 uv run pytest
 
-# Run with verbose output
-uv run pytest -v
+# Show the current test count in each lane
+uv run pytest --collect-only -qq --dependency-lane-report | tail -n 7
+
+# Run one dependency lane
+uv run pytest -q -m hermetic
+uv run pytest -q -m app
+
+# Run PostgreSQL tests after generating the client and migrating the test database
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/deltallm_test \
+  uv run pytest -q -m postgres
+
+# Run Redis integration tests
+DELTALLM_TEST_REDIS_URL=redis://localhost:6379/0 \
+  REDIS_URL=redis://localhost:6379/0 \
+  uv run pytest -q -m redis
+
+# Run Helm tests after building chart dependencies
+uv run pytest -q -m helm
 
 # Run specific test file
 uv run pytest tests/test_specific.py
 ```
+
+The collection hook fails when a test declares multiple primary lanes or when
+real Prisma, Redis, or Helm usage is missing its matching explicit marker. This
+keeps lane selection exhaustive and prevents infrastructure tests from silently
+running in a fake-only job.
 
 ## Reporting Issues
 

@@ -17,6 +17,9 @@ from tests.db.tier_migration_helpers import require_tier_schema
 from tests.db.tier_migration_helpers import seed_tier
 
 
+pytestmark = pytest.mark.postgres
+
+
 MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "prisma/migrations/20260814120000_tier_version_revision_provenance/migration.sql"
@@ -28,7 +31,7 @@ def test_revision_provenance_migration_declares_required_invariants() -> None:
 
     for fragment in (
         'ADD COLUMN "configuration_revision" INTEGER NOT NULL DEFAULT 0',
-        'ADD COLUMN "created_by_kind" TEXT NOT NULL DEFAULT \'unknown\'',
+        "ADD COLUMN \"created_by_kind\" TEXT NOT NULL DEFAULT 'unknown'",
         'CONSTRAINT "deltallm_tierversion_configuration_revision_check"',
         'CONSTRAINT "deltallm_tierversion_created_by_kind_check"',
         'CONSTRAINT "deltallm_tierversion_source_not_self_check"',
@@ -39,7 +42,7 @@ def test_revision_provenance_migration_declares_required_invariants() -> None:
         'CONSTRAINT "deltallm_tiercreationrequest_idempotency_key_check"',
         'CREATE UNIQUE INDEX "deltallm_tiercreationrequest_scope_key"',
         'CREATE UNIQUE INDEX "deltallm_tiercreationrequest_tier_id_key"',
-        'ON DELETE CASCADE',
+        "ON DELETE CASCADE",
     ):
         assert fragment in sql
 
@@ -217,7 +220,7 @@ async def test_revision_provenance_and_creation_request_constraints_against_post
                 second_tier_id,
             )
 
-        await db.execute_raw('DELETE FROM deltallm_tier WHERE tier_id = $1', tier_id)
+        await db.execute_raw("DELETE FROM deltallm_tier WHERE tier_id = $1", tier_id)
         request_rows = await db.query_raw(
             """
             SELECT COUNT(*)::int AS total

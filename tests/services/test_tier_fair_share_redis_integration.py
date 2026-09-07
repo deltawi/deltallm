@@ -19,6 +19,9 @@ from src.services.tier_capacity_fair_share import (
 from src.tier_rate_limit_policy import TierCapacityRateCheck
 
 
+pytestmark = pytest.mark.redis
+
+
 @pytest.mark.skipif(
     not os.getenv("DELTALLM_TEST_REDIS_URL"),
     reason="DELTALLM_TEST_REDIS_URL is required for the Redis integration test",
@@ -148,10 +151,7 @@ async def test_static_hard_cap_telemetry_lua_against_real_redis() -> None:
     heatmap_key = fair_share_limit_hit_heatmap_key()
     rank_key = fair_share_limit_hit_heatmap_rank_key()
     total_key = fair_share_limit_hit_total_key()
-    field = (
-        f"{pool_key}|{callable_key}|{organization_id}|"
-        "tier_pool_model_rpm|integration"
-    )
+    field = f"{pool_key}|{callable_key}|{organization_id}|tier_pool_model_rpm|integration"
 
     try:
         admitted = await limiter.check_rate_limits_and_tier_fair_share_atomic(

@@ -13,6 +13,9 @@ from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
 
+pytestmark = pytest.mark.redis
+
+
 class _MutableRouteGroupRepository:
     def __init__(self, groups: list[dict]) -> None:
         self.groups = groups
