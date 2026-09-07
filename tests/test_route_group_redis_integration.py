@@ -18,6 +18,7 @@ from src.services.route_groups import (
     RouteGroupRuntimeCache,
     load_route_groups,
 )
+from tests.services.test_route_group_cache_contract import INVALID_GROUP_FIELDS
 
 
 class _MutableRouteGroupRepository:
@@ -170,7 +171,8 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
 )
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_route_group_cache_repairs_invalid_nested_real_redis_snapshot() -> None:
+@pytest.mark.parametrize("fields", [{"policy_semantics_version": "invalid"}, *INVALID_GROUP_FIELDS])
+async def test_route_group_cache_repairs_invalid_nested_real_redis_snapshot(fields) -> None:
     redis = Redis.from_url(os.environ["DELTALLM_TEST_REDIS_URL"], decode_responses=True)
     keyspace = RouteGroupRuntimeRedisKeyspace(
         application="deltallm-test",
@@ -190,8 +192,8 @@ async def test_route_group_cache_repairs_invalid_nested_real_redis_snapshot() ->
         "groups": [
             {
                 "key": "invalid-cache",
-                "policy_semantics_version": "invalid",
                 "members": [],
+                **fields,
             }
         ],
     }
@@ -204,12 +206,13 @@ async def test_route_group_cache_repairs_invalid_nested_real_redis_snapshot() ->
         assert source == "db"
         assert groups[0]["key"] == "durable-route"
         assert repository.calls == 1
+        assert 0 < await redis.ttl(cache_key) <= cache.l2_ttl_seconds
 
-        cache._l1_entry = None
+        second_replica = RouteGroupRuntimeCache(redis, keyspace=keyspace)
         cached_groups, cached_source = await load_route_groups(
             repository,
             cfg,
-            route_group_cache=cache,
+            route_group_cache=second_replica,
         )
 
         assert cached_source == "l2_cache"
