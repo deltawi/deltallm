@@ -6,19 +6,23 @@ This page is the main "how do I call the gateway?" guide for first-time users.
 
 ## 1. Start the Gateway
 
-After completing [installation](installation.md) or [Docker](docker.md), make sure the backend is running:
+Complete the [Docker Compose setup](docker.md), including the `.env` file and initial
+model deployment. Compose starts the gateway, PostgreSQL, and Redis together; you do
+not need to start a second backend or Redis process.
 
-```bash
-# Optional: start Redis for distributed caching and rate limiting
-redis-server --daemonize yes
+The examples below use the single-instance Compose address, `http://localhost:4002`.
+If you followed the [manual installation](installation.md), substitute
+`http://localhost:8000`. For the multi-instance Compose evaluation profile, use
+`http://localhost`.
 
-python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-```
+Replace `YOUR_MASTER_KEY` with the `DELTALLM_MASTER_KEY` value you configured. The
+master key is for this local evaluation; create a scoped virtual key in step 6 for
+your application.
 
 ## 2. Verify It's Running
 
 ```bash
-curl http://localhost:8000/health/liveliness
+curl http://localhost:4002/health/liveliness
 ```
 
 Expected response:
@@ -32,7 +36,7 @@ Expected response:
 ## 3. List Available Models
 
 ```bash
-curl http://localhost:8000/v1/models \
+curl http://localhost:4002/v1/models \
   -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
 
@@ -48,7 +52,7 @@ curl http://localhost:8000/v1/models \
 Use the standard OpenAI chat completions format:
 
 ```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
+curl -X POST http://localhost:4002/v1/chat/completions \
   -H "Authorization: Bearer YOUR_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -69,7 +73,7 @@ Point any OpenAI SDK client at DeltaLLM:
     from openai import OpenAI
 
     client = OpenAI(
-        base_url="http://localhost:8000/v1",
+        base_url="http://localhost:4002/v1",
         api_key="YOUR_MASTER_KEY",
     )
 
@@ -86,7 +90,7 @@ Point any OpenAI SDK client at DeltaLLM:
     import OpenAI from "openai";
 
     const client = new OpenAI({
-      baseURL: "http://localhost:8000/v1",
+      baseURL: "http://localhost:4002/v1",
       apiKey: "YOUR_MASTER_KEY",
     });
 
@@ -102,7 +106,7 @@ Point any OpenAI SDK client at DeltaLLM:
 Instead of sharing the master key, create scoped virtual keys:
 
 ```bash
-curl -X POST http://localhost:8000/ui/api/keys \
+curl -X POST http://localhost:4002/ui/api/keys \
   -H "Authorization: Bearer YOUR_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
