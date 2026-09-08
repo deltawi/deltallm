@@ -30,6 +30,7 @@ from src.api.admin.endpoints import (
     tiers_router,
     users_router,
 )
+from src.api.admin.endpoints.route_groups_by_id import router as route_groups_by_id_router
 from src.ui.routes import ui_router as legacy_ui_router
 
 admin_router = APIRouter()
@@ -58,6 +59,7 @@ admin_router.include_router(guardrails_router)
 admin_router.include_router(tier_capacity_router)
 admin_router.include_router(tiers_router)
 admin_router.include_router(tier_policy_preview_router)
+admin_router.include_router(route_groups_by_id_router)
 admin_router.include_router(route_groups_router)
 admin_router.include_router(prompt_registry_router)
 admin_router.include_router(config_router)

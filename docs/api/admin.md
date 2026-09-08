@@ -184,16 +184,32 @@ For full UI and `curl` examples, see [Admin UI: Named Credentials](../admin-ui/n
 
 ### Route Groups
 
+Use the `route_group_id` UUID returned by list/create responses to address an individual group.
+The key is a runtime model name and may contain `/`, `%`, spaces, Unicode, `?`, or `#`.
+It is preserved exactly in response bodies, prompt bindings, and inference requests.
+To resolve a known key, send it as the URL-encoded `group_key` query parameter to
+`GET /ui/api/route-groups/resolve/by-key`; the response contains `route_group_id` and `group_key`.
+
+The existing `/ui/api/route-groups/{group_key}` routes and their subresources remain
+compatibility endpoints for single-segment names. URL-encoding a slash is insufficient on
+those endpoints because servers decode paths before routing. New integrations should use
+the ID endpoints below. Unknown or deleted IDs return 404 and cannot select a new group
+created with the same key. IDs are never interpreted as keys.
+See the [addressing design](../project/route-group-addressing.md) for compatibility and rollback details.
+
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | `GET` | `/ui/api/route-groups` | List route groups |
-| `GET` | `/ui/api/route-groups/{group_key}` | Get one route group |
+| `GET` | `/ui/api/route-groups/by-id/{route_group_id}` | Get one route group |
 | `POST` | `/ui/api/route-groups` | Create a route group |
-| `PUT` | `/ui/api/route-groups/{group_key}` | Update a route group |
-| `DELETE` | `/ui/api/route-groups/{group_key}` | Delete a route group |
-| `GET` | `/ui/api/route-groups/{group_key}/members` | List group members |
-| `POST` | `/ui/api/route-groups/{group_key}/members` | Add a member |
-| `DELETE` | `/ui/api/route-groups/{group_key}/members/{deployment_id}` | Remove a member |
+| `PUT` | `/ui/api/route-groups/by-id/{route_group_id}` | Update a route group |
+| `DELETE` | `/ui/api/route-groups/by-id/{route_group_id}` | Delete a route group |
+| `GET` | `/ui/api/route-groups/by-id/{route_group_id}/members` | List group members |
+| `POST` | `/ui/api/route-groups/by-id/{route_group_id}/members` | Add a member |
+| `DELETE` | `/ui/api/route-groups/by-id/{route_group_id}/members/{deployment_id}` | Remove a member |
+
+Member `weight` and `priority` accept integers or null. Integer strings remain accepted
+for compatibility. Boolean values are rejected with 400 before any member is changed.
 
 An enabled route group owns a colliding callable key even when it has no enabled members. Deleting
 the group preserves callable-target bindings when a same-named model deployment exists; otherwise
@@ -242,16 +258,16 @@ Access-group binding upserts use this payload:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/ui/api/route-groups/{group_key}/policy` | Read current policy |
-| `GET` | `/ui/api/route-groups/{group_key}/policies` | Read policy history |
-| `POST` | `/ui/api/route-groups/{group_key}/policy/validate` | Validate a policy payload |
-| `POST` | `/ui/api/route-groups/{group_key}/policy/draft` | Save a draft policy |
-| `POST` | `/ui/api/route-groups/{group_key}/policy/publish` | Publish a policy |
-| `POST` | `/ui/api/route-groups/{group_key}/policy/rollback` | Roll back to an earlier policy |
-| `POST` | `/ui/api/route-groups/{group_key}/policy/simulate` | Simulate routing behavior |
+| `GET` | `/ui/api/route-groups/by-id/{route_group_id}/policy` | Read current policy |
+| `GET` | `/ui/api/route-groups/by-id/{route_group_id}/policies` | Read policy history |
+| `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/validate` | Validate a policy payload |
+| `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/draft` | Save a draft policy |
+| `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/publish` | Publish a policy |
+| `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/rollback` | Roll back to an earlier policy |
+| `POST` | `/ui/api/route-groups/by-id/{route_group_id}/policy/simulate` | Simulate routing behavior |
 | `PUT` | `/ui/api/route-groups/{group_key}/policy` | Deprecated compatibility endpoint for direct publication |
 
-Use `POST /ui/api/route-groups/{group_key}/policy/publish` for new integrations. A non-empty body
+Use `POST /ui/api/route-groups/by-id/{route_group_id}/policy/publish` for new integrations. A non-empty body
 publishes that document; an omitted or empty body publishes the latest draft. The legacy `PUT`
 endpoint always treats its body as an explicit document and returns a `Link` header identifying the
 POST successor.
@@ -307,6 +323,10 @@ does not mutate live routing state. When `policy` is present, it is the complete
 document rather than a patch: omitted `members` inherit the group's enabled membership, omitted
 `retry` and `timeouts` clear published overrides, and omitted `strategy` falls back to the route
 group's configured strategy.
+
+ID-addressed simulation verifies that the requested group still exists in its database
+snapshot. If the group was deleted before that snapshot, it returns 404, including when
+another group has since been created with the same key.
 
 ### Prompt Registry
 

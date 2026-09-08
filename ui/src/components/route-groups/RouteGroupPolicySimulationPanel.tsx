@@ -9,7 +9,7 @@ import { effectivePolicyMemberIds } from '../../lib/routeGroups';
 import { useRoutePolicySimulation } from '../../lib/useRoutePolicySimulation';
 
 interface RouteGroupPolicySimulationPanelProps {
-  groupKey: string;
+  routeGroupId: string;
   policy: Record<string, unknown> | null;
   policyError: string | null;
   members: RouteGroupMemberDetail[];
@@ -73,7 +73,7 @@ function SelectionList({
 }
 
 export default function RouteGroupPolicySimulationPanel({
-  groupKey,
+  routeGroupId,
   policy,
   policyError,
   members,
@@ -114,7 +114,7 @@ export default function RouteGroupPolicySimulationPanel({
     outcome: outcomes[member.deployment_id] || 'success' as RoutePolicySimulationOutcome,
   }));
   const fingerprint = JSON.stringify({
-    groupKey,
+    routeGroupId,
     policy,
     promptRef,
     iterations,
@@ -123,7 +123,7 @@ export default function RouteGroupPolicySimulationPanel({
     tags,
     outcomes: scenarioOutcomes,
   });
-  const simulation = useRoutePolicySimulation(groupKey, fingerprint);
+  const simulation = useRoutePolicySimulation(routeGroupId, fingerprint);
 
   const handleRun = () => {
     if (!policy) {

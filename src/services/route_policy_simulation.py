@@ -13,6 +13,7 @@ from src.api.admin.route_group_contracts import (
     RoutePolicySimulationSummary,
 )
 from src.db.prompt_registry import PromptRegistryRepository
+from src.db.route_group_identity import RouteGroupIdentityNotFoundError
 from src.db.route_groups import RouteGroupRepository
 from src.models.errors import RateLimitError, ServiceUnavailableError, TimeoutError
 from src.router import (
@@ -133,7 +134,10 @@ class RoutePolicySimulationService:
         if group is None:
             raise RoutePolicySimulationNotFoundError("Route group not found")
 
-        runtime_groups = await self._route_groups.list_runtime_groups()
+        try:
+            runtime_groups = await self._route_groups.list_runtime_groups()
+        except RouteGroupIdentityNotFoundError as exc:
+            raise RoutePolicySimulationNotFoundError("Route group not found") from exc
         membership = await self._policy_membership(group_key)
         warnings: list[str] = []
         if request.policy is not None:

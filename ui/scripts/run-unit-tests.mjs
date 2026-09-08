@@ -36,6 +36,7 @@ const testSources = [
   'tests/reportingRequest.test.ts',
   'tests/reportingRefresh.test.ts',
   'tests/routeGroupsApi.test.ts',
+  'tests/routeGroupNavigation.test.tsx',
   'tests/routeGroupsPolicy.test.ts',
   'tests/policyGuidedEditor.test.ts',
   'tests/routeGroupPolicySimulationPanel.test.ts',
@@ -62,6 +63,7 @@ await build({
     'react-router-dom',
   ],
   jsx: 'automatic',
+  loader: { '.svg': 'dataurl' },
   platform: 'node',
   format: 'esm',
 });

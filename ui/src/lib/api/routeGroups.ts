@@ -169,61 +169,65 @@ export const routeGroups = {
     params?: { search?: string; limit?: number; offset?: number },
     signal?: AbortSignal,
   ) => apiFetch<RouteGroupListResponse>(withQuery('/ui/api/route-groups', params), { signal }),
-  get: (groupKey: string, signal?: AbortSignal) =>
+  resolveKey: (groupKey: string, signal?: AbortSignal) =>
+    apiFetch<{ route_group_id: string; group_key: string }>(
+      withQuery('/ui/api/route-groups/resolve/by-key', { group_key: groupKey }), { signal },
+    ),
+  get: (routeGroupId: string, signal?: AbortSignal) =>
     apiFetch<{
       group: RouteGroup;
       members: RouteGroupMemberDetail[];
       policy: RoutePolicy | null;
       bindings: RouteGroupBinding[];
-    }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, { signal }),
+    }>(`/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}`, { signal }),
   create: (payload: RouteGroupWritePayload, signal?: AbortSignal) =>
     apiFetch<RouteGroupMutationResponse>('/ui/api/route-groups', {
       method: 'POST',
       json: payload,
       signal,
     }),
-  update: (groupKey: string, payload: RouteGroupWritePayload, signal?: AbortSignal) =>
-    apiFetch<RouteGroupMutationResponse>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, {
+  update: (routeGroupId: string, payload: RouteGroupWritePayload, signal?: AbortSignal) =>
+    apiFetch<RouteGroupMutationResponse>(`/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}`, {
       method: 'PUT',
       json: payload,
       signal,
     }),
-  delete: (groupKey: string, signal?: AbortSignal) =>
-    apiFetch<DeleteRouteGroupResponse>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, {
+  delete: (routeGroupId: string, signal?: AbortSignal) =>
+    apiFetch<DeleteRouteGroupResponse>(`/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}`, {
       method: 'DELETE',
       signal,
     }),
-  members: (groupKey: string, signal?: AbortSignal) =>
+  members: (routeGroupId: string, signal?: AbortSignal) =>
     apiFetch<RouteGroupMember[]>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/members`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/members`,
       { signal },
     ),
   upsertMember: (
-    groupKey: string,
+    routeGroupId: string,
     payload: RouteGroupMemberWritePayload,
     signal?: AbortSignal,
   ) =>
     apiFetch<RouteGroupMemberMutationResponse>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/members`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/members`,
       { method: 'POST', json: payload, signal },
     ),
-  removeMember: (groupKey: string, deploymentId: string, signal?: AbortSignal) =>
+  removeMember: (routeGroupId: string, deploymentId: string, signal?: AbortSignal) =>
     apiFetch<DeleteRouteGroupResponse>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/members/${encodeURIComponent(deploymentId)}`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/members/${encodeURIComponent(deploymentId)}`,
       { method: 'DELETE', signal },
     ),
-  getPolicy: (groupKey: string, signal?: AbortSignal) =>
+  getPolicy: (routeGroupId: string, signal?: AbortSignal) =>
     apiFetch<{ group_key: string; policy: RoutePolicy | null }>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy`,
       { signal },
     ),
-  listPolicies: (groupKey: string, signal?: AbortSignal) =>
+  listPolicies: (routeGroupId: string, signal?: AbortSignal) =>
     apiFetch<{ group_key: string; policies: RoutePolicy[] }>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policies`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policies`,
       { signal },
     ),
   validatePolicy: (
-    groupKey: string,
+    routeGroupId: string,
     payload: Record<string, unknown>,
     signal?: AbortSignal,
   ) =>
@@ -232,40 +236,40 @@ export const routeGroups = {
       valid: boolean;
       policy: Record<string, unknown>;
       warnings: string[];
-    }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/validate`, {
+    }>(`/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/validate`, {
       method: 'POST',
       json: payload,
       signal,
     }),
   savePolicyDraft: (
-    groupKey: string,
+    routeGroupId: string,
     payload: Record<string, unknown>,
     signal?: AbortSignal,
   ) =>
     apiFetch<RoutePolicyMutationResponse>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/draft`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/draft`,
       { method: 'POST', json: payload, signal },
     ),
   publishPolicy: (
-    groupKey: string,
+    routeGroupId: string,
     payload?: Record<string, unknown>,
     signal?: AbortSignal,
   ) =>
     apiFetch<RoutePolicyMutationResponse>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/publish`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/publish`,
       { method: 'POST', json: payload ?? {}, signal },
     ),
-  rollbackPolicy: (groupKey: string, version: number, signal?: AbortSignal) =>
+  rollbackPolicy: (routeGroupId: string, version: number, signal?: AbortSignal) =>
     apiFetch<RollbackRoutePolicyResponse>(
-      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/rollback`,
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/rollback`,
       { method: 'POST', json: { version }, signal },
     ),
   simulatePolicy: (
-    groupKey: string,
+    routeGroupId: string,
     payload: RoutePolicySimulationRequest,
     signal?: AbortSignal,
   ) => apiFetch<RoutePolicySimulationResponse>(
-    `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/simulate`,
+    `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/simulate`,
     { method: 'POST', json: payload, signal },
   ),
 };

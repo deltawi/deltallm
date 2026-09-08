@@ -87,7 +87,7 @@ test('policy simulation panel covers permission, loading, results, stale, error,
   const root = createRoot(rootNode);
   const renderPanel = (canSimulate: boolean, policy: Record<string, unknown>) => (
     root.render(createElement(RouteGroupPolicySimulationPanel, {
-      groupKey: 'support',
+      routeGroupId: '12f410b2-641f-40fb-9ba8-4281b70bc8ca',
       policy,
       policyError: null,
       members: MEMBERS,
