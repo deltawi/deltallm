@@ -457,11 +457,17 @@ when a dynamic update attempts to change them.
 | `sso_userinfo_url` | — | OAuth user info URL |
 | `sso_redirect_uri` | — | OAuth redirect URI |
 | `sso_scope` | `openid email profile` | OAuth scopes |
-| `sso_admin_email_list` | `[]` | Emails that get platform admin role on first SSO login |
-| `sso_default_team_id` | — | Optional team automatically assigned to SSO users |
+| `sso_admin_email_list` | `[]` | Verified emails assigned platform admin when SSO creates a new account; existing roles are managed in People & Access |
+| `sso_default_team_id` | — | Optional team assigned to ordinary SSO accounts; missing memberships are created and existing organization/team roles are preserved |
 | `sso_state_ttl_seconds` | `600` | TTL for Redis-backed SSO callback state |
 
 SSO callback state is stored in Redis. If SSO is enabled but Redis is unavailable, DeltaLLM keeps SSO disabled instead of exposing a broken login flow.
+
+Attaching a new provider subject to an existing account always requires verified
+email ownership. Existing provider-subject bindings can authenticate without a
+verification claim; email-derived fallback subjects require verification on every
+login. See [Authentication and SSO](../features/authentication.md#auto-assign-platform-admins)
+for provider compatibility and rollout guidance.
 
 ## Self-Registration Settings
 
@@ -518,7 +524,7 @@ general_settings:
 | `self_registration.enabled` | `false` | Enable first-time SSO provisioning into the configured sandbox org/team |
 | `self_registration.mode` | `sso_allowed_domain` | Current supported production path for automatic provisioning |
 | `self_registration.allowed_domains` | `[]` | Bare email domains eligible for first-time SSO provisioning |
-| `self_registration.require_email_verification` | `true` | Require the identity provider to report a verified email before provisioning |
+| `self_registration.require_email_verification` | `true` | Require verified email for ordinary new-account provisioning; disabling this never bypasses existing-account linking or initial admin ownership checks |
 | `self_registration.require_admin_approval` | `false` | Reserved approval gate. When true, automatic sandbox provisioning is blocked |
 | `self_registration.default_org.*` | — | Organization ID, display name, budgets, and rate limits to seed |
 | `self_registration.default_team.*` | — | Team ID, alias, role, budgets, rate limits, and self-service key policy to seed |

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from src.auth.sso_identity import (
+    SSOAccountMatch,
+    SSOIdentityAssertion,
+    SSOIdentityOwnershipError,
+    SSOSubjectSource,
+)
+
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -85,12 +92,15 @@ async def test_sso_callback_creates_user_and_returns_session_token():
         http_client=http_client,
     )
 
-    response = await handler.handle_callback("authorization-code", code_verifier="pkce-verifier-123")
+    response = await handler.handle_callback(
+        "authorization-code", code_verifier="pkce-verifier-123"
+    )
 
     assert response["email"] == "admin@example.com"
     assert response["role"] == "proxy_admin"
     assert response["team_id"] == "default-team"
     assert response["provider_subject"] == "admin@example.com"
+    assert response["provider_subject_source"] == "email"
     assert response["email_verified"] is None
     assert response["token"].startswith("sso:")
     assert len(response["token"].split(":")[-1]) >= 43
@@ -124,6 +134,7 @@ async def test_sso_callback_returns_provider_subject_from_userinfo_sub():
 
     assert response["email"] == "user@example.com"
     assert response["provider_subject"] == "provider-subject-123"
+    assert response["provider_subject_source"] == "provider"
     assert response["email_verified"] is True
 
 
@@ -140,7 +151,9 @@ async def test_sso_callback_normalizes_string_email_verified_claim():
             redirect_uri="https://proxy.example.com/auth/callback",
         ),
         user_repository=InMemoryUserRepository(),
-        http_client=MockSSOHTTPClient(userinfo={"email": "user@example.com", "verified_email": "false"}),
+        http_client=MockSSOHTTPClient(
+            userinfo={"email": "user@example.com", "verified_email": "false"}
+        ),
     )
 
     response = await handler.handle_callback("authorization-code")
@@ -176,3 +189,36 @@ async def test_sso_callback_is_rate_limited_by_email():
 
     assert exc_info.value.status_code == 429
     assert exc_info.value.headers == {"Retry-After": "42"}
+
+
+@pytest.mark.parametrize("verified", [False, None, "true", "false", 1, [], {}])
+def test_callback_assertion_requires_boolean_verification_for_email_link(verified) -> None:
+    identity = SSOIdentityAssertion.from_callback(
+        {
+            "email": "USER@example.com",
+            "provider_subject": "subject",
+            "provider_subject_source": "provider",
+            "email_verified": verified,
+        },
+        provider="oidc",
+    )
+    assert identity.email == "user@example.com"
+    with pytest.raises(SSOIdentityOwnershipError):
+        identity.require_ownership(SSOAccountMatch.EMAIL, role="platform_admin")
+
+
+@pytest.mark.parametrize("source", [None, "email", "unknown"])
+def test_runtime_user_id_or_unclassified_subject_cannot_prove_ownership(source) -> None:
+    identity = SSOIdentityAssertion.from_callback(
+        {
+            "email": "person@example.com",
+            "user_id": "runtime-user-id",
+            "provider_subject": "unclassified",
+            "provider_subject_source": source,
+        },
+        provider="oidc",
+    )
+    assert identity.subject == "person@example.com"
+    assert identity.subject_source is SSOSubjectSource.EMAIL
+    with pytest.raises(SSOIdentityOwnershipError):
+        identity.require_ownership(SSOAccountMatch.SUBJECT, role="org_user")

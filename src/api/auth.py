@@ -23,6 +23,7 @@ from src.middleware.platform_auth import (
 )
 from src.models.errors import RateLimitError
 from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole, TeamRole
+from src.auth.sso_identity import SSOIdentityAssertion, SSOIdentityOwnershipError
 from src.db.email_tokens import EmailTokenRepository
 from src.models.platform_auth import (
     ChangePasswordRequest,
@@ -179,21 +180,6 @@ def _normalized_email_domain(email: str) -> str | None:
     return domain
 
 
-def _sso_provider_subject(response_payload: dict[str, Any], *, fallback_email: str) -> str:
-    for key in ("provider_subject", "subject", "user_id"):
-        subject = str(response_payload.get(key) or "").strip()
-        if subject:
-            return subject
-    return fallback_email
-
-
-def _sso_email_verified(response_payload: dict[str, Any]) -> bool | None:
-    value = response_payload.get("email_verified")
-    if isinstance(value, bool):
-        return value
-    return None
-
-
 def _is_self_registration_enabled(settings: Any) -> bool:
     return bool(settings is not None and getattr(settings, "enabled", False))
 
@@ -229,7 +215,6 @@ def _is_allowed_self_registration_domain(settings: Any, *, email: str) -> bool:
 @dataclass(frozen=True)
 class _ExistingSSOAccountMatch:
     account: dict[str, Any]
-    matched_by_identity: bool
 
 
 async def _emit_self_registration_blocked(
@@ -313,14 +298,17 @@ async def _existing_sso_account(
     provider: str,
     subject: str,
 ) -> _ExistingSSOAccountMatch | None:
+    """Choose the provisioning route; the login transaction revalidates ownership."""
     if hasattr(identity_service, "get_account_by_sso_identity"):
-        account = await identity_service.get_account_by_sso_identity(provider=provider, subject=subject)
+        account = await identity_service.get_account_by_sso_identity(
+            provider=provider, subject=subject
+        )
         if account is not None:
-            return _ExistingSSOAccountMatch(account=dict(account), matched_by_identity=True)
+            return _ExistingSSOAccountMatch(account=dict(account))
     if hasattr(identity_service, "get_account_by_email"):
         account = await identity_service.get_account_by_email(email)
         if account is not None:
-            return _ExistingSSOAccountMatch(account=dict(account), matched_by_identity=False)
+            return _ExistingSSOAccountMatch(account=dict(account))
     return None
 
 
@@ -328,13 +316,13 @@ async def _create_sso_login_for_existing_account(
     *,
     identity_service: Any,
     account: dict[str, Any],
-    email: str,
-    provider: str,
-    subject: str,
+    identity: SSOIdentityAssertion,
 ) -> Any:
     account_id = str(account.get("account_id") or "").strip()
     if not account_id:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish session")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish session"
+        )
     if not bool(account.get("is_active", True)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive")
 
@@ -348,9 +336,7 @@ async def _create_sso_login_for_existing_account(
 
         login = await create_sso_login(
             account_id=account_id,
-            email=email,
-            provider=provider,
-            subject=subject,
+            identity=identity,
         )
         if login is None:
             raise HTTPException(
@@ -358,8 +344,12 @@ async def _create_sso_login_for_existing_account(
                 detail="Failed to establish session",
             )
         return login
+    except SSOIdentityOwnershipError:
+        raise
     except AccountInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive"
+        ) from exc
     except LoginSessionCreationError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -373,12 +363,11 @@ async def _create_self_registered_sso_login(
     *,
     request: Request,
     request_start: float,
-    email: str,
-    provider: str,
-    subject: str,
-    email_verified: bool | None,
+    identity: SSOIdentityAssertion,
     settings: Any,
 ) -> Any:
+    email, provider = identity.email, identity.provider
+    email_verified = identity.email_verified
     if getattr(settings, "mode", "sso_allowed_domain") != "sso_allowed_domain":
         detail = "Self-registration approval workflow is not available"
         await _emit_self_registration_blocked(
@@ -441,14 +430,25 @@ async def _create_self_registered_sso_login(
 
     try:
         sso_login = await provisioner.provision_sso_from_defaults(
-            email=email,
+            identity=identity,
             settings=settings,
-            provider=provider,
-            subject=subject,
-            is_active=True,
         )
         result = sso_login.provisioning
         login = sso_login.login
+    except SSOIdentityOwnershipError as exc:
+        await _emit_self_registration_blocked(
+            request=request,
+            request_start=request_start,
+            email=email,
+            provider=provider,
+            reason="email_not_verified",
+            detail=str(exc),
+        )
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except AccountInactiveError as exc:
+        raise HTTPException(status_code=401, detail="Account is inactive") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
         await _emit_self_registration_provisioning_failed(
             request=request,
@@ -461,6 +461,9 @@ async def _create_self_registered_sso_login(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to provision self-registration account",
         ) from exc
+
+    if result is None:
+        return login
 
     await emit_control_audit_event(
         request=request,
@@ -1286,9 +1289,13 @@ async def auth_login(
     handler = getattr(request.app.state, "sso_auth_handler", None)
     state_store = getattr(request.app.state, "sso_state_store", None)
     if handler is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO is not enabled")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO is not enabled"
+        )
     if state_store is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable"
+        )
 
     if not state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing state")
@@ -1301,21 +1308,30 @@ async def auth_login(
             return_to=_safe_return_to(return_to),
         )
     except SSOStateStoreError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable") from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable"
+        ) from exc
 
     return {"authorize_url": handler.get_authorize_url(state, code_challenge=code_challenge)}
 
 
 @router.get("/callback")
-async def auth_callback(request: Request, code: str = Query(default=""), state: str = Query(default="")) -> Response:
+async def auth_callback(
+    request: Request, code: str = Query(default=""), state: str = Query(default="")
+) -> Response:
     request_start = perf_counter()
     try:
         handler = getattr(request.app.state, "sso_auth_handler", None)
         state_store = getattr(request.app.state, "sso_state_store", None)
         if handler is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO is not enabled")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO is not enabled"
+            )
         if state_store is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="SSO state storage unavailable",
+            )
 
         if not code:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code")
@@ -1333,11 +1349,18 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
         try:
             login_state = await state_store.pop_login_state(state=state)
         except SSOStateStoreError as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable") from exc
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="SSO state storage unavailable",
+            ) from exc
         if login_state is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired SSO state")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired SSO state"
+            )
 
-        response_payload = await handler.handle_callback(code, code_verifier=login_state.code_verifier)
+        response_payload = await handler.handle_callback(
+            code, code_verifier=login_state.code_verifier
+        )
         raw_email = response_payload.get("email")
         if not isinstance(raw_email, str) or not raw_email.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO email")
@@ -1347,7 +1370,9 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
         identity_service = getattr(request.app.state, "platform_identity_service", None)
 
         if identity_service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
 
         normalized_email = (
             identity_service.normalize_email(raw_email)
@@ -1364,8 +1389,8 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
         }
         is_platform_admin = normalized_email in admins
         provider = str(getattr(general_settings, "sso_provider", "sso") or "sso")
-        subject = _sso_provider_subject(response_payload, fallback_email=normalized_email)
-        email_verified = _sso_email_verified(response_payload)
+        identity = SSOIdentityAssertion.from_callback(response_payload, provider=provider)
+        subject = identity.subject
         self_registration_settings = getattr(general_settings, "self_registration", None)
 
         if _is_self_registration_enabled(self_registration_settings) and not is_platform_admin:
@@ -1379,39 +1404,38 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
                 login = await _create_self_registered_sso_login(
                     request=request,
                     request_start=request_start,
-                    email=normalized_email,
-                    provider=provider,
-                    subject=subject,
-                    email_verified=email_verified,
+                    identity=identity,
                     settings=self_registration_settings,
                 )
             else:
-                if not existing_account.matched_by_identity:
-                    await _enforce_self_registration_email_verified(
+                try:
+                    login = await _create_sso_login_for_existing_account(
+                        identity_service=identity_service,
+                        account=existing_account.account,
+                        identity=identity,
+                    )
+                except SSOIdentityOwnershipError as exc:
+                    await _emit_self_registration_blocked(
                         request=request,
                         request_start=request_start,
                         email=normalized_email,
                         provider=provider,
-                        email_verified=email_verified,
-                        settings=self_registration_settings,
+                        reason="email_not_verified",
+                        detail=str(exc),
                     )
-                login = await _create_sso_login_for_existing_account(
-                    identity_service=identity_service,
-                    account=existing_account.account,
-                    email=normalized_email,
-                    provider=provider,
-                    subject=subject,
-                )
+                    raise HTTPException(status_code=403, detail=str(exc)) from exc
         else:
             try:
                 login = await identity_service.upsert_sso_account(
-                    email=normalized_email,
+                    identity=identity,
                     is_platform_admin=is_platform_admin,
-                    provider=provider,
-                    subject=subject,
                     team_id=response_payload.get("team_id"),
                     default_team_role=TeamRole.VIEWER,
                 )
+            except AccountInactiveError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive"
+                ) from exc
             except LoginSessionCreationError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1420,7 +1444,10 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         if login is None:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish session")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to establish session",
+            )
 
         ttl = int(getattr(general_settings, "auth_session_ttl_hours", 12) * 3600)
 

@@ -229,7 +229,45 @@ The default organization, team, and runtime user values are applied once at prov
 
 ### Auto-Assign Platform Admins
 
-Add emails to `sso_admin_email_list` to grant `platform_admin` on first SSO login.
+Add emails to `general_settings.sso_admin_email_list` to assign `platform_admin`
+when SSO creates a new platform account. Existing accounts keep their stored
+platform role, including accounts linking SSO for the first time. This applies
+with self-registration enabled or disabled.
+
+The identity provider must report a verified email before SSO can grant an
+initial platform-admin role or attach a new provider subject to an existing
+account. This ownership check applies to all existing account roles, including
+when `self_registration.require_email_verification` is `false`. That setting
+controls ordinary new-account provisioning only.
+
+An established provider-subject binding can continue signing in without an
+email-verification claim. If the provider supplies no subject and DeltaLLM uses
+email as its fallback identifier, email verification is required on every login.
+Unverified email changes leave the stored account and identity email unchanged;
+a verified change is accepted only if another account does not own the address.
+
+Providers that cannot assert verified email ownership receive `403` when first
+linking to an existing account. Use an existing local login while configuring
+the provider's verified-email assertion. Existing provider-subject bindings
+continue to work; DeltaLLM does not provide an authenticated account-linking UI.
+
+Manage subsequent promotions and demotions in **People & Access**. Adding or
+removing an email from the list does not change an existing account's role.
+SSO login also preserves disabled status and rejects inactive accounts; complete
+invitation acceptance or reactivate the account through the admin workflow first.
+
+When `sso_default_team_id` applies, SSO creates missing default memberships and
+preserves existing organization and team roles. For example, demoting a platform
+admin to `org_user` leaves their `org_owner` and `team_admin` memberships intact.
+Explicit membership edits and invitation grants can still change those roles.
+
+Older versions reassigned roles from this list on subsequent SSO logins. When
+upgrading, finish the rollout across all API replicas before reapplying any lost
+platform or membership role changes in People & Access, then verify another SSO
+sign-in preserves them. Verify first-time email linking with your provider before
+rollout; unverified linking that older versions accepted is now denied.
+No database migration or automatic role restoration is performed. Rolling back
+to an affected version restores the old overwrite and unsafe email-linking behavior.
 
 ## Role-Based Access Control
 

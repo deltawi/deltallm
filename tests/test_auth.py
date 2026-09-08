@@ -6,6 +6,7 @@ import pytest
 
 from src.audit.actions import AuditAction
 from src.config import AppConfig
+from src.auth.sso_identity import SSOAccountMatch, SSOIdentityAssertion
 from src.models.platform_auth import PlatformAuthContext
 from src.models.errors import RateLimitError
 from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
@@ -27,10 +28,12 @@ class _StubSSOHandler:
         email: str = "user@example.com",
         subject: str = "subject-1",
         email_verified: bool | None = True,
+        subject_source: str = "provider",
     ) -> None:
         self.email = email
         self.subject = subject
         self.email_verified = email_verified
+        self.subject_source = subject_source
 
     def generate_pkce_pair(self):
         return ("pkce-verifier", "pkce-challenge")
@@ -47,6 +50,7 @@ class _StubSSOHandler:
             "email": self.email,
             "role": "internal_user",
             "provider_subject": self.subject,
+            "provider_subject_source": self.subject_source,
             "email_verified": self.email_verified,
             "token": "provider-session-token",
         }
@@ -139,10 +143,21 @@ class _StubIdentityService:
         self,
         *,
         account_id: str,
-        email: str,
-        provider: str = "sso",
-        subject: str | None = None,
+        identity: SSOIdentityAssertion,
     ):
+        email, provider, subject = identity.email, identity.provider, identity.subject
+        account = self.accounts[account_id]
+        if not account["is_active"]:
+            raise AccountInactiveError("Account is inactive")
+        linked = self.identities.get((provider, subject))
+        if linked is not None and linked != account_id:
+            raise ValueError("SSO identity is already linked to another account")
+        identity.require_ownership(
+            SSOAccountMatch.SUBJECT if linked else SSOAccountMatch.EMAIL,
+            role=str(account["role"]),
+        )
+        if identity.email_verified is not True:
+            email = str(account["email"])
         self.sso_login_calls.append(
             {
                 "account_id": account_id,
@@ -177,10 +192,21 @@ class _StubIdentityService:
         self.last_logins.append(account_id)
 
     async def upsert_sso_account(self, **kwargs):
+        identity = kwargs.pop("identity")
+        kwargs.update(email=identity.email, provider=identity.provider, subject=identity.subject)
         self.legacy_upserts.append(dict(kwargs))
         email = self.normalize_email(kwargs["email"])
         existing = await self.get_account_by_email(email)
         account_id = str(existing.get("account_id")) if existing else "acct-legacy"
+        linked = self.identities.get((identity.provider, identity.subject))
+        identity.require_ownership(
+            SSOAccountMatch.SUBJECT
+            if linked
+            else (SSOAccountMatch.EMAIL if existing else SSOAccountMatch.CREATED),
+            role=str(existing["role"])
+            if existing
+            else ("platform_admin" if kwargs.get("is_platform_admin") else "org_user"),
+        )
         if existing is None:
             self.add_account(
                 account_id=account_id,
@@ -215,12 +241,11 @@ class _StubSelfRegistrationProvisioner:
     async def provision_sso_from_defaults(
         self,
         *,
-        email: str,
+        identity: SSOIdentityAssertion,
         settings,
-        provider: str,
-        subject: str,
-        is_active: bool = True,
     ):  # noqa: ANN001
+        email, provider, subject = identity.email, identity.provider, identity.subject
+        is_active = True
         self.calls.append({"email": email, "settings": settings, "is_active": is_active})
         if self.error is not None:
             raise self.error
@@ -353,11 +378,13 @@ async def _start_sso_and_callback(
     email: str,
     subject: str = "subject-1",
     email_verified: bool | None = True,
+    subject_source: str = "provider",
 ):
     test_app.state.sso_auth_handler = _StubSSOHandler(
         email=email,
         subject=subject,
         email_verified=email_verified,
+        subject_source=subject_source,
     )
     test_app.state.sso_state_store = SSOStateStore(
         redis_client=test_app.state.redis, ttl_seconds=600
@@ -1143,7 +1170,11 @@ async def test_sso_callback_self_registration_existing_account_inactive_service_
     client, test_app
 ):
     class InactiveDuringLoginIdentityService(_StubIdentityService):
-        async def create_sso_login_for_existing_account(self, **kwargs):  # noqa: ANN003, ANN201
+        async def create_sso_login_for_existing_account(self, **kwargs):
+            identity = kwargs.pop("identity")
+            kwargs.update(
+                email=identity.email, provider=identity.provider, subject=identity.subject
+            )  # noqa: ANN003, ANN201
             self.sso_login_calls.append(
                 {
                     "account_id": str(kwargs["account_id"]),
