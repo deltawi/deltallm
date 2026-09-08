@@ -4,9 +4,14 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
-from src.auth.roles import OrganizationRole, PlatformRole
+from src.auth.roles import PlatformRole
+from src.auth.sso_identity import SSOAccountMatch, SSOIdentityAssertion
+from src.db.platform_accounts import PlatformAccountRecord
+from src.db.platform_memberships import seed_organization_membership, seed_team_membership
+from src.services.organization_mutation_policy import OrganizationMutationPolicy
+from src.services.sso_account_service import SSOAccountService
 from src.config import SelfRegistrationSettings
-from src.services.platform_identity_service import PlatformIdentityService
+from src.services.platform_identity_service import LoginResult, PlatformIdentityService
 
 
 _SELF_REGISTRATION_SOURCE = "self_registration"
@@ -37,8 +42,8 @@ class SelfRegistrationProvisioningResult:
 
 @dataclass(frozen=True)
 class SelfRegistrationSSOLoginResult:
-    provisioning: SelfRegistrationProvisioningResult
-    login: Any
+    provisioning: SelfRegistrationProvisioningResult | None
+    login: LoginResult
 
 
 class SelfRegistrationProvisioningService:
@@ -89,69 +94,34 @@ class SelfRegistrationProvisioningService:
     async def provision_sso_from_defaults(
         self,
         *,
-        email: str,
+        identity: SSOIdentityAssertion,
         settings: SelfRegistrationSettings,
-        provider: str,
-        subject: str,
-        is_active: bool = True,
     ) -> SelfRegistrationSSOLoginResult:
         if not settings.enabled:
             raise ValueError("self-registration is disabled")
         if self.db is None:
             raise RuntimeError("database is required for self-registration provisioning")
-
-        normalized_email = self.platform_identity_service.normalize_email(email)
-        normalized_provider = str(provider or "sso").strip() or "sso"
-        normalized_subject = str(subject or normalized_email).strip()
-        if not normalized_email:
-            raise ValueError("email is required")
-        if not normalized_subject:
-            raise ValueError("subject is required")
-
         if not hasattr(self.db, "tx"):
-            raise RuntimeError("database transactions are required for SSO self-registration provisioning")
-
+            raise RuntimeError(
+                "database transactions are required for SSO self-registration provisioning"
+            )
         async with self.db.tx() as tx:
             identity_service = self.platform_identity_service.with_db(tx)
-            return await self._provision_sso_with_dependencies(
-                db_client=tx,
-                identity_service=identity_service,
-                email=normalized_email,
-                settings=settings,
-                provider=normalized_provider,
-                subject=normalized_subject,
-                is_active=is_active,
-            )
-
-    async def _provision_sso_with_dependencies(
-        self,
-        *,
-        db_client: Any,
-        identity_service: PlatformIdentityService,
-        email: str,
-        settings: SelfRegistrationSettings,
-        provider: str,
-        subject: str,
-        is_active: bool,
-    ) -> SelfRegistrationSSOLoginResult:
-        provisioning = await self._provision_with_dependencies(
-            db_client=db_client,
-            identity_service=identity_service,
-            email=email,
-            settings=settings,
-            is_active=is_active,
-        )
-        await identity_service.link_sso_identity(
-            account_id=provisioning.account_id,
-            email=email,
-            provider=provider,
-            subject=subject,
-        )
-        login = await identity_service.create_login_result_for_account(provisioning.account_id)
-        if login is None:
-            raise RuntimeError("failed to establish self-registration session")
-        await identity_service.mark_last_login(provisioning.account_id)
-        return SelfRegistrationSSOLoginResult(provisioning=provisioning, login=login)
+            resolved = await SSOAccountService(tx, identity_service).resolve(identity)
+            provisioning = None
+            if resolved.match is SSOAccountMatch.CREATED:
+                if settings.require_email_verification:
+                    identity.require_verified_email()
+                provisioning = await self._provision_with_dependencies(
+                    db_client=tx,
+                    identity_service=identity_service,
+                    email=identity.email,
+                    settings=settings,
+                    is_active=True,
+                    account=resolved.account,
+                )
+            login = await identity_service.finish_sso_login(resolved.account.account_id)
+            return SelfRegistrationSSOLoginResult(provisioning=provisioning, login=login)
 
     async def _provision_with_dependencies(
         self,
@@ -161,6 +131,7 @@ class SelfRegistrationProvisioningService:
         email: str,
         settings: SelfRegistrationSettings,
         is_active: bool,
+        account: PlatformAccountRecord | None = None,
     ) -> SelfRegistrationProvisioningResult:
         organization_id = str(settings.default_org.id or "").strip()
         team_id = str(settings.default_team.id or "").strip()
@@ -173,14 +144,15 @@ class SelfRegistrationProvisioningService:
             organization_id=organization_id,
         )
         await self._insert_default_org(db_client, settings=settings)
+        await OrganizationMutationPolicy.for_database(db_client).require_active(organization_id)
         await self._insert_default_team(db_client, settings=settings)
 
-        account = await identity_service.ensure_account(
-            email=email,
-            role=PlatformRole.ORG_USER,
-            is_active=is_active,
-        )
-        account_id = str(account.get("account_id") or "").strip()
+        if account is None:
+            row = await identity_service.ensure_account(
+                email=email, role=PlatformRole.ORG_USER, is_active=is_active
+            )
+            account = PlatformAccountRecord.from_row(row)
+        account_id = account.account_id
         if not account_id:
             raise RuntimeError("failed to provision account")
 
@@ -191,12 +163,12 @@ class SelfRegistrationProvisioningService:
             team_id=team_id,
             settings=settings,
         )
-        await self._insert_org_membership(
+        await seed_organization_membership(
             db_client,
             account_id=account_id,
             organization_id=organization_id,
         )
-        await self._insert_team_membership(
+        await seed_team_membership(
             db_client,
             account_id=account_id,
             team_id=team_id,
@@ -211,12 +183,12 @@ class SelfRegistrationProvisioningService:
 
         return SelfRegistrationProvisioningResult(
             account_id=account_id,
-            email=str(account.get("email") or email),
+            email=account.email,
             organization_id=organization_id,
             team_id=team_id,
             user_id=user_id,
             team_role=settings.default_team.role,
-            account_is_active=bool(account.get("is_active", is_active)),
+            account_is_active=account.is_active,
         )
 
     async def _ensure_team_can_belong_to_org(
@@ -241,7 +213,9 @@ class SelfRegistrationProvisioningService:
         if existing_org_id != organization_id:
             raise ValueError("default team already belongs to a different organization")
 
-    async def _insert_default_org(self, db_client: Any, *, settings: SelfRegistrationSettings) -> None:
+    async def _insert_default_org(
+        self, db_client: Any, *, settings: SelfRegistrationSettings
+    ) -> None:
         default_org = settings.default_org
         await db_client.execute_raw(
             """
@@ -276,7 +250,9 @@ class SelfRegistrationProvisioningService:
             self._metadata_json("organization"),
         )
 
-    async def _insert_default_team(self, db_client: Any, *, settings: SelfRegistrationSettings) -> None:
+    async def _insert_default_team(
+        self, db_client: Any, *, settings: SelfRegistrationSettings
+    ) -> None:
         default_team = settings.default_team
         await db_client.execute_raw(
             """
@@ -321,47 +297,6 @@ class SelfRegistrationProvisioningService:
             default_team.self_service_budget_ceiling,
             default_team.self_service_require_expiry,
             default_team.self_service_max_expiry_days,
-        )
-
-    async def _insert_org_membership(
-        self,
-        db_client: Any,
-        *,
-        account_id: str,
-        organization_id: str,
-    ) -> None:
-        await db_client.execute_raw(
-            """
-            INSERT INTO deltallm_organizationmembership (
-                membership_id, account_id, organization_id, role, created_at, updated_at
-            )
-            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-            ON CONFLICT (account_id, organization_id) DO NOTHING
-            """,
-            account_id,
-            organization_id,
-            OrganizationRole.MEMBER,
-        )
-
-    async def _insert_team_membership(
-        self,
-        db_client: Any,
-        *,
-        account_id: str,
-        team_id: str,
-        role: str,
-    ) -> None:
-        await db_client.execute_raw(
-            """
-            INSERT INTO deltallm_teammembership (
-                membership_id, account_id, team_id, role, created_at, updated_at
-            )
-            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-            ON CONFLICT (account_id, team_id) DO NOTHING
-            """,
-            account_id,
-            team_id,
-            role,
         )
 
     async def _mark_account_self_registered(

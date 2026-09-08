@@ -26,6 +26,16 @@ and the [access/identity API](../api/admin.md#access-and-identity).
 - Runtime user budgets, rate limits, and self-service key policy are visible from the account details drawer
 - Modals let admins add accounts, attach memberships, or edit runtime user asset access without leaving the page
 
+Platform role changes persist across SSO sign-ins. The configured
+`sso_admin_email_list` assigns an initial role only when SSO creates an account;
+it does not override promotions or demotions made here. Disabling an account
+also prevents SSO login until the account is reactivated.
+
+SSO default-team enrollment fills missing memberships and preserves existing
+organization and team roles. First-time SSO linking to an existing account
+requires the identity provider to verify the account's email; a known provider
+subject can continue signing in with its stored permissions.
+
 ## Invitations
 
 People & Access is the main invite-by-email surface.

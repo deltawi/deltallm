@@ -11,12 +11,24 @@ from typing import Any
 import urllib.parse
 
 from src.auth.roles import (
-    OrganizationRole,
     PLATFORM_ROLE_PERMISSIONS,
     Permission,
     PlatformRole,
     TeamRole,
 )
+from src.auth.sso_identity import (
+    AccountInactiveError as AccountInactiveError,
+    LoginSessionCreationError as LoginSessionCreationError,
+    SSOIdentityAssertion,
+)
+from src.db.platform_accounts import ensure_platform_account
+from src.db.platform_memberships import (
+    lock_sso_default_team,
+    seed_organization_membership,
+    seed_team_membership,
+)
+from src.services.organization_mutation_policy import OrganizationMutationPolicy
+from src.services.sso_account_service import SSOAccountService
 from src.models.platform_auth import PlatformAuthContext
 
 
@@ -34,14 +46,6 @@ class AccountAuthState:
     email: str
     has_local_password: bool
     has_sso_identity: bool
-
-
-class AccountInactiveError(RuntimeError):
-    pass
-
-
-class LoginSessionCreationError(RuntimeError):
-    pass
 
 
 class PlatformIdentityService:
@@ -156,191 +160,82 @@ class PlatformIdentityService:
 
     async def upsert_sso_account(
         self,
-        email: str,
+        *,
+        identity: SSOIdentityAssertion,
         is_platform_admin: bool,
-        provider: str = "sso",
-        subject: str | None = None,
         team_id: str | None = None,
         default_team_role: str = TeamRole.VIEWER,
     ) -> LoginResult | None:
         if self.db is None:
             return None
-
-        if hasattr(self.db, "tx"):
-            async with self.db.tx() as tx:
-                identity_service = self.with_db(tx)
-                return await identity_service._upsert_sso_account(
-                    email=email,
-                    is_platform_admin=is_platform_admin,
-                    provider=provider,
-                    subject=subject,
-                    team_id=team_id,
-                    default_team_role=default_team_role,
-                )
-
-        return await self._upsert_sso_account(
-            email=email,
-            is_platform_admin=is_platform_admin,
-            provider=provider,
-            subject=subject,
-            team_id=team_id,
-            default_team_role=default_team_role,
-        )
+        async with self.db.tx() as tx:
+            return await self.with_db(tx)._upsert_sso_account(
+                identity=identity,
+                is_platform_admin=is_platform_admin,
+                team_id=team_id,
+                default_team_role=default_team_role,
+            )
 
     async def _upsert_sso_account(
         self,
-        email: str,
+        *,
+        identity: SSOIdentityAssertion,
         is_platform_admin: bool,
-        provider: str,
-        subject: str | None,
         team_id: str | None,
         default_team_role: str,
-    ) -> LoginResult | None:
-        role = PlatformRole.ADMIN if is_platform_admin else PlatformRole.ORG_USER
-        normalized_email = self.normalize_email(email)
-        if not normalized_email:
-            raise ValueError("email is required")
-        normalized_provider = str(provider or "sso").strip() or "sso"
-        normalized_subject = str(subject or normalized_email).strip()
-        if not normalized_subject:
-            raise ValueError("subject is required")
-
-        linked_account = await self.get_account_by_sso_identity(
-            provider=normalized_provider,
-            subject=normalized_subject,
+    ) -> LoginResult:
+        resolved = await SSOAccountService(self.db, self).resolve(
+            identity,
+            initial_role=PlatformRole.ADMIN if is_platform_admin else PlatformRole.ORG_USER,
         )
-        if linked_account is not None:
-            linked_account_id = str(linked_account.get("account_id") or "").strip()
-            if not linked_account_id:
-                raise RuntimeError("linked SSO account is invalid")
-            await self._reconcile_sso_identity_for_account(
-                account_id=linked_account_id,
-                email=normalized_email,
-                provider=normalized_provider,
-                subject=normalized_subject,
-                role=role,
-                is_active=True,
-            )
-            account_id = linked_account_id
-        else:
-            await self.db.execute_raw(
-                """
-                INSERT INTO deltallm_platformaccount (
-                    account_id, email, role, is_active, force_password_change,
-                    mfa_enabled, created_at, updated_at
-                )
-                VALUES (gen_random_uuid(), $1, $2, true, false, false, NOW(), NOW())
-                ON CONFLICT (email)
-                DO UPDATE SET role = EXCLUDED.role, is_active = true, updated_at = NOW()
-                """,
-                normalized_email,
-                role,
-            )
-            account = await self.get_account_by_email(normalized_email)
-            if account is None:
-                raise LoginSessionCreationError("Failed to establish session")
-            account_id = str(account.get("account_id") or "").strip()
-            if not account_id:
-                raise RuntimeError("failed to load SSO account")
-
-            await self.link_sso_identity(
-                account_id=account_id,
-                email=normalized_email,
-                provider=normalized_provider,
-                subject=normalized_subject,
-            )
-        if not is_platform_admin and team_id:
-            await self.db.execute_raw(
-                """
-                INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
-                VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-                ON CONFLICT (account_id, team_id)
-                DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
-                """,
-                account_id,
-                team_id,
-                default_team_role,
-            )
-            org_rows = await self.db.query_raw(
-                "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
-                team_id,
-            )
-            organization_id = org_rows[0].get("organization_id") if org_rows else None
+        account = resolved.account
+        if account.role == PlatformRole.ORG_USER and team_id:
+            organization_id = await lock_sso_default_team(self.db, team_id=team_id)
             if organization_id:
-                await self.db.execute_raw(
-                    """
-                    INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
-                    VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-                    ON CONFLICT (account_id, organization_id)
-                    DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
-                    """,
-                    account_id,
-                    organization_id,
-                    OrganizationRole.MEMBER,
+                await OrganizationMutationPolicy.for_database(self.db).require_active(
+                    organization_id
                 )
-
-        login = await self.create_login_result_for_account(account_id)
-        if login is None:
-            raise LoginSessionCreationError("Failed to establish session")
-        await self.mark_last_login(account_id)
-        return login
+                await seed_organization_membership(
+                    self.db, account_id=account.account_id, organization_id=organization_id
+                )
+            await seed_team_membership(
+                self.db, account_id=account.account_id, team_id=team_id, role=default_team_role
+            )
+        return await self.finish_sso_login(account.account_id)
 
     async def create_sso_login_for_existing_account(
         self,
         *,
         account_id: str,
-        email: str,
-        provider: str = "sso",
-        subject: str | None = None,
+        identity: SSOIdentityAssertion,
     ) -> LoginResult | None:
         if self.db is None:
             return None
-
-        if hasattr(self.db, "tx"):
-            async with self.db.tx() as tx:
-                identity_service = self.with_db(tx)
-                return await identity_service._create_sso_login_for_existing_account(
-                    account_id=account_id,
-                    email=email,
-                    provider=provider,
-                    subject=subject,
-                )
-
-        return await self._create_sso_login_for_existing_account(
-            account_id=account_id,
-            email=email,
-            provider=provider,
-            subject=subject,
-        )
+        async with self.db.tx() as tx:
+            return await self.with_db(tx)._create_sso_login_for_existing_account(
+                account_id=account_id, identity=identity
+            )
 
     async def _create_sso_login_for_existing_account(
         self,
         *,
         account_id: str,
-        email: str,
-        provider: str = "sso",
-        subject: str | None = None,
+        identity: SSOIdentityAssertion,
     ) -> LoginResult:
-        normalized_account_id = str(account_id or "").strip()
+        normalized_account_id = account_id.strip()
         if not normalized_account_id:
             raise ValueError("account_id is required")
-
-        account = await self.get_account_by_id(normalized_account_id)
-        if account is None:
-            raise RuntimeError("SSO account not found")
-        if not bool(account.get("is_active", True)):
-            raise AccountInactiveError("Account is inactive")
-
-        await self._reconcile_sso_identity_for_account(
-            account_id=normalized_account_id,
-            email=email,
-            provider=provider,
-            subject=subject,
+        resolved = await SSOAccountService(self.db, self).resolve(
+            identity, expected_account_id=normalized_account_id
         )
-        login = await self.create_login_result_for_account(normalized_account_id)
+        return await self.finish_sso_login(resolved.account.account_id)
+
+    async def finish_sso_login(self, account_id: str) -> LoginResult:
+        """Finish a validated SSO login inside its account-resolution transaction."""
+        login = await self.create_login_result_for_account(account_id)
         if login is None:
             raise LoginSessionCreationError("Failed to establish session")
-        await self.mark_last_login(normalized_account_id)
+        await self.mark_last_login(account_id)
         return login
 
     async def reconcile_sso_identity_for_account(
@@ -796,18 +691,8 @@ class PlatformIdentityService:
                 "role": role,
                 "is_active": is_active,
             }
-        await self.db.execute_raw(
-            """
-            INSERT INTO deltallm_platformaccount (
-                account_id, email, role, is_active, force_password_change, mfa_enabled, created_at, updated_at
-            )
-            VALUES (gen_random_uuid(), $1, $2, $3, false, false, NOW(), NOW())
-            ON CONFLICT (email)
-            DO UPDATE SET updated_at = NOW()
-            """,
-            normalized_email,
-            role,
-            is_active,
+        await ensure_platform_account(
+            self.db, email=normalized_email, role=role, is_active=is_active
         )
         account = await self.get_account_by_email(normalized_email)
         if account is None:

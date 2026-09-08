@@ -277,8 +277,10 @@ general_settings:
   # sso_userinfo_url: https://idp.example.com/oauth2/userinfo
   # sso_redirect_uri: http://localhost:4002/auth/callback
   # sso_scope: openid email profile
+  # Initial admin role for verified new SSO accounts. Manage existing roles in People & Access.
   # sso_admin_email_list:
   #   - admin@example.com
+  # Create missing default memberships while preserving existing org/team roles.
   # sso_default_team_id: team-123
   # sso_state_ttl_seconds: 600
   #

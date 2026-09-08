@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from src.auth.sso_identity import SSOIdentityAssertion, SSOSubjectSource
+
+import asyncio
 import copy
 from types import SimpleNamespace
 
@@ -27,12 +30,36 @@ class FakePlatformIdentityDB:
         self.accounts: dict[str, dict[str, object]] = {}
         self.identities: dict[tuple[str, str], dict[str, object]] = {}
         self.sessions: dict[str, dict[str, object]] = {}
+        self.teams: dict[str, dict[str, object]] = {}
+        self.organizations: dict[str, dict[str, object]] = {}
+        self.team_memberships: dict[tuple[str, str], dict[str, object]] = {}
+        self.organization_memberships: dict[tuple[str, str], dict[str, object]] = {}
         self.fail_session_insert = False
         self.fail_last_login_update = False
         self.hide_next_email_lookup = False
 
+    def tx(self) -> "_FakeTransaction":
+        return _FakeTransaction(self)
+
     async def query_raw(self, query: str, *params):  # noqa: ANN201
         normalized = " ".join(query.lower().split())
+        if "insert into deltallm_platformaccount" in normalized and "returning" in normalized:
+            if self._account_id_for_email(str(params[0])) is not None:
+                return []
+            await self.execute_raw(query, *params)
+            return [dict(self.accounts[self._account_id_for_email(str(params[0]))])]
+        if "set email = coalesce" in normalized:
+            row = self.accounts.get(str(params[0]))
+            if row is None:
+                return []
+            if params[2] is not None and str(row["email"]).lower() != str(params[2]).lower():
+                return []
+            if params[1] is not None:
+                owner = self._account_id_for_email(str(params[1]))
+                if owner is not None and owner != params[0]:
+                    raise ValueError("duplicate email")
+                row["email"] = params[1]
+            return [dict(row)]
         if "from deltallm_platformsession s join deltallm_platformaccount a" in normalized:
             token_hash = str(params[0])
             session = self.sessions.get(token_hash)
@@ -70,7 +97,7 @@ class FakePlatformIdentityDB:
             account_id = str(params[0])
             account = self.accounts.get(account_id)
             return [dict(account)] if account else []
-        if "WHERE lower(email) = lower($1)" in query:
+        if "where lower(email)" in normalized:
             if self.hide_next_email_lookup:
                 self.hide_next_email_lookup = False
                 return []
@@ -80,13 +107,37 @@ class FakePlatformIdentityDB:
                     return [dict(row)]
             return []
         if "from deltallm_organizationmembership" in normalized:
-            return []
+            return [
+                dict(row)
+                for (account_id, _), row in self.organization_memberships.items()
+                if account_id == params[0]
+            ]
         if "from deltallm_teammembership" in normalized:
-            return []
+            return [
+                dict(row)
+                for (account_id, _), row in self.team_memberships.items()
+                if account_id == params[0]
+            ]
+        if "from deltallm_teamtable" in normalized:
+            row = self.teams.get(str(params[0]))
+            return [dict(row)] if row else []
+        if "from deltallm_organizationtable" in normalized:
+            row = self.organizations.get(str(params[0]))
+            return [dict(row)] if row else []
         return []
 
     async def execute_raw(self, query: str, *params):  # noqa: ANN201
         normalized = " ".join(query.lower().split())
+        for table, memberships, scope in (
+            ("deltallm_teammembership", self.team_memberships, "team_id"),
+            ("deltallm_organizationmembership", self.organization_memberships, "organization_id"),
+        ):
+            if f"insert into {table}" in normalized:
+                key = (str(params[0]), str(params[1]))
+                if key in memberships and "do nothing" in normalized:
+                    return 0
+                memberships[key] = {scope: params[1], "role": params[2]}
+                return 1
         if "insert into deltallm_platformsession" in normalized:
             if self.fail_session_insert:
                 raise RuntimeError("session insert failed")
@@ -119,8 +170,9 @@ class FakePlatformIdentityDB:
             is_active = bool(params[2]) if len(params) > 2 else True
             existing_account_id = self._account_id_for_email(email)
             if existing_account_id is not None and "on conflict (email)" in normalized:
-                self.accounts[existing_account_id]["role"] = role
-                self.accounts[existing_account_id]["is_active"] = is_active
+                if "do update set role =" in normalized:
+                    self.accounts[existing_account_id]["role"] = role
+                    self.accounts[existing_account_id]["is_active"] = is_active
                 return 1
             account_id = f"acct-{len(self.accounts) + 1}"
             self.add_account(account_id=account_id, email=email, role=role, is_active=is_active)
@@ -229,6 +281,8 @@ class _FakeTransaction:
             "accounts": copy.deepcopy(self.db.accounts),
             "identities": copy.deepcopy(self.db.identities),
             "sessions": copy.deepcopy(self.db.sessions),
+            "team_memberships": copy.deepcopy(self.db.team_memberships),
+            "organization_memberships": copy.deepcopy(self.db.organization_memberships),
         }
         return self.db
 
@@ -237,6 +291,8 @@ class _FakeTransaction:
             self.db.accounts = self.snapshot["accounts"]
             self.db.identities = self.snapshot["identities"]
             self.db.sessions = self.snapshot["sessions"]
+            self.db.team_memberships = self.snapshot["team_memberships"]
+            self.db.organization_memberships = self.snapshot["organization_memberships"]
         return False
 
 
@@ -250,6 +306,11 @@ class LoginRecordingIdentityService(PlatformIdentityService):
     def __init__(self, *, db_client, salt: str = "salt-key") -> None:  # noqa: ANN001
         super().__init__(db_client=db_client, salt=salt)
         self.login_account_ids: list[str] = []
+
+    def with_db(self, db_client):
+        service = LoginRecordingIdentityService(db_client=db_client, salt=self.salt)
+        service.login_account_ids = self.login_account_ids
+        return service
 
     async def create_login_result_for_account(self, account_id: str):  # noqa: ANN201
         self.login_account_ids.append(account_id)
@@ -335,10 +396,14 @@ async def test_upsert_sso_account_rejects_claimed_subject_before_mutating_accoun
 
     with pytest.raises(ValueError, match="already linked"):
         await service.upsert_sso_account(
-            email="user@example.com",
+            identity=SSOIdentityAssertion(
+                email="user@example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             is_platform_admin=True,
-            provider="oidc",
-            subject="subject-1",
         )
 
     assert db.accounts["acct-1"]["role"] == "org_user"
@@ -348,7 +413,9 @@ async def test_upsert_sso_account_rejects_claimed_subject_before_mutating_accoun
 @pytest.mark.asyncio
 async def test_upsert_sso_account_uses_linked_subject_when_provider_email_changes() -> None:
     db = FakePlatformIdentityDB()
-    db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=False)
+    db.add_account(
+        account_id="acct-1", email="old@example.com", role="platform_admin", is_active=True
+    )
     db.identities[("oidc", "subject-1")] = {
         "account_id": "acct-1",
         "provider": "oidc",
@@ -358,17 +425,21 @@ async def test_upsert_sso_account_uses_linked_subject_when_provider_email_change
     service = LoginRecordingIdentityService(db_client=db)
 
     login = await service.upsert_sso_account(
-        email="New@Example.com",
+        identity=SSOIdentityAssertion(
+            email="New@Example.com",
+            provider="oidc",
+            subject="subject-1",
+            email_verified=True,
+            subject_source=SSOSubjectSource.PROVIDER,
+        ),
         is_platform_admin=False,
-        provider="oidc",
-        subject="subject-1",
     )
 
     assert login is not None
     assert login.session_token == "session-acct-1"
     assert service.login_account_ids == ["acct-1"]
     assert db.accounts["acct-1"]["email"] == "new@example.com"
-    assert db.accounts["acct-1"]["role"] == "org_user"
+    assert db.accounts["acct-1"]["role"] == "platform_admin"
     assert db.accounts["acct-1"]["is_active"] is True
     assert db.accounts["acct-1"]["last_login_at"] == "now"
     assert db.identities[("oidc", "subject-1")] == {
@@ -382,7 +453,7 @@ async def test_upsert_sso_account_uses_linked_subject_when_provider_email_change
 @pytest.mark.asyncio
 async def test_upsert_sso_account_rejects_linked_subject_email_owned_by_other_account() -> None:
     db = FakePlatformIdentityDB()
-    db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=False)
+    db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=True)
     db.add_account(account_id="acct-2", email="new@example.com", role="org_user", is_active=True)
     db.identities[("oidc", "subject-1")] = {
         "account_id": "acct-1",
@@ -394,16 +465,20 @@ async def test_upsert_sso_account_rejects_linked_subject_email_owned_by_other_ac
 
     with pytest.raises(ValueError, match="email is already linked"):
         await service.upsert_sso_account(
-            email="new@example.com",
+            identity=SSOIdentityAssertion(
+                email="new@example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             is_platform_admin=True,
-            provider="oidc",
-            subject="subject-1",
         )
 
     assert service.login_account_ids == []
     assert db.accounts["acct-1"]["email"] == "old@example.com"
     assert db.accounts["acct-1"]["role"] == "org_user"
-    assert db.accounts["acct-1"]["is_active"] is False
+    assert db.accounts["acct-1"]["is_active"] is True
     assert db.accounts["acct-2"]["email"] == "new@example.com"
     assert db.identities[("oidc", "subject-1")]["email"] == "old@example.com"
 
@@ -440,12 +515,19 @@ async def test_create_sso_login_for_existing_account_reconciles_and_creates_sess
     db = TransactionalFakePlatformIdentityDB()
     db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=True)
     service = PlatformIdentityService(db_client=db, salt="salt-key")
+    await service.link_sso_identity(
+        account_id="acct-1", email="old@example.com", provider="oidc", subject="subject-1"
+    )
 
     login = await service.create_sso_login_for_existing_account(
+        identity=SSOIdentityAssertion(
+            email="New@Example.com",
+            provider="oidc",
+            subject="subject-1",
+            email_verified=True,
+            subject_source=SSOSubjectSource.PROVIDER,
+        ),
         account_id="acct-1",
-        email="New@Example.com",
-        provider="oidc",
-        subject="subject-1",
     )
 
     assert login is not None
@@ -471,18 +553,26 @@ async def test_create_sso_login_for_existing_account_rolls_back_reconcile_when_s
     db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=True)
     db.fail_session_insert = True
     service = PlatformIdentityService(db_client=db, salt="salt-key")
+    await service.link_sso_identity(
+        account_id="acct-1", email="old@example.com", provider="oidc", subject="subject-1"
+    )
+    identities_before = copy.deepcopy(db.identities)
 
     with pytest.raises(RuntimeError, match="session insert failed"):
         await service.create_sso_login_for_existing_account(
+            identity=SSOIdentityAssertion(
+                email="New@Example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             account_id="acct-1",
-            email="New@Example.com",
-            provider="oidc",
-            subject="subject-1",
         )
 
     assert db.accounts["acct-1"]["email"] == "old@example.com"
     assert db.accounts["acct-1"]["last_login_at"] is None
-    assert db.identities == {}
+    assert db.identities == identities_before
     assert db.sessions == {}
 
 
@@ -496,10 +586,14 @@ async def test_create_sso_login_for_existing_account_rejects_inactive_account_be
 
     with pytest.raises(AccountInactiveError, match="Account is inactive"):
         await service.create_sso_login_for_existing_account(
+            identity=SSOIdentityAssertion(
+                email="New@Example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             account_id="acct-1",
-            email="New@Example.com",
-            provider="oidc",
-            subject="subject-1",
         )
 
     assert db.accounts["acct-1"]["email"] == "old@example.com"
@@ -510,7 +604,7 @@ async def test_create_sso_login_for_existing_account_rejects_inactive_account_be
 @pytest.mark.asyncio
 async def test_upsert_sso_account_rolls_back_if_identity_conflict_races() -> None:
     db = TransactionalFakePlatformIdentityDB()
-    db.add_account(account_id="acct-1", email="user@example.com", role="org_user", is_active=False)
+    db.add_account(account_id="acct-1", email="user@example.com", role="org_user", is_active=True)
     db.add_account(account_id="acct-2", email="other@example.com")
     db.identities[("oidc", "subject-1")] = {
         "account_id": "acct-2",
@@ -523,14 +617,18 @@ async def test_upsert_sso_account_rolls_back_if_identity_conflict_races() -> Non
 
     with pytest.raises(ValueError, match="already linked"):
         await service.upsert_sso_account(
-            email="user@example.com",
+            identity=SSOIdentityAssertion(
+                email="user@example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             is_platform_admin=True,
-            provider="oidc",
-            subject="subject-1",
         )
 
     assert db.accounts["acct-1"]["role"] == "org_user"
-    assert db.accounts["acct-1"]["is_active"] is False
+    assert db.accounts["acct-1"]["is_active"] is True
     assert db.identities[("oidc", "subject-1")]["account_id"] == "acct-2"
 
 
@@ -542,10 +640,14 @@ async def test_upsert_sso_account_rolls_back_if_last_login_update_fails() -> Non
 
     with pytest.raises(RuntimeError, match="last login update failed"):
         await service.upsert_sso_account(
-            email="user@example.com",
+            identity=SSOIdentityAssertion(
+                email="user@example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             is_platform_admin=False,
-            provider="oidc",
-            subject="subject-1",
         )
 
     assert db.accounts == {}
@@ -554,19 +656,131 @@ async def test_upsert_sso_account_rolls_back_if_last_login_update_fails() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError, asyncio.CancelledError])
+async def test_upsert_sso_account_rolls_back_if_session_creation_fails(
+    monkeypatch: pytest.MonkeyPatch, error_type: type[BaseException]
+) -> None:
+    db = TransactionalFakePlatformIdentityDB()
+    execute_raw = db.execute_raw
+
+    async def fail_session_creation(query: str, *params: object) -> int:
+        if "insert into deltallm_platformsession" in query.lower():
+            raise error_type("session unavailable")
+        return await execute_raw(query, *params)
+
+    monkeypatch.setattr(db, "execute_raw", fail_session_creation)
+    service = PlatformIdentityService(db_client=db, salt="salt-key")
+    with pytest.raises(error_type, match="session unavailable"):
+        await service.upsert_sso_account(
+            identity=SSOIdentityAssertion(
+                email="user@example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
+            is_platform_admin=True,
+        )
+
+    assert db.accounts == {}
+    assert db.identities == {}
+    assert db.sessions == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("listed", [False, True])
+async def test_upsert_sso_account_seeds_initial_role_only(listed: bool) -> None:
+    db = TransactionalFakePlatformIdentityDB()
+    service = PlatformIdentityService(db_client=db, salt="salt-key")
+
+    first = await service.upsert_sso_account(
+        identity=SSOIdentityAssertion(
+            email="User@Example.com",
+            provider="oidc",
+            subject="subject-1",
+            email_verified=True,
+            subject_source=SSOSubjectSource.PROVIDER,
+        ),
+        is_platform_admin=listed,
+    )
+    assert first is not None
+    expected_role = "platform_admin" if listed else "org_user"
+    assert first.context.role == expected_role
+    assert first.context.email == "user@example.com"
+
+    second = await service.upsert_sso_account(
+        identity=SSOIdentityAssertion(
+            email="User@Example.com",
+            provider="oidc",
+            subject="subject-1",
+            email_verified=True,
+            subject_source=SSOSubjectSource.PROVIDER,
+        ),
+        is_platform_admin=not listed,
+    )
+    assert second is not None
+    assert second.context.role == expected_role
+    assert second.context.account_id == first.context.account_id
+    assert len(db.accounts) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["org_user", "platform_admin"])
+async def test_sso_default_team_uses_stored_platform_role(
+    monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    db = FakePlatformIdentityDB()
+    db.add_account(account_id="acct-1", email="user@example.com", role=role)
+    db.teams["team-1"] = {"team_id": "team-1", "organization_id": None}
+    execute_raw = db.execute_raw
+    membership_writes: list[tuple[object, ...]] = []
+
+    async def record_memberships(query: str, *params: object) -> int:
+        if "insert into deltallm_teammembership" in query.lower():
+            membership_writes.append(params)
+            return 1
+        return await execute_raw(query, *params)
+
+    monkeypatch.setattr(db, "execute_raw", record_memberships)
+    service = PlatformIdentityService(db_client=db, salt="salt-key")
+    login = await service.upsert_sso_account(
+        identity=SSOIdentityAssertion(
+            email="user@example.com",
+            provider="oidc",
+            subject="subject-1",
+            email_verified=True,
+            subject_source=SSOSubjectSource.PROVIDER,
+        ),
+        is_platform_admin=role != "platform_admin",
+        team_id="team-1",
+    )
+    assert login is not None
+    assert login.context.role == role
+    assert membership_writes == (
+        [("acct-1", "team-1", "team_viewer")] if role == "org_user" else []
+    )
+
+
+@pytest.mark.asyncio
 async def test_upsert_sso_account_rolls_back_if_account_reload_fails() -> None:
     db = TransactionalFakePlatformIdentityDB()
+    db.add_account(account_id="acct-1", email="user@example.com")
+    accounts_before = copy.deepcopy(db.accounts)
     db.hide_next_email_lookup = True
     service = PlatformIdentityService(db_client=db, salt="salt-key")
 
     with pytest.raises(LoginSessionCreationError, match="Failed to establish session"):
         await service.upsert_sso_account(
-            email="user@example.com",
+            identity=SSOIdentityAssertion(
+                email="user@example.com",
+                provider="oidc",
+                subject="subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             is_platform_admin=False,
-            provider="oidc",
-            subject="subject-1",
         )
 
-    assert db.accounts == {}
+    assert db.accounts == accounts_before
     assert db.identities == {}
     assert db.sessions == {}
