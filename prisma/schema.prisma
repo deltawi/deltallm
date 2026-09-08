@@ -72,6 +72,7 @@ model DeltaLLM_TeamModelSpendCounter {
   model       String
   spend       Float    @default(0)
   spend_exact Decimal? @db.Decimal(38, 18)
+  reserved_spend_exact Decimal @default(0) @db.Decimal(38, 18)
   updated_at  DateTime @updatedAt
 
   @@id([team_id, model])
@@ -92,6 +93,7 @@ model DeltaLLM_VerificationToken {
   soft_budget           Float?
   spend                 Float    @default(0)
   spend_exact           Decimal? @db.Decimal(38, 18)
+  reserved_spend_exact Decimal @default(0) @db.Decimal(38, 18)
   budget_duration       String?
   budget_reset_at       DateTime?
   rpm_limit             Int?
@@ -127,6 +129,7 @@ model DeltaLLM_UserTable {
   soft_budget     Float?
   spend           Float    @default(0)
   spend_exact     Decimal? @db.Decimal(38, 18)
+  reserved_spend_exact Decimal @default(0) @db.Decimal(38, 18)
   budget_duration String?
   budget_reset_at DateTime?
   models          String[]
@@ -156,6 +159,7 @@ model DeltaLLM_TeamTable {
   soft_budget      Float?
   spend            Float    @default(0)
   spend_exact      Decimal? @db.Decimal(38, 18)
+  reserved_spend_exact Decimal @default(0) @db.Decimal(38, 18)
   budget_duration  String?
   budget_reset_at  DateTime?
   model_max_budget Json?
@@ -223,6 +227,7 @@ model DeltaLLM_OrganizationTable {
   model_tpm_limit   Json?
   spend             Float    @default(0)
   spend_exact       Decimal? @db.Decimal(38, 18)
+  reserved_spend_exact Decimal @default(0) @db.Decimal(38, 18)
   budget_duration   String?
   budget_reset_at   DateTime?
   metadata          Json?
@@ -560,6 +565,35 @@ model DeltaLLM_CacheInvalidationOutbox {
   @@index([lease_expires_at], map: "deltallm_cacheinvalidationoutbox_lease_expires_idx")
   @@index([scope_type, scope_id], map: "deltallm_cacheinvalidationoutbox_scope_idx")
   @@map("deltallm_cacheinvalidationoutbox")
+}
+
+model DeltaLLM_BillingOperation {
+  operation_id       String    @id
+  owner_token        String
+  api_key            String
+  user_id            String?
+  team_id            String?
+  organization_id    String?
+  model              String
+  snapshot           Json
+  selector_event_id  String    @unique
+  selector_allowance Decimal   @db.Decimal(38, 18)
+  answer_allowance   Decimal   @db.Decimal(38, 18)
+  selector_state     String    @default("reserved")
+  answer_state       String    @default("reserved")
+  selector_receipt   Json?
+  answer_receipt     Json?
+  closed_at          DateTime? @db.Timestamptz
+  recovery_blocked_at DateTime? @db.Timestamptz
+  recovery_error_code String?
+  expires_at         DateTime  @db.Timestamptz
+  created_at         DateTime  @default(now()) @db.Timestamptz
+  updated_at         DateTime  @default(now()) @db.Timestamptz
+
+  @@index([organization_id, created_at, operation_id], map: "deltallm_billing_operations_org_time_idx")
+  @@index([created_at, operation_id], map: "deltallm_billing_operations_time_idx")
+  @@index([team_id, created_at, operation_id], map: "deltallm_billing_operations_team_time_idx")
+  @@map("deltallm_billing_operations")
 }
 
 model DeltaLLM_SpendIngestionOutbox {

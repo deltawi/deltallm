@@ -33,15 +33,34 @@ class CacheKeyBuilder:
         self.fields = fields or set(DEFAULT_CACHE_KEY_FIELDS)
         self.salt = custom_salt
 
-    def build_key(self, request: ChatCompletionRequest) -> str:
-        return self.build_key_from_payload(request.model_dump(exclude_none=True))
+    def build_key(
+        self, request: ChatCompletionRequest, *, routing_fingerprint: str | None = None
+    ) -> str:
+        return self.build_key_from_payload(
+            request.model_dump(exclude_none=True), routing_fingerprint=routing_fingerprint
+        )
 
-    def build_key_from_payload(self, request_data: dict[str, Any], custom_key: str | None = None) -> str:
+    def build_key_from_payload(
+        self,
+        request_data: dict[str, Any],
+        custom_key: str | None = None,
+        *,
+        routing_fingerprint: str | None = None,
+    ) -> str:
         if custom_key:
-            return f"custom:{custom_key}"
-
-        components = {field: request_data[field] for field in self.fields if field in request_data}
-        normalized = self._normalize(components)
+            components = {"custom_key": custom_key}
+        else:
+            components = {
+                "payload": {
+                    field: request_data[field] for field in self.fields if field in request_data
+                }
+            }
+        # Server-owned dimensions cannot be removed by field configuration, custom keys,
+        # or a similarly named field in caller payload/metadata.
+        normalized = {
+            "request": self._normalize(components),
+            "routing_fingerprint": routing_fingerprint,
+        }
         as_string = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
         if self.salt:
             as_string = f"{self.salt}:{as_string}"

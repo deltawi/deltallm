@@ -12,9 +12,15 @@ from typing import Any, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
-from src.api.admin.endpoints.common import db_or_503, get_auth_scope, log_admin_query_timing, to_json_value
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    get_auth_scope,
+    log_admin_query_timing,
+    to_json_value,
+)
 from src.auth.roles import Permission
 from src.billing.spend_read import SpendReadSource, get_spend_read_source
+from src.db.spend_components import external_request_sql
 from src.middleware.admin import require_any_admin_permission
 from src.providers.resolution import provider_from_model, resolve_provider
 from src.services.spend_reporting_cache import (
@@ -233,7 +239,9 @@ def _grouped_spend_config(
         }
     if group_by == "organization":
         return {
-            "joins": ["LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id"],
+            "joins": [
+                "LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id"
+            ],
             "group_expr": "s.organization_id",
             "display_expr": "NULLIF(TRIM(COALESCE(o.organization_name, '')), '')",
             "group_by_exprs": [
@@ -334,7 +342,9 @@ def _resolve_reporting_visibility(
 
 
 def _reporting_v2_enabled(request: Request) -> bool:
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     return bool(getattr(general_settings, "spend_reporting_v2_enabled", False))
 
 
@@ -347,7 +357,9 @@ def _reporting_context(request: Request, visibility: SpendVisibility) -> dict[st
 
 async def _reporting_cache(request: Request) -> SpendReportingCache:
     redis_client = getattr(request.app.state, "redis", None)
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     max_concurrent_loads = int(getattr(general_settings, "spend_reporting_max_concurrency", 2))
     global_max_concurrent_loads = int(
         getattr(general_settings, "spend_reporting_global_max_concurrency", 2)
@@ -549,9 +561,7 @@ async def _run_reporting_transaction(
                 load_budget.global_max_concurrent_loads,
             )
             if not admission_rows:
-                raise ReportingRefreshBusy(
-                    "Global reporting query capacity is currently full"
-                )
+                raise ReportingRefreshBusy("Global reporting query capacity is currently full")
             return await operation(tx, deadline, cancellation_grace)
     except ReportingQueryTimedOut:
         raise
@@ -596,6 +606,7 @@ def _summary_reporting_cache_payload(
 ) -> dict[str, Any]:
     return {
         "endpoint": "summary",
+        "component_count_schema": 1,
         "source": source.table,
         "scope": _reporting_scope_cache_payload(visibility),
         "start_date": start_date.isoformat() if start_date else None,
@@ -631,18 +642,20 @@ def _spend_report_cache_payload(
         "scope_type": scope_type,
         "scope_id": scope_id,
         "scope_unassigned": scope_unassigned,
-        "response_schema": 2,
+        "response_schema": 3,
     }
     if group_by == "day":
         payload["interval"] = interval
         return payload
 
-    payload.update({
-        "search": search,
-        "sort_by": sort_by,
-        "limit": limit,
-        "offset": offset,
-    })
+    payload.update(
+        {
+            "search": search,
+            "sort_by": sort_by,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
     if group_by == "provider":
         payload["model_provider_overrides"] = model_provider_overrides
     if group_by == "user":
@@ -705,12 +718,14 @@ async def spend_summary(
     source = get_spend_read_source()
     cache_ttl = reporting_cache_ttl(start_date, end_date)
     force_refresh = _reporting_cache_revalidation_requested(cache_control)
-    cache_key = cache.key(_summary_reporting_cache_payload(
-        source=source,
-        visibility=visibility,
-        start_date=start_date,
-        end_date=end_date,
-    ))
+    cache_key = cache.key(
+        _summary_reporting_cache_payload(
+            source=source,
+            visibility=visibility,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    )
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -741,10 +756,10 @@ async def spend_summary(
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
                 COALESCE(SUM({source.prompt_tokens_column}), 0) AS prompt_tokens,
                 COALESCE(SUM({source.completion_tokens_column}), 0) AS completion_tokens,
-                COUNT(*) AS total_requests,
+                COUNT(*) FILTER (WHERE {external_request_sql()}) AS total_requests,
                 COUNT(DISTINCT model) FILTER (WHERE NULLIF(TRIM(model), '') IS NOT NULL) AS unique_models,
-                COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
-                COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
+                COUNT(*) FILTER (WHERE {external_request_sql()} AND COALESCE(status, 'success') = 'success') AS successful_requests,
+                COUNT(*) FILTER (WHERE {external_request_sql()} AND status = 'error') AS failed_requests
             FROM {source.table}
             {where_sql}
             """,
@@ -785,7 +800,9 @@ async def spend_summary(
 )
 async def spend_report(
     request: Request,
-    group_by: str = Query(default="day", pattern="^(model|provider|day|user|team|organization|api_key)$"),
+    group_by: str = Query(
+        default="day", pattern="^(model|provider|day|user|team|organization|api_key)$"
+    ),
     interval: Literal["day", "week", "month"] = Query(default="day"),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
@@ -818,38 +835,42 @@ async def spend_report(
     )
     visibility = _resolve_reporting_visibility(request, scope, view)
     if group_by not in visibility.allowed_groupings:
-        raise HTTPException(status_code=403, detail="This usage dimension is outside your reporting scope")
+        raise HTTPException(
+            status_code=403, detail="This usage dimension is outside your reporting scope"
+        )
     if scope_type is not None and scope_type not in visibility.allowed_dimensions:
-        raise HTTPException(status_code=403, detail="This usage filter is outside your reporting scope")
+        raise HTTPException(
+            status_code=403, detail="This usage filter is outside your reporting scope"
+        )
     db = db_or_503(request)
     source = get_spend_read_source()
     user_identity_labels_visible = _user_identity_labels_visible(scope, visibility)
     model_provider_overrides = (
-        _legacy_cache_model_provider_overrides(request)
-        if group_by == "provider"
-        else None
+        _legacy_cache_model_provider_overrides(request) if group_by == "provider" else None
     )
     cache = await _reporting_cache(request)
     cache_ttl = reporting_cache_ttl(start_date, end_date)
     force_refresh = _reporting_cache_revalidation_requested(cache_control)
     normalized_search = search.strip() if search and search.strip() else None
-    cache_key = cache.key(_spend_report_cache_payload(
-        source=source,
-        visibility=visibility,
-        group_by=group_by,
-        interval=interval,
-        start_date=start_date,
-        end_date=end_date,
-        search=normalized_search,
-        sort_by=sort_by,
-        scope_type=scope_type,
-        scope_id=scope_id,
-        scope_unassigned=scope_unassigned,
-        model_provider_overrides=model_provider_overrides,
-        user_identity_labels_visible=user_identity_labels_visible,
-        limit=limit,
-        offset=offset,
-    ))
+    cache_key = cache.key(
+        _spend_report_cache_payload(
+            source=source,
+            visibility=visibility,
+            group_by=group_by,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            search=normalized_search,
+            sort_by=sort_by,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            scope_unassigned=scope_unassigned,
+            model_provider_overrides=model_provider_overrides,
+            user_identity_labels_visible=user_identity_labels_visible,
+            limit=limit,
+            offset=offset,
+        )
+    )
     if group_by == "day":
         bucket_expr = {
             "day": "DATE(start_time)",
@@ -891,10 +912,10 @@ async def spend_report(
                 SELECT
                     {bucket_expr} AS group_key,
                     COALESCE(SUM(spend), 0) AS total_spend,
-                    COUNT(*) AS request_count,
+                    COUNT(*) FILTER (WHERE {external_request_sql()}) AS request_count,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                    COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
-                    COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
+                    COUNT(*) FILTER (WHERE {external_request_sql()} AND COALESCE(status, 'success') = 'success') AS successful_requests,
+                    COUNT(*) FILTER (WHERE {external_request_sql()} AND status = 'error') AS failed_requests
                 FROM {source.table}
                 {where_sql}
                 GROUP BY {bucket_expr}
@@ -995,7 +1016,7 @@ async def spend_report(
                     ({group_expr}) IS NULL AS is_unassigned,
                     {display_expr} AS display_name,
                     COALESCE(SUM(s.spend), 0) AS total_spend,
-                    COUNT(*) AS request_count,
+                    COUNT(*) FILTER (WHERE {external_request_sql(alias="s")}) AS request_count,
                     COALESCE(SUM(s.total_tokens), 0) AS total_tokens,
                     COALESCE(SUM(s.{source.prompt_tokens_column}), 0) AS prompt_tokens,
                     COALESCE(SUM(s.{source.completion_tokens_column}), 0) AS completion_tokens
@@ -1046,11 +1067,7 @@ async def spend_report(
         response = {
             "group_by": group_by,
             "data": [
-                to_json_value({
-                    k: v
-                    for k, v in dict(row).items()
-                    if k != "total_count"
-                })
+                to_json_value({k: v for k, v in dict(row).items() if k != "total_count"})
                 for row in data_rows
             ],
             "pagination": {
@@ -1110,7 +1127,9 @@ async def spend_feature_status(
         required_permission=Permission.SPEND_READ,
     )
     visibility = _resolve_reporting_visibility(request, scope, None)
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     return {
         "cache_enabled": bool(getattr(general_settings, "cache_enabled", False)),
         "reporting_api_version": 2 if _reporting_v2_enabled(request) else 1,
@@ -1178,9 +1197,7 @@ async def request_logs(
     if cursor:
         cursor_time, cursor_id = _decode_request_log_cursor(cursor)
         params.extend((cursor_time, cursor_id))
-        clauses.append(
-            f"(start_time, id) < (${len(params) - 1}::timestamp, ${len(params)})"
-        )
+        clauses.append(f"(start_time, id) < (${len(params) - 1}::timestamp, ${len(params)})")
     apply_spend_visibility(
         clauses=clauses,
         params=params,
@@ -1238,11 +1255,7 @@ async def request_logs(
                 )
                 total = int((total_rows[0] if total_rows else {}).get("total") or 0)
 
-            has_more = (
-                offset + limit < total
-                if total is not None
-                else len(logs) > limit
-            )
+            has_more = offset + limit < total if total is not None else len(logs) > limit
             page_logs = logs[:limit]
             next_cursor = None
             if has_more and page_logs and not offset_pagination:

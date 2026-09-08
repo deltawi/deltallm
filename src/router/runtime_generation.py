@@ -11,6 +11,7 @@ from src.router.failover import FallbackConfig, FailoverManager
 from src.router.registry import DeploymentRegistryStore
 from src.router.router import Router, RouterConfig, RoutingStrategy
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
+from src.router.routing_identity import build_runtime_routing_fingerprints
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,7 @@ class RoutingRuntimeGeneration:
     router: Router
     failover_manager: FailoverManager
     cooldown_manager: CooldownManager
+    routing_fingerprints: Mapping[str, str]
     source: str = "config_only"
     requires_reconciliation: bool = False
 
@@ -74,6 +76,14 @@ class RoutingRuntimeGeneration:
             router=router,
             failover_manager=failover_manager,
             cooldown_manager=cooldown_manager,
+            routing_fingerprints=build_runtime_routing_fingerprints(
+                groups=route_groups,
+                policies=router_config.route_group_policies,
+                deployments=deployment_registry.snapshot(),
+                default_strategy=strategy,
+                failover_config=failover_config,
+                enable_pre_call_checks=router_config.enable_pre_call_checks,
+            ),
             source=source,
             requires_reconciliation=requires_reconciliation,
         )

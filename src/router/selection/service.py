@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import asyncio
 
+from src.billing.operation_reservation import BillingOperationUnavailable
+from src.metrics.selector import (
+    SelectorTermination,
+    observe_selector_decision,
+    observe_selector_termination,
+)
+from src.models.errors import TimeoutError as RequestTimeoutError
+
 from src.models.requests import ChatCompletionRequest
 from src.route_policy_contract import LLMTierSelectorPolicy, SelectorLane
 from src.router.selection.contracts import (
@@ -11,6 +19,8 @@ from src.router.selection.contracts import (
     SelectorModelHop,
     SelectorPolicyIdentity,
     SelectorUsage,
+    SelectorAdmission,
+    SelectorInvariantError,
     UnknownSelectorUsage,
 )
 from src.router.selection.parser import parse_selector_output
@@ -21,8 +31,11 @@ from src.router.selection.request_state import RequestSelectorState
 class SelectorService:
     """Isolated prerequisite: deliberately not constructed by production bootstrap."""
 
-    def __init__(self, hop: SelectorModelHop) -> None:
+    def __init__(
+        self, hop: SelectorModelHop, *, admission: SelectorAdmission | None = None
+    ) -> None:
         self._hop = hop
+        self._admission = admission
 
     async def select_once(
         self,
@@ -52,10 +65,62 @@ class SelectorService:
         policy: LLMTierSelectorPolicy,
         identity: SelectorPolicyIdentity,
     ) -> SelectorDecision:
+        started = asyncio.get_running_loop().time()
+        try:
+            decision = await self._execute(
+                state=state,
+                payload=payload,
+                token_estimate=token_estimate,
+                policy=policy,
+                identity=identity,
+            )
+        except asyncio.CancelledError:
+            observe_selector_termination(
+                SelectorTermination.CANCELLED, seconds=asyncio.get_running_loop().time() - started
+            )
+            raise
+        except RequestTimeoutError:
+            observe_selector_termination(
+                SelectorTermination.DEADLINE, seconds=asyncio.get_running_loop().time() - started
+            )
+            raise
+        except BillingOperationUnavailable:
+            observe_selector_termination(
+                SelectorTermination.ACCOUNTING_UNAVAILABLE,
+                seconds=asyncio.get_running_loop().time() - started,
+            )
+            raise
+        except SelectorInvariantError:
+            observe_selector_termination(
+                SelectorTermination.INVARIANT_FAILURE,
+                seconds=asyncio.get_running_loop().time() - started,
+            )
+            raise
+        observe_selector_decision(decision)
+        return decision
+
+    async def _execute(
+        self,
+        *,
+        state: RequestSelectorState,
+        payload: ChatCompletionRequest,
+        token_estimate: int,
+        policy: LLMTierSelectorPolicy,
+        identity: SelectorPolicyIdentity,
+    ) -> SelectorDecision:
         loop = asyncio.get_running_loop()
         started = loop.time()
         expires_at = min(state.deadline.expires_at, started + policy.timeout_ms / 1000)
         result: SelectorLane | SelectorCause
+        if self._admission is not None:
+            try:
+                async with asyncio.timeout_at(expires_at):
+                    await self._admission.admit(expires_at=expires_at)
+            except TimeoutError:
+                # An ambiguous reservation is not permission to answer in a default
+                # lane. Only provider/selection timeouts may default after admission.
+                state.deadline.require_remaining()
+                raise BillingOperationUnavailable() from None
         try:
             async with asyncio.timeout_at(expires_at):
                 features = project_selector_request(payload, token_estimate=token_estimate)
@@ -87,6 +152,8 @@ class SelectorService:
             state.deadline.require_remaining()
             result = SelectorCause.SELECTOR_TIMEOUT
         state.deadline.require_remaining()
+        if self._admission is not None:
+            await self._admission.finish(state.usage, expires_at=state.deadline.expires_at)
         return _decision(
             result,
             policy=policy,

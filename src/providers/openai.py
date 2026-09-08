@@ -18,6 +18,7 @@ from src.providers.base import (
     reject_openai_compatible_failure_response,
 )
 from src.providers.healthcheck import is_provider_healthy
+from src.providers.token_receipt import ProviderTokenReceipt, openai_token_receipt
 from src.providers.openai_compatible import (
     translate_openai_compatible_stream,
     validate_openai_single_result,
@@ -62,6 +63,9 @@ _CONTENT_MESSAGE_MARKERS = (
 
 class OpenAIAdapter(ProviderAdapter):
     provider_name = "openai"
+
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return openai_token_receipt(payload)
 
     def validate_single_result_payload(self, payload: object) -> None:
         validate_openai_single_result(payload)

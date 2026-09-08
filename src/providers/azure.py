@@ -9,6 +9,7 @@ from src.models.errors import FailureClassification, ProxyError
 from src.models.request_serialization import dump_openai_chat_request
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.providers.token_receipt import ProviderTokenReceipt, openai_token_receipt
 from src.providers.base import (
     ProviderAdapter,
     ProviderErrorDetails,
@@ -48,6 +49,9 @@ _CONTENT_MESSAGE_MARKERS = ("content management policy", "responsible ai policy"
 
 
 class AzureOpenAIAdapter(ProviderAdapter):
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return openai_token_receipt(payload)
+
     provider_name = "azure_openai"
 
     def validate_single_result_payload(self, payload: object) -> None:

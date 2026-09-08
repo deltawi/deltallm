@@ -15,6 +15,7 @@ from src.models.responses import ChatCompletionResponse
 from src.providers.chat_upstream import ChatUpstream
 from src.providers.error_body import provider_error_body_is_unavailable
 from src.providers.signing import apply_request_signing
+from src.providers.token_receipt import TokenReceiptObserver
 
 logger = logging.getLogger(__name__)
 RESPONSE_CLOSE_GRACE_SECONDS = 0.05
@@ -65,6 +66,7 @@ async def execute_chat_hop(
     timeout: httpx.Timeout,
     observer: HopObserver | None = None,
     bounded: BoundedChatResponse | None = None,
+    receipt_observer: TokenReceiptObserver | None = None,
 ) -> ChatCompletionResponse:
     """Shared single-attempt transport; clients and answer accounting belong to callers."""
     request_url = f"{upstream.api_base}{upstream.endpoint}"
@@ -109,7 +111,7 @@ async def execute_chat_hop(
     try:
         if bounded is not None:
             canonical = await upstream.adapter.translate_single_success_response(
-                response, model_name
+                response, model_name, receipt_observer=receipt_observer
             )
         else:
             canonical = await upstream.adapter.translate_success_response(response, model_name)
