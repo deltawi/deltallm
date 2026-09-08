@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.db.route_group_identity import RouteGroupIdentityMixin
 from src.router.policy_validation import (
     CURRENT_POLICY_SEMANTICS_VERSION,
     PolicyMemberInventoryItem,
@@ -96,24 +97,25 @@ def to_policy_record(row: dict[str, Any]) -> RoutePolicyRecord:
     )
 
 
-class RoutePolicyLifecycleMixin:
+class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
     prisma: Any | None
 
     async def get_published_policy(self, group_key: str) -> RoutePolicyRecord | None:
         if self.prisma is None:
             return None
+        lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT p.route_policy_id, p.route_group_id, p.version, p.semantics_version, p.status,
                    p.policy_json, p.published_at, p.published_by, p.created_at, p.updated_at
             FROM deltallm_routepolicy p
             JOIN deltallm_routegroup g ON g.route_group_id = p.route_group_id
-            WHERE g.group_key = $1
+            WHERE g.{lookup.column} = $1
               AND p.status = 'published'
             ORDER BY p.version DESC
             LIMIT 1
             """,
-            group_key,
+            lookup.value,
         )
         return to_policy_record(rows[0]) if rows else None
 
@@ -407,28 +409,30 @@ class RoutePolicyLifecycleMixin:
     async def list_policies(self, group_key: str) -> list[RoutePolicyRecord]:
         if self.prisma is None:
             return []
+        lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT p.route_policy_id, p.route_group_id, p.version, p.semantics_version, p.status,
                    p.policy_json, p.published_at, p.published_by, p.created_at, p.updated_at
             FROM deltallm_routepolicy p
             JOIN deltallm_routegroup g ON g.route_group_id = p.route_group_id
-            WHERE g.group_key = $1
+            WHERE g.{lookup.column} = $1
             ORDER BY p.version DESC
             """,
-            group_key,
+            lookup.value,
         )
         return [to_policy_record(row) for row in rows]
 
     async def _lock_group_id(self, group_key: str) -> str | None:
+        lookup = self._group_lookup(group_key)
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT route_group_id
             FROM deltallm_routegroup
-            WHERE group_key = $1
+            WHERE {lookup.column} = $1
             FOR UPDATE
             """,
-            group_key,
+            lookup.value,
         )
         return str(rows[0]["route_group_id"]) if rows else None
 

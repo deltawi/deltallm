@@ -37,71 +37,6 @@ general_settings:
 
 That seeds the sample `model_list` into the database on first startup. After the first successful boot, you can set `model_deployment_bootstrap_from_config` back to `false`.
 
-### Single instance
-
-The fastest way to get everything running:
-
-```bash
-# Edit config.yaml with your API keys and settings
-
-docker compose --profile single up -d --build
-```
-
-If you want the full Presidio engine for guardrails instead of the default regex fallback:
-
-```bash
-INSTALL_PRESIDIO=true docker compose --profile single up -d --build
-```
-
-Run the command from the repository root so Compose can read the project `.env` file automatically.
-
-On startup, the DeltaLLM container applies migrations with:
-
-```bash
-prisma migrate deploy --schema=./prisma/schema.prisma
-```
-
-Then it starts the API server.
-
-This starts:
-- DeltaLLM on port **4002** on the host (`4000` inside the container)
-- PostgreSQL 15 database
-- Redis 7 cache
-
-DeltaLLM is available at `http://localhost:4002`.
-
-Without `INSTALL_PRESIDIO=true`, Presidio guardrails still work, but DeltaLLM uses the built-in regex fallback for a smaller default image.
-
-Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
-
-### Multi-instance evaluation
-
-Run two DeltaLLM instances behind an Nginx load balancer:
-
-```bash
-docker compose --profile ha up -d --build
-```
-
-Each DeltaLLM container runs `prisma migrate deploy --schema=./prisma/schema.prisma` before
-starting the API. Concurrent startup is acceptable only for this evaluation profile. Production
-rollouts must run one coordinated migration job before starting replicas.
-
-This starts:
-- 2 DeltaLLM instances (load balanced)
-- Nginx reverse proxy on port 80
-- PostgreSQL database
-- Redis cache
-
-DeltaLLM is available at `http://localhost`.
-
-!!! warning "This profile is not highly available"
-    Nginx, PostgreSQL, Redis, storage, and both application containers share one host and one
-    failure domain. The profile does not provide production TLS, stateful-service redundancy,
-    coordinated migrations, or recovery automation. See [Docker and Compose
-    boundaries](../deployment/docker.md) before operating outside local evaluation.
-
-Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
-
 ## Environment Variables
 
 Create a `.env` file in the project root.
@@ -168,6 +103,71 @@ The starter config keeps the common optional features commented out with guidanc
 The container applies strict Prisma migrations automatically on boot, so you do not need a
 separate schema initialization step for the local Compose profiles. Do not extend this
 per-container behavior to a multi-replica production rollout.
+
+## Single instance
+
+The fastest way to get everything running:
+
+```bash
+# Edit config.yaml with your API keys and settings
+
+docker compose --profile single up -d --build
+```
+
+If you want the full Presidio engine for guardrails instead of the default regex fallback:
+
+```bash
+INSTALL_PRESIDIO=true docker compose --profile single up -d --build
+```
+
+Run the command from the repository root so Compose can read the project `.env` file automatically.
+
+On startup, the DeltaLLM container applies migrations with:
+
+```bash
+prisma migrate deploy --schema=./prisma/schema.prisma
+```
+
+Then it starts the API server.
+
+This starts:
+- DeltaLLM on port **4002** on the host (`4000` inside the container)
+- PostgreSQL 15 database
+- Redis 7 cache
+
+DeltaLLM is available at `http://localhost:4002`.
+
+Without `INSTALL_PRESIDIO=true`, Presidio guardrails still work, but DeltaLLM uses the built-in regex fallback for a smaller default image.
+
+Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
+
+## Multi-instance evaluation
+
+Run two DeltaLLM instances behind an Nginx load balancer:
+
+```bash
+docker compose --profile ha up -d --build
+```
+
+Each DeltaLLM container runs `prisma migrate deploy --schema=./prisma/schema.prisma` before
+starting the API. Concurrent startup is acceptable only for this evaluation profile. Production
+rollouts must run one coordinated migration job before starting replicas.
+
+This starts:
+- 2 DeltaLLM instances (load balanced)
+- Nginx reverse proxy on port 80
+- PostgreSQL database
+- Redis cache
+
+DeltaLLM is available at `http://localhost`.
+
+!!! warning "This profile is not highly available"
+    Nginx, PostgreSQL, Redis, storage, and both application containers share one host and one
+    failure domain. The profile does not provide production TLS, stateful-service redundancy,
+    coordinated migrations, or recovery automation. See [Docker and Compose
+    boundaries](../deployment/docker.md) before operating outside local evaluation.
+
+Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
 
 ## Custom Config
 

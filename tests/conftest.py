@@ -41,6 +41,9 @@ from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 
 
+pytest_plugins = ("tests.dependency_lanes",)
+
+
 class NoopBudgetService:
     async def check_budgets(self, **kwargs):
         return None

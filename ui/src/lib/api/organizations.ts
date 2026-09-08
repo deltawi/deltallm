@@ -71,6 +71,7 @@ export interface OrganizationCapabilities {
   manage_members: boolean;
   manage_assets: boolean;
   manage_service_policy: boolean;
+  expedite_deletion: boolean;
   view_usage: boolean;
 }
 
@@ -160,6 +161,8 @@ export function normalizeOrganizationCapabilities(
     manage_members: active && capability(raw, 'manage_members'),
     manage_assets: active && capability(raw, 'manage_assets'),
     manage_service_policy: active && capability(raw, 'manage_service_policy'),
+    expedite_deletion: lifecycleState.startsWith('deletion_')
+      && capability(raw, 'expedite_deletion'),
     view_usage: lifecycleState !== 'unavailable' && capability(raw, 'view_usage'),
   };
 }

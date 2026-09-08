@@ -16,6 +16,9 @@ from tests.db.tier_migration_helpers import seed_tier
 from tests.db.tier_migration_helpers import seed_tier_version
 
 
+pytestmark = pytest.mark.postgres
+
+
 @pytest.mark.asyncio
 async def test_model_policy_capacity_pool_foreign_key_rejects_missing_pool() -> None:
     db = await connect_prisma()

@@ -44,12 +44,16 @@ guardrails-presidio = [
 ]
 
 [tool.pytest.ini_options]
+addopts = ["--strict-markers"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
+  "hermetic: uses only in-process code, fakes, and temporary files",
+  "app: exercises the in-process FastAPI application with fake dependencies",
+  "postgres: requires a real PostgreSQL database and generated Prisma client",
+  "redis: requires a real Redis server",
+  "helm: requires the Helm CLI and chart dependencies",
   "integration: exercises a real local infrastructure dependency when available",
-  "postgres: exercises real PostgreSQL constraints, transactions, and locking",
-  "redis: exercises real Redis coordination, Lua, TTL, and recovery",
 ]
 
 [tool.ruff]

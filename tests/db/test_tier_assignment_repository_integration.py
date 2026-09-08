@@ -14,6 +14,9 @@ from tests.db.tier_migration_helpers import seed_tier
 from tests.db.tier_migration_helpers import seed_tier_version
 
 
+pytestmark = pytest.mark.postgres
+
+
 @pytest.mark.asyncio
 async def test_upsert_org_assignment_persists_timestamps_and_metadata_against_postgres() -> None:
     db = await connect_prisma()

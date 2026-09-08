@@ -44,16 +44,12 @@ class _WorkerRepository:
         self.finalized: list[str] = []
         self.finalization_result = OrganizationDeletionFinalizationResult.completed()
         self.cleanup_progress: dict[str, int] = {}
+        self.batch_wait_deadline: datetime | None = None
 
     async def claim_due(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
         jobs, self.jobs = self.jobs, []
         return jobs
-
-    async def advance_phase(self, job, *, next_phase, progress=None, **kwargs):  # noqa: ANN001, ANN003, ANN201
-        del kwargs
-        self.transitions.append((job.phase, next_phase, dict(progress or {})))
-        return True
 
     async def run_cleanup_page(
         self,
@@ -79,10 +75,26 @@ class _WorkerRepository:
             )
         return True, result
 
-    async def mark_waiting(self, job, **kwargs):  # noqa: ANN001, ANN003, ANN201
-        del job
-        self.waits.append(dict(kwargs))
-        return True
+    async def settle_batch_wait(
+        self,
+        job,
+        *,
+        active_batches,
+        requested_recheck_at,
+        **kwargs,
+    ):  # noqa: ANN001, ANN003, ANN201
+        del kwargs
+        deadline = self.batch_wait_deadline or job.not_before_at
+        deadline_reached = deadline is not None and datetime.now(tz=UTC) >= deadline
+        progress = {
+            "active_batches": active_batches,
+            "recovery_window_elapsed": deadline_reached,
+        }
+        if active_batches > 0 or not deadline_reached:
+            self.waits.append({"requested_recheck_at": requested_recheck_at, "progress": progress})
+            return "waiting"
+        self.transitions.append((job.phase, "resolve_owned_assets", progress))
+        return "advanced"
 
     async def mark_retry(self, job, **kwargs):  # noqa: ANN001, ANN003, ANN201
         del job
@@ -224,6 +236,26 @@ async def test_worker_enters_irreversible_phase_only_after_deadline() -> None:
         not_before_at=datetime.now(tz=UTC) - timedelta(seconds=1),
     )
     worker, repository, _cleanup = _worker(job)
+
+    await worker.process_once()
+
+    assert repository.transitions == [
+        (
+            "wait_for_batches",
+            "resolve_owned_assets",
+            {"active_batches": 0, "recovery_window_elapsed": True},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_worker_batch_wait_uses_repository_deadline_not_claim_snapshot() -> None:
+    job = _job(
+        phase="wait_for_batches",
+        not_before_at=datetime.now(tz=UTC) + timedelta(hours=1),
+    )
+    worker, repository, _cleanup = _worker(job)
+    repository.batch_wait_deadline = datetime.now(tz=UTC) - timedelta(seconds=1)
 
     await worker.process_once()
 

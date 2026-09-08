@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from src.db.organization_deletion_records import (
     OrganizationDeletionJobRecord,
@@ -56,9 +57,16 @@ class OrganizationDeletionMutationResult:
     immediate_invalidation_succeeded: bool
 
 
+@dataclass(frozen=True)
+class OrganizationDeletionExpediteResult:
+    job: OrganizationDeletionJobRecord
+    idempotency_resolution: Literal["applied", "replayed"]
+
+
 __all__ = [
     "OrganizationDeletionConflictError",
     "OrganizationDeletionError",
+    "OrganizationDeletionExpediteResult",
     "OrganizationDeletionMutationResult",
     "OrganizationDeletionNotFoundError",
     "OrganizationDeletionPlan",

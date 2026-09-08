@@ -210,8 +210,9 @@ class OrganizationDeletionRequestWriter:
                 code="organization_deletion_idempotency_conflict",
             )
 
-    @staticmethod
+    @classmethod
     def require_deletable_organization(
+        cls,
         organization: dict[str, Any],
         *,
         confirmation_name: str,
@@ -221,10 +222,21 @@ class OrganizationDeletionRequestWriter:
                 "Organization deletion is already in progress",
                 code="organization_deletion_active_job",
             )
+        cls.require_confirmation_name(organization, confirmation_name=confirmation_name)
+
+    @staticmethod
+    def require_confirmation_name(
+        organization: dict[str, Any],
+        *,
+        confirmation_name: str,
+    ) -> None:
         expected = str(
             organization.get("organization_name") or organization.get("organization_id") or ""
         ).strip()
-        if not expected or not hmac.compare_digest(expected, confirmation_name):
+        if not expected or not hmac.compare_digest(
+            expected.encode("utf-8"),
+            confirmation_name.encode("utf-8"),
+        ):
             raise OrganizationDeletionValidationError(
                 "confirmation_name must exactly match the organization name"
             )

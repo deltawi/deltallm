@@ -14,6 +14,7 @@ class OrganizationCapabilitiesResponse(BaseModel):
     manage_members: bool = False
     manage_assets: bool = False
     manage_service_policy: bool = False
+    expedite_deletion: bool = False
     view_usage: bool = False
 
 

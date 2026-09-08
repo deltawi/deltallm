@@ -63,6 +63,11 @@ capacity state is read.
 
 ## What the Detail Page Lets You Do
 
+Group names may include slashes, spaces, Unicode, and other reserved URL characters.
+Opening a group uses its stable ID in the page address. The displayed name, call examples,
+and prompt bindings keep the original group key. Saved name-based links redirect to the
+current group address when that name can be recovered from the URL.
+
 - edit the basic group metadata
 - add and remove member deployments
 - see the current usage example for calling the group

@@ -13,6 +13,7 @@ import httpx
 from fastapi import HTTPException, status
 
 from src.models.errors import RateLimitError
+from src.auth.sso_identity import SSOSubjectSource
 
 
 class SSOProvider(str, Enum):
@@ -102,18 +103,26 @@ class SSOAuthHandler:
         token_data = await self._exchange_code(code, code_verifier=code_verifier)
         access_token = token_data.get("access_token")
         if not access_token:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing access token")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Missing access token"
+            )
 
         user_info = await self._get_userinfo(access_token)
         raw_email = user_info.get("email")
         email = str(raw_email or "").strip().lower()
         if not email:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email not provided by SSO provider")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Email not provided by SSO provider"
+            )
         await self._enforce_callback_rate_limit(email)
 
-        provider_subject = self._extract_provider_subject(user_info, fallback_email=email)
+        provider_subject, subject_source = self._extract_provider_subject(
+            user_info, fallback_email=email
+        )
         email_verified = self._extract_email_verified(user_info)
-        admin_emails = {str(item or "").strip().lower() for item in (self.config.admin_email_list or [])}
+        admin_emails = {
+            str(item or "").strip().lower() for item in (self.config.admin_email_list or [])
+        }
         is_admin = email in admin_emails
         user = await self.users.get_or_create_by_email(
             email=email,
@@ -130,17 +139,20 @@ class SSOAuthHandler:
             "role": user.user_role,
             "team_id": user.team_id,
             "provider_subject": provider_subject,
+            "provider_subject_source": subject_source.value,
             "email_verified": email_verified,
             "token": self._generate_session_token(user),
         }
 
-    def _extract_provider_subject(self, user_info: dict[str, Any], *, fallback_email: str) -> str:
+    def _extract_provider_subject(
+        self, user_info: dict[str, Any], *, fallback_email: str
+    ) -> tuple[str, SSOSubjectSource]:
         for key in ("sub", "id", "oid", "user_id"):
             value = user_info.get(key)
             subject = str(value or "").strip()
             if subject:
-                return subject
-        return fallback_email
+                return subject, SSOSubjectSource.PROVIDER
+        return fallback_email, SSOSubjectSource.EMAIL
 
     def _extract_email_verified(self, user_info: dict[str, Any]) -> bool | None:
         for key in ("email_verified", "verified_email"):
@@ -173,13 +185,17 @@ class SSOAuthHandler:
         if self._http_client is not None:
             response = await self._http_client.post(self.config.token_url, data=payload)
             if response.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to exchange code")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to exchange code"
+                )
             return response.json()
 
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(self.config.token_url, data=payload)
             if response.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to exchange code")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to exchange code"
+                )
             return response.json()
 
     async def _get_userinfo(self, access_token: str) -> dict[str, Any]:
@@ -188,13 +204,17 @@ class SSOAuthHandler:
         if self._http_client is not None:
             response = await self._http_client.get(self.config.userinfo_url, headers=headers)
             if response.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get user info")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get user info"
+                )
             return response.json()
 
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.get(self.config.userinfo_url, headers=headers)
             if response.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get user info")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get user info"
+                )
             return response.json()
 
     async def _enforce_callback_rate_limit(self, email: str) -> None:
@@ -210,7 +230,9 @@ class SSOAuthHandler:
                 limit=10,
             )
         except RateLimitError as exc:
-            headers = {"Retry-After": str(exc.retry_after)} if getattr(exc, "retry_after", None) else None
+            headers = (
+                {"Retry-After": str(exc.retry_after)} if getattr(exc, "retry_after", None) else None
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many SSO login attempts; please try again later",

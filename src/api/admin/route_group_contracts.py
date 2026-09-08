@@ -8,16 +8,19 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     ModelWrapValidatorHandler,
     PrivateAttr,
+    StrictBool,
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from src.route_policy_contract import LLMTierSelectorPolicy, RoutePolicyMember
 
 
-class RouteGroupMutationResponse(BaseModel):
+class RouteGroupResponse(BaseModel):
     route_group_id: str
     group_key: str
     name: str | None
@@ -31,6 +34,9 @@ class RouteGroupMutationResponse(BaseModel):
     owner_scope_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class RouteGroupMutationResponse(RouteGroupResponse):
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -247,3 +253,69 @@ class RoutePolicySimulationResponse(BaseModel):
     terminal_outcomes: dict[str, int]
     sample_decision: dict[str, Any] | None = None
     sample_attempts: list[RoutePolicySimulationAttempt] = Field(default_factory=list)
+
+
+class RouteGroupDetailMember(RouteGroupMemberMutationResponse):
+    model_name: str | None = None
+    provider: str | None = None
+    mode: str | None = None
+    healthy: bool | None = None
+
+
+class RouteGroupBindingResponse(BaseModel):
+    route_group_binding_id: str
+    route_group_id: str
+    group_key: str
+    scope_type: str
+    scope_id: str
+    enabled: bool
+    metadata: dict[str, JsonValue] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class RouteGroupDetailResponse(BaseModel):
+    group: RouteGroupResponse
+    members: list[RouteGroupDetailMember]
+    policy: RoutePolicyResponse | None
+    bindings: list[RouteGroupBindingResponse]
+
+
+class RouteGroupResolutionResponse(BaseModel):
+    route_group_id: str
+    group_key: str
+
+
+class RouteGroupUpdateRequest(BaseModel):
+    name: str | None = None
+    mode: str | None = None
+    strategy: str | None = None
+    enabled: StrictBool = True
+    metadata: dict[str, JsonValue] | None = None
+    default_prompt: dict[str, str | None] | None = None
+    owner_scope_type: str | None = None
+    owner_scope_id: str | None = None
+
+
+class RouteGroupMemberWriteRequest(BaseModel):
+    deployment_id: str = Field(min_length=1)
+    enabled: StrictBool = True
+    weight: int | None = None
+    priority: int | None = None
+
+    @field_validator("weight", "priority", mode="before")
+    @classmethod
+    def reject_boolean_numbers(cls, value: object) -> object:
+        # Reject before Pydantic turns True/False into 1/0. Retain numeric-string
+        # compatibility with the existing member endpoint.
+        if isinstance(value, bool):
+            raise PydanticCustomError("int_type", "Input should be a valid integer")
+        return value
+
+
+class RoutePolicyRollbackRequest(BaseModel):
+    version: int = Field(ge=1, strict=True)
+
+
+class RouteGroupErrorResponse(BaseModel):
+    detail: str

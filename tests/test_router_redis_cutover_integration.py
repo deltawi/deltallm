@@ -14,6 +14,9 @@ from scripts.router_redis_schema_cutover import (
 )
 
 
+pytestmark = pytest.mark.redis
+
+
 def test_resolve_redis_url_reads_and_trims_secret_file(tmp_path: Path) -> None:
     redis_url_file = tmp_path / "redis-url"
     redis_url_file.write_text("  redis://localhost:6379/0\n", encoding="utf-8")

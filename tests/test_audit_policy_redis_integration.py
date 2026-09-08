@@ -11,6 +11,9 @@ from src.services.audit_policy_invalidation import AuditPolicyInvalidation
 from src.telemetry.lifecycle import WorkerState
 
 
+pytestmark = pytest.mark.redis
+
+
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/15")
 
 

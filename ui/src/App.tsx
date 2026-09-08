@@ -24,7 +24,6 @@ import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
 import NamedCredentials from './pages/NamedCredentials';
 import AuditLogs from './pages/AuditLogs';
-import RouteGroups from './pages/RouteGroups';
 import PromptRegistry from './pages/PromptRegistry';
 import PromptTemplateDetail from './pages/PromptTemplateDetail';
 import MCPServers from './pages/MCPServers';
@@ -42,7 +41,8 @@ const Organizations = lazy(() => import('./pages/Organizations'));
 const OrganizationDetail = lazy(() => import('./pages/OrganizationDetail'));
 const OrganizationCreate = lazy(() => import('./pages/OrganizationCreate'));
 const TeamCreate = lazy(() => import('./pages/TeamCreate'));
-const RouteGroupDetail = lazy(() => import('./pages/RouteGroupDetail'));
+const RouteGroupRoute = lazy(() => import('./pages/RouteGroupRoute'));
+const RouteGroups = lazy(() => import('./pages/RouteGroups'));
 const ModelCreate = lazy(() => import('./pages/ModelCreate'));
 const ModelEdit = lazy(() => import('./pages/ModelEdit'));
 
@@ -199,8 +199,9 @@ function AppRoutes() {
         <Route path="/tiers" element={uiAccess.tiers ? <Tiers /> : <Navigate to="/" replace />} />
         <Route path="/tiers/:tierId" element={uiAccess.tiers ? <TierDetail /> : <Navigate to="/" replace />} />
         <Route path="/named-credentials" element={uiAccess.named_credentials ? <NamedCredentials /> : <Navigate to="/" replace />} />
-        <Route path="/route-groups" element={uiAccess.route_groups ? <RouteGroups /> : <Navigate to="/" replace />} />
-        <Route path="/route-groups/:groupKey" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/route-groups" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroups /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/route-groups/by-id/:routeGroupId" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/route-groups/*" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/prompts" element={uiAccess.prompts ? <PromptRegistry /> : <Navigate to="/" replace />} />
         <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
         <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <MCPServers /> : <Navigate to="/" replace />} />

@@ -77,3 +77,45 @@ test('structured deletion errors expose the server message', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('organization deletion expedite encodes the target and acknowledgement', async () => {
+  const controller = new AbortController();
+  let capturedPath = '';
+  let capturedInit: RequestInit | undefined;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (path, init) => {
+    capturedPath = String(path);
+    capturedInit = init;
+    return new Response(JSON.stringify({ deletion_job_id: 'delete/one' }), {
+      status: 202,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    await organizationDeletion.expedite(
+      'org/one',
+      'delete/one',
+      {
+        confirmation_name: 'Example',
+        acknowledge_immediate_irreversible_deletion: true,
+      },
+      'expedite-1',
+      controller.signal,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(
+    capturedPath,
+    '/ui/api/organizations/org%2Fone/deletion-requests/delete%2Fone/expedite',
+  );
+  assert.equal(capturedInit?.method, 'POST');
+  assert.equal(capturedInit?.signal, controller.signal);
+  assert.equal(new Headers(capturedInit?.headers).get('Idempotency-Key'), 'expedite-1');
+  assert.equal(
+    JSON.parse(String(capturedInit?.body)).acknowledge_immediate_irreversible_deletion,
+    true,
+  );
+});

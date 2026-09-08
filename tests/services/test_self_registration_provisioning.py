@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.auth.sso_identity import SSOIdentityAssertion, SSOSubjectSource
+
 import copy
 import json
 from types import SimpleNamespace
@@ -8,7 +10,10 @@ from typing import Any
 import pytest
 
 from src.config import AppConfig, SelfRegistrationSettings
-from src.services.platform_identity_service import PlatformIdentityService
+from src.services.platform_identity_service import (
+    LoginSessionCreationError,
+    PlatformIdentityService,
+)
 from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
 
 
@@ -80,10 +85,30 @@ class FakeSelfRegistrationDB:
 
     async def query_raw(self, query: str, *params):  # noqa: ANN201
         normalized = _normalize_sql(query)
+        if "insert into deltallm_platformaccount" in normalized and "returning" in normalized:
+            if self._account_by_email(str(params[0])) is not None:
+                return []
+            await self.execute_raw(query, *params)
+            return [dict(self._account_by_email(str(params[0])))]
+        if "set email = coalesce" in normalized:
+            account = self.accounts.get(str(params[0]))
+            if account is None:
+                return []
+            if params[2] is not None and str(account["email"]).lower() != str(params[2]).lower():
+                return []
+            if params[1] is not None:
+                account["email"] = params[1]
+            return [dict(account)]
+        if "from deltallm_organizationtable" in normalized:
+            org = self.organizations.get(str(params[0]))
+            return [{"lifecycle_state": "active", **org}] if org else []
         if "from deltallm_teamtable" in normalized and "where team_id = $1" in normalized:
             team = self.teams.get(str(params[0]))
             return [dict(team)] if team else []
-        if "from deltallm_platformaccount" in normalized and "lower(email) = lower($1)" in normalized:
+        if (
+            "from deltallm_platformaccount" in normalized
+            and "lower(email) = lower($1)" in normalized
+        ):
             email = str(params[0]).strip().lower()
             account = self._account_by_email(email)
             return [dict(account)] if account else []
@@ -283,7 +308,10 @@ class FakeSelfRegistrationDB:
         normalized_email = user_email.strip().lower()
         if user_id in self.users:
             return 0
-        if any(str(user.get("user_email") or "").lower() == normalized_email for user in self.users.values()):
+        if any(
+            str(user.get("user_email") or "").lower() == normalized_email
+            for user in self.users.values()
+        ):
             return 0
         self.users[user_id] = {
             "user_id": user_id,
@@ -302,12 +330,16 @@ class FakeSelfRegistrationDB:
         }
         return 1
 
-    def _update_platform_account_metadata(self, account_id: str, metadata_key: str, metadata: str) -> int:
+    def _update_platform_account_metadata(
+        self, account_id: str, metadata_key: str, metadata: str
+    ) -> int:
         account = self.accounts.get(account_id)
         if account is None:
             return 0
 
-        account_metadata = account.get("metadata") if isinstance(account.get("metadata"), dict) else {}
+        account_metadata = (
+            account.get("metadata") if isinstance(account.get("metadata"), dict) else {}
+        )
         current_value = account_metadata.get(metadata_key)
         current_obj = dict(current_value) if isinstance(current_value, dict) else {}
         account_metadata[metadata_key] = {**current_obj, **json.loads(metadata)}
@@ -348,7 +380,9 @@ class _FakeTransaction:
 
 
 class SuccessfulSSOIdentityService(PlatformIdentityService):
-    def __init__(self, *, db_client: Any, salt: str = "salt-key", session_ttl_hours: int = 12) -> None:
+    def __init__(
+        self, *, db_client: Any, salt: str = "salt-key", session_ttl_hours: int = 12
+    ) -> None:
         super().__init__(db_client=db_client, salt=salt, session_ttl_hours=session_ttl_hours)
         self.identity_links: list[dict[str, str]] = []
         self.last_logins: list[str] = []
@@ -433,7 +467,8 @@ def _service(
 ) -> SelfRegistrationProvisioningService:
     return SelfRegistrationProvisioningService(
         db_client=db,
-        platform_identity_service=identity_service or PlatformIdentityService(db_client=db, salt="salt-key"),
+        platform_identity_service=identity_service
+        or PlatformIdentityService(db_client=db, salt="salt-key"),
     )
 
 
@@ -469,7 +504,10 @@ async def test_provision_from_defaults_seeds_sandbox_records() -> None:
     assert db.users["acct-1"]["user_email"] == "developer@example.com"
     assert db.users["acct-1"]["max_budget"] == 10
     assert db.users["acct-1"]["team_id"] == "team-self-serve"
-    assert db.accounts["acct-1"]["metadata"]["self_registration"] == _expected_account_self_registration_metadata()
+    assert (
+        db.accounts["acct-1"]["metadata"]["self_registration"]
+        == _expected_account_self_registration_metadata()
+    )
 
 
 @pytest.mark.asyncio
@@ -562,7 +600,9 @@ async def test_provision_from_defaults_rejects_existing_runtime_user_outside_def
 
 
 @pytest.mark.asyncio
-async def test_provision_from_defaults_returns_existing_runtime_user_in_default_team_for_same_email() -> None:
+async def test_provision_from_defaults_returns_existing_runtime_user_in_default_team_for_same_email() -> (
+    None
+):
     db = FakeSelfRegistrationDB()
     db.users["legacy-user"] = {
         "user_id": "legacy-user",
@@ -582,20 +622,29 @@ async def test_provision_from_defaults_returns_existing_runtime_user_in_default_
     assert "acct-1" not in db.users
     assert db.users["legacy-user"]["max_budget"] == 500
     assert db.users["legacy-user"]["team_id"] == "team-self-serve"
-    assert db.accounts["acct-1"]["metadata"]["self_registration"] == _expected_account_self_registration_metadata()
+    assert (
+        db.accounts["acct-1"]["metadata"]["self_registration"]
+        == _expected_account_self_registration_metadata()
+    )
 
 
 @pytest.mark.asyncio
-async def test_provision_sso_from_defaults_links_identity_and_creates_login_in_transaction() -> None:
+async def test_provision_sso_from_defaults_links_identity_and_creates_login_in_transaction() -> (
+    None
+):
     db = TransactionalFakeSelfRegistrationDB()
     identity_service = SuccessfulSSOIdentityService(db_client=db)
     service = _service(db, identity_service)
 
     result = await service.provision_sso_from_defaults(
-        email="Developer@Example.com",
+        identity=SSOIdentityAssertion(
+            email="Developer@Example.com",
+            provider="oidc",
+            subject="provider-subject-1",
+            email_verified=True,
+            subject_source=SSOSubjectSource.PROVIDER,
+        ),
         settings=_enabled_settings(),
-        provider="oidc",
-        subject="provider-subject-1",
     )
 
     assert result.provisioning.account_id == "acct-1"
@@ -620,10 +669,14 @@ async def test_provision_sso_from_defaults_requires_transaction_support() -> Non
 
     with pytest.raises(RuntimeError, match="transactions are required"):
         await service.provision_sso_from_defaults(
-            email="developer@example.com",
+            identity=SSOIdentityAssertion(
+                email="developer@example.com",
+                provider="oidc",
+                subject="provider-subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             settings=_enabled_settings(),
-            provider="oidc",
-            subject="provider-subject-1",
         )
 
     assert db.accounts == {}
@@ -639,10 +692,14 @@ async def test_provision_sso_from_defaults_rolls_back_when_identity_link_fails()
 
     with pytest.raises(RuntimeError, match="identity link failed"):
         await service.provision_sso_from_defaults(
-            email="developer@example.com",
+            identity=SSOIdentityAssertion(
+                email="developer@example.com",
+                provider="oidc",
+                subject="provider-subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             settings=_enabled_settings(),
-            provider="oidc",
-            subject="provider-subject-1",
         )
 
     assert db.accounts == {}
@@ -658,12 +715,16 @@ async def test_provision_sso_from_defaults_rolls_back_when_login_session_creatio
     db = TransactionalFakeSelfRegistrationDB()
     service = _service(db, SessionFailingSSOIdentityService(db_client=db))
 
-    with pytest.raises(RuntimeError, match="failed to establish self-registration session"):
+    with pytest.raises(LoginSessionCreationError, match="Failed to establish session"):
         await service.provision_sso_from_defaults(
-            email="developer@example.com",
+            identity=SSOIdentityAssertion(
+                email="developer@example.com",
+                provider="oidc",
+                subject="provider-subject-1",
+                email_verified=True,
+                subject_source=SSOSubjectSource.PROVIDER,
+            ),
             settings=_enabled_settings(),
-            provider="oidc",
-            subject="provider-subject-1",
         )
 
     assert db.accounts == {}

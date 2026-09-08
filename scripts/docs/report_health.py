@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml
+from mkdocs.utils import yaml_load
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,7 +32,7 @@ def _nav_paths(value: Any) -> set[str]:
 
 
 def collect_health() -> dict[str, Any]:
-    config = yaml.safe_load(MKDOCS_CONFIG.read_text(encoding="utf-8"))
+    config = yaml_load(MKDOCS_CONFIG.read_text(encoding="utf-8"))
     nav_paths = _nav_paths(config.get("nav", []))
     pages = sorted(
         path.relative_to(DOCS_DIR).as_posix()

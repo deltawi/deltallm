@@ -21,6 +21,9 @@ from src.services.route_groups import (
 from tests.services.test_route_group_cache_contract import INVALID_GROUP_FIELDS
 
 
+pytestmark = pytest.mark.redis
+
+
 class _MutableRouteGroupRepository:
     def __init__(self, groups: list[dict]) -> None:
         self.groups = groups

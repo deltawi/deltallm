@@ -258,6 +258,11 @@ model DeltaLLM_OrganizationDeletionJob {
   options                 Json      @default("{}")
   progress                Json      @default("{}")
   not_before_at           DateTime
+  expedited_at            DateTime?
+  expedited_by_account_id String?
+  expedite_previous_not_before_at DateTime?
+  expedite_idempotency_key String?  @db.VarChar(200)
+  expedite_request_hash   String?   @db.Char(64)
   attempt_count           Int       @default(0)
   max_attempts            Int       @default(20)
   next_attempt_at         DateTime  @default(now())

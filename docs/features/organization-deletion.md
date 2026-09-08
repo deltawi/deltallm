@@ -1,6 +1,6 @@
 # Organization Deletion
 
-Organization deletion is an asynchronous, durable control-plane workflow. A platform administrator starts it from an organization's **Overview** page in the admin UI. Deletion is not exposed to organization owners or ordinary organization administrators.
+Organization deletion is an asynchronous, durable control-plane workflow. A platform administrator starts it from an organization's **Overview** page in the admin UI. Organization owners and organization administrators cannot start or restore deletion, but they can inspect an existing deletion, waive its remaining recovery window, and retry its cleanup for an organization they administer.
 
 ## Lifecycle
 
@@ -9,7 +9,8 @@ The workflow uses four organization states:
 1. `active` — normal access and mutations are allowed.
 2. `deletion_pending` — access is revoked immediately, pending work is cancelled, and the recovery window is open.
 3. `purging` — irreversible cleanup has begun; restore is no longer available.
-4. `deletion_failed` — cleanup exhausted its automatic retries and requires a platform administrator to retry it.
+4. `deletion_failed` — cleanup exhausted its automatic retries and requires an organization owner,
+   organization administrator, or platform administrator to retry it.
 
 The request transaction creates the durable deletion job, changes the organization state, increments the fleet-wide lifecycle generation, writes an audit event, and enqueues cache invalidation atomically. API-key, JWT, and custom authentication paths reject inactive organizations. Each process refreshes the global generation in the background and compares it with the lifecycle snapshot already carried by cached API-key auth. The steady-state data plane therefore performs no additional lifecycle database call; a rare generation mismatch triggers a single-flighted organization lookup. Requests fail closed when the background generation becomes older than the configured staleness bound. PostgreSQL remains authoritative.
 
@@ -34,6 +35,32 @@ remain informational and are rechecked by the locked request transaction. The ad
 The page then shows the durable job phase and progress. Refreshing or switching API replicas does not lose the job.
 
 Restore is available only before the recovery deadline and before the worker enters an irreversible phase. Restore reactivates access but does not recreate cancelled invitations, approvals, batch work, or email deliveries.
+
+An organization owner, organization administrator, or platform administrator may choose **Delete
+permanently now** while restore is still available. The administrator must re-enter the exact
+organization name and explicitly acknowledge that the remaining recovery period will be waived.
+This moves the durable deadline to the current time and
+wakes a waiting job, but it does not skip active-batch shutdown, ownership classification, cleanup
+phases, fencing, or the final inventory check. The waiver and its previous deadline are recorded in
+the audit log. A failed job must first be rescheduled with **Retry cleanup**.
+
+The equivalent API action is:
+
+```http
+POST /ui/api/organizations/{organization_id}/deletion-requests/{deletion_job_id}/expedite
+Content-Type: application/json
+Idempotency-Key: <unique key retained for retries>
+
+{
+  "confirmation_name": "Exact organization name",
+  "acknowledge_immediate_irreversible_deletion": true
+}
+```
+
+The key is required and bounded to 200 characters. Retrying the same request with the same key
+returns the current job with `idempotency_resolution: "replayed"`, including after cleanup has
+advanced. Reusing that key with a different confirmation, or trying a second key after the waiver
+was applied, returns `409`. An unacknowledged request returns `400` without consuming the key.
 
 ## Removed and retained data
 
@@ -66,7 +93,8 @@ Platform account identities are not organization-owned and are therefore not del
 Sensitive prompt and approval history is deleted only when a durable organization, team, or API-key
 claim assigns it to the organization. Contradictory claims are reported as **conflicting sensitive
 records**. Legacy rows without a durable ownership claim are reported as **unattributed sensitive
-records**. Either count blocks the deletion request; there is no force-delete bypass. An operator
+records**. Either count blocks the deletion request; the recovery-window waiver cannot bypass this
+classification requirement. An operator
 must use an audited data-repair procedure to add or correct the explicit ownership claim, then load
 a fresh preview.
 
@@ -83,7 +111,11 @@ the lease, and persists progress in one short transaction. If the lease expires 
 page rolls back. Cleanup queries are idempotent and page-bounded, so a worker can safely resume
 after a timeout, pod termination, or expired lease.
 
-Automatic failures use exponential backoff. After `organization_deletion_max_attempts`, the organization enters `deletion_failed`; a platform administrator can reschedule the same durable job with **Retry cleanup**. The UI never creates a second cleanup graph.
+Automatic failures use exponential backoff. After `organization_deletion_max_attempts`, the
+organization enters `deletion_failed`; an organization owner, organization administrator, or
+platform administrator can reschedule the same durable job with **Retry cleanup**. A recovery-window
+waiver is accepted only after this retry returns the job to runnable state. The UI never creates a
+second cleanup graph.
 
 When a separate Helm batch-worker deployment is enabled, organization-deletion workers are disabled on API pods and enabled on worker pods. Without that split, each API replica may run a worker safely because database claims provide ownership.
 
@@ -98,7 +130,12 @@ Important Prometheus metrics are:
 
 Alert on permanent failures, a sustained retry rate, or phase latency near `organization_deletion_worker_record_timeout_seconds`. Readiness is refreshed by successful polling and bounded record progress, so a worker remains ready while legitimately processing a full multi-wave claim batch. It fails when polling or progress is stale, an in-flight record exceeds the configured record timeout plus polling grace, or the worker task exits. To investigate, inspect the deletion job's `phase`, `attempt_count`, `last_error_code`, `next_attempt_at`, and lease fields. Error details intentionally contain an exception class and safe phase message rather than raw provider or tenant data.
 
-Roll out lifecycle-aware binaries first with `organization_deletion_requests_enabled: false`. Enable new requests only after every API and worker replica reports lifecycle protocol v2 and a fresh lifecycle snapshot. Protocol v2 requires fail-closed scope resolution, durable principal tombstones, and atomic final inventory checks.
+Apply database migrations before rolling out the application binaries. The expedite migration adds
+only nullable provenance columns and constraints, so old binaries ignore them during a rolling
+deployment. Then roll out lifecycle-aware binaries with `organization_deletion_requests_enabled:
+false`. Enable new requests only after every API and worker replica reports lifecycle protocol v2
+and a fresh lifecycle snapshot. Protocol v2 requires fail-closed scope resolution, durable
+principal tombstones, and atomic final inventory checks.
 
 For emergency rollback, first disable `organization_deletion_requests_enabled`, then disable `organization_deletion_worker_enabled` to stop new claims. This does not reactivate organizations already marked for deletion. Restore individually while still within the recovery window, or correct the worker fault and re-enable it. Never deploy lifecycle-unaware code while an organization is inactive or a deletion job is unfinished. The migration is additive; do not remove lifecycle columns, job tables, triggers, or tombstones while any deployed binary uses this feature.
 

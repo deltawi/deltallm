@@ -4,6 +4,8 @@ import test from 'node:test';
 import { routeGroups, type RoutePolicy } from '../src/lib/api';
 import { routeGroupMutationOutcome } from '../src/lib/routeGroups';
 
+const GROUP_ID = '12f410b2-641f-40fb-9ba8-4281b70bc8ca';
+
 test('route-group partial writes retain tombstones and omit untouched fields', async () => {
   const originalFetch = globalThis.fetch;
   const documents: unknown[] = [];
@@ -14,10 +16,10 @@ test('route-group partial writes retain tombstones and omit untouched fields', a
     });
   }) as typeof fetch;
   try {
-    await routeGroups.savePolicyDraft('support', {
+    await routeGroups.savePolicyDraft(GROUP_ID, {
       members: [{ deployment_id: 'dep-a', lane: null }],
     });
-    await routeGroups.publishPolicy('support', { selector: null, context: null });
+    await routeGroups.publishPolicy(GROUP_ID, { selector: null, context: null });
     assert.deepEqual(documents, [
       { members: [{ deployment_id: 'dep-a', lane: null }] },
       { selector: null, context: null },
@@ -34,7 +36,7 @@ test('route-group policy input errors preserve the server error message', async 
   }), { status: 400, headers: { 'content-type': 'application/json' } })) as typeof fetch;
   try {
     await assert.rejects(
-      routeGroups.savePolicyDraft('support', { selector: null }),
+      routeGroups.savePolicyDraft(GROUP_ID, { selector: null }),
       /Invalid route policy request fields or types/,
     );
   } finally {
@@ -60,7 +62,7 @@ test('route-group policy responses preserve semantics and post-commit warnings',
   }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
 
   try {
-    const result = await routeGroups.publishPolicy('support', { strategy: 'weighted' });
+    const result = await routeGroups.publishPolicy(GROUP_ID, { strategy: 'weighted' });
 
     assert.equal(result.policy.semantics_version, 2);
     assert.deepEqual(result.warnings, ['Runtime refresh is pending']);
@@ -99,7 +101,7 @@ test('route-group policy history keeps future semantics opaque on reads', async 
   }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
 
   try {
-    const result = await routeGroups.listPolicies('support');
+    const result = await routeGroups.listPolicies(GROUP_ID);
 
     assert.deepEqual(result.policies[0].policy_json, historicalPolicy.policy_json);
   } finally {
@@ -136,7 +138,7 @@ test('route-group policy validation preserves typed selector and context fields'
   }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
 
   try {
-    const result = await routeGroups.validatePolicy('support', {
+    const result = await routeGroups.validatePolicy(GROUP_ID, {
       context: { mode: 'smallest-sufficient' },
       selector: {
         kind: 'llm-tier',
@@ -188,7 +190,7 @@ test('route-group policy mutations pass AbortSignal to the shared transport', as
 
   try {
     const controller = new AbortController();
-    await routeGroups.publishPolicy('support', {}, controller.signal);
+    await routeGroups.publishPolicy(GROUP_ID, {}, controller.signal);
     assert.equal(capturedSignal, controller.signal);
   } finally {
     globalThis.fetch = originalFetch;
@@ -229,7 +231,7 @@ test('route-group policy simulation sends the typed scenario and AbortSignal', a
 
   try {
     const controller = new AbortController();
-    const result = await routeGroups.simulatePolicy('support / eu', {
+    const result = await routeGroups.simulatePolicy(GROUP_ID, {
       iterations: 2,
       input_tokens: 9_000,
       requested_output_tokens: 1_000,
@@ -238,7 +240,7 @@ test('route-group policy simulation sends the typed scenario and AbortSignal', a
       outcomes: [{ deployment_id: 'dep-a', outcome: 'timeout' }],
     }, controller.signal);
 
-    assert.equal(capturedPath, '/ui/api/route-groups/support%20%2F%20eu/policy/simulate');
+    assert.equal(capturedPath, `/ui/api/route-groups/by-id/${GROUP_ID}/policy/simulate`);
     assert.equal(capturedInit?.method, 'POST');
     assert.equal(capturedInit?.signal, controller.signal);
     assert.deepEqual(JSON.parse(String(capturedInit?.body)), {

@@ -1,6 +1,7 @@
 site_name: DeltaLLM Documentation
 site_description: Open-source LLM gateway with unified API, RBAC, guardrails, and observability
-site_url: https://docs.deltallm.io/
+# Preserve the language/version path used by Read the Docs in canonical URLs and the sitemap.
+site_url: !ENV [READTHEDOCS_CANONICAL_URL, 'https://docs.deltallm.io/en/latest/']
 repo_url: https://github.com/deltawi/deltallm
 repo_name: deltallm
 
@@ -152,6 +153,7 @@ nav:
       - Route-Group Model Router Design: project/model-router-design.md
       - Documentation Governance: project/documentation-governance.md
       - Context-capacity Routing Decision: project/context-routing-design.md
+      - Route-group Admin Addressing: project/route-group-addressing.md
 
 extra:
   social:

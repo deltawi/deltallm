@@ -16,6 +16,8 @@ from tests.db.test_route_policy_publication_invariants import (
     _cleanup_group,
 )
 
+pytestmark = pytest.mark.postgres
+
 
 @pytest_asyncio.fixture
 async def selector_database():

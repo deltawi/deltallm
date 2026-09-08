@@ -421,6 +421,9 @@ class _FakeRouteGroupRepository:
             return None
         if policy.status != "draft":
             return None
+        ensure_selector_activation_supported(
+            policy.policy_json, semantics_version=policy.semantics_version
+        )
         published = replace(policy, status="published", published_by=published_by)
         self.policies[group_key] = published
         return published

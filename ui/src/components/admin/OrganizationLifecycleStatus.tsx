@@ -46,7 +46,7 @@ export function OrganizationLifecycleNotice({ state, deletionNotBeforeAt }: Noti
   } else if (state === 'purging') {
     message = 'Runtime access and administrative changes are disabled. Irreversible cleanup has started, so the organization can no longer be restored.';
   } else if (state === 'deletion_failed') {
-    message = 'Runtime access and administrative changes remain disabled. A platform administrator must retry cleanup from the Danger zone.';
+    message = 'Runtime access and administrative changes remain disabled. An organization owner, organization administrator, or platform administrator must retry cleanup from the Danger zone.';
   } else {
     message = 'Administrative changes are disabled until the organization lifecycle status can be verified. Refresh this page before trying again.';
   }

@@ -62,6 +62,9 @@ except Exception:  # pragma: no cover
     Prisma = None  # type: ignore[assignment]
 
 
+pytestmark = pytest.mark.postgres
+
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 BATCH_JOB_STATUS_RECONCILIATION_MIGRATION_PATH = (
     Path(__file__).resolve().parents[1]
@@ -1987,13 +1990,18 @@ async def test_db_backed_webhook_delivery_claims_recover_and_fence_attempt_gener
             attempt_count=1,
             status_code=200,
         )
+        # Claims use the database clock; the container and host can be skewed.
+        clock = await batch_db.query_raw(
+            "SELECT EXTRACT(EPOCH FROM NOW())::double precision AS now"
+        )
+        due_at = datetime.fromtimestamp(clock[0]["now"], tz=UTC) - timedelta(seconds=1)
         assert await recovery_repo.mark_webhook_outbox_retrying(
             event_id=claimed.event_id,
             worker_id="delivery-recovery",
             attempt_count=2,
             status_code=503,
             error="http_retryable_status",
-            next_attempt_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+            next_attempt_at=due_at,
         )
 
         final_claim = await owner_repo.claim_webhook_outbox_due(

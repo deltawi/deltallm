@@ -16,6 +16,9 @@ from src.db.organization_deletion_tenant_cleanup import OrganizationDeletionTena
 from tests.db.tier_migration_helpers import connect_prisma
 
 
+pytestmark = pytest.mark.postgres
+
+
 @pytest.mark.asyncio
 async def test_batch_ownership_is_snapshotted_and_inactive_webhooks_are_suppressed() -> None:
     db = await connect_prisma()
