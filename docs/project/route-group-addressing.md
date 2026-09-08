@@ -1,3 +1,10 @@
+---
+title: Route-group Admin Addressing
+description: Stable group identities, URL compatibility, and rollout behavior for the admin API and UI.
+status: stable
+audience: administrators, contributors
+---
+
 # Route-group admin addressing
 
 Issue: [#308](https://github.com/deltawi/deltallm/issues/308).
@@ -93,6 +100,21 @@ Validated on 2026-09-07:
   Direct ESLint on all 17 changed UI source/test/runner files: zero findings.
 - `uv run --no-sync ruff check` and `uv run --no-sync ruff format --check` on all changed
   Python files passed; `git diff --check` passed.
+
+Additional CI gates validated on 2026-09-08:
+
+- `uv run --no-sync python -m pytest -q -m hermetic --durations=25`: 2542 passed,
+  1290 deselected. Raw HTTP retry-classification tests use deterministic backoff;
+  the dedicated retry-deadline regression retains the real wait.
+- `uv run --no-sync python -m pytest -q --confcutdir=tests/docs tests/docs`: 9 passed.
+- `uv run --no-sync python -m scripts.docs.report_health --check`: 81 public pages,
+  all in navigation, with no missing headings or images.
+- `uv run --no-sync python -m scripts.docs.export_openapi --check`,
+  `uv run --no-sync python -m scripts.docs.generate_config_reference --check`, and
+  `uv run --no-sync python -m scripts.docs.generate_provider_reference --check`: current.
+- `uv run --no-sync python -m mkdocs build --strict --site-dir /private/tmp/issue308-ci-docs-site`
+  and `uv run --no-sync python -m scripts.docs.verify_public_site /private/tmp/issue308-ci-docs-site`:
+  passed, with no internal pages in the public artifact.
 
 Chromium smoke checks used the production bundle served by the existing FastAPI static
 routes, with mocked API responses (HTTP and SQL behavior are verified separately above).

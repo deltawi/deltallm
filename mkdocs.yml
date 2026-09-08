@@ -151,6 +151,7 @@ nav:
       - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
       - Documentation Governance: project/documentation-governance.md
       - Context-capacity Routing Decision: project/context-routing-design.md
+      - Route-group Admin Addressing: project/route-group-addressing.md
 
 extra:
   social:

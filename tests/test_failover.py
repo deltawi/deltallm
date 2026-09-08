@@ -2275,7 +2275,7 @@ async def test_failover_applies_timeout_resolver_to_classified_fallbacks():
     ],
 )
 async def test_failover_retries_transient_raw_http_errors(
-    status_code: int, headers: dict[str, str]
+    status_code: int, headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ):
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
@@ -2285,6 +2285,9 @@ async def test_failover_retries_transient_raw_http_errors(
         state_backend=state,
         cooldown_manager=CooldownManager(state),
     )
+    # Test retry classification without random backoff consuming the deadline.
+    # test_total_deadline_bounds_retry_backoff covers the real wait budget.
+    monkeypatch.setattr(manager, "_compute_backoff", lambda *_: 0.0)
     attempts = {"count": 0}
 
     async def run(_deployment: Deployment) -> str:
@@ -2314,7 +2317,9 @@ async def test_failover_retries_transient_raw_http_errors(
 
 
 @pytest.mark.asyncio
-async def test_failover_retries_raw_http_timeout_when_route_policy_targets_timeout():
+async def test_failover_retries_raw_http_timeout_when_route_policy_targets_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+):
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
     manager = FailoverManager(
@@ -2323,6 +2328,8 @@ async def test_failover_retries_raw_http_timeout_when_route_policy_targets_timeo
         state_backend=state,
         cooldown_manager=CooldownManager(state),
     )
+    # Timeout classification uses the same deterministic retry seam as HTTP errors.
+    monkeypatch.setattr(manager, "_compute_backoff", lambda *_: 0.0)
     attempts = {"count": 0}
 
     async def run(_deployment: Deployment) -> str:
