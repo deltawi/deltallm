@@ -32,6 +32,8 @@ class SelectorCause(StrEnum):
     INVALID_JSON = "invalid_json"
     UNKNOWN_LANE = "unknown_lane"
     OUTPUT_TOO_LARGE = "output_too_large"
+    CAPACITY_DENIED = "capacity_denied"
+    CAPACITY_UNAVAILABLE = "capacity_unavailable"
 
 
 class SelectorPolicyIdentity(FrozenContract):
@@ -80,6 +82,7 @@ class ReportedSelectorUsage(FrozenContract):
     prompt_tokens: int = Field(ge=0, le=MAX_OBSERVED_COUNT)
     completion_tokens: int = Field(ge=0, le=MAX_OBSERVED_COUNT)
     total_tokens: int = Field(ge=0, le=MAX_OBSERVED_COUNT)
+    cached_input_tokens: int | None = Field(default=None, ge=0, le=MAX_OBSERVED_COUNT)
 
 
 class UnknownSelectorUsage(FrozenContract):
@@ -143,6 +146,12 @@ class SelectorModelHop(Protocol):
     ) -> SelectorHopOutcome:
         """Execute one concrete-deployment hop within the supplied monotonic deadline."""
         ...
+
+
+class SelectorAdmission(Protocol):
+    async def admit(self, *, expires_at: float) -> None: ...
+
+    async def finish(self, usage: SelectorUsage, *, expires_at: float) -> None: ...
 
 
 class SelectorInvariantError(RuntimeError):

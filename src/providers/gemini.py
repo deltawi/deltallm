@@ -10,6 +10,7 @@ import httpx
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
 from src.providers.base import (
     ProviderAdapter,
     ProviderErrorDetails,
@@ -126,6 +127,16 @@ def _is_valid_gemini_success_payload(data: Mapping[str, Any]) -> bool:
 
 
 class GeminiAdapter(ProviderAdapter):
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return native_token_receipt(
+            payload,
+            usage_key="usageMetadata",
+            input_key="promptTokenCount",
+            output_key="candidatesTokenCount",
+            total_key="totalTokenCount",
+            cache_key="cachedContentTokenCount",
+        )
+
     provider_name = "gemini"
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:

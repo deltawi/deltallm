@@ -13,6 +13,7 @@ _RECORD_SPECIFIC_PRISMA_CODES = {
     "P2020",
     "P2023",
 }
+_RECORD_SPECIFIC_SQLSTATES = {"PBR01"}  # Frozen billing-component receipt conflict.
 
 
 def is_record_specific_database_error(exc: Exception) -> bool:
@@ -39,7 +40,10 @@ def is_record_specific_database_error(exc: Exception) -> bool:
                 if code and str(key).lower() in {"code", "sqlstate", "pgcode"}
             )
         if any(
-            code in _RECORD_SPECIFIC_PRISMA_CODES or code.startswith(("22", "23")) for code in codes
+            code in _RECORD_SPECIFIC_PRISMA_CODES
+            or code in _RECORD_SPECIFIC_SQLSTATES
+            or code.startswith(("22", "23"))
+            for code in codes
         ):
             return True
         current = current.__cause__ or current.__context__

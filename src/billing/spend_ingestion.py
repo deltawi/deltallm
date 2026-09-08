@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import logging
+import math
 from time import perf_counter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from src.billing.fallback_gate import (
@@ -16,6 +17,8 @@ from src.billing.fallback_gate import (
     FallbackGateTimedOut,
 )
 from src.billing.money import money_string
+from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.selector_charge import AcceptedSelectorCharge
 from src.billing.spend import PreparedSpendEvent, SpendTrackingService, _failure_metadata
 from src.db.client import is_prisma_transaction_client
 from src.db.errors import is_record_specific_database_error
@@ -42,7 +45,11 @@ from src.telemetry.lifecycle import (
     wait_for_startup,
 )
 
+if TYPE_CHECKING:
+    from src.db.billing_operation_recovery import BillingOperationRecovery
+
 logger = logging.getLogger(__name__)
+_SELECTOR_RECEIPT_ACCEPT_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +88,14 @@ class SpendIngestionOverloadedError(ServiceUnavailableError):
         super().__init__(message=message, code="spend_ingestion_capacity")
 
 
+class SelectorChargeUnavailableError(ServiceUnavailableError):
+    error_type = "selector_accounting_unavailable"
+    message = "Selector usage accounting is temporarily unavailable"
+
+    def __init__(self) -> None:
+        super().__init__(code="selector_accounting_unavailable")
+
+
 class SpendIngestionService:
     """Durable bounded ingress for synchronous gateway spend events."""
 
@@ -90,10 +105,12 @@ class SpendIngestionService:
         db_client: Any | None,
         writer: SpendTrackingService,
         config: SpendIngestionConfig,
+        operation_recovery: BillingOperationRecovery | None = None,
     ) -> None:
         self.db = db_client
         self.writer = writer
         self.config = config
+        self.operation_recovery = operation_recovery
         self.repository = SpendIngestionRepository(db_client)
         self._running = False
         self._wake = asyncio.Event()
@@ -315,6 +332,34 @@ class SpendIngestionService:
     async def log_spend_once(self, **kwargs: Any) -> Any:
         return await self.writer.log_spend_once(**kwargs)
 
+    async def log_selector_charge(
+        self, charge: AcceptedSelectorCharge, *, expires_at: float
+    ) -> None:
+        """Accept a frozen selector receipt without the legacy best-effort fallback."""
+
+        if type(expires_at) not in (int, float) or not math.isfinite(expires_at):
+            raise ValueError("selector charge deadline must be a finite monotonic instant")
+        now = asyncio.get_running_loop().time()
+        if expires_at <= now or not self.config.enabled or self._closed or self.db is None:
+            increment_spend_ingestion_failure("selector_receipt")
+            raise SelectorChargeUnavailableError()
+        try:
+            async with asyncio.timeout_at(
+                min(expires_at, now + _SELECTOR_RECEIPT_ACCEPT_TIMEOUT_SECONDS)
+            ):
+                await self._enqueue(
+                    "spend",
+                    charge.spend_payload(),
+                    event_id=charge.attribution.component_event_id,
+                )
+        except SpendIngestionOverloadedError:
+            raise
+        except Exception as exc:
+            # In particular, never expose a billing TimeoutError to the selector's
+            # provider-timeout safe-default handler. Cancellation still propagates.
+            increment_spend_ingestion_failure("selector_receipt")
+            raise SelectorChargeUnavailableError() from exc
+
     async def _enqueue(
         self,
         event_type: str,
@@ -326,7 +371,9 @@ class SpendIngestionService:
             raise RuntimeError("spend ingestion database is unavailable")
         accepted_payload = dict(payload)
         if event_type == "spend":
-            accepted_payload["cost_exact"] = money_string(payload.get("cost"))
+            accepted_payload["cost_exact"] = money_string(
+                payload.get("cost_exact", payload.get("cost"))
+            )
             accepted_payload["spend_event_version"] = 2
         # This identifier is owned by the server and is intentionally unrelated
         # to the caller-controlled request ID. It is persisted once and reused
@@ -447,6 +494,14 @@ class SpendIngestionService:
             logger.debug("failed to publish spend ingestion backlog", exc_info=True)
 
     async def _claim_batch(self) -> list[_OutboxRecord]:
+        if self.operation_recovery is not None:
+            try:
+                await self.operation_recovery.recover()
+            except BillingOperationUnavailable:
+                # Durable intents/receipts remain recoverable. A recovery timeout
+                # must not starve the canonical outbox that can settle those holds.
+                increment_spend_ingestion_failure("operation_recovery")
+                logger.warning("billing_operation_recovery_unavailable")
         return await self.repository.claim_batch(
             limit=self.config.batch_size,
             worker_id=self.config.worker_id,
@@ -508,10 +563,18 @@ class SpendIngestionService:
         )
         try:
             async with self._transaction() as tx:
+                if self.operation_recovery is not None:
+                    await self.operation_recovery.lock_for_events(
+                        tx, [record.event_id for record, _ in records]
+                    )
                 batch_writer = self.writer.with_db(tx)
                 _, ledger_counts = await batch_writer.log_prepared_batch_once(
                     [prepared for _, prepared in records]
                 )
+                if self.operation_recovery is not None:
+                    await self.operation_recovery.settle_events(
+                        tx, [record.event_id for record, _ in records]
+                    )
                 completed = await self.repository.with_db(tx).mark_completed(
                     event_ids=[record.event_id for record, _ in records],
                     worker_id=self.config.worker_id,

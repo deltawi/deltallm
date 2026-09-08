@@ -19,6 +19,7 @@ from src.providers.chat_upstream import (
     resolve_chat_upstream_from_registry,
 )
 from src.providers.resolution import resolve_upstream_model
+from src.providers.token_receipt import ProviderTokenReceipt
 from src.router.selection.contracts import (
     SELECTOR_OUTPUT_BYTES,
     SELECTOR_OUTPUT_TOKENS,
@@ -29,6 +30,7 @@ from src.router.selection.contracts import (
     SelectorHopSuccess,
     SelectorInvariantError,
     SelectorPrompt,
+    SelectorUsage,
     UnknownSelectorUsage,
     UnattemptedSelectorUsage,
 )
@@ -149,6 +151,18 @@ class SelectorProviderHop:
         if remaining <= 0:
             raise TimeoutError()
         timeout = _bounded_timeout(self._client.timeout, upstream.timeout, remaining)
+        observed: SelectorUsage = UnknownSelectorUsage()
+
+        def observe(receipt: ProviderTokenReceipt | None) -> None:
+            nonlocal observed
+            if receipt is not None:
+                observed = ReportedSelectorUsage(
+                    prompt_tokens=receipt.input_tokens,
+                    completion_tokens=receipt.output_tokens,
+                    total_tokens=receipt.total_tokens,
+                    cached_input_tokens=receipt.cached_input_tokens,
+                )
+
         try:
             canonical = await execute_chat_hop(
                 client=self._client,
@@ -158,12 +172,11 @@ class SelectorProviderHop:
                 model_name=model,
                 timeout=timeout,
                 bounded=BoundedChatResponse(),
+                receipt_observer=observe,
             )
         except ChatHopError as exc:
-            return SelectorHopFailure(
-                cause=SelectorCause(exc.cause.value), usage=UnknownSelectorUsage()
-            )
-        return _selector_result(canonical)
+            return SelectorHopFailure(cause=SelectorCause(exc.cause.value), usage=observed)
+        return _selector_result(canonical, receipt=observed)
 
 
 def _bounded_timeout(
@@ -210,12 +223,18 @@ def _classifier_request(
     )
 
 
-def _selector_result(response: ChatCompletionResponse) -> SelectorHopOutcome:
+def _selector_result(
+    response: ChatCompletionResponse, *, receipt: SelectorUsage | None = None
+) -> SelectorHopOutcome:
     try:
-        usage = ReportedSelectorUsage(
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            total_tokens=response.usage.total_tokens,
+        usage = (
+            receipt
+            if receipt is not None
+            else ReportedSelectorUsage(
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens,
+            )
         )
     except ValidationError:
         return SelectorHopFailure(

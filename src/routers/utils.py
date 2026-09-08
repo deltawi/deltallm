@@ -7,23 +7,16 @@ from typing import Any
 from fastapi import Request
 
 from src.models.errors import BudgetExceededError
+from src.providers.request_defaults import provider_request_defaults
 
 logger = logging.getLogger(__name__)
-
-
-_UI_ONLY_DEFAULT_KEYS = frozenset({"available_voices"})
 
 
 def apply_default_params(
     upstream_payload: dict[str, Any],
     model_info: dict[str, Any],
 ) -> dict[str, Any]:
-    defaults = model_info.get("default_params")
-    if not isinstance(defaults, dict) or not defaults:
-        return upstream_payload
-    for key, value in defaults.items():
-        if key in _UI_ONLY_DEFAULT_KEYS:
-            continue
+    for key, value in provider_request_defaults(model_info).items():
         if key not in upstream_payload:
             upstream_payload[key] = value
     return upstream_payload
@@ -44,6 +37,7 @@ async def enforce_budget_if_configured(
         return
     try:
         from src.billing.budget import BudgetExceeded
+
         await budget_service.check_budgets(
             api_key=getattr(auth_ctx, "api_key", None),
             user_id=getattr(auth_ctx, "user_id", None),

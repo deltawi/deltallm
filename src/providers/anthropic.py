@@ -10,6 +10,7 @@ import httpx
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.providers.token_receipt import ProviderTokenReceipt, anthropic_token_receipt
 from src.providers.base import (
     ProviderAdapter,
     ProviderErrorDetails,
@@ -170,6 +171,9 @@ def _chat_tool_choice_to_anthropic(tool_choice: Any) -> dict[str, Any] | None:
 
 
 class AnthropicAdapter(ProviderAdapter):
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return anthropic_token_receipt(payload)
+
     provider_name = "anthropic"
 
     def validate_single_result_payload(self, payload: object) -> None:

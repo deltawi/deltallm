@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Any
 from urllib.parse import quote
 
+from fastapi import FastAPI
 import pytest
 
 from src.db.callable_targets import CallableTargetBindingRecord
@@ -26,6 +27,7 @@ from src.router.policy_validation import (
     PolicyMemberInventoryItem,
     merge_policy_members,
 )
+from src.router.registry import DeploymentRegistryStore
 from src.router.runtime_generation import rebuild_routing_runtime_generation
 from src.router.selection.policy import (
     RouteSelectorActivationUnsupportedError,
@@ -104,9 +106,37 @@ def _publish_test_model_registry(test_app: Any) -> None:
             model_registry=model_registry,
             route_groups=list(current.route_groups),
             callable_target_catalog=build_callable_target_catalog(model_registry),
-            deployment_registry=build_deployment_registry(model_registry),
+            deployment_registry=DeploymentRegistryStore(build_deployment_registry(model_registry)),
         )
     )
+
+
+def test_published_model_registry_shares_one_deployment_store(test_app: FastAPI) -> None:
+    store = test_app.state.routing_runtime_generation_store
+    previous = store.require_snapshot()
+    test_app.state.model_registry = {
+        "selector-test": [
+            {
+                "deployment_id": "dep-selector",
+                "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    }
+
+    _publish_test_model_registry(test_app)
+
+    published = store.require_snapshot()
+    assert published is not previous
+    assert published.deployment_registry is published.router.deployment_registry
+    assert published.deployment_registry is not previous.deployment_registry
+    assert [
+        deployment.deployment_id
+        for deployment in published.deployment_registry.snapshot()["selector-test"]
+    ] == ["dep-selector"]
+    assert "selector-test" in published.routing_fingerprints
+    assert "selector-test" not in previous.deployment_registry
+    assert "selector-test" not in previous.routing_fingerprints
 
 
 class _FakeRouteGroupRepository:

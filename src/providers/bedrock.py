@@ -17,6 +17,7 @@ from src.models.errors import (
 )
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
 from src.providers.base import (
     ProviderAdapter,
     ProviderErrorDetails,
@@ -204,6 +205,17 @@ def _classified_stream_finish_reason(failure: ProxyError) -> str:
 
 
 class BedrockAdapter(ProviderAdapter):
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return native_token_receipt(
+            payload,
+            usage_key="usage",
+            input_key="inputTokens",
+            output_key="outputTokens",
+            total_key="totalTokens",
+            cache_key="cacheReadInputTokens",
+            unsupported_usage_keys=("cacheWriteInputTokens",),
+        )
+
     provider_name = "bedrock"
     stream_uses_bytes = True
 

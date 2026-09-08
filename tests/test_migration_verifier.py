@@ -155,3 +155,28 @@ def test_default_base_ref_fails_without_stable_main_release(
 
     with pytest.raises(RuntimeError, match="no stable release tag reachable from origin/main"):
         verify_migration_paths._default_base_ref()  # noqa: SLF001
+
+
+def test_migration_verifier_checks_exact_reservations_and_deletion_guards(monkeypatch):
+    statements = []
+    monkeypatch.setattr(
+        verify_migration_paths, "_db_execute", lambda *args, sql, **kwargs: statements.append(sql)
+    )
+    verify_migration_paths._verify_operation_reservations(
+        "prisma", "postgresql://localhost/upgrade"
+    )
+    assert len(statements) == 1
+    for invariant in (
+        "reserved_spend_exact",
+        "numeric_precision=38",
+        "numeric_scale=18",
+        "deltallm_recover_operation",
+        "deltallm_recover_operation_isolated",
+        "recovery_blocked_at",
+        "recovery_error_code",
+        "pg_get_constraintdef",
+        "pg_get_expr",
+        "deltallm_key_hold_delete_guard",
+        "pending_count=0",
+    ):
+        assert invariant in statements[0]

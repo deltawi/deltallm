@@ -48,6 +48,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "integration: exercises a real local infrastructure dependency when available",
+  "postgres: exercises real PostgreSQL constraints, transactions, and locking",
+  "redis: exercises real Redis coordination, Lua, TTL, and recovery",
 ]
 
 [tool.ruff]
