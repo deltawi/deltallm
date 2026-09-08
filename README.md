@@ -20,9 +20,14 @@
 
 DeltaLLM is a self-hosted LLM gateway. Point OpenAI-compatible clients at one endpoint, then manage model deployments, routing, scoped API keys, budgets, guardrails, MCP tools, and usage from one control plane.
 
-For SaaS products and platform teams, [service tiers](docs/admin-ui/tiers.md) let you
+For hosting consultants, managed service providers, and platform teams,
+[service tiers](docs/admin-ui/tiers.md) let you
 define a model package once and assign it to multiple customer organizations, with
 per-model limits, pricing, and shared capacity. The gateway and Admin UI are MIT licensed.
+
+[SSO](docs/features/authentication.md#single-sign-on),
+[audit logs](docs/features/audit-log.md), and scoped administration are included
+without a gateway license fee. You cover your infrastructure and upstream model usage.
 
 ## One Endpoint For Your Apps
 
