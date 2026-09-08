@@ -20,6 +20,15 @@
 
 DeltaLLM is a self-hosted LLM gateway. Point OpenAI-compatible clients at one endpoint, then manage model deployments, routing, scoped API keys, budgets, guardrails, MCP tools, and usage from one control plane.
 
+For hosting consultants, managed service providers, and platform teams,
+[service tiers](docs/admin-ui/tiers.md) let you
+define a model package once and assign it to multiple customer organizations, with
+per-model limits, pricing, and shared capacity. The gateway and Admin UI are MIT licensed.
+
+[SSO](docs/features/authentication.md#single-sign-on),
+[audit logs](docs/features/audit-log.md), and scoped administration are included
+without a gateway license fee. You cover your infrastructure and upstream model usage.
+
 ## One Endpoint For Your Apps
 
 ```python
@@ -41,6 +50,7 @@ Your application keeps its OpenAI request format. DeltaLLM handles provider cred
 
 - **Unified API** - Use one OpenAI-compatible endpoint across OpenAI, Anthropic, Azure OpenAI, Bedrock, Gemini, Groq, and other providers.
 - **Scoped API keys** - Issue virtual keys with model allowlists, rate limits, budgets, owners, and expiry.
+- **Customer plans** - Assign versioned model packages to organizations through service tiers, with model access, rate limits, and pricing managed together.
 - **Routing and failover** - Route by strategy, retry failed deployments, and separate provider credentials from application code.
 - **Batch API** - Run embeddings and non-streaming chat completions asynchronously through OpenAI-compatible files and batches, even when upstream providers are synchronous.
 - **MCP gateway** - Register external MCP servers and expose approved tools through controlled gateway flows.
@@ -96,10 +106,14 @@ Start the stack:
 docker compose --profile single up -d --build
 ```
 
-Check health and send a request:
+Wait for the health endpoint to return `{"status":"ok"}`, then send a request.
+In this terminal, export the same master key you put in `.env`: Compose reads that
+file for its containers, but it does not export variables into your shell.
 
 ```bash
 curl http://localhost:4002/health/liveliness
+
+export DELTALLM_MASTER_KEY='paste-your-generated-master-key'
 
 curl http://localhost:4002/v1/chat/completions \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
@@ -146,6 +160,10 @@ production high-availability reference.
 - [Report a vulnerability privately](SECURITY.md)
 - PRs are welcome. Start with the [local installation guide](docs/getting-started/installation.md).
 - Documentation changes follow the [documentation contribution guide](CONTRIBUTING_DOCS.md).
+
+If DeltaLLM solves a problem for you, consider starring the repository. Share your
+use case in [Discussions](https://github.com/deltawi/deltallm/discussions) so we can
+improve the workflows that matter to you.
 
 ## License
 

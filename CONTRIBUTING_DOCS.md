@@ -40,6 +40,18 @@ uv run mkdocs serve
 The preview includes only publishable pages. If a page is not ready for publication,
 keep it outside the public source tree.
 
+## Published URLs
+
+`mkdocs.yml` uses `READTHEDOCS_CANONICAL_URL` supplied by Read the Docs, with
+`https://docs.deltallm.io/en/latest/` as the local and CI fallback. Keep the language
+and version path: the root-level `/getting-started/` URL does not serve the page
+published at `/en/latest/getting-started/`.
+
+After changing the documentation domain or default version, inspect the generated
+canonical links and `sitemap.xml`, then verify that their destinations load on the
+published site. The Read the Docs custom domain must be marked as canonical in its
+project settings. See [Read the Docs canonical URL configuration](https://docs.readthedocs.com/platform/stable/intro/mkdocs.html#set-the-canonical-url).
+
 ## Run the documentation gate
 
 Use a temporary output directory so generated site files never enter the repository:
