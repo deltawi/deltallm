@@ -17,6 +17,7 @@ import {
   type PolicyGuidedValues,
   type PolicyMemberOption,
 } from '../lib/routeGroups';
+import PolicySelectorEditor from './route-groups/PolicySelectorEditor';
 
 const STRATEGY_META: Record<string, { icon: React.ElementType; label: string }> = {
   'simple-shuffle': { icon: Zap, label: 'Simple Shuffle' },
@@ -120,6 +121,7 @@ export default function PolicyGuidedEditor({
 
   return (
     <div className="space-y-6">
+      <PolicySelectorEditor values={values} onChange={onChange} members={memberOptions} workloadMode={workloadMode} />
       <div>
         <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
           Routing strategy
@@ -253,6 +255,7 @@ export default function PolicyGuidedEditor({
                   <button
                     type="button"
                     role="checkbox"
+                    aria-label={`Include ${deploymentId}`}
                     aria-checked={included}
                     disabled={!member.enabled}
                     onClick={() => toggleMember(deploymentId)}

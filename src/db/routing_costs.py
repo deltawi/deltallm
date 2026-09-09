@@ -26,6 +26,7 @@ def routing_cost_query(
     end: datetime,
     limit: int = 100,
     before: tuple[datetime, str] | None = None,
+    model_group: str | None = None,
 ) -> RoutingCostQuery:
     """Execute through the existing bounded, protected reporting query owner.
 
@@ -48,28 +49,47 @@ def routing_cost_query(
     params: list[object] = [start, end]
     clauses = ["created_at >= $1::timestamptz", "created_at < $2::timestamptz"]
     apply_spend_visibility(clauses=clauses, params=params, visibility=visibility, source=source)
+    if model_group is not None:
+        if not model_group or len(model_group) > 256:
+            raise ValueError("invalid model-group filter")
+        params.append(model_group)
+        clauses.append(f"model = ${len(params)}::text")
     if before is not None:
         params.extend(before)
         clauses.append(
             f"(created_at,operation_id)<(${len(params) - 1}::timestamptz,${len(params)}::text)"
         )
     params.append(limit + 1)
+    # Selector receipts use the typed "reported" contract; the existing answer
+    # billing owner freezes token counts without that discriminator. Neither a
+    # missing receipt nor explicitly unpriced usage proves a free answer.
+    answer_receipt = """(a.usage_snapshot->>'kind'='reported' OR (
+        jsonb_typeof(a.usage_snapshot->'prompt_tokens')='number'
+        AND jsonb_typeof(a.usage_snapshot->'completion_tokens')='number'
+        AND a.unpriced_reason IS NULL
+    ))"""
     sql = f"""
         WITH page AS MATERIALIZED (
             SELECT * FROM deltallm_billing_operations WHERE {" AND ".join(clauses)}
             ORDER BY created_at DESC,operation_id DESC LIMIT ${len(params)}
         )
-        SELECT o.operation_id,o.created_at,o.selector_state,o.answer_state,a.deployment_model AS answer_model,
+        SELECT o.operation_id,o.created_at,o.selector_state,
+            CASE WHEN o.snapshot->>'budget_mode'='soft_selector:v1' THEN
+                CASE WHEN {answer_receipt} THEN 'settled' ELSE 'pending' END
+                ELSE o.answer_state END AS answer_state,
+            a.deployment_model AS answer_model,
             CASE WHEN o.selector_state='unattempted' THEN '0' ELSE
                 COALESCE(s.provider_cost_exact::text,o.selector_receipt->>'provider_cost_exact') END AS selector_provider_cost,
             CASE WHEN o.selector_state='unattempted' THEN '0' ELSE
                 COALESCE(s.spend_exact::text,o.selector_receipt->>'cost_exact') END AS selector_customer_charge,
-            CASE WHEN o.answer_state='unattempted' THEN '0'
-                WHEN a.status='success' AND a.usage_snapshot->>'kind'='reported'
-                THEN a.provider_cost_exact::text END AS answer_provider_cost,
-            CASE WHEN o.answer_state='unattempted' THEN '0'
-                WHEN a.status='success' AND a.usage_snapshot->>'kind'='reported'
-                THEN a.spend_exact::text END AS answer_customer_charge,
+            CASE WHEN {answer_receipt} THEN a.provider_cost_exact::text
+                WHEN o.answer_state='unattempted'
+                  AND o.snapshot->>'budget_mode' IS DISTINCT FROM 'soft_selector:v1'
+                THEN '0' END AS answer_provider_cost,
+            CASE WHEN {answer_receipt} THEN a.spend_exact::text
+                WHEN o.answer_state='unattempted'
+                  AND o.snapshot->>'budget_mode' IS DISTINCT FROM 'soft_selector:v1'
+                THEN '0' END AS answer_customer_charge,
             o.snapshot->'reference_answer_pricing' AS reference_answer_pricing,
             o.snapshot->>'measurable_switch_penalty' AS measurable_penalty,
             a.input_tokens,a.output_tokens,a.total_tokens,a.status

@@ -31,6 +31,8 @@ from src.api.admin.endpoints import (
     users_router,
 )
 from src.api.admin.endpoints.route_groups_by_id import router as route_groups_by_id_router
+from src.api.admin.endpoints.selector_evaluations import router as selector_evaluations_router
+from src.api.admin.endpoints.routing_costs import router as routing_costs_router
 from src.ui.routes import ui_router as legacy_ui_router
 
 admin_router = APIRouter()
@@ -60,11 +62,13 @@ admin_router.include_router(tier_capacity_router)
 admin_router.include_router(tiers_router)
 admin_router.include_router(tier_policy_preview_router)
 admin_router.include_router(route_groups_by_id_router)
+admin_router.include_router(selector_evaluations_router)
 admin_router.include_router(route_groups_router)
 admin_router.include_router(prompt_registry_router)
 admin_router.include_router(config_router)
 admin_router.include_router(audit_router)
 admin_router.include_router(spend_router)
+admin_router.include_router(routing_costs_router)
 
 # Include remaining UI endpoints not yet split (static files only).
 admin_router.include_router(legacy_ui_router)
