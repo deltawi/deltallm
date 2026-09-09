@@ -314,11 +314,15 @@ def test_selector_activation_gate_is_version_aware():
     policy = _policy()
 
     ensure_selector_activation_supported(policy, semantics_version=2)
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         ensure_selector_activation_supported(
             policy,
             semantics_version=SELECTOR_POLICY_SEMANTICS_VERSION,
         )
+    policy["context"] = {"unknown_capacity": "exclude"}
+    ensure_selector_activation_supported(
+        policy, semantics_version=SELECTOR_POLICY_SEMANTICS_VERSION
+    )
 
 
 def test_routing_fingerprint_is_stable_for_equivalent_normalized_policy():

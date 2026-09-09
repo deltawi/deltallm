@@ -34,10 +34,11 @@ def _group():
     }
 
 
-def _fingerprints(groups, *, default_strategy=RoutingStrategy.SIMPLE_SHUFFLE):
+def _fingerprints(groups, *, default_strategy=RoutingStrategy.SIMPLE_SHUFFLE, model_entries=None):
     registry = build_deployment_registry(
         {
-            "gpt-4o-mini": [
+            "gpt-4o-mini": model_entries
+            or [
                 {
                     "deltallm_params": {"model": "openai/small"},
                     "model_info": {"mode": "chat", "weight": 3},
@@ -120,6 +121,14 @@ def test_inherited_strategy_and_disabled_group_ownership_affect_identity():
 
 
 def test_version_aware_selector_and_lane_fingerprint_without_activation():
+    entries = [
+        {"deployment_id": deployment_id, "deltallm_params": {"model": "openai/small"}}
+        for deployment_id in ("gpt-4o-mini-0", "quality-only")
+    ]
+
+    def fingerprints(groups):
+        return _fingerprints(groups, model_entries=entries)
+
     group = _group()
     group["selector"] = {
         "kind": "llm-tier",
@@ -130,19 +139,29 @@ def test_version_aware_selector_and_lane_fingerprint_without_activation():
         ],
     }
     group["members"][0]["lane"] = "economy"
+    group["members"].append({"deployment_id": "quality-only", "lane": "quality"})
     changed = deepcopy(group)
     changed["members"][0]["lane"] = "quality"
-    assert _fingerprints([group]) != _fingerprints([changed])
+    changed["members"][1]["lane"] = "economy"
+    assert fingerprints([group]) != fingerprints([changed])
     changed = deepcopy(group)
     changed["selector"]["timeout_ms"] = 1000
-    assert _fingerprints([group]) != _fingerprints([changed])
+    assert fingerprints([group]) != fingerprints([changed])
     historical = {**group, "policy_semantics_version": 1}
-    assert _fingerprints([historical]) == _fingerprints(
-        [{**historical, "selector": {"opaque": True}, "members": _group()["members"]}]
+    assert fingerprints([historical]) == fingerprints(
+        [
+            {
+                **historical,
+                "selector": {"opaque": True},
+                "members": [
+                    {"deployment_id": member["deployment_id"]} for member in group["members"]
+                ],
+            }
+        ]
     )
     # Current file configuration has no stored database semantics version.
     file_group = {key: value for key, value in group.items() if key != "policy_semantics_version"}
-    assert _fingerprints([file_group]) == _fingerprints([group])
+    assert fingerprints([file_group]) == fingerprints([group])
 
 
 @pytest.mark.parametrize("custom_key", [None, "private custom key"])

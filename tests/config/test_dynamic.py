@@ -216,7 +216,7 @@ class FakeRouteGroupCache:
                 RouteGroupRuntimeSnapshot(
                     0,
                     self.stale_groups,
-                    selector_activation_state=RouteSelectorActivationState.INACTIVE,
+                    selector_activation_state=RouteSelectorActivationState.VALIDATED,
                 ),
                 "l1_cache",
             )
@@ -237,7 +237,7 @@ class FakeRouteGroupRepository:
         return RouteGroupRuntimeSnapshot(
             self.revision,
             self.groups,
-            selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            selector_activation_state=RouteSelectorActivationState.VALIDATED,
         )
 
 

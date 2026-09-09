@@ -325,6 +325,18 @@ def _normalize_model_info_or_400(
     existing_model_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized = dict(model_info)
+    if normalized.get("chat_capabilities") is not None:
+        from src.chat_capabilities import ChatRoutingCapabilities
+
+        try:
+            normalized["chat_capabilities"] = ChatRoutingCapabilities.model_validate(
+                normalized["chat_capabilities"]
+            ).model_dump()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="model_info.chat_capabilities must declare supported chat features with boolean values",
+            ) from exc
     if "access_groups" in normalized:
         try:
             normalized["access_groups"] = normalize_access_group_list(

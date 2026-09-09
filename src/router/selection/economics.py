@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from src.billing.operation_reservation import (
     BillingOperationUnavailable,
     ComponentState,
-    OperationReservation,
+    BillingOperation,
     OperationReservationStore,
     selector_receipt,
 )
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReservedSelectorAdmission:
-    """An isolated prerequisite supplied by the future authenticated execution edge.
+    """Admission supplied by the authenticated execution edge.
 
     Neither this type nor a cache signal authorizes a principal. The edge must have
     completed canonical authentication, final-model policy and caller admission.
@@ -41,7 +41,7 @@ class ReservedSelectorAdmission:
         self,
         *,
         store: OperationReservationStore,
-        operation: OperationReservation,
+        operation: BillingOperation,
         cache: ResponseCacheEligibility,
     ) -> None:
         self._store, self._operation, self._cache = store, operation, cache
@@ -67,7 +67,7 @@ class AccountedSelectorHop:
         self,
         *,
         store: OperationReservationStore,
-        operation: OperationReservation,
+        operation: BillingOperation,
         hop: SelectorModelHop,
     ) -> None:
         self._store, self._operation, self._hop = store, operation, hop

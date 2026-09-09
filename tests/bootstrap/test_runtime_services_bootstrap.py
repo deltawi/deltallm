@@ -81,6 +81,10 @@ def _install_runtime_service_fakes(
     tier_policy_reload_error: Exception | None = None,
     prompt_registry_error: Exception | None = None,
 ) -> None:
+    monkeypatch.setattr(
+        "src.bootstrap.runtime_services.configure_selector_execution", lambda state, spend: None
+    )
+
     class FakeGuardrailRegistry:
         def __init__(self) -> None:
             self.loaded = None

@@ -8,6 +8,7 @@ import json
 from typing import TYPE_CHECKING
 
 from src.providers.request_defaults import provider_request_defaults
+from src.chat_capabilities import ChatRoutingCapabilities
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.route_policy_contract import (
     LLMTierSelectorPolicy,
@@ -125,6 +126,15 @@ def _deployment_identity(deployment: Deployment) -> str:
             },
             "credential_reference": deployment.named_credential_id,
             "mode": str(info.get("mode") or "chat").strip().lower(),
+            **(
+                {
+                    "chat_capabilities": ChatRoutingCapabilities.model_validate(
+                        info["chat_capabilities"]
+                    ).model_dump(mode="json")
+                }
+                if info.get("chat_capabilities") is not None
+                else {}
+            ),
             "defaults": provider_request_defaults(info),
             "context_limits": {
                 key: info.get(key)

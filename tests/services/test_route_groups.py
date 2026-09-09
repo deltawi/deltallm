@@ -53,7 +53,7 @@ class _FakeRouteGroupRepository:
             self.revision,
             list(self.groups),
             database_initialized=self.database_initialized,
-            selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            selector_activation_state=RouteSelectorActivationState.VALIDATED,
         )
 
 
@@ -157,12 +157,23 @@ def test_selector_free_config_runtime_shape_is_unchanged():
     ]
 
 
-def test_file_config_selector_activation_is_explicitly_rejected():
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+def test_file_config_selector_activation_requires_safe_context_policy():
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         route_groups_from_config(
             _selector_config(),
             deployment_modes={"dep-mini": "chat", "dep-large": "chat"},
         )
+
+
+def test_file_config_retains_selector_and_lanes_for_qualified_runtime_publication():
+    document = _selector_config().model_dump(mode="json")
+    document["router_settings"]["route_groups"][0]["context"] = {"unknown_capacity": "exclude"}
+    cfg = AppConfig.model_validate(document)
+    groups = route_groups_from_config(
+        cfg, deployment_modes={"dep-mini": "chat", "dep-large": "chat"}
+    )
+    assert groups[0]["selector"]["kind"] == "llm-tier"
+    assert {member["lane"] for member in groups[0]["members"]} == {"economy", "quality"}
 
 
 def test_file_config_selector_requires_loaded_deployment_inventory():
@@ -211,7 +222,7 @@ async def test_l2_cached_selector_snapshot_reloads_durable_authority():
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "inactive",
+            "selector_activation_state": "validated-v3",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -259,7 +270,7 @@ async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
     assert repository.calls == 1
     rewritten = json.loads(redis.values[_runtime_cache_key(1)])
     assert rewritten["schema_version"] == ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION
-    assert rewritten["selector_activation_state"] == "inactive"
+    assert rewritten["selector_activation_state"] == "validated-v3"
 
 
 @pytest.mark.asyncio
@@ -268,7 +279,7 @@ async def test_l2_cache_ignores_invalid_nested_snapshot_and_reloads_durable_stat
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "inactive",
+            "selector_activation_state": "validated-v3",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -299,7 +310,7 @@ async def test_l2_cache_ignores_unknown_nested_fields_and_reloads_durable_state(
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "inactive",
+            "selector_activation_state": "validated-v3",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -326,7 +337,7 @@ async def test_l2_cache_ignores_member_lane_without_active_selector():
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "inactive",
+            "selector_activation_state": "validated-v3",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -358,7 +369,7 @@ async def test_invalid_l2_cache_uses_config_only_after_durable_load_fails():
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "inactive",
+            "selector_activation_state": "validated-v3",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -780,7 +791,7 @@ async def test_older_in_flight_database_load_cannot_overwrite_newer_generation()
             return RouteGroupRuntimeSnapshot(
                 revision,
                 groups,
-                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
             )
 
     cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})

@@ -88,6 +88,15 @@ class AttemptPermit:
 
 
 @dataclass(frozen=True, slots=True)
+class RouteCandidateLane:
+    """A policy lane after hard eligibility; lower lanes are empty after selection."""
+
+    lane: str
+    rank: int
+    deployments: tuple[Deployment, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RouteCandidatePlan:
     """Request-scoped, policy-ordered deployments eligible for failover attempts."""
 
@@ -99,6 +108,8 @@ class RouteCandidatePlan:
     filtered_count: int
     rejection_reason: str | None = None
     context_eligible_count: int | None = None
+    lanes: tuple[RouteCandidateLane, ...] = ()
+    minimum_rank: int | None = None
 
 
 class RouteCandidatePlanner(Protocol):

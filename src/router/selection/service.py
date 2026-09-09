@@ -29,7 +29,7 @@ from src.router.selection.request_state import RequestSelectorState
 
 
 class SelectorService:
-    """Isolated prerequisite: deliberately not constructed by production bootstrap."""
+    """One bounded decision composed by the authenticated execution owner."""
 
     def __init__(
         self, hop: SelectorModelHop, *, admission: SelectorAdmission | None = None

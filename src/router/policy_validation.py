@@ -52,6 +52,9 @@ class PolicyMemberInventoryItem:
     deployment_id: str
     enabled: bool = True
     workload_mode: str | None = None
+    model_info: Mapping[str, object] | None = None
+    provider_model: str | None = None
+    provider_name: str | None = None
 
 
 class _SelectorWriteIntent(StrEnum):

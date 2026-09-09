@@ -55,21 +55,34 @@ class BoundedTokenQuote(FrozenBillingContract):
 
     @property
     def allowance(self) -> Decimal:
-        price = self.pricing
-        input_rate = max(
-            price.input_cost_per_token, price.input_cost_per_token_cache_hit or Decimal(0)
+        return token_price_allowance(
+            self.pricing,
+            input_tokens=self.max_input_tokens,
+            output_tokens=self.max_output_tokens,
+            attempts=self.max_attempts,
         )
-        with localcontext() as context:
-            context.prec = 80
-            per_attempt = (
-                self.max_input_tokens * input_rate
-                + self.max_output_tokens * price.output_cost_per_token
-                + price.cost_per_request
-            )
-            amount = self.max_attempts * per_attempt.quantize(
-                Decimal("1e-18"), rounding=ROUND_CEILING
-            )
-        return canonical_money(amount)
+
+
+def token_price_allowance(
+    price: SelectorPriceSnapshot, *, input_tokens: int, output_tokens: int, attempts: int = 1
+) -> Decimal:
+    """Exact estimate arithmetic only, not evidence of provider-enforced ceilings."""
+    if (
+        any(type(value) is not int or value < 0 for value in (input_tokens, output_tokens))
+        or type(attempts) is not int
+        or not 1 <= attempts <= 128
+    ):
+        raise ValueError("invalid token-price allowance bounds")
+    input_rate = max(price.input_cost_per_token, price.input_cost_per_token_cache_hit or Decimal(0))
+    with localcontext() as context:
+        context.prec = 80
+        per_attempt = (
+            input_tokens * input_rate
+            + output_tokens * price.output_cost_per_token
+            + price.cost_per_request
+        )
+        amount = attempts * per_attempt.quantize(Decimal("1e-18"), rounding=ROUND_CEILING)
+    return canonical_money(amount)
 
 
 class ProviderEnforcedSelectorCeiling(FrozenBillingContract):
@@ -118,20 +131,46 @@ class OperationReservation(FrozenBillingContract):
             return canonical_money(self.selector.allowance + self.answer.allowance)
 
 
+class SoftSelectorOperation(FrozenBillingContract):
+    """Durable selector component without spending holds or an answer reservation.
+
+    Answer charges retain their canonical spend owner. The admission allowance is
+    a conservative check, not a promise that concurrent spending cannot overshoot.
+    """
+
+    budget_mode: Literal["soft_selector:v1"] = "soft_selector:v1"
+    attribution: SelectorChargeAttribution = Field(repr=False)
+    owner_token: UUID = Field(repr=False)
+    pricing: SelectorPriceSnapshot
+    admission_allowance: Price
+    expires_at: AwareDatetime
+
+
+BillingOperation = OperationReservation | SoftSelectorOperation
+
+
+def operation_selector_pricing(operation: BillingOperation) -> SelectorPriceSnapshot:
+    return (
+        operation.pricing
+        if isinstance(operation, SoftSelectorOperation)
+        else operation.selector.pricing
+    )
+
+
 class ReservedOperation(FrozenBillingContract):
-    operation: OperationReservation = Field(repr=False)
+    operation: BillingOperation = Field(repr=False)
     selector_state: ComponentState
     answer_state: ComponentState
 
 
 class OperationReservationStore(Protocol):
     async def reserve(
-        self, operation: OperationReservation, *, expires_at: float
+        self, operation: BillingOperation, *, expires_at: float
     ) -> ReservedOperation: ...
 
     async def dispatch(
         self,
-        operation: OperationReservation,
+        operation: BillingOperation,
         *,
         component: Literal["selector", "answer"],
         expires_at: float,
@@ -139,27 +178,27 @@ class OperationReservationStore(Protocol):
 
     async def unattempted(
         self,
-        operation: OperationReservation,
+        operation: BillingOperation,
         *,
         component: Literal["selector", "answer"],
         expires_at: float,
     ) -> None: ...
 
     async def accept_selector(
-        self, operation: OperationReservation, charge: AcceptedSelectorCharge, *, expires_at: float
+        self, operation: BillingOperation, charge: AcceptedSelectorCharge, *, expires_at: float
     ) -> None: ...
 
     async def confirm_not_dispatched(
-        self, operation: OperationReservation, *, expires_at: float
+        self, operation: BillingOperation, *, expires_at: float
     ) -> None: ...
 
 
 def selector_receipt(
-    operation: OperationReservation, *, usage: SelectorTokenReceipt, started_at: datetime
+    operation: BillingOperation, *, usage: SelectorTokenReceipt, started_at: datetime
 ) -> AcceptedSelectorCharge:
     return AcceptedSelectorCharge(
         attribution=operation.attribution,
-        pricing=operation.selector.pricing,
+        pricing=operation_selector_pricing(operation),
         usage=usage,
         started_at=started_at,
         finished_at=datetime.now(UTC),

@@ -25,6 +25,7 @@ class RouteSelectorActivationState(StrEnum):
 
     UNCHECKED = "unchecked"
     INACTIVE = "inactive"
+    VALIDATED = "validated-v3"
 
 
 def ensure_selector_activation_supported(
@@ -32,16 +33,23 @@ def ensure_selector_activation_supported(
     *,
     semantics_version: int,
 ) -> None:
-    """Keep selector policies inert until the complete execution path lands in PR 4."""
+    """Validate executable semantics; inventory and readiness are checked by owners."""
 
     if (
         semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION
         and policy_json.get("selector") is not None
     ):
-        raise RouteSelectorActivationUnsupportedError(
-            "LLM route-policy selectors cannot be activated until selector execution support "
-            "is available"
-        )
+        try:
+            LLMTierSelectorPolicy.model_validate(policy_json["selector"])
+        except ValueError:
+            raise RouteSelectorActivationUnsupportedError(
+                "invalid executable selector policy"
+            ) from None
+        context = parse_context_routing_policy(policy_json.get("context"))
+        if context is None or context.unknown_capacity != "exclude":
+            raise RouteSelectorActivationUnsupportedError(
+                "selector requires context routing with unknown_capacity=exclude"
+            )
 
 
 def build_routing_fingerprint(

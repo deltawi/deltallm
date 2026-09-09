@@ -60,12 +60,19 @@ router_settings:
   #         weight: 3
   #       - deployment_id: embeddings-secondary
   #         weight: 1
-  # Model-router contract example (issue #304). This remains commented because selector
-  # runtime activation is intentionally rejected until the complete PR 4 execution path lands.
+  # Optional real-time model router (issue #304). Before enabling, declare each member's
+  # model_info.chat_capabilities and positive context capacity. The classifier also needs
+  # explicit provider token prices and positive RPM/TPM limits; see docs/configuration/models.md.
+  # Requires general_settings.spend_ingestion_mode: outbox and its enabled healthy worker.
+  # Selector cost is charged to customers; budgets remain soft checks, not spending holds.
+  # Batch and deterministic selector simulation remain unsupported.
   # route_groups:
   #   - key: support-chat
   #     mode: chat
   #     strategy: least-busy
+  #     context:
+  #       mode: smallest-sufficient
+  #       unknown_capacity: exclude
   #     selector:
   #       kind: llm-tier
   #       classifier_deployment_id: support-mini
@@ -111,7 +118,7 @@ general_settings:
   gateway_preflight_lease_ttl_seconds: 30
   # The outbox mode durably accepts one small event on the request path and
   # applies idempotent spend/ledger updates in a bounded background worker.
-  spend_ingestion_mode: legacy
+  spend_ingestion_mode: legacy # Use outbox before activating a model-router selector.
   spend_ingestion_batch_size: 100
   spend_ingestion_flush_interval_ms: 100
   spend_ingestion_lease_seconds: 30

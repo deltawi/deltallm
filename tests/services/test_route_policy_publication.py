@@ -56,7 +56,7 @@ class _Repository:
     ) -> RoutePolicyWriteResult | None:
         if not self.group_exists:
             return None
-        effective, warnings = RouteGroupRepository(None)._prepare_policy_write(
+        prepared = RouteGroupRepository(None)._prepare_policy_write(
             policy_json,
             current=None,
             context=RoutePolicyValidationContext(
@@ -73,11 +73,11 @@ class _Repository:
             ),
         )
         ensure_selector_activation_supported(
-            effective, semantics_version=CURRENT_POLICY_SEMANTICS_VERSION
+            prepared.normalized, semantics_version=CURRENT_POLICY_SEMANTICS_VERSION
         )
         self.document_calls.append(policy_json)
         return RoutePolicyWriteResult(
-            _policy(group_key, effective, published_by=published_by), warnings
+            _policy(group_key, prepared.document, published_by=published_by), prepared.warnings
         )
 
     async def publish_latest_draft(
@@ -176,7 +176,7 @@ async def test_selector_publication_is_rejected_before_repository_or_refresh() -
         refresh_runtime=refresh,
     )
 
-    with pytest.raises(ValueError, match="cannot be activated"):
+    with pytest.raises(ValueError, match="unknown_capacity=exclude"):
         await service.publish_document(
             "support",
             {

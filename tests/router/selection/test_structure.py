@@ -11,6 +11,22 @@ NEW_MODULES = (
     "router/selection/provider.py",
     "router/selection/request_state.py",
     "router/selection/service.py",
+    "router/selection/lanes.py",
+    "router/selection/planning.py",
+    "router/selection/request_context.py",
+    "router/group_policy.py",
+    "router/group_execution.py",
+    "router/initial_selection.py",
+    "router/static_filters.py",
+    "router/selection/activation.py",
+    "router/selection/answer_observation.py",
+    "router/selection/eligibility.py",
+    "router/selection/operation.py",
+    "router/selection/qualification.py",
+    "router/selection/reachability.py",
+    "router/selection/runtime.py",
+    "router/selection/target_validation.py",
+    "chat_capabilities.py",
     "providers/chat_hop.py",
     "providers/chat_upstream.py",
 )
@@ -34,7 +50,7 @@ def test_new_boundaries_are_small_typed_and_request_free(module):
             assert name not in {"create_task", "AsyncClient", "Client", "create_pool"}
 
 
-def test_selector_service_is_not_wired_into_production():
+def test_selector_execution_is_owned_by_the_authenticated_edge_and_selection_package():
     targets = {
         "src.router.selection.service",
         "src.router.selection.provider",
@@ -43,11 +59,33 @@ def test_selector_service_is_not_wired_into_production():
     for path in (ROOT / "src").rglob("*.py"):
         if path.is_relative_to(ROOT / "src/router/selection"):
             continue
+        if path == ROOT / "src/routers/selector_edge.py":
+            continue
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.ImportFrom):
                 assert node.module not in targets, path
             elif isinstance(node, ast.Import):
                 assert not any(alias.name in targets for alias in node.names), path
+
+
+def test_planning_does_not_own_selector_provider_execution():
+    for module in (
+        "router/router.py",
+        "router/selection/planning.py",
+        "router/selection/request_context.py",
+    ):
+        tree = ast.parse((ROOT / "src" / module).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in {"invoke", "select_once", "create_task"}, module
+    tree = ast.parse((ROOT / "src/router/router.py").read_text())
+    assert len((ROOT / "src/router/router.py").read_text().splitlines()) < 800
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in {
+            "plan_deployments",
+            "_plan_eligible_group",
+        }:
+            assert node.end_lineno - node.lineno < 80
 
 
 def test_answer_facade_and_selector_bridge_share_one_signing_and_transport_owner():
@@ -61,3 +99,22 @@ def test_answer_facade_and_selector_bridge_share_one_signing_and_transport_owner
         )
     service = (ROOT / "src/router/selection/service.py").read_text()
     assert "httpx" not in service and "record_router_usage" not in service
+
+
+def test_selector_execution_requires_authenticated_cache_admission_and_shared_accounting():
+    edge = (ROOT / "src/routers/chat.py").read_text()
+    assert (
+        edge.index("preflight = await run_text_preflight")
+        < edge.index("selector_deadline = bind_selector_operation")
+        < edge.index("primary = await require_initial_deployment")
+    )
+    source = (ROOT / "src/router/selection/runtime.py").read_text()
+    assert "AccountedSelectorHop(store=self._billing" in source
+    assert "ReservedSelectorAdmission(" in source and "CapacityAdmittedSelectorHop(" in source
+    bootstrap = (ROOT / "src/bootstrap/selector.py").read_text()
+    assert "BillingOperationRecovery(" in bootstrap and "selector_events_only=True" in bootstrap
+    edge = (ROOT / "src/routers/selector_edge.py").read_text()
+    assert "cache.require_provider_execution()" in edge
+    for node in ast.walk(ast.parse(edge)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            assert node.end_lineno - node.lineno < 80, node.name

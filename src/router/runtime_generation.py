@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from collections.abc import Callable
 from types import MappingProxyType
 from typing import Any, Mapping
 from uuid import uuid4
@@ -12,6 +13,8 @@ from src.router.registry import DeploymentRegistryStore
 from src.router.router import Router, RouterConfig, RoutingStrategy
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.router.routing_identity import build_runtime_routing_fingerprints
+from src.router.selection.qualification import QualifiedSelector, qualify_selector_groups
+from src.router.selection.reachability import selector_reachable_groups
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +39,8 @@ class RoutingRuntimeGeneration:
     routing_fingerprints: Mapping[str, str]
     source: str = "config_only"
     requires_reconciliation: bool = False
+    selectors: Mapping[str, QualifiedSelector] = field(default_factory=lambda: MappingProxyType({}))
+    selector_reachable_groups: frozenset[str] = frozenset()
 
     @classmethod
     def create(
@@ -58,7 +63,12 @@ class RoutingRuntimeGeneration:
         source: str = "config_only",
         requires_reconciliation: bool = False,
     ) -> RoutingRuntimeGeneration:
+        selectors = qualify_selector_groups(
+            router_config.route_group_policies, deployment_registry.snapshot()
+        )
         return cls(
+            selectors=selectors,
+            selector_reachable_groups=selector_reachable_groups(selectors, failover_config),
             generation_id=uuid4().hex,
             revision=revision,
             app_config=app_config,
@@ -101,6 +111,11 @@ class RoutingRuntimeGenerationStore:
 
     def __init__(self, generation: RoutingRuntimeGeneration | None = None) -> None:
         self._current = generation
+        self._selector_activation_check: Callable[[], None] | None = None
+
+    def set_selector_activation_check(self, check: Callable[[], None]) -> None:
+        """Bootstrap installs the local readiness guard before serving requests."""
+        self._selector_activation_check = check
 
     def snapshot(self) -> RoutingRuntimeGeneration | None:
         return self._current
@@ -112,6 +127,8 @@ class RoutingRuntimeGenerationStore:
         return generation
 
     def replace(self, generation: RoutingRuntimeGeneration) -> None:
+        if self._selector_activation_check is not None and generation.selectors:
+            self._selector_activation_check()
         self._current = generation
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,7 @@ from src.router.policy_validation import (
 from src.router.route_group_validation import validate_route_group_member_modes
 from src.router.selection.policy import (
     SELECTOR_POLICY_SEMANTICS_VERSION,
+    RouteSelectorActivationUnsupportedError,
     ensure_selector_activation_supported,
 )
 
@@ -57,6 +59,15 @@ class RoutePolicyValidationContext:
 class StoredRoutePolicyDocument:
     policy_json: dict[str, Any]
     semantics_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedRoutePolicyWrite:
+    """Keep opaque storage fields separate from the canonical validation projection."""
+
+    document: dict[str, Any]
+    normalized: dict[str, Any]
+    warnings: tuple[str, ...]
 
 
 def parse_policy_json(value: Any) -> dict[str, Any]:
@@ -99,6 +110,24 @@ def to_policy_record(row: dict[str, Any]) -> RoutePolicyRecord:
 
 class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
     prisma: Any | None
+    selector_activation_check: Callable[[], None] | None
+
+    def _require_selector_publication(
+        self, document: dict[str, Any], context: RoutePolicyValidationContext
+    ) -> None:
+        if document.get("selector") is None:
+            return
+        from src.router.selection.activation import validate_selector_activation_inventory
+
+        if self.selector_activation_check is None:
+            raise RouteSelectorActivationUnsupportedError(
+                "selector activation requires durable spend outbox and its worker"
+            )
+        self.selector_activation_check()
+        try:
+            validate_selector_activation_inventory(document, context.inventory)
+        except ValueError as exc:
+            raise RouteSelectorActivationUnsupportedError(str(exc)) from exc
 
     async def get_published_policy(self, group_key: str) -> RoutePolicyRecord | None:
         if self.prisma is None:
@@ -148,22 +177,23 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             return None
         context = await self._load_policy_validation_context(group_id)
         current = await self._latest_policy_document(group_id, status="published")
-        effective, warnings = self._prepare_policy_write(
+        prepared = self._prepare_policy_write(
             policy_json,
             current=current,
             context=context,
         )
         ensure_selector_activation_supported(
-            effective,
+            prepared.normalized,
             semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
         )
+        self._require_selector_publication(prepared.normalized, context)
         policy = await self._replace_published_policy(
             group_id,
-            effective,
+            prepared.document,
             semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             published_by=published_by,
         )
-        return RoutePolicyWriteResult(policy, warnings) if policy is not None else None
+        return RoutePolicyWriteResult(policy, prepared.warnings) if policy is not None else None
 
     async def save_draft_policy(
         self,
@@ -203,7 +233,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             )
         else:
             current = await self._latest_policy_document(group_id, status="published")
-        effective, warnings = self._prepare_policy_write(
+        prepared = self._prepare_policy_write(
             policy_json,
             current=current,
             context=context,
@@ -211,18 +241,18 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         if drafts:
             policy = await self._update_draft(
                 str(drafts[0]["route_policy_id"]),
-                effective,
+                prepared.document,
                 semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             )
         else:
             policy = await self._insert_policy(
                 group_id,
                 "draft",
-                effective,
+                prepared.document,
                 semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
                 published_by=None,
             )
-        return RoutePolicyWriteResult(policy, warnings) if policy is not None else None
+        return RoutePolicyWriteResult(policy, prepared.warnings) if policy is not None else None
 
     def _prepare_policy_write(
         self,
@@ -230,7 +260,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         *,
         current: StoredRoutePolicyDocument | None,
         context: RoutePolicyValidationContext,
-    ) -> tuple[dict[str, Any], tuple[str, ...]]:
+    ) -> PreparedRoutePolicyWrite:
         if not isinstance(policy_json, dict):
             raise ValueError("policy payload must be an object")
         current_semantics = (
@@ -253,7 +283,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             existing_semantics_version=current_semantics,
         )
         try:
-            self._validate_policy_document(
+            projection, _ = self._validate_policy_document(
                 effective,
                 context=context,
                 semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
@@ -263,7 +293,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             raise RoutePolicyStateConflictError(
                 f"policy is incompatible with current route-group members: {exc}"
             ) from exc
-        return effective, tuple(warnings)
+        return PreparedRoutePolicyWrite(effective, projection, tuple(warnings))
 
     async def publish_latest_draft(
         self,
@@ -322,6 +352,8 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             normalized,
             semantics_version=int(drafts[0].get("semantics_version") or 1),
         )
+        if int(drafts[0].get("semantics_version") or 1) >= SELECTOR_POLICY_SEMANTICS_VERSION:
+            self._require_selector_publication(normalized, context)
         await self._archive_published(group_id)
         rows = await self.prisma.query_raw(
             """
@@ -399,6 +431,8 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             normalized,
             semantics_version=semantics_version,
         )
+        if semantics_version >= SELECTOR_POLICY_SEMANTICS_VERSION:
+            self._require_selector_publication(normalized, context)
         return await self._replace_published_policy(
             group_id,
             source_document,
@@ -484,6 +518,9 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
                 g.mode AS group_mode,
                 m.deployment_id,
                 m.enabled,
+                d.model_info,
+                d.deltallm_params->>'model' AS provider_model,
+                d.deltallm_params->>'provider' AS provider_name,
                 CASE
                     WHEN d.deployment_id IS NULL THEN NULL
                     ELSE COALESCE(d.model_info->>'mode', 'chat')
@@ -505,6 +542,9 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
                 workload_mode=(
                     str(row["deployment_mode"]) if row.get("deployment_mode") is not None else None
                 ),
+                model_info=parse_policy_json(row.get("model_info")),
+                provider_model=row.get("provider_model"),
+                provider_name=row.get("provider_name"),
             )
             for row in rows
             if str(row.get("deployment_id") or "")
@@ -574,12 +614,18 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             return
         try:
             context = await self._load_policy_validation_context(group_id)
-            self._validate_policy_document(
+            normalized, _ = self._validate_policy_document(
                 parse_policy_json(rows[0].get("policy_json")),
                 context=context,
                 semantics_version=int(rows[0].get("semantics_version") or 1),
                 stored_document=True,
             )
+            if int(rows[0].get("semantics_version") or 1) >= SELECTOR_POLICY_SEMANTICS_VERSION:
+                from src.router.selection.activation import validate_selector_activation_inventory
+
+                # Existing active policies must remain qualified during member/model
+                # edits. This reuses the already locked transaction, not readiness.
+                validate_selector_activation_inventory(normalized, context.inventory)
         except ValueError as exc:
             raise RoutePolicyStateConflictError(
                 f"route-group change would invalidate the published policy: {exc}"

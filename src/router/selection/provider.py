@@ -95,7 +95,7 @@ class ConcreteSelectorTarget:
 
 
 class SelectorProviderHop:
-    """Unwired bridge to the canonical direct hop; it never owns clients or routing."""
+    """Bridge to the canonical direct hop; it never owns clients or routing."""
 
     def __init__(
         self,

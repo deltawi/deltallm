@@ -4,10 +4,11 @@ Status: accepted design for [issue #304](https://github.com/deltawi/deltallm/iss
 The implementation is split into six reviewable PRs. PRs 1–3 define prerequisites and must not
 activate a selector. PR 4 is the first activation boundary.
 
-Current PR 3 status: prerequisite code is implemented locally; real PostgreSQL/Redis,
-migration and production-capacity qualification are still open. The
-[current completion record](#pr-3-completion-decision--2026-09-08) supersedes the older
-partial-implementation checkpoints below. This is not a merge-readiness sign-off.
+PRs 1–3 are integrated into the feature branch, not `main`. PR 4 implements the
+real-time activation boundary locally, including the user-approved soft-budget
+contract. Its [completion record](#pr-4-completion-record-2026-09-09) supersedes the
+historical partial checkpoints below; the [PR 3 record](#pr-3-completion-decision-2026-09-08)
+remains implementation history, not the current verification status.
 
 ## Goal and non-goals
 
@@ -150,23 +151,21 @@ validates the submitted document only; it does not implicitly inherit a stored d
 `members` may be omitted but cannot be null. Invalid authored fields return HTTP 400, including
 typed request validation, without echoing submitted values. Incompatible effective policy state
 returns HTTP 409. Selector/context null tombstones and legacy selector-free normalization remain
-supported. Publish/rollback preserve the explicit unsupported-selector activation error.
+supported. Publish/rollback report a stable activation error if the complete selector
+runtime or its required deployment metadata cannot be qualified.
 
-Runtime Route-Group snapshots carry explicit proof that the selector activation gate ran. The
-database repository and validated file configuration are the only authorities that can mint an
-`inactive` snapshot before PR 4. Redis is an optimization, not an authority: its bounded 4 MiB
-`deltallm:<environment>:v2:route-group-runtime:r<revision>` entries are produced by the shared Redis
-key builder and use a strict versioned envelope containing the schema version and selector-gate
-state. Missing, legacy, malformed, oversized, or incompatible envelopes are cache misses and reload
-PostgreSQL. Selector, policy JSON, or lane fields are incompatible with this inactive projection
-and therefore also cause a cache miss. Only the durable loader can raise an activation error;
-that error never falls back to file configuration. Owned mode, strategy, timeout, retry, and context
-values are validated before a cache hit. Opaque nested extensions and valid historical numeric
-strings retain their meaning. Invalid groups reject the entire envelope. Read and write failures
-emit redacted structured logs and a fixed-reason `deltallm_route_group_cache_failures_total`
-counter; repair failure does not fail a valid durable read. Cache schema v2 remains compatible for
-valid entries. The previous cache namespace is left
-to expire naturally; PR 4 must bump the envelope and namespace when the activation state changes.
+Runtime Route-Group snapshots carry explicit validation provenance. PR 4 advances the
+bounded 4 MiB cache envelope and shared-key-builder namespace to v3 with `validated-v3`
+provenance. Database and validated file configuration remain authoritative. Canonical
+selector/lane data now survives L1/L2 round trips; runtime generation construction
+independently qualifies deployment capabilities, context, pricing and capacity before
+swapping the snapshot. Missing, old `inactive`, malformed, oversized or incompatible
+envelopes are observable misses and reload PostgreSQL. Loader validation failures never
+fall back to file configuration. Owned mode, strategy, timeout, retry, context and
+selector fields are validated before a cache hit; opaque historical fields keep their
+versioned meaning. Invalid groups reject the entire envelope. Cache failures retain the
+fixed-reason `deltallm_route_group_cache_failures_total` counter and redacted logs;
+repair failure does not fail a valid durable read. Old namespaces expire naturally.
 
 ## Request order after activation
 
@@ -1099,6 +1098,15 @@ scope bypasses reservation.** PR 4 must qualify the common admission boundary fo
 traffic sharing a protected scope before claiming hard-budget support. It must not just
 open the selector gate and treat this prerequisite as proof of whole-gateway hard caps.
 
+**PR 4 decision, 2026-09-09:** the user chose non-strict budgets. Do not extend atomic
+reservation admission to selector-free traffic. Concurrent requests may exceed a budget;
+there is no measured frequency or guaranteed overshoot bound. This supersedes the
+requirement to qualify whole-gateway hard-budget admission, not durable billing: incurred
+selector and answer usage still has one economic effect, and unknown usage remains pending
+for reconciliation. The PR 3 migration is shared and remains immutable. These paragraphs
+describe the reservation prerequisite, not a claim that production uses it or enforces
+hard shared budgets.
+
 ### Dependency, storage and rollout budgets
 
 - Existing selector-free requests: zero added SQL, Redis or provider awaits. All new
@@ -1391,3 +1399,470 @@ qualification. Raw runs and every comparison are preserved.
 The temporary ignored kickoff plan has been deleted as requested. This permanent record
 retains implementation decisions and the outstanding verification gates; no commit,
 push, merge, production activation or remote issue mutation was performed in this turn.
+
+## PR 4 — candidate-planning integration (historical first checkpoint)
+
+The first implementation slice adds immutable lane/rank information to
+`RouteCandidatePlan`. Publication, file-load and runtime activation guards remain closed;
+this slice alone does not make any production request invoke a selector. The remaining
+real-time execution, capability qualification, billing, streaming and Batch rejection
+work must land before activation. No shadow mode is introduced.
+
+### Ownership and compatibility
+
+`src/router/group_policy.py` now owns the existing strategy enum, group policy and runtime
+policy projection; `src/router/router.py` preserves their import facade. The group policy
+is frozen. `SelectorLaneRouting` holds frozen canonical selector/member contracts, using
+the existing assignment validator rather than a new configuration source. Historical
+pre-selector semantics ignore opaque selector fields as before. Selector-free members
+are not subjected to stricter selector validation.
+
+The router owns hard eligibility and one batched state read. The focused
+`src/router/selection/planning.py` owner applies the existing strategy and context ordering
+independently within each permitted lane. Health, cooldown, tags, workload compatibility,
+context capacity and configured pre-call checks run before the decision is applied.
+Missing/unhealthy/full lanes can escalate upward, never below the chosen minimum rank.
+A later selector-enabled group reuses the rank even when its lane names differ; a group
+with no sufficient rank has no executable candidates. Selector-free groups retain their
+existing equivalence contract and ordering.
+
+The existing `RequestSelectorState` remains the sole operation decision owner. The new
+internal request-context bridge cannot replace an attached owner, is separate from caller
+metadata, and does not start or join provider work. Before selection, a plan exposes hard
+eligibility by lane but has **no executable deployments**. Once the decision exists,
+pre-decision selector plans are invalidated; ordinary cached plans remain reusable.
+Explicit/context-demand invalidation discards candidate ordering without discarding the
+decision. Cancellation, failure and deadline expiry cannot return a previously cached
+executable selector plan. This is request-local state, not a new Redis or process cache.
+
+The previously oversized planning method is split at the eligibility/ordering boundary.
+Structure tests ratchet both methods below 80 lines and the router module below 800, and
+prohibit selector execution in planning. No clients, workers, queues, SQL, Redis commands,
+schema changes, public fields, headers or UI settings are added in this slice. The existing
+provider-execution activation guard is retained, including its structural regression.
+
+### Verification scope
+
+Tests cover all supported lane counts (2–8) and every rank, per-lane ordering for all nine
+existing strategy values, safe-default ranking, hard-filter precedence, no downgrade when
+the selected lane is unavailable, differently named fallback lanes, decision retention
+through re-planning, immutable projections, caller-metadata isolation, and terminal-state
+rejection. The cache fingerprint fixture now has a valid nonempty two-lane membership;
+its member-change, timeout-change, historical-semantics and equivalent-snapshot assertions
+are preserved.
+
+Dependency regression tests assert one health/cooldown batch per fresh plan; active,
+usage and latency state is loaded once only when required by the strategy/pre-call policy.
+All lanes share that snapshot, with no additional SQL/Redis/provider round trips. Cached
+plans perform no additional state reads. Selector-free ordering is compared with the
+previous strategy invocation under the same random state, not merely an unordered set.
+
+Full PR 4 acceptance remains open: these tests do not yet prove HTTP selector execution,
+lazy fallback execution, MCP continuation wiring, stream disconnect cancellation, actual
+answer-attempt accounting, capability/data-placement qualification or production activation.
+
+### Local verification — 2026-09-09
+
+Base: local feature integration `37929ea740704653730df1740bb0f236402bd51e`.
+Worktree: `.worktrees/issue-304-pr4-realtime-routing`. The Python 3.11 environment was
+installed from the frozen lock with dev/docs extras and its Prisma client generated.
+
+- `uv run --frozen --no-sync pytest -q -m hermetic --tb=short --durations=5`:
+  **3,179 passed** (final run, including all 89 additional cases).
+- `.venv/bin/pytest -q -m app --tb=short --durations=10`:
+  **1,156 passed**, 22 existing deprecation warnings, 328.39 seconds.
+- `.venv/bin/pytest -q -m postgres --tb=short --durations=10`, with `DATABASE_URL`
+  targeting the feature's isolated migrated PostgreSQL 15 database:
+  **235 passed**, 4 deprecation warnings, 69.82 seconds.
+- `.venv/bin/pytest -q -m redis --tb=short --durations=10`, with both Redis test
+  variables pointing to the isolated Redis 7 instance: **46 passed**, 2 deprecation
+  warnings, 8.38 seconds. Both owned containers were stopped afterward; no data deleted.
+- Full `--collect-only -qq --dependency-lane-report`: **4,675 tests**, partitioned into
+  3,179 hermetic / 1,156 app / 235 postgres / 46 redis / 59 Helm. No classifier, fixture
+  lane or CI selection changes. The unaffected Helm lane and UI gates were not rerun.
+- `.venv/bin/ruff check src/router tests/router/selection tests/test_routing_cache_identity.py`
+  passed; `.venv/bin/ruff format --check` on all 14 changed Python files passed.
+- `.venv/bin/python scripts/docs/export_openapi.py --check`: current, 227 paths /
+  295 operations. `git diff --check` passed. No migration or generated-artifact changes.
+
+The new failover test also exercises the real `FailoverManager` with zero, one and two
+retries, followed by upward escalation, while invalidating plans between attempts.
+Its mock explicitly requests retry-or-next behavior without health damage; local
+fail-fast errors must not be treated as provider-retry failures. A zero configured
+backoff cap makes this a deterministic ordering/ownership test, not a wall-clock test.
+No production retry behavior or deadline was relaxed.
+
+The unchanged `tests/performance/routing_cache_profile.py` harness ran sequentially
+against the clean base worktree and this implementation:
+`.venv/bin/python -m tests.performance.routing_cache_profile --label before|after
+--output-dir /private/tmp/deltallm-pr4-planning.5jEuge`.
+The raw JSONL samples and summaries are retained in that directory. Each profile
+offered 10 RPS for 20 seconds, received **200/200 successes**, dropped no requests,
+and recorded zero sampled in-flight slope. This is ASGI with fake Redis and a fixed
+local provider mock, not a database, streaming TTFT or release-capacity certificate.
+
+| Profile | Before p50 / p95 / p99 (ms) | After p50 / p95 / p99 (ms) |
+| --- | --- | --- |
+| Cache miss | 6.819 / 9.263 / 11.279 | 5.468 / 10.725 / 17.549 |
+| Cache hit | 4.390 / 6.666 / 12.173 | 1.716 / 3.406 / 3.960 |
+
+Redis/cache/provider call counts are identical before and after: misses make one
+provider POST and one response-cache get/set; hits make zero provider calls and one
+cache get. Existing Redis method counts match the harness's exact assertions. The
+after-miss run had a 225.506 ms maximum, 121.565 ms maximum scheduling lag, and maximum
+in-flight of three (one in the other profiles). The miss-tail increase is recorded,
+not dismissed as proved host noise or presented as latency parity. Longer controlled
+performance qualification remains required before PR 4 activation.
+
+### PR 4 execution composition and soft admission (2026-09-09)
+
+The implementation extends the existing billing-operation journal with a typed
+`SoftSelectorOperation`. This is not a weakened `OperationReservation` or an
+invented provider-enforced quote. It acquires no spending holds and does not own
+answer accounting. The journal's answer component is `unattempted` because that
+component is not dispatched through this journal; the existing answer spend owner
+continues to record the answer. This does not describe the answer as free.
+
+Before the selector dispatches, one bounded transactional ownership/budget snapshot
+checks the verified key, user, team, organization and team-model scope with a
+conservative configured-context allowance. Concurrent admissions may overshoot.
+When a team-model budget is configured, its maintained spend counter must exist;
+missing counter data returns accounting unavailable before provider dispatch. No
+append-only spend-history scan or rollup repair runs in this new admission path.
+Actual reported selector usage is accepted even above the estimate. A stable child
+event and frozen provider-price snapshot carry its exact pass-through customer
+charge; unknown usage stays pending. There is no provider replay for reconciliation.
+The existing spend worker recovers journal receipts into its existing outbox and
+settles them in the same ledger transaction. Ordinary answer events do not gain
+operation-journal settlement queries, and selector-free requests acquire no holds.
+No shared migration, new client/pool, new queue or new worker is introduced.
+
+The authenticated Chat/Responses edge binds a single operation only when the pinned
+fallback topology can reach a selector. It supplies the final normalized request,
+whole-response-cache eligibility, verified attribution and original execution
+deadline. Initial hard-rejected groups do not justify a paid classification.
+Failover owns attempts and retries, but defers selector groups until execution
+reaches them. All subsequent groups and MCP model phases reuse the decision's
+minimum rank; payload/context replanning does not reset the decision or deadline.
+The edge owns and joins both the selector task and its blocking disconnect monitor;
+neither is detached. A real ASGI disconnect cancels the provider and unwinds the
+middleware with a local `499 client_disconnected` error before SSE headers. Receipt
+and permit cleanup remain owned by the existing selector prerequisites.
+
+Activation requires explicit `model_info.chat_capabilities` for every enabled
+member, known positive context metadata and `context.unknown_capacity: exclude`.
+The common floor is text chat. Operators must explicitly qualify tools, JSON
+object/schema output, image/audio/file input, multiple choices and streaming; undeclared optional
+features are not inferred from provider/model names. The classifier also requires
+explicit input/output provider prices and positive canonical RPM/TPM limits.
+Its concurrency ceiling is conservatively its RPM ceiling, on the same shared
+deployment lease owner. Unsupported billing dimensions reject qualification.
+Classifier tags use the same static tag filter as answer candidates.
+
+Publication readiness and metadata qualification run within the locked policy
+transaction. File/database runtime generations independently compile qualified,
+immutable selector projections before publication. Disposable route-group cache
+envelopes/keyspaces advance to v3 with `validated-v3` provenance; older inactive
+envelopes are misses. Simulation remains explicit unsupported until PR 5's offline
+evaluation work. Batch rejects both direct selectors and selector-bearing fallback
+topologies with `batch_model_router_selector_unsupported` until PR 6.
+
+The completion record below covers the expanded execution scope; the earlier
+candidate-only counts are retained as historical evidence, not added to final totals.
+
+## PR 4 completion record — 2026-09-09
+
+The complete real-time implementation is local on `issue-304-pr4-realtime-routing`,
+based on feature integration `37929ea740704653730df1740bb0f236402bd51e`. This record
+supersedes the incomplete PR 4 checkpoint above and the old dormant-only activation
+restrictions. No commit, push, PR, remote issue edit or merge to `main` is part of
+this implementation turn. Production defaults do not configure a selector.
+
+### Issue #304 delivery checklist
+
+- [x] Immutable lane-aware `RouteCandidatePlan`; no classifier execution in planning.
+- [x] Authoritative membership, workload, capability, tags, health, capacity and
+  context checks precede decision application; authorization precedes paid selection.
+- [x] Selected rank followed by upward-only escalation, including differently named
+  lanes in later groups; no lower-rank candidate after a quality decision.
+- [x] All existing strategies and context ordering apply within each eligible lane.
+- [x] Existing retries, classified/ordinary/local-context fallbacks, cycle/attempt
+  limits, one decision, MCP continuation and pinned-generation semantics are retained.
+- [x] Chat Completions and Responses work in streaming and non-streaming modes.
+- [x] Classification and durable known receipt precede stream headers/body; actual
+  ASGI disconnect cancels and joins the classifier, without opening an answer stream.
+- [x] Policy qualification, soft budget admission, exact durable billing, shared
+  provider capacity, cache eligibility, bounded telemetry and execution are composed.
+- [x] Atomic publish activates a qualified selector; removal and versioned rollback
+  disable/revalidate it. Invalid metadata changes cannot archive the working policy.
+- [x] Batch explicitly rejects direct and fallback-reachable selectors with
+  `batch_model_router_selector_unsupported`, pending PR 6.
+- [x] Selector-free groups and response-cache hits perform no classifier work;
+  ordinary requests retain their dependency counts and answer usage contract.
+
+The issue's legacy long deployment-ID P2 is also fixed: response DTOs preserve valid
+selector-free identifiers over 256 characters, while selector-enabled writes retain
+their strict bound. The HTTP regression covers validation and draft persistence.
+Guided editing, explicit evaluation and analytics UI remain PR 5; per-item Batch
+classification remains PR 6. Neither is an unfinished PR 4 item. There is no shadow mode.
+
+Main regression owners are `tests/router/selection/test_{planning,lane_bounds,
+planned_failover,planning_dependencies,realtime,realtime_fallbacks,realtime_lifecycle,
+realtime_admission,disconnect,execution_contracts}.py`,
+`tests/db/test_selector_activation.py`, `tests/bootstrap/test_selector.py`,
+`tests/test_soft_selector_operations_postgres.py`, and
+`tests/test_ui_route_policy_legacy_identifiers.py`. Tests include accounting outage,
+capacity/tag/context denial, unsupported features outside the bounded prompt projection,
+one selector across MCP tool phases, policy reload during classification, both provider-
+classified fallback kinds, local context fallback without primary dispatch, stale L2
+cache provenance, and one terminal metric even when a deployment belongs to several groups.
+
+### Ownership, resource and dependency budgets
+
+The user-approved soft budget decision supersedes strict cross-traffic reservation
+qualification. It does not waive durable charges, attribution or fail-closed accounting.
+The new admission query joins five unique scope/counter identities, never scans spend
+history, and returns at most one row. A configured team-model budget with a missing
+counter is unavailable, not zero. The real query-plan regression seeds 10,001 counters,
+uses `deltallm_teammodelspend_pkey` for exactly one row/loop, and has no event-table scan.
+Its focused sample measured 0.089 ms execution / 0.494 ms planning; the other identity
+tables in that fixture are small, so this is not an all-tenant production-scale profile.
+
+One reported selector adds four application statements for fresh admission, two for
+dispatch intent and two for receipt acceptance, including transaction timeout setup
+but excluding begin/commit protocol. These three transactions borrow the existing
+telemetry database pool. Each has a 250 ms ceiling subordinate to the execution deadline;
+receipt cleanup has a shared 250 ms grace and permit cleanup 50 ms with owner-token TTL
+recovery. One request owns at most two joined selector/disconnect tasks, no detached
+work, and at most one classifier provider call. Billing denial returns unavailable;
+provider/format/context/capacity failure uses the safe lane without answer cooldown.
+
+Selector provider acquisition/release adds two canonical Redis EVALs. Eligible-lane
+planning shares the existing batched health/capacity snapshot across every lane. After a
+decision, replanning reads the canonical snapshot again rather than sharing mutable
+state across operations. The integrated mock profile measures the resulting full-path
+delta: per request, `eval +2`, `hgetall +2`, `mget +1`, `zadd +1`, with all other fake
+Redis method counts unchanged. These include fake implementation internals, not wire
+command counts. Baseline operations make zero selector billing calls; selector operations
+make exactly one reserve/dispatch/accept. Ordinary answer outbox batches do not acquire
+new operation-journal settlement queries. Existing spend recovery remains off requests.
+
+There are no new pools, clients, workers, queues, indexes or migrations. Selector work
+borrows the existing provider/telemetry/Redis owners; increased request work does not
+increase their configured connection ceilings. With the current production chart's
+12 API replicas, one process per pod and one rolling-surge pod, the existing database
+allocation is `(12 + 1) * (20 + 5) = 325` connections, including 65 telemetry connections;
+the existing upstream HTTP ceiling is `13 * 500 = 6,500`. Enabling two split workers
+plus their one surge adds 75 database / 1,500 upstream connections, not a second selector
+allocation. Migration/admin headroom and external provider/server limits still need an
+operator-approved deployment budget; these sums are ceilings, not throughput claims.
+The existing shared Redis client remains unchanged; this PR does not certify or redesign
+its deployment-wide pool policy. Provider RPM/TPM and lease state are deployment-scoped
+in shared Redis, not multiplied per API replica. Selector admission uses one RPM and
+`classifier context allowance + 64` TPM units; the concurrency ceiling is its configured
+RPM limit. Account for classifier and answer traffic on the same physical deployment.
+
+The existing 100,000-pending-operation journal bound, canonical retention policy,
+idempotent recovery, storage/index amplification and rollout runbook above remain in
+force. Soft operations hold zero spending allowance and leave answer accounting with
+the existing answer owner; they do not mislabel unknown selector usage as free. No
+production-scale storage or 50-RPS release certificate is claimed by local completion.
+
+### Final correctness and compatibility verification
+
+Python 3.11.13 uses the frozen lock and generated Prisma 0.15 client. Full collection
+is **4,774 tests**, assigned exclusively to 3,212 hermetic / 1,195 app / 262 postgres /
+46 redis / 59 Helm. All five lanes pass with no skipped tests. JUnit and collection
+artifacts are retained at `/private/tmp/deltallm-pr4-final.18iuAt/` on the implementation
+host; this temporary path is evidence, not a durable repository artifact store.
+
+```sh
+.venv/bin/pytest --collect-only -qq --dependency-lane-report
+.venv/bin/pytest -q -m hermetic
+.venv/bin/pytest -q -m app
+DATABASE_URL="$PR4_TEST_DATABASE_URL" .venv/bin/pytest -q -m postgres
+REDIS_URL="$PR4_TEST_REDIS_URL" DELTALLM_TEST_REDIS_URL="$PR4_TEST_REDIS_URL" .venv/bin/pytest -q -m redis
+.venv/bin/pytest -q -m helm
+git ls-files -m -o --exclude-standard -z -- '*.py' | xargs -0 .venv/bin/ruff check
+git ls-files -m -o --exclude-standard -z -- '*.py' | xargs -0 .venv/bin/ruff format --check
+.venv/bin/python scripts/docs/export_openapi.py --check
+.venv/bin/mkdocs build --strict --site-dir /tmp/deltallm-pr4-docs-site
+git diff --check
+```
+
+Use isolated migrated PostgreSQL 15 and Redis 7, not production URLs. Hermetic tests
+include an existing loopback webhook test: sandbox-only execution skipped it; the final
+socket-enabled run passed all 3,212 in 16.36 seconds. The app lane passed in 482.83 seconds
+with 22 existing deprecation warnings; PostgreSQL passed all 262 in 92.72 seconds with
+four existing deprecation warnings. Schema and all shared migrations are unchanged;
+the feature/main alignment already qualified fresh, last-release and shared-feature
+migration paths. PR 4 runs against that same migrated schema. No CI/lane selection
+or test-discovery rules were weakened or changed.
+
+UI verification uses actual Node 22.23.2: **206 unit tests pass**, type-check/production
+build passes, touched-file ESLint passes. Full lint remains the clean feature base's
+**118 errors / 4 warnings**, with identical normalized findings and no new errors.
+The complete generated `ui/dist` is byte-for-byte identical to the clean base: no
+initial-bundle or route-chunk growth. OpenAPI is synchronized at 227 paths / 295
+operations. No provider credentials or live third-party calls were used.
+
+### Constant-arrival and TTFT evidence
+
+Raw JSONL and summaries are in `/private/tmp/deltallm-pr4-final.18iuAt/{cache,
+cache-repeat,realtime}`. Every case offers 10 RPS for 20 seconds, completes 200/200
+successfully with zero generator drops and zero sampled in-flight slope. The existing
+cache harness runs unchanged in the clean feature-base and PR 4 checkouts. The repeat
+reverses execution order (after, then before) and preserves the initial results.
+
+| Cache case | Before p50 / p95 / p99 ms | After p50 / p95 / p99 ms |
+| --- | --- | --- |
+| Initial miss | 10.398 / 18.016 / 21.547 | 10.530 / 16.514 / 27.063 |
+| Initial hit | 5.775 / 9.940 / 16.645 | 5.877 / 7.702 / 8.943 |
+| Repeat miss | 10.675 / 17.793 / 22.339 | 12.017 / 19.863 / 24.021 |
+| Repeat hit | 6.225 / 9.133 / 10.523 | 5.265 / 7.658 / 11.136 |
+
+All cache/Redis/provider count assertions match the base exactly: a miss has one
+cache get/set and one provider post; a hit has one get and no provider post. Miss tail
+latency is higher, not demonstrated parity: initial/repeat PR 4 maxima were 329.166 /
+312.172 ms with 223.542 / 205.932 ms maximum scheduling lag and four observed in-flight
+requests (one in baseline cache cases). These short in-process samples do not attribute
+the stalls to a specific cause or certify a deployment SLO.
+
+The new `tests.performance.realtime_selector_profile` compares the complete admitted
+Chat path with/without selection, using fixed 1 ms provider hops, fake billing and
+fake Redis. TTFT is measured at the first ASGI body, not a buffered client's read.
+
+| Integrated path | p50 / p95 / p99 ms | Stream TTFT p50 / p95 / p99 ms |
+| --- | --- | --- |
+| Baseline non-streaming | 12.587 / 17.900 / 46.752 | — |
+| Selector non-streaming | 19.155 / 27.616 / 32.606 | — |
+| Baseline streaming | 14.352 / 20.697 / 24.267 | 10.752 / 16.662 / 19.579 |
+| Selector streaming | 20.898 / 27.217 / 33.198 | 17.317 / 24.469 / 30.761 |
+
+Median selection overhead was 6.568 ms non-streaming and 6.565 ms for streaming TTFT,
+including the mock selector provider time. Each selector case made 200 selector and
+200 answer calls, and 200 reserve/dispatch/accept operations; both baseline cases made
+200 answer calls and zero selector/billing operations. Total selector provider time
+was 249.923 ms non-streaming / 297.959 ms streaming; answer provider totals were
+252.480 / 248.601 ms. All integrated cases observed maximum in-flight one except the
+baseline non-streaming case (four, 347.995 ms maximum latency). SQL/real-Redis wire
+latency, real-provider quality, net savings and deployment saturation are not measured
+by this harness; real-service correctness is covered separately by the full lanes.
+
+Reproduce with the same locked environment in each checkout:
+
+```sh
+.venv/bin/python -m tests.performance.routing_cache_profile --label before --output-dir /tmp/pr4/cache
+.venv/bin/python -m tests.performance.routing_cache_profile --label after --output-dir /tmp/pr4/cache
+.venv/bin/python -m tests.performance.realtime_selector_profile --output-dir /tmp/pr4/realtime
+```
+
+### PR 4 review corrections — 2026-09-09
+
+Four reproduced review findings are corrected locally without changing the soft
+budget decision, public answer-only usage, settings, schema, UI or deployment
+contracts:
+
+- Streaming MCP requests fail with the existing 400 message after canonical
+  transformed-payload preflight and before binding/admitting a selector. Both Chat
+  and Responses reject tools supplied directly or introduced by a hook with zero
+  selector reserve, dispatch, receipt or provider calls. Failure logging uses the
+  existing preflight error owner, before any deployment is chosen.
+- Initial local-context fallback planning shares the original request deadline.
+  Only the existing batched planning await is deadline-bounded: deferred selector
+  work retains its own bounded receipt/permit cleanup, without an enclosing timeout
+  that could cancel cleanup a second time. Event-barrier tests on Chat and Responses
+  prove cancellation/join and 408 while planning is stalled, before any paid call.
+- A typed prepared-write result keeps the canonical validation projection separate
+  from the stored document. Direct publication qualifies the projection and persists
+  the preserved document, matching draft publication and rollback. PostgreSQL tests
+  prove nested opaque member metadata survives direct publish, draft, removal and
+  rollback; new client-authored unknown fields still fail without a revision change.
+- Activation uses the existing canonical member merge to qualify effective enabled
+  members. Group-disabled and policy-disabled members need not have activation
+  metadata; disabled inventory can lack a lane or concrete model. The classifier
+  must remain enabled and both active lanes populated. PostgreSQL tests cover
+  publication, draft, rollback and active-group edits, plus atomic rejection of
+  re-enabling an unqualified member without changing policy history or revision.
+
+No SQL, Redis, provider call, retry, task owner or pool is added. Ordinary routing
+still performs no selector work; the existing local-fallback batch planner now has
+the same deadline bound as other selector-reachable planning. Publication remains
+inside the existing group-locked transaction and runtime revision lifecycle. No
+migration is needed; the earlier fresh/upgrade and UI/Helm evidence still applies
+to these unchanged surfaces.
+
+#### Review-fix verification
+
+The four HTTP MCP variants, two blocked-planner variants and three failing
+PostgreSQL publication variants reproduced the findings before the fixes. Fourteen
+new regressions are collected automatically: three hermetic, six app and five
+PostgreSQL. Focused routing/publication/HTTP tests passed **399**; the selector
+activation PostgreSQL module passed **15**. All five full lanes then passed:
+
+| Lane | Passed | Runtime |
+| --- | ---: | ---: |
+| Hermetic | 3,215 | 16.79 s |
+| App | 1,201 | 644.98 s |
+| PostgreSQL | 267 | 101.62 s |
+| Redis | 46 | 9.49 s |
+| Helm | 59 | 7.61 s |
+| Total, mutually exclusive | 4,788 | — |
+
+No failures or skips; app/PostgreSQL/Redis retain 22/4/2 existing deprecation
+warnings. Ruff lint and format checks pass for all **82** changed/new Python files.
+OpenAPI remains current at 227 paths / 295 operations; strict MkDocs and
+`git diff --check` pass. No test-classifier or shared-fixture contract was weakened.
+The isolated PostgreSQL/Redis containers were stopped afterward, retaining data.
+UI sources/build inputs and schema/migrations did not change in this follow-up;
+their earlier verification is not represented as a new run.
+
+Raw collection, JUnit and logs: `/private/tmp/deltallm-pr4-review-fixes.O7zXhG`.
+Reproduction commands use the existing frozen-lock `.venv`; set the two task-local
+test URLs to isolated services (Docker may assign new ports after restart):
+
+```sh
+.venv/bin/pytest -q tests/router/selection tests/services/test_route_policy_publication.py tests/db/test_route_policy_repository.py tests/test_ui_route_groups.py
+DATABASE_URL="$PR4_TEST_DATABASE_URL" .venv/bin/pytest -q tests/db/test_selector_activation.py
+.venv/bin/pytest --collect-only -qq --dependency-lane-report
+.venv/bin/pytest -q -m hermetic --durations=10
+.venv/bin/pytest -q -m app --durations=10
+DATABASE_URL="$PR4_TEST_DATABASE_URL" .venv/bin/pytest -q -m postgres --durations=10
+REDIS_URL="$PR4_TEST_REDIS_URL" DELTALLM_TEST_REDIS_URL="$PR4_TEST_REDIS_URL" .venv/bin/pytest -q -m redis --durations=10
+.venv/bin/pytest -q -m helm --durations=10
+git ls-files -m -o --exclude-standard -z -- '*.py' | xargs -0 .venv/bin/ruff check
+git ls-files -m -o --exclude-standard -z -- '*.py' | xargs -0 .venv/bin/ruff format --check
+.venv/bin/python scripts/docs/export_openapi.py --check
+.venv/bin/mkdocs build --strict --site-dir /tmp/pr4-review-docs
+git diff --check
+```
+
+The unchanged cache harness was repeated sequentially on the clean feature base
+and final PR 4 worktree, with no test suites running (`cache-isolated/`). All four
+cases completed 200/200 at 10 RPS for 20 seconds, zero generator drops and zero
+sampled in-flight slope. Redis/cache/provider call dictionaries match exactly:
+misses have one cache get/set and one provider call; hits have one get and no
+provider call. The normal path adds no selector economic work.
+
+| Isolated cache case | Before p50 / p95 / p99 ms | After p50 / p95 / p99 ms |
+| --- | --- | --- |
+| Miss | 6.199 / 12.124 / 15.479 | 6.241 / 13.045 / 34.259 |
+| Hit | 3.115 / 6.021 / 8.165 | 2.585 / 6.064 / 10.571 |
+
+Tail latency is not proven equivalent: the isolated after-miss maximum was
+242.487 ms with 137.569 ms maximum scheduling lag and three in flight, versus one
+in flight in the other cases. An earlier comparison overlapping the app suite is
+retained in `cache/`: its after-miss run failed the 200-success assertion with
+196 successes/four 429s, 705.018 ms maximum scheduling lag and nine in flight.
+Do not silently discard that failed run or attribute its stall to a specific cause.
+
+The integrated real-time profile (`realtime/`) also repeated all four cases:
+200/200 successes each, zero generator drops, 200 answer calls each, and exactly
+200 reserve/dispatch/receipt operations only in each selector case (zero in both
+baselines). Every sampled in-flight slope was non-positive. Stream TTFT p50/p95/p99
+was 10.605/14.771/20.937 ms baseline and 17.033/25.325/31.080 ms with selection.
+This run overlapped the application suite: its baseline non-streaming p95/p99 was
+202.215/257.600 ms, so it is call-count evidence, not a clean latency-overhead
+comparison. Both profiles remain local fake-dependency regression checks, not a
+production performance or real-model savings certificate. Use the same harness
+commands from the preceding section with the review artifact directory.

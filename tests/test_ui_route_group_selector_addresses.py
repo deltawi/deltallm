@@ -61,7 +61,7 @@ async def test_selector_draft_retains_contract_across_addressing_routes(
             selector_path + "/policy/publish", headers=HEADERS, json=payload
         )
         assert published.status_code == 400, published.text
-        assert "cannot be activated" in published.text
+    assert "unknown_capacity=exclude" in published.text
     current = await client.get(selector_path + "/policy", headers=HEADERS)
     assert current.status_code == 200, current.text
     assert current.json()["policy"]["status"] == "draft"

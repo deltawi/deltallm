@@ -46,6 +46,8 @@ from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
 from src.router import ROUTING_MODE_CONTEXT_KEY, require_initial_deployment
+from src.routers.selector_edge import bind_selector_operation
+from src.router.selection.operation import selector_answer_observation
 from src.router.context_policy import RequestTokenDemand, set_request_token_demand
 from src.router.health_state import DeploymentHealthRef
 from src.router.usage import record_router_usage
@@ -131,6 +133,10 @@ async def handle_chat_like_request(
     callback_manager = preflight.callback_manager
     guardrail_middleware = preflight.guardrail_middleware
     has_mcp_tools = chat_request_has_mcp_tools(payload)
+    if payload.stream and has_mcp_tools:
+        raise InvalidRequestError(
+            message="MCP tools are not supported on streaming chat requests yet"
+        )
 
     router = routing_runtime.router
     model_group = router.resolve_model_group(payload.model)
@@ -146,6 +152,14 @@ async def handle_chat_like_request(
             requested_output_tokens=payload.max_tokens,
         ),
     )
+    selector_deadline = bind_selector_operation(
+        request,
+        runtime=routing_runtime,
+        payload=payload,
+        auth=auth,
+        context=request_context,
+        token_estimate=preflight.token_estimate,
+    )
     primary = await require_initial_deployment(
         router=router,
         failover_manager=routing_runtime.failover_manager,
@@ -153,6 +167,8 @@ async def handle_chat_like_request(
         request_context=request_context,
     )
     failover_kwargs = route_failover_kwargs(request_context)
+    if selector_deadline is not None:
+        failover_kwargs["request_deadline"] = selector_deadline
     capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
@@ -162,16 +178,17 @@ async def handle_chat_like_request(
 
     def track_attempt(deployment):  # noqa: ANN001
         capture_attempted_deployment(request, deployment)
+        observation = selector_answer_observation(request_context)
+        if observation is not None:
+            observation.attempted(
+                deployment.route_group_key or deployment.model_name, deployment.deployment_id
+            )
 
     cache_context = getattr(request.state, "cache_context", None)
     cache_hit = bool(getattr(cache_context, "hit", False)) if cache_context is not None else False
     cache_key = getattr(cache_context, "cache_key", None) if cache_context is not None else None
     try:
         if payload.stream:
-            if has_mcp_tools:
-                raise InvalidRequestError(
-                    message="MCP tools are not supported on streaming chat requests yet"
-                )
             # Validate provider+mode before starting the streaming response,
             # so unsupported stream providers fail as a normal HTTP error.
             resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
@@ -187,6 +204,13 @@ async def handle_chat_like_request(
             opened_stream = managed_stream.value
             stream_lifecycle = ManagedStreamLifecycle(opened_stream, managed_stream)
             served_deployment = managed_stream.deployment
+            observation = selector_answer_observation(request_context)
+            if observation is not None:
+                observation.answered(
+                    served_deployment.route_group_key or served_deployment.model_name,
+                    served_deployment.deployment_id,
+                    streaming=True,
+                )
             try:
                 update_served_route_decision(
                     request,
@@ -453,6 +477,7 @@ async def handle_chat_like_request(
                     primary_deployment=primary,
                     model_group=model_group,
                     routing_context=request_context,
+                    request_deadline=selector_deadline,
                     timeout_seconds=failover_kwargs.get("timeout_seconds"),
                     retry_max_attempts=failover_kwargs.get("retry_max_attempts"),
                     retryable_error_classes=tuple(
@@ -497,6 +522,13 @@ async def handle_chat_like_request(
             response_transform(payload_data) if response_transform is not None else payload_data
         )
         api_provider = resolve_provider(served_deployment.deltallm_params)
+        observation = selector_answer_observation(request_context)
+        if observation is not None:
+            observation.answered(
+                served_deployment.route_group_key or served_deployment.model_name,
+                served_deployment.deployment_id,
+                streaming=False,
+            )
         await emit_nonstream_success(
             request=request,
             auth=auth,

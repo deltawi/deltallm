@@ -13,6 +13,8 @@ from src.models.responses import UserAPIKeyAuth
 from src.rate_limit_policy import estimate_tokens
 from src.router import Deployment, FailoverManager
 from src.router.context_policy import RequestTokenDemand, set_request_token_demand
+from src.router.execution import RequestDeadline
+from src.router.selection.operation import refresh_selector_payload
 
 
 ChatDeploymentCall = Callable[
@@ -30,6 +32,7 @@ class MCPModelRouting:
     timeout_seconds: float | None = None
     retry_max_attempts: int | None = None
     retryable_error_classes: tuple[str, ...] | None = None
+    request_deadline: RequestDeadline | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +67,9 @@ class MCPChatExecutionService:
         routing: MCPModelRouting,
         on_attempt: DeploymentAttemptObserver | None = None,
     ) -> MCPChatExecutionResult:
-        deadline = self.failover_manager.create_request_deadline(routing.timeout_seconds)
+        deadline = routing.request_deadline or self.failover_manager.create_request_deadline(
+            routing.timeout_seconds
+        )
         served_deployment: Deployment | None = None
         phase_primary = routing.primary_deployment
         fallback_used = False
@@ -73,10 +78,12 @@ class MCPChatExecutionService:
             phase_payload: ChatCompletionRequest,
         ) -> tuple[dict[str, Any], float]:
             nonlocal fallback_used, phase_primary, served_deployment
+            token_estimate = estimate_tokens(dump_request_for_preflight(phase_payload))
+            refresh_selector_payload(routing.routing_context, phase_payload, token_estimate)
             set_request_token_demand(
                 routing.routing_context,
                 RequestTokenDemand(
-                    input_tokens=estimate_tokens(dump_request_for_preflight(phase_payload)),
+                    input_tokens=token_estimate,
                     requested_output_tokens=phase_payload.max_tokens,
                 ),
             )
