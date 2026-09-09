@@ -895,6 +895,91 @@
         "title": "EmbeddingRequest",
         "type": "object"
       },
+      "EvaluationCosts": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_customer_charge": {
+            "anyOf": [
+              {
+                "maxLength": 39,
+                "pattern": "^[0-9]{1,20}(\\.[0-9]{1,18})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Customer Charge"
+          },
+          "answer_provider_cost": {
+            "anyOf": [
+              {
+                "maxLength": 39,
+                "pattern": "^[0-9]{1,20}(\\.[0-9]{1,18})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Provider Cost"
+          },
+          "baseline_answer_provider_cost": {
+            "anyOf": [
+              {
+                "maxLength": 39,
+                "pattern": "^[0-9]{1,20}(\\.[0-9]{1,18})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Answer Provider Cost"
+          },
+          "measurable_penalty": {
+            "anyOf": [
+              {
+                "maxLength": 39,
+                "pattern": "^[0-9]{1,20}(\\.[0-9]{1,18})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measurable Penalty"
+          },
+          "selector_customer_charge": {
+            "anyOf": [
+              {
+                "maxLength": 39,
+                "pattern": "^[0-9]{1,20}(\\.[0-9]{1,18})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selector Customer Charge"
+          },
+          "selector_provider_cost": {
+            "anyOf": [
+              {
+                "maxLength": 39,
+                "pattern": "^[0-9]{1,20}(\\.[0-9]{1,18})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selector Provider Cost"
+          }
+        },
+        "title": "EvaluationCosts",
+        "type": "object"
+      },
       "FallbackEventResponse": {
         "properties": {
           "attempt": {
@@ -1437,6 +1522,83 @@
           "lanes"
         ],
         "title": "LLMTierSelectorPolicy",
+        "type": "object"
+      },
+      "LaneConfusion": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "expected_lane": {
+            "title": "Expected Lane",
+            "type": "string"
+          },
+          "selected_lane": {
+            "title": "Selected Lane",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_lane",
+          "selected_lane",
+          "count"
+        ],
+        "title": "LaneConfusion",
+        "type": "object"
+      },
+      "LaneEvaluation": {
+        "additionalProperties": false,
+        "properties": {
+          "correct": {
+            "title": "Correct",
+            "type": "integer"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "integer"
+          },
+          "lane": {
+            "title": "Lane",
+            "type": "string"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "recall": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane",
+          "expected",
+          "selected",
+          "correct",
+          "precision",
+          "recall"
+        ],
+        "title": "LaneEvaluation",
         "type": "object"
       },
       "MCPToolDefinition": {
@@ -5421,6 +5583,180 @@
         "title": "RoutePolicyValidationResponse",
         "type": "object"
       },
+      "RoutingCostAggregate": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_customer_charge_count": {
+            "minimum": 0.0,
+            "title": "Answer Customer Charge Count",
+            "type": "integer"
+          },
+          "answer_customer_charge_exact": {
+            "title": "Answer Customer Charge Exact",
+            "type": "string"
+          },
+          "answer_distribution": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Answer Distribution",
+            "type": "array"
+          },
+          "answer_provider_cost_count": {
+            "minimum": 0.0,
+            "title": "Answer Provider Cost Count",
+            "type": "integer"
+          },
+          "answer_provider_cost_exact": {
+            "title": "Answer Provider Cost Exact",
+            "type": "string"
+          },
+          "complete_cost_count": {
+            "minimum": 0.0,
+            "title": "Complete Cost Count",
+            "type": "integer"
+          },
+          "net_savings_exact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Savings Exact"
+          },
+          "operation_count": {
+            "minimum": 0.0,
+            "title": "Operation Count",
+            "type": "integer"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "pending_reconciliation_count": {
+            "minimum": 0.0,
+            "title": "Pending Reconciliation Count",
+            "type": "integer"
+          },
+          "savings_covered_count": {
+            "minimum": 0.0,
+            "title": "Savings Covered Count",
+            "type": "integer"
+          },
+          "savings_kind": {
+            "const": "counterfactual_estimate",
+            "default": "counterfactual_estimate",
+            "title": "Savings Kind",
+            "type": "string"
+          },
+          "selector_customer_charge_count": {
+            "minimum": 0.0,
+            "title": "Selector Customer Charge Count",
+            "type": "integer"
+          },
+          "selector_customer_charge_exact": {
+            "title": "Selector Customer Charge Exact",
+            "type": "string"
+          },
+          "selector_provider_cost_count": {
+            "minimum": 0.0,
+            "title": "Selector Provider Cost Count",
+            "type": "integer"
+          },
+          "selector_provider_cost_exact": {
+            "title": "Selector Provider Cost Exact",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_count",
+          "complete_cost_count",
+          "pending_reconciliation_count",
+          "savings_covered_count",
+          "selector_provider_cost_count",
+          "selector_customer_charge_count",
+          "answer_provider_cost_count",
+          "answer_customer_charge_count",
+          "selector_provider_cost_exact",
+          "selector_customer_charge_exact",
+          "answer_provider_cost_exact",
+          "answer_customer_charge_exact",
+          "net_savings_exact",
+          "partial",
+          "answer_distribution"
+        ],
+        "title": "RoutingCostAggregate",
+        "type": "object"
+      },
+      "RoutingCostCursor": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "title": "Operation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "created_at",
+          "operation_id"
+        ],
+        "title": "RoutingCostCursor",
+        "type": "object"
+      },
+      "RoutingCostPage": {
+        "additionalProperties": false,
+        "properties": {
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingCostCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RoutingCostAggregate"
+          }
+        },
+        "required": [
+          "generated_at",
+          "summary",
+          "has_more",
+          "next_cursor"
+        ],
+        "title": "RoutingCostPage",
+        "type": "object"
+      },
       "SchedulerBackfillRequest": {
         "properties": {
           "limit": {
@@ -5514,6 +5850,240 @@
           "active_mode"
         ],
         "title": "SchedulerModeUpdateRequest",
+        "type": "object"
+      },
+      "SelectorEvaluationReport": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_quality_mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Quality Mean"
+          },
+          "answer_quality_sample_count": {
+            "title": "Answer Quality Sample Count",
+            "type": "integer"
+          },
+          "basis": {
+            "const": "supplied_fixture_replay",
+            "default": "supplied_fixture_replay",
+            "title": "Basis",
+            "type": "string"
+          },
+          "confusion": {
+            "items": {
+              "$ref": "#/components/schemas/LaneConfusion"
+            },
+            "title": "Confusion",
+            "type": "array"
+          },
+          "correct_count": {
+            "title": "Correct Count",
+            "type": "integer"
+          },
+          "costs": {
+            "$ref": "#/components/schemas/RoutingCostAggregate"
+          },
+          "default_count": {
+            "title": "Default Count",
+            "type": "integer"
+          },
+          "default_rate": {
+            "title": "Default Rate",
+            "type": "number"
+          },
+          "failure_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Failure Counts",
+            "type": "object"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/LaneEvaluation"
+            },
+            "title": "Lanes",
+            "type": "array"
+          },
+          "latency_p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency P50 Ms"
+          },
+          "latency_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency P95 Ms"
+          },
+          "latency_sample_count": {
+            "title": "Latency Sample Count",
+            "type": "integer"
+          },
+          "sample_count": {
+            "title": "Sample Count",
+            "type": "integer"
+          },
+          "selector_fingerprint": {
+            "title": "Selector Fingerprint",
+            "type": "string"
+          },
+          "warnings": {
+            "default": [
+              "Fixture replay only: no provider calls, charges or publication changes.",
+              "Scores, timings and costs are supplied evidence, not independently measured results.",
+              "Lane agreement is not answer quality. Missing evidence remains unavailable.",
+              "This report does not validate deployment eligibility for publication."
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selector_fingerprint",
+          "sample_count",
+          "correct_count",
+          "default_count",
+          "default_rate",
+          "failure_counts",
+          "lanes",
+          "confusion",
+          "latency_sample_count",
+          "latency_p50_ms",
+          "latency_p95_ms",
+          "answer_quality_sample_count",
+          "answer_quality_mean",
+          "costs"
+        ],
+        "title": "SelectorEvaluationReport",
+        "type": "object"
+      },
+      "SelectorEvaluationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/SelectorEvaluationSample"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/LLMTierSelectorPolicy"
+          }
+        },
+        "required": [
+          "selector",
+          "samples"
+        ],
+        "title": "SelectorEvaluationRequest",
+        "type": "object"
+      },
+      "SelectorEvaluationSample": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_quality_score": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Quality Score"
+          },
+          "costs": {
+            "$ref": "#/components/schemas/EvaluationCosts"
+          },
+          "expected_lane": {
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+            "title": "Expected Lane",
+            "type": "string"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "enum": [
+                  "selector_timeout",
+                  "provider_error",
+                  "capacity_denied"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "maximum": 300000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          }
+        },
+        "required": [
+          "expected_lane"
+        ],
+        "title": "SelectorEvaluationSample",
         "type": "object"
       },
       "SelectorLane": {
@@ -30662,6 +31232,131 @@
         ]
       }
     },
+    "/ui/api/route-policy-evaluations": {
+      "post": {
+        "operationId": "evaluate_route_selector_ui_api_route_policy_evaluations_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectorEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectorEvaluationReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid fixture fields, bounds or labels"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "408": {
+            "description": "Upload timed out"
+          },
+          "413": {
+            "description": "Fixture exceeds 256 KiB"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Required audit unavailable"
+          }
+        },
+        "summary": "Evaluate Route Selector",
+        "tags": [
+          "Admin Route Groups"
+        ]
+      }
+    },
     "/ui/api/routing": {
       "get": {
         "operationId": "get_routing_ui_api_routing_get",
@@ -31603,6 +32298,178 @@
           }
         },
         "summary": "Spend Report",
+        "tags": [
+          "Spend"
+        ]
+      }
+    },
+    "/ui/api/spend/routing-costs": {
+      "get": {
+        "operationId": "routing_cost_report_ui_api_spend_routing_costs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model_group",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model Group"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_created_at",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Created At"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_operation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Operation Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "organization",
+                    "team",
+                    "self"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingCostPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Outside the authorized spend scope"
+          },
+          "422": {
+            "description": "Invalid range, filter or cursor"
+          },
+          "503": {
+            "description": "Reporting unavailable, timed out or at capacity"
+          }
+        },
+        "summary": "Routing Cost Report",
         "tags": [
           "Spend"
         ]

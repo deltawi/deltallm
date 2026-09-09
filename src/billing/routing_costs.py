@@ -42,6 +42,10 @@ class RoutingCostAggregate(FrozenBillingContract):
     complete_cost_count: int = Field(ge=0)
     pending_reconciliation_count: int = Field(ge=0)
     savings_covered_count: int = Field(ge=0)
+    selector_provider_cost_count: int = Field(ge=0)
+    selector_customer_charge_count: int = Field(ge=0)
+    answer_provider_cost_count: int = Field(ge=0)
+    answer_customer_charge_count: int = Field(ge=0)
     selector_provider_cost_exact: str
     selector_customer_charge_exact: str
     answer_provider_cost_exact: str
@@ -68,6 +72,7 @@ def aggregate_routing_costs(
         "answer_customer_charge",
     )
     totals = {field: Decimal(0) for field in fields}
+    counts = {field: 0 for field in fields}
     complete = covered = 0
     savings = Decimal(0)
     distribution: Counter[str] = Counter()
@@ -78,6 +83,7 @@ def aggregate_routing_costs(
             for field in fields:
                 if values[field] is not None:
                     totals[field] += values[field]
+                    counts[field] += 1
             complete += all(values[field] is not None for field in fields)
             if row.net_savings is not None:
                 covered += 1
@@ -93,6 +99,7 @@ def aggregate_routing_costs(
             for row in rows
         ),
         savings_covered_count=covered,
+        **{f"{field}_count": counts[field] for field in fields},
         selector_provider_cost_exact=money_string(totals["selector_provider_cost"]),
         selector_customer_charge_exact=money_string(totals["selector_customer_charge"]),
         answer_provider_cost_exact=money_string(totals["answer_provider_cost"]),

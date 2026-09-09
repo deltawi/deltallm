@@ -441,8 +441,9 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
     try {
       const result = await routeGroups.validatePolicy(routeGroupId, parsed, operation.signal);
       if (!mutations.isCurrent(operation)) return;
-      setPolicyText(JSON.stringify(result.policy, null, 2));
-      setGuidedPolicy(toGuidedPolicy(result.policy, members));
+      const validated = restoreDraftPolicyTombstones(result.policy, parsed);
+      setPolicyText(JSON.stringify(validated, null, 2));
+      setGuidedPolicy(toGuidedPolicy(validated, members));
       setPolicyMessage(result.warnings?.length ? `Valid with warnings: ${result.warnings.join(' ')}` : 'Policy is valid.');
       setPolicyError(null);
     } catch (error: unknown) {
@@ -504,13 +505,13 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
     }
   };
 
-  const handleRollback = async () => {
-    if (!selectedRollbackVersion) return;
+  const handleRollback = async (version = selectedRollbackVersion) => {
+    if (!version) return;
     const operation = mutations.begin();
     if (!operation) return;
     setPolicyAction('rollback');
     try {
-      const result = await routeGroups.rollbackPolicy(routeGroupId, selectedRollbackVersion, operation.signal);
+      const result = await routeGroups.rollbackPolicy(routeGroupId, version, operation.signal);
       if (!mutations.isCurrent(operation)) return;
       setPolicyMessage(
         routeGroupMutationOutcome(
@@ -693,6 +694,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
           ) : activeTab === 'advanced' ? (
             <RouteGroupAdvancedTab
               routeGroupId={group.route_group_id}
+              groupKey={group.group_key}
               workloadMode={workloadMode}
               bindings={bindings}
               templates={promptTemplates.data?.data || []}
@@ -720,7 +722,14 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
               policyAction={policyAction}
               showAdvancedJson={showAdvancedJson}
               hasMembers={memberIds.length > 0}
-              onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
+              onToggleAdvancedJson={() => {
+                if (showAdvancedJson) {
+                  const parsed = parsePolicyTextLoose(policyText);
+                  if (!parsed) { setPolicyError('Invalid JSON payload'); return; }
+                  setGuidedPolicy(toGuidedPolicy(parsed, members));
+                } else setPolicyText(guidedPreview);
+                setShowAdvancedJson((cur) => !cur);
+              }}
               onGuidedPolicyChange={setGuidedPolicy}
               onPolicyTextChange={setPolicyText}
               onValidate={handleValidatePolicy}

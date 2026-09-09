@@ -1,3 +1,5 @@
+import { applyGuidedSelector, readGuidedSelector, selectorDefaults, validateGuidedSelector, type GuidedSelector } from './routeGroupSelector';
+
 export const ROUTE_GROUP_MODE_OPTIONS = ['chat', 'embedding', 'image_generation', 'audio_speech', 'audio_transcription', 'rerank'] as const;
 
 export const ROUTE_GROUP_STRATEGY_OPTIONS = [
@@ -56,6 +58,9 @@ export type GuidedMemberSelection = 'inherit' | 'explicit';
 export type GuidedContextMode = 'disabled' | 'eligible-only' | 'smallest-sufficient';
 
 export interface PolicyMemberOption {
+  mode?: string | null;
+  model_name?: string | null;
+  provider?: string | null;
   deployment_id: string;
   enabled: boolean;
   weight: number | null;
@@ -63,6 +68,7 @@ export interface PolicyMemberOption {
 }
 
 export interface PolicyGuidedValues {
+  selector: GuidedSelector;
   strategy: string;
   memberSelection: GuidedMemberSelection;
   memberIds: string[];
@@ -77,6 +83,7 @@ export interface PolicyGuidedValues {
 }
 
 export const GUIDED_POLICY_DEFAULTS: PolicyGuidedValues = {
+  selector: selectorDefaults(),
   strategy: 'weighted',
   memberSelection: 'inherit',
   memberIds: [],
@@ -185,12 +192,10 @@ export function restoreDraftPolicyTombstones(
   publishedPolicy: Record<string, unknown> | null,
 ): Record<string, unknown> {
   const restored = { ...draftPolicy };
-  if (
-    publishedPolicy
-    && 'context' in publishedPolicy
-    && !('context' in draftPolicy)
-  ) {
-    restored.context = null;
+  for (const key of ['context', 'selector']) {
+    if (publishedPolicy && key in publishedPolicy && !(key in draftPolicy)) {
+      restored[key] = null;
+    }
   }
   return restored;
 }
@@ -225,6 +230,7 @@ export function toGuidedPolicy(
     : [];
 
   return {
+    selector: readGuidedSelector(policy),
     strategy,
     memberSelection: hasExplicitMembers ? 'explicit' : 'inherit',
     memberIds: selectedMembers,
@@ -284,6 +290,8 @@ export function validateGuidedPolicy(
   memberOptions: PolicyMemberOption[],
   workloadMode: string,
 ): string | null {
+  const selectorError = validateGuidedSelector(guided.selector, memberOptions, guided.memberIds, workloadMode);
+  if (selectorError) return selectorError;
   const enabledIds = new Set(
     memberOptions.filter((member) => member.enabled).map((member) => member.deployment_id),
   );
@@ -336,7 +344,7 @@ export function buildPolicyFromGuided(
   const policy: Record<string, unknown> = { ...basePolicy, strategy: guided.strategy };
   delete policy.mode;
 
-  if (guided.memberSelection === 'explicit') {
+  if (guided.memberSelection === 'explicit' || guided.selector.state === 'enabled') {
     const baseMembers = Array.isArray(basePolicy.members) ? basePolicy.members : [];
     const baseById = new Map<string, Record<string, unknown>>();
     for (const entry of baseMembers) {
@@ -400,5 +408,5 @@ export function buildPolicyFromGuided(
     policy.context = currentContext;
   }
 
-  return policy;
+  return applyGuidedSelector(policy, basePolicy, guided.selector);
 }

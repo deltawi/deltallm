@@ -304,8 +304,9 @@ lane, capability or fallback-dependency changes invalidate it naturally.
 
 Batch items whose group or configured fallback topology contains a selector return
 `batch_model_router_selector_unsupported` until PR 6. Non-chat workloads reject selector policies.
-Deterministic policy simulation does not run selectors; guided editing and explicit offline
-evaluation are PR 5 work. Streaming with managed MCP tools retains its existing unsupported error.
+Deterministic policy simulation does not run selectors. The guided editor and optional fixture
+evaluation are described in [Model router administration](model-router-admin.md).
+Streaming with managed MCP tools retains its existing unsupported error.
 
 Monitor bounded selector decision/default/termination counters, duration, terminal rank and
 escalation counters, and selector contribution to streaming TTFT. Detailed lane and policy identity
