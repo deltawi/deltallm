@@ -181,10 +181,10 @@ class RouteGroupRuntimeCache:
             snapshot = RouteGroupRuntimeSnapshot(
                 revision=revision,
                 groups=[
-                    group.model_dump(mode="python", exclude_unset=True) for group in payload.groups
+                    group.model_dump(mode="json", exclude_unset=True) for group in payload.groups
                 ],
                 database_initialized=payload.database_initialized,
-                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
             )
         except (TypeError, ValueError, ValidationError):
             self._record_failure(RouteGroupCacheFailureReason.INVALID_PAYLOAD)
@@ -199,7 +199,7 @@ class RouteGroupRuntimeCache:
         try:
             serialized = RouteGroupRuntimeCacheEnvelope(
                 schema_version=ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
                 revision=snapshot.revision,
                 groups=snapshot.groups,
                 database_initialized=snapshot.database_initialized,
@@ -266,9 +266,10 @@ def route_groups_from_config(
         )
         if policy.get("context") is None:
             policy.pop("context", None)
-        policy.pop("selector", None)
-        for member in policy["members"]:
-            member.pop("lane", None)
+        if item.selector is None:
+            policy.pop("selector", None)
+            for member in policy["members"]:
+                member.pop("lane", None)
         groups.append(policy)
     return groups
 
@@ -276,7 +277,7 @@ def route_groups_from_config(
 def _require_runtime_snapshot_selector_activation_validated(
     snapshot: RouteGroupRuntimeSnapshot,
 ) -> None:
-    if snapshot.selector_activation_state != RouteSelectorActivationState.INACTIVE:
+    if snapshot.selector_activation_state != RouteSelectorActivationState.VALIDATED:
         raise UnvalidatedRouteGroupSnapshotError(
             "route-group runtime snapshot has not passed the selector activation gate"
         )
@@ -313,7 +314,7 @@ async def load_route_group_snapshot_result(
             snapshot=RouteGroupRuntimeSnapshot(
                 revision=0,
                 groups=route_groups_from_config(cfg, deployment_modes=deployment_modes),
-                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
             ),
             source="config_only",
             database_available=True,
@@ -337,7 +338,7 @@ async def load_route_group_snapshot_result(
             snapshot=RouteGroupRuntimeSnapshot(
                 revision=0,
                 groups=route_groups_from_config(cfg, deployment_modes=deployment_modes),
-                selector_activation_state=RouteSelectorActivationState.INACTIVE,
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
             ),
             source="config_db_unavailable",
             database_available=False,
@@ -355,7 +356,7 @@ async def load_route_group_snapshot_result(
         snapshot=RouteGroupRuntimeSnapshot(
             revision=snapshot.revision,
             groups=route_groups_from_config(cfg, deployment_modes=deployment_modes),
-            selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            selector_activation_state=RouteSelectorActivationState.VALIDATED,
         ),
         source="config_db_empty",
         database_available=True,

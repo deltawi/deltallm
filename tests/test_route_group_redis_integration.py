@@ -38,7 +38,7 @@ class _MutableRouteGroupRepository:
         return RouteGroupRuntimeSnapshot(
             self.revision,
             list(self.groups),
-            selector_activation_state=RouteSelectorActivationState.INACTIVE,
+            selector_activation_state=RouteSelectorActivationState.VALIDATED,
         )
 
 
@@ -158,8 +158,8 @@ async def test_route_group_cache_recovers_after_real_redis_write_outage() -> Non
         raw_envelope = await redis.get(keyspace.snapshot(2))
         assert raw_envelope is not None
         envelope = json.loads(raw_envelope)
-        assert envelope["schema_version"] == 2
-        assert envelope["selector_activation_state"] == "inactive"
+        assert envelope["schema_version"] == 3
+        assert envelope["selector_activation_state"] == "validated-v3"
         cache._l1_entry = None
         _, cached_source = await load_route_groups(repository, cfg, route_group_cache=cache)
         assert cached_source == "l2_cache"
@@ -189,7 +189,7 @@ async def test_route_group_cache_repairs_invalid_nested_real_redis_snapshot(fiel
     cache_key = keyspace.snapshot(1)
     invalid_envelope = {
         "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-        "selector_activation_state": "inactive",
+        "selector_activation_state": "validated-v3",
         "revision": 1,
         "database_initialized": True,
         "groups": [

@@ -366,7 +366,7 @@ async def test_publish_policy_uses_null_to_delete_context_without_ambiguous_omis
 async def test_runtime_policy_member_list_excludes_omitted_base_members() -> None:
     snapshot = await RouteGroupRepository(_RuntimeRouteGroupDB()).load_runtime_snapshot()
 
-    assert snapshot.selector_activation_state == RouteSelectorActivationState.INACTIVE
+    assert snapshot.selector_activation_state == RouteSelectorActivationState.VALIDATED
     assert snapshot.groups[0]["members"] == [
         {
             "deployment_id": "dep-b",
@@ -379,7 +379,7 @@ async def test_runtime_policy_member_list_excludes_omitted_base_members() -> Non
 
 @pytest.mark.asyncio
 async def test_runtime_loading_rejects_published_v3_selector() -> None:
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         await RouteGroupRepository(_RuntimeSelectorRouteGroupDB()).load_runtime_snapshot()
 
 
@@ -616,7 +616,7 @@ async def test_selector_draft_preserves_opaque_stored_fields_and_reaches_activat
     transaction.draft_policy = record.policy.policy_json
     transaction.draft_semantics_version = 3
     transaction.executions.clear()
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         await repository.publish_latest_draft("support-route")
 
     assert transaction.executions == []
@@ -628,7 +628,7 @@ async def test_direct_selector_publication_is_explicitly_rejected() -> None:
     transaction = _RoutePolicyDB(member_rows=_selector_member_rows())
     prisma = _TransactionalRoutePolicyDB(transaction)
 
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         await RouteGroupRepository(prisma).publish_policy(
             "support-route",
             _selector_policy(),
@@ -710,7 +710,7 @@ async def test_publish_latest_selector_draft_is_explicitly_rejected() -> None:
     )
     prisma = _TransactionalRoutePolicyDB(transaction)
 
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         await RouteGroupRepository(prisma).publish_latest_draft("support-route")
 
     assert transaction.executions == []
@@ -726,7 +726,7 @@ async def test_rollback_to_v3_selector_is_explicitly_rejected() -> None:
     )
     prisma = _TransactionalRoutePolicyDB(transaction)
 
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         await RouteGroupRepository(prisma).rollback_policy(
             "support-route",
             target_version=3,
@@ -748,7 +748,7 @@ async def test_rollback_to_v3_selector_tolerates_trusted_opaque_fields_before_ga
     )
     prisma = _TransactionalRoutePolicyDB(transaction)
 
-    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
         await RouteGroupRepository(prisma).rollback_policy(
             "support-route",
             target_version=3,

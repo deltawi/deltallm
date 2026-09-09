@@ -4620,7 +4620,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/RoutePolicyMember"
+                  "$ref": "#/components/schemas/RoutePolicyMemberResponse"
                 },
                 "type": "array"
               },
@@ -4764,6 +4764,64 @@
           "deployment_id"
         ],
         "title": "RoutePolicyMember",
+        "type": "object"
+      },
+      "RoutePolicyMemberResponse": {
+        "additionalProperties": false,
+        "description": "Read compatibility for historical selector-free deployment identifiers.\n\nWrites continue through the strict selector/legacy semantic validators. Do not\napply a new selector-only length limit to a valid legacy response projection.",
+        "properties": {
+          "deployment_id": {
+            "minLength": 1,
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "lane": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lane"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          }
+        },
+        "required": [
+          "deployment_id"
+        ],
+        "title": "RoutePolicyMemberResponse",
         "type": "object"
       },
       "RoutePolicyMutationResponse": {

@@ -5,13 +5,19 @@ from __future__ import annotations
 import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.route_group_config import ModelMode, RoutingStrategyName
 from src.router.context_policy import parse_context_routing_policy
 from src.router.policy_validation import ALLOWED_RETRYABLE_ERROR_CLASSES
+from src.route_policy_contract import (
+    LLMTierSelectorPolicy,
+    RoutePolicyMember,
+    validate_selector_assignments,
+)
+from src.router.selection.policy import ensure_selector_activation_supported
 
-ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION = 2
+ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION = 3
 ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -82,6 +88,7 @@ class _CacheMember(BaseModel):
     enabled: bool = True
     weight: int | None = Field(default=None, ge=1)
     priority: int | None = Field(default=None, ge=0)
+    lane: str | None = Field(default=None, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
 
 
 class _CacheGroup(BaseModel):
@@ -99,6 +106,22 @@ class _CacheGroup(BaseModel):
     default_prompt: dict[str, str] | None = None
     access_groups: list[str] | None = None
     members: list[_CacheMember]
+    selector: LLMTierSelectorPolicy | None = None
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> _CacheGroup:
+        if self.selector is None and any(member.lane is not None for member in self.members):
+            raise ValueError("member lanes require an active selector")
+        if self.selector is not None:
+            validate_selector_assignments(
+                self.selector,
+                [RoutePolicyMember.model_validate(member.model_dump()) for member in self.members],
+                group_mode=self.mode,
+            )
+            ensure_selector_activation_supported(
+                self.model_dump(), semantics_version=self.policy_semantics_version or 3
+            )
+        return self
 
     @field_validator("context")
     @classmethod
@@ -113,8 +136,8 @@ class _CacheGroup(BaseModel):
 class RouteGroupRuntimeCacheEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    schema_version: Literal[2]
-    selector_activation_state: Literal["inactive"]
+    schema_version: Literal[3]
+    selector_activation_state: Literal["validated-v3"]
     revision: int = Field(ge=0)
     groups: list[_CacheGroup]
     database_initialized: bool | None

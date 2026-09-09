@@ -39,11 +39,17 @@ class BillingOperationRecovery:
     """
 
     def __init__(
-        self, operations: BillingOperationRepository, *, max_pending_events: int, max_attempts: int
+        self,
+        operations: BillingOperationRepository,
+        *,
+        max_pending_events: int,
+        max_attempts: int,
+        selector_events_only: bool = False,
     ) -> None:
         self.operations = operations
         self.max_pending_events = max_pending_events
         self.max_attempts = max_attempts
+        self.selector_events_only = selector_events_only
 
     async def recover(self) -> int:
         # Prioritize one known receipt, then rotate one other open operation. Each

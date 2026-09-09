@@ -51,11 +51,39 @@ INVALID_GROUP_FIELDS = [
 ]
 
 
+@pytest.mark.asyncio
+async def test_active_selector_roundtrips_l1_l2_and_old_inactive_envelope_reloads():
+    from tests.test_ui_route_groups import _selector_policy_payload
+
+    group = {
+        "key": "selected",
+        "mode": "chat",
+        "policy_semantics_version": 3,
+        "context": {"unknown_capacity": "exclude"},
+        **_selector_policy_payload(),
+    }
+    repository = _FakeRouteGroupRepository([group])
+    redis = _FakeRedis()
+    cache = RouteGroupRuntimeCache(redis)
+    original, source = await cache.get_snapshot(repository)
+    assert source == "db"
+    assert (await cache.get_snapshot(repository))[1] == "l1_cache"
+    cached, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+    assert source == "l2_cache" and cached.groups == original.groups
+    assert build_route_group_policies(cached.groups)["selected"].selector is not None
+    envelope = json.loads(redis.values[_runtime_cache_key(1)])
+    envelope.update(schema_version=2, selector_activation_state="inactive-v1")
+    redis.values[_runtime_cache_key(1)] = json.dumps(envelope)
+    repaired, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+    assert source == "db" and repaired.groups == original.groups
+    assert repository.calls == 2
+
+
 def invalid_envelope(fields):
     return json.dumps(
         {
-            "schema_version": 2,
-            "selector_activation_state": "inactive",
+            "schema_version": 3,
+            "selector_activation_state": "validated-v3",
             "revision": 1,
             "database_initialized": True,
             "groups": [{"key": "corrupt", "members": [], **fields}],

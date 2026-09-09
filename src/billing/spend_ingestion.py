@@ -555,6 +555,15 @@ class SpendIngestionService:
         records: list[tuple[_OutboxRecord, PreparedSpendEvent]],
     ) -> dict[str, int]:
         claim_token = _shared_claim_token([record for record, _ in records])
+        operation_events = [
+            record.event_id
+            for record, prepared in records
+            if self.operation_recovery is not None
+            and (
+                not self.operation_recovery.selector_events_only
+                or prepared.row.get("call_type") == "model_router_selector"
+            )
+        ]
         heartbeat = asyncio.create_task(
             self._lease_heartbeat(
                 event_ids=[record.event_id for record, _ in records],
@@ -563,18 +572,14 @@ class SpendIngestionService:
         )
         try:
             async with self._transaction() as tx:
-                if self.operation_recovery is not None:
-                    await self.operation_recovery.lock_for_events(
-                        tx, [record.event_id for record, _ in records]
-                    )
+                if self.operation_recovery is not None and operation_events:
+                    await self.operation_recovery.lock_for_events(tx, operation_events)
                 batch_writer = self.writer.with_db(tx)
                 _, ledger_counts = await batch_writer.log_prepared_batch_once(
                     [prepared for _, prepared in records]
                 )
-                if self.operation_recovery is not None:
-                    await self.operation_recovery.settle_events(
-                        tx, [record.event_id for record, _ in records]
-                    )
+                if self.operation_recovery is not None and operation_events:
+                    await self.operation_recovery.settle_events(tx, operation_events)
                 completed = await self.repository.with_db(tx).mark_completed(
                     event_ids=[record.event_id for record, _ in records],
                     worker_id=self.config.worker_id,

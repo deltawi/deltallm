@@ -56,6 +56,7 @@ from src.router.execution import (
     get_failover_attempt_context,
 )
 from src.router.health_policy import affects_deployment_health
+from src.router.selection.reachability import require_batch_selector_support
 from src.routers.routing_decision import route_failover_kwargs
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ class ChatWorkerExecutionMixin:
         )
         app_router = routing_generation.router
         model_group = app_router.resolve_model_group(chat_request.model)
+        require_batch_selector_support(model_group, routing_generation.selector_reachable_groups)
         await self._raise_if_model_group_deferred(model_group)
 
         primary_deployment = await require_initial_deployment(

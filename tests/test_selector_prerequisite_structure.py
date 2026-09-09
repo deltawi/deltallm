@@ -9,6 +9,7 @@ MODULES = (
     "billing/routing_costs.py",
     "cache/execution_eligibility.py",
     "db/billing_operations.py",
+    "db/soft_selector_admission.py",
     "db/billing_operation_recovery.py",
     "db/routing_costs.py",
     "db/spend_components.py",

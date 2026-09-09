@@ -142,6 +142,16 @@ class RoutePolicyRetryDocument(BaseModel):
     retryable_error_classes: list[str] | None = None
 
 
+class RoutePolicyMemberResponse(RoutePolicyMember):
+    """Read compatibility for historical selector-free deployment identifiers.
+
+    Writes continue through the strict selector/legacy semantic validators. Do not
+    apply a new selector-only length limit to a valid legacy response projection.
+    """
+
+    deployment_id: str = Field(min_length=1)
+
+
 class RoutePolicyDocumentResponse(BaseModel):
     """Normalized latest policy projection; unknown future fields remain readable."""
 
@@ -149,7 +159,7 @@ class RoutePolicyDocumentResponse(BaseModel):
 
     mode: str | None = None
     strategy: str | None = None
-    members: list[RoutePolicyMember] | None = None
+    members: list[RoutePolicyMemberResponse] | None = None
     timeouts: RoutePolicyTimeoutsDocument | None = None
     retry: RoutePolicyRetryDocument | None = None
     context: RoutePolicyContextDocument | None = None

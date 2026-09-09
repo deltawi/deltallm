@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field, replace
-from enum import Enum
 import logging
 from collections.abc import Mapping
 from typing import Any, Sequence, cast
 
-from src.route_group_config import ModelMode, validate_context_routing_workload_mode
+from src.route_group_config import ModelMode
 from src.metrics import increment_router_context_decision
 from src.models.errors import (
     ModelNotFoundError,
@@ -31,29 +30,37 @@ from src.router.health_state import (
     build_deployment_health_ref,
 )
 from src.router.context_policy import (
-    ContextRoutingPolicy,
     context_capacity_error,
     context_rejection_reason,
     context_routing_metrics_enabled,
     filter_context_candidates,
     get_request_context_routing_policy,
     get_request_token_demand,
-    order_context_candidates,
-    parse_context_routing_policy,
     set_request_context_routing_policy,
 )
 from src.router.registry import DeploymentRegistryStore
+from src.router.group_policy import (
+    RouteGroupPolicy as RouteGroupPolicy,
+    RoutingStrategy as RoutingStrategy,
+    build_route_group_policies as build_route_group_policies,
+)
 from src.router.route_group_validation import (
     normalize_route_group_mode,
     validate_route_group_member_modes,
 )
 from src.router.state import DeploymentStateBackend
+from src.router.selection.planning import order_candidates, selector_context_policy
+from src.router.selection.eligibility import capability_allows
+from src.router.static_filters import required_request_tags, tags_allow_deployment
+from src.router.selection.contracts import SelectorDecision
+from src.router.selection.request_context import refresh_selector_candidate_plans
 from src.router.strategies import (
     CostBasedStrategy,
     LatencyBasedStrategy,
     LeastBusyStrategy,
     PriorityBasedStrategy,
     RateLimitAwareStrategy,
+    RoutingStrategyImpl,
     SimpleShuffleStrategy,
     StrategyStateSnapshot,
     UsageBasedStrategy,
@@ -63,18 +70,6 @@ from src.router.strategies import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class RoutingStrategy(str, Enum):
-    SIMPLE_SHUFFLE = "simple-shuffle"
-    LEAST_BUSY = "least-busy"
-    LATENCY_BASED = "latency-based-routing"
-    COST_BASED = "cost-based-routing"
-    USAGE_BASED = "usage-based-routing"
-    TAG_BASED = "tag-based-routing"
-    PRIORITY_BASED = "priority-based-routing"
-    WEIGHTED = "weighted"
-    RATE_LIMIT_AWARE = "rate-limit-aware"
 
 
 @dataclass
@@ -96,6 +91,7 @@ class Deployment:
     rerank_units_pm_limit: int | None = None
     health_incarnation: str | None = None
     named_credential_id: str | None = None
+    route_group_key: str | None = None
     health_ref: DeploymentHealthRef = field(init=False)
 
     def __post_init__(self) -> None:
@@ -118,32 +114,11 @@ class RouterConfig:
     route_group_policies: dict[str, "RouteGroupPolicy"] = field(default_factory=dict)
 
 
-@dataclass
-class RouteGroupPolicy:
-    workload_mode: ModelMode | None = None
-    strategy: RoutingStrategy | None = None
-    policy_version: int | None = None
-    timeout_seconds: float | None = None
-    retry_max_attempts: int | None = None
-    retryable_error_classes: frozenset[str] | None = None
-    context: ContextRoutingPolicy | None = None
-
-    def failover_overrides(self) -> dict[str, Any]:
-        overrides: dict[str, Any] = {}
-        if self.timeout_seconds is not None:
-            overrides["timeout_seconds"] = float(self.timeout_seconds)
-        if self.retry_max_attempts is not None:
-            overrides["retry_max_attempts"] = int(self.retry_max_attempts)
-        if self.retryable_error_classes:
-            overrides["retryable_error_classes"] = sorted(self.retryable_error_classes)
-        return overrides
-
-
 @dataclass(frozen=True, slots=True)
 class _CandidatePlanInput:
     model_group: str
     strategy: RoutingStrategy
-    strategy_impl: Any
+    strategy_impl: RoutingStrategyImpl
     candidates: tuple[Deployment, ...]
 
 
@@ -221,6 +196,7 @@ class Router:
         groups = list(
             dict.fromkeys(str(group).strip() for group in model_groups if str(group).strip())
         )
+        selector_decision = refresh_selector_candidate_plans(request_context)
         cached = candidate_plan_cache(request_context)
         missing_groups = [group for group in groups if group not in cached]
         if not missing_groups:
@@ -265,45 +241,67 @@ class Router:
 
         for group in pending:
             healthy = self._filter_healthy(group.candidates, health, cooldowns)
-            policy = self.config.route_group_policies.get(group.model_group)
-            context_policy = get_request_context_routing_policy(request_context)
-            if context_policy is None and policy is not None:
-                context_policy = policy.context
-            demand = get_request_token_demand(request_context)
-            configured = self._apply_filters(list(group.candidates), request_context)
-            context_eligible, configured_context_evaluations = filter_context_candidates(
-                configured, demand, context_policy
-            )
-            filtered = self._apply_filters(healthy, request_context)
-            filtered, _ = filter_context_candidates(filtered, demand, context_policy)
-            if self.config.enable_pre_call_checks:
-                filtered = self._apply_pre_call_checks(filtered, state_snapshot.usage or {})
-            ordered = await group.strategy_impl.order(
-                filtered,
-                request_context,
-                state_snapshot,
-            )
-            ordered = order_context_candidates(list(ordered), demand, context_policy)
-            cached[group.model_group] = RouteCandidatePlan(
-                model_group=group.model_group,
-                strategy=group.strategy.value,
-                deployments=tuple(ordered),
-                candidate_count=len(group.candidates),
-                healthy_count=len(healthy),
-                filtered_count=len(filtered),
-                rejection_reason=(
-                    context_rejection_reason(configured_context_evaluations)
-                    if not filtered
-                    else None
-                ),
-                context_eligible_count=(
-                    len(context_eligible)
-                    if context_policy is not None and demand is not None
-                    else None
-                ),
+            cached[group.model_group] = await self._plan_eligible_group(
+                group, healthy, request_context, state_snapshot, selector_decision
             )
 
         return {group: cached[group] for group in groups}
+
+    async def _plan_eligible_group(
+        self,
+        group: _CandidatePlanInput,
+        healthy: list[Deployment],
+        request_context: dict[str, object],
+        state_snapshot: StrategyStateSnapshot,
+        selector_decision: SelectorDecision | None,
+    ) -> RouteCandidatePlan:
+        policy = self.config.route_group_policies.get(group.model_group)
+        context_policy = get_request_context_routing_policy(request_context)
+        if context_policy is None and policy is not None:
+            context_policy = policy.context
+        if policy is not None and policy.selector is not None:
+            context_policy = selector_context_policy(context_policy, policy.context)
+        demand = get_request_token_demand(request_context)
+        configured = self._apply_filters(list(group.candidates), request_context)
+        context_eligible, configured_context_evaluations = filter_context_candidates(
+            configured, demand, context_policy
+        )
+        filtered = self._apply_filters(healthy, request_context)
+        filtered, _ = filter_context_candidates(filtered, demand, context_policy)
+        if policy is not None and policy.selector is not None:
+            filtered = [
+                dep for dep in filtered if capability_allows(request_context, dep.deployment_id)
+            ]
+        if self.config.enable_pre_call_checks:
+            filtered = self._apply_pre_call_checks(filtered, state_snapshot.usage or {})
+        ordered = await order_candidates(
+            eligible=filtered,
+            strategy=group.strategy_impl,
+            context=request_context,
+            snapshot=state_snapshot,
+            demand=demand,
+            context_policy=context_policy,
+            selector=policy.selector if policy is not None else None,
+            decision=selector_decision,
+        )
+        return RouteCandidatePlan(
+            model_group=group.model_group,
+            strategy=group.strategy.value,
+            deployments=ordered.deployments,
+            candidate_count=len(group.candidates),
+            healthy_count=len(healthy),
+            filtered_count=len(filtered),
+            rejection_reason=(
+                context_rejection_reason(configured_context_evaluations)
+                if not filtered
+                else ordered.rejection_reason
+            ),
+            context_eligible_count=(
+                len(context_eligible) if context_policy is not None and demand is not None else None
+            ),
+            lanes=ordered.lanes,
+            minimum_rank=ordered.minimum_rank,
+        )
 
     @staticmethod
     def _workload_mode_mismatch(
@@ -424,22 +422,13 @@ class Router:
         if not deployments:
             return []
 
-        metadata = request_context.get("metadata")
-        request_tags = metadata.get("tags") if isinstance(metadata, dict) else None
-        normalized_tags = (
-            [tag.strip() for tag in request_tags if isinstance(tag, str) and tag.strip()]
-            if isinstance(request_tags, list)
-            else []
-        )
+        normalized_tags = required_request_tags(request_context.get("metadata"))
         request_mode = str(request_context.get(ROUTING_MODE_CONTEXT_KEY) or "").strip().lower()
 
         return [
             deployment
             for deployment in deployments
-            if (
-                not normalized_tags
-                or (deployment.tags and all(tag in deployment.tags for tag in normalized_tags))
-            )
+            if tags_allow_deployment(deployment.tags, normalized_tags)
             and self._supports_request_mode(deployment, request_mode)
         ]
 
@@ -501,7 +490,7 @@ class Router:
 
     def _resolve_strategy_for_group(
         self, model_group: str
-    ) -> tuple[RoutingStrategy, Any, RouteGroupPolicy | None]:
+    ) -> tuple[RoutingStrategy, RoutingStrategyImpl, RouteGroupPolicy | None]:
         policy = self.config.route_group_policies.get(model_group)
         strategy = (
             policy.strategy if policy is not None and policy.strategy is not None else self.strategy
@@ -647,6 +636,7 @@ def build_deployment_registry_with_route_groups(
             grouped_deployments.append(
                 replace(
                     base,
+                    route_group_key=group_key,
                     weight=int(override_weight) if override_weight is not None else base.weight,
                     priority=int(override_priority)
                     if override_priority is not None
@@ -660,85 +650,6 @@ def build_deployment_registry_with_route_groups(
         registry[group_key] = grouped_deployments
 
     return registry
-
-
-def build_route_group_policies(
-    route_groups: list[dict[str, Any]] | None,
-) -> dict[str, RouteGroupPolicy]:
-    policies: dict[str, RouteGroupPolicy] = {}
-    if not route_groups:
-        return policies
-
-    for group in route_groups:
-        key = str(group.get("key") or "").strip()
-        if not key or not bool(group.get("enabled", True)):
-            continue
-
-        strategy_name = group.get("strategy")
-        strategy: RoutingStrategy | None = None
-        if isinstance(strategy_name, str) and strategy_name in RoutingStrategy._value2member_map_:
-            strategy = RoutingStrategy(strategy_name)
-
-        policy_version = group.get("policy_version")
-        timeouts = group.get("timeouts")
-        retry = group.get("retry")
-        context = parse_context_routing_policy(group.get("context"))
-        if context is not None:
-            validate_context_routing_workload_mode(group.get("mode"))
-        policies[key] = RouteGroupPolicy(
-            workload_mode=normalize_route_group_mode(group.get("mode")),
-            strategy=strategy,
-            policy_version=int(policy_version) if policy_version is not None else None,
-            timeout_seconds=_extract_timeout_seconds(timeouts),
-            retry_max_attempts=_extract_retry_max_attempts(retry),
-            retryable_error_classes=_extract_retryable_error_classes(retry),
-            context=context,
-        )
-    return policies
-
-
-def _extract_timeout_seconds(timeouts: Any) -> float | None:
-    if not isinstance(timeouts, dict):
-        return None
-    global_seconds = timeouts.get("global_seconds")
-    if global_seconds is not None:
-        try:
-            parsed = float(global_seconds)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
-
-    global_ms = timeouts.get("global_ms")
-    if global_ms is None:
-        return None
-    try:
-        parsed_ms = float(global_ms)
-    except (TypeError, ValueError):
-        return None
-    return (parsed_ms / 1000.0) if parsed_ms > 0 else None
-
-
-def _extract_retry_max_attempts(retry: Any) -> int | None:
-    if not isinstance(retry, dict):
-        return None
-    value = retry.get("max_attempts")
-    if value is None:
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def _extract_retryable_error_classes(retry: Any) -> frozenset[str] | None:
-    if not isinstance(retry, dict):
-        return None
-    classes = retry.get("retryable_error_classes")
-    if not isinstance(classes, list):
-        return None
-    normalized = {str(item).strip() for item in classes if str(item).strip()}
-    return frozenset(normalized) if normalized else None
 
 
 def _deployment_from_entry(model_name: str, entry: dict[str, Any], index: int) -> Deployment:

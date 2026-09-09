@@ -380,27 +380,27 @@ class _FakeRouteGroupRepository:
         group = self.groups.get(group_key)
         if group is None:
             return None
-        effective, warnings = self._prepare_policy_write(group_key, policy_json)
+        prepared = self._prepare_policy_write(group_key, policy_json)
         self._policy_counter += 1
         policy = RoutePolicyRecord(
             route_policy_id=f"p-{self._policy_counter}",
             route_group_id=group.route_group_id,
             version=self._policy_counter,
             status="draft",
-            policy_json=effective,
+            policy_json=prepared.document,
             semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             published_by=None,
         )
         self.policies[group_key] = policy
-        return RoutePolicyWriteResult(policy, warnings)
+        return RoutePolicyWriteResult(policy, prepared.warnings)
 
     async def publish_policy(self, group_key: str, policy_json: dict, *, published_by=None):  # noqa: ANN001, ANN201
         group = self.groups.get(group_key)
         if group is None:
             return None
-        effective, warnings = self._prepare_policy_write(group_key, policy_json)
+        prepared = self._prepare_policy_write(group_key, policy_json)
         ensure_selector_activation_supported(
-            effective, semantics_version=CURRENT_POLICY_SEMANTICS_VERSION
+            prepared.normalized, semantics_version=CURRENT_POLICY_SEMANTICS_VERSION
         )
         self._policy_counter += 1
         policy = RoutePolicyRecord(
@@ -408,12 +408,12 @@ class _FakeRouteGroupRepository:
             route_group_id=group.route_group_id,
             version=self._policy_counter,
             status="published",
-            policy_json=effective,
+            policy_json=prepared.document,
             semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             published_by=published_by,
         )
         self.policies[group_key] = policy
-        return RoutePolicyWriteResult(policy, warnings)
+        return RoutePolicyWriteResult(policy, prepared.warnings)
 
     async def publish_latest_draft(self, group_key: str, *, published_by=None):  # noqa: ANN001, ANN201
         policy = self.policies.get(group_key)
@@ -1159,7 +1159,7 @@ async def test_route_group_policy_api_rejects_selector_publication(client, test_
     )
 
     assert response.status_code == 400
-    assert "cannot be activated" in response.text
+    assert "unknown_capacity=exclude" in response.text
     assert repository.policies == {}
 
 
@@ -1246,7 +1246,7 @@ async def test_route_group_policy_simulation_rejects_selector(client, test_app):
     )
 
     assert response.status_code == 400
-    assert "cannot be activated" in response.text
+    assert "simulation is not supported" in response.text
 
 
 @pytest.mark.asyncio

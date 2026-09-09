@@ -7,6 +7,7 @@ import socket
 from typing import Any
 
 from src.bootstrap.status import BootstrapStatus
+from src.bootstrap.selector import configure_selector_execution
 from src.billing import (
     AlertConfig,
     AlertService,
@@ -474,6 +475,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             worker_id=f"{socket.gethostname()}:{os.getpid()}:spend",
         ),
     )
+    configure_selector_execution(app.state, spend_ingestion_service)
     await spend_ingestion_service.start()
     app.state.spend_tracking_service = spend_ingestion_service
     app.state.budget_service = BudgetEnforcementService(

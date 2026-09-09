@@ -34,6 +34,7 @@ class SelectorCause(StrEnum):
     OUTPUT_TOO_LARGE = "output_too_large"
     CAPACITY_DENIED = "capacity_denied"
     CAPACITY_UNAVAILABLE = "capacity_unavailable"
+    POLICY_DENIED = "policy_denied"
 
 
 class SelectorPolicyIdentity(FrozenContract):

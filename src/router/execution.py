@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Awaitable, Callable, Generic, TypeVar
 
 from src.models.errors import TimeoutError
-from src.router.router import Deployment
+
+if TYPE_CHECKING:
+    from src.router.router import Deployment
 
 
 T = TypeVar("T")

@@ -22,6 +22,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
+from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
@@ -146,6 +147,7 @@ class DeltaLLMParams(BaseModel):
 
 class ModelInfo(BaseModel):
     mode: ModelMode = "chat"
+    chat_capabilities: ChatRoutingCapabilities | None = None
     weight: int = 1
     priority: int = 0
     tags: list[str] = Field(default_factory=list)

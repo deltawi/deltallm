@@ -364,7 +364,7 @@ async def test_exact_ledger_batch_addition_is_independent_of_ambient_decimal_pre
     assert key_update.args[2] == ["9007199254740992.000000000000000003"]
 
 
-def test_selector_charging_is_not_invoked_by_production_request_paths() -> None:
+def test_production_selector_receipts_use_journal_not_direct_best_effort_spend() -> None:
     for path in (Path(__file__).parents[1] / "src").rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):

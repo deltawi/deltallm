@@ -59,6 +59,13 @@ class RequestSelectorState:
     def usage(self) -> SelectorUsage:
         return self._usage
 
+    def decision_for_planning(self) -> SelectorDecision | None:
+        """Read the single operation decision without starting or joining provider work."""
+        if self._state in (SelectorState.NEW, SelectorState.RUNNING):
+            self._deadline.require_remaining()
+            return None
+        return self._terminal_result()
+
     def observe_usage(self, usage: SelectorUsage) -> None:
         if self._state is not SelectorState.RUNNING:
             raise SelectorInvariantError()

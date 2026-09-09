@@ -89,6 +89,9 @@ def capture_initial_route_decision(
     if not isinstance(decision, dict):
         return None
     stored = deepcopy(decision)
+    previous = getattr(request.state, "route_decision", None)
+    if isinstance(previous, dict) and "selector" in previous:
+        stored["selector"] = deepcopy(previous["selector"])
     request.state.route_decision = stored
     _refresh_request_resolution(request)
     return stored
