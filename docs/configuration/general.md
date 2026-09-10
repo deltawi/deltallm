@@ -56,6 +56,10 @@ general_settings:
   spend_reporting_execution_timeout_seconds: 60
   spend_reporting_redis_timeout_seconds: 0.5
   spend_reporting_v2_enabled: false
+  # Startup-only provider discovery egress; independent of batch webhook policy.
+  provider_discovery_allow_http: false
+  provider_discovery_allowed_ports: [443]
+  provider_discovery_allowed_private_cidrs: []
   upstream_http_connect_timeout_seconds: 10
   upstream_http_read_timeout_seconds: 300
   upstream_http_write_timeout_seconds: 30
@@ -633,3 +637,16 @@ Audit events are written to Postgres and can be queried via the Admin Audit API.
 With durable ingestion enabled, required audit and prompt-render events never use the in-memory queue. Prompt renders and their best-effort resolution audit share one policy-aware enqueue transaction: one lock-only SQL statement followed by one batched policy/capacity decision and insert statement using a fresh PostgreSQL snapshot. At capacity, required writes fail closed with a controlled `503`; best-effort events are explicitly dropped and counted after their non-reserved capacity is exhausted. A best-effort audit dependency failure is also counted and dropped without changing request or external-side-effect correctness, while required persistence remains fail-closed. In `legacy` mode, required records are persisted synchronously while only best-effort records use the bounded compatibility queue. Exhausted required outbox records remain `blocked`, consume capacity, and require platform-admin replay after investigation. Organization content-policy changes take a database advisory lock, redact active and blocked envelopes when storage is disabled, and publish on an application/environment/schema-scoped Redis channel so every replica evicts its local policy cache. The database policy check remains authoritative if Redis is unavailable. Readiness checks the dedicated telemetry pool and expected workers; repeated worker failures remain readiness-fatal even while the supervised loop attempts recovery.
 
 Apply the telemetry migrations and follow the [durable telemetry rollout](../deployment/telemetry-ingestion-rollout.md) before changing either ingestion mode.
+
+### Provider discovery egress (startup only)
+
+| Setting | Default | Constraint |
+| --- | --- | --- |
+| `provider_discovery_allow_http` | `false` | Explicit boolean; enable only for controlled HTTP endpoints |
+| `provider_discovery_allowed_ports` | `[443]` | 1–64 unique integer ports, each 1–65535 |
+| `provider_discovery_allowed_private_cidrs` | `[]` | Up to 128 IPv4/IPv6 networks, canonicalized during validation |
+
+These settings apply to new compatible-chat provider discovery and health checks,
+independently of batch webhook allowances. Changes require an API restart.
+Metadata addresses are always denied. See [provider discovery policy](../providers/compatible-chat.md#discovery-authorization-and-outbound-policy)
+for authorization, proxy requirements, limits, rollout, and migration boundaries.

@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Self, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 
 ChatMessageContent: TypeAlias = str | list[dict[str, Any]]
@@ -27,6 +35,18 @@ class UserChatMessage(ChatMessageBase):
 class AssistantChatMessage(ChatMessageBase):
     role: Literal["assistant"]
     content: ChatMessageContent | None = None
+    reasoning_content: str | None = Field(default=None, max_length=1_048_576)
+    # Provider-owned JSON blocks must round-trip intact during interleaved tool
+    # use; accepting only JSON values avoids an untyped Python object boundary.
+    reasoning_details: list[dict[str, JsonValue]] | None = Field(default=None, max_length=128)
+
+    @model_serializer(mode="wrap")
+    def serialize_reasoning(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data = handler(self)
+        for field in ("reasoning_content", "reasoning_details"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
 
     @model_validator(mode="after")
     def validate_content_or_tool_calls(self) -> Self:

@@ -1,0 +1,27 @@
+{
+  "provider": "tencent",
+  "last_verified_at": "2026-09-09",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "Tencent Hy API guide",
+      "url": "https://proxy-hk.tencentcloud.com/document/product/1300/80695"
+    }
+  ],
+  "models": [
+    {
+      "id": "hy3",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ]
+    },
+    {
+      "id": "hy4-preview",
+      "status": "preview",
+      "supported_modes": [
+        "chat"
+      ]
+    }
+  ]
+}

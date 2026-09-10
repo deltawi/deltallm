@@ -70,6 +70,9 @@ batchWorker:
 
 config:
   general_settings:
+    provider_discovery_allow_http: false
+    provider_discovery_allowed_ports: [443]
+    provider_discovery_allowed_private_cidrs: []
     cache_backend: redis
     spend_ingestion_mode: outbox
     audit_ingestion_mode: outbox

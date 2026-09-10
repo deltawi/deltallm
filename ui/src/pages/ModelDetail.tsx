@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import { ApiError, models, type DeploymentHealth, type ModelDeploymentDetail } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
@@ -492,8 +493,7 @@ export default function ModelDetail() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const { session, authMode } = useAuth();
-  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const canEdit = userRole === 'platform_admin' || authMode === 'master_key';
+  const canEdit = resolveUiAccess(authMode, session).model_admin;
 
   const { data: model, loading, refetch } = useApi(
     (signal) => models.get(deploymentId!, signal),
@@ -529,6 +529,7 @@ export default function ModelDetail() {
   };
 
   const handleCheckHealth = async () => {
+    if (!canEdit) return;
     setCheckingHealth(true);
     setHealthActionMessage(null);
     setHealthActionError(null);
@@ -640,15 +641,17 @@ export default function ModelDetail() {
               </div>
 
               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCheckHealth}
-                  disabled={checkingHealth}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} />
-                  Check Health
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={handleCheckHealth}
+                    disabled={checkingHealth}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} />
+                    Check Health
+                  </button>
+                )}
                 {canEdit && (
                   <>
                     <button

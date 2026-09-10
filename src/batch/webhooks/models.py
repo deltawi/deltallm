@@ -4,12 +4,14 @@ import hashlib
 import json
 from collections.abc import Collection
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
+
+from src.outbound.urls import MAX_OUTBOUND_URL_LENGTH, normalize_outbound_url
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 
-BATCH_WEBHOOK_MAX_URL_LENGTH = 2_048
+BATCH_WEBHOOK_MAX_URL_LENGTH = MAX_OUTBOUND_URL_LENGTH
 BATCH_WEBHOOK_MIN_SECRET_BYTES = 32
 BATCH_WEBHOOK_MAX_SECRET_BYTES = 4_096
 
@@ -30,69 +32,10 @@ class BatchWebhookValidationError(ValueError):
 
 
 def _normalize_webhook_url(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized:
-        raise ValueError("webhook url is required")
     try:
-        normalized.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ValueError("webhook url must contain valid UTF-8 text") from exc
-    if len(normalized) > BATCH_WEBHOOK_MAX_URL_LENGTH:
-        raise ValueError(f"webhook url must be at most {BATCH_WEBHOOK_MAX_URL_LENGTH} characters")
-    if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in normalized):
-        raise ValueError("webhook url must not contain whitespace or control characters")
-    if "\\" in normalized:
-        raise ValueError("webhook url must not contain backslashes")
-
-    try:
-        parsed = urlsplit(normalized)
-        port = parsed.port
+        return normalize_outbound_url(value)
     except ValueError as exc:
-        raise ValueError("webhook url is invalid") from exc
-
-    scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https"}:
-        raise ValueError("webhook url scheme must be https (or http when explicitly enabled)")
-    if not parsed.hostname:
-        raise ValueError("webhook url must include a hostname")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("webhook url must not include user information")
-    if "#" in normalized:
-        raise ValueError("webhook url must not include a fragment")
-
-    try:
-        hostname = parsed.hostname.encode("idna").decode("ascii").lower()
-    except UnicodeError as exc:
-        raise ValueError("webhook url hostname is invalid") from exc
-    if not hostname:
-        raise ValueError("webhook url must include a hostname")
-    if ":" not in hostname:
-        hostname = hostname.rstrip(".")
-        if len(hostname) > 253:
-            raise ValueError("webhook url hostname is invalid")
-        labels = hostname.split(".")
-        if not hostname or any(
-            len(label) > 63
-            or label.startswith("-")
-            or label.endswith("-")
-            or not all(
-                character.isascii() and (character.isalnum() or character == "-")
-                for character in label
-            )
-            for label in labels
-        ):
-            raise ValueError("webhook url hostname is invalid")
-
-    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
-    if port is not None and not (
-        (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
-    ):
-        rendered_host = f"{rendered_host}:{port}"
-
-    canonical_url = urlunsplit((scheme, rendered_host, parsed.path or "/", parsed.query, ""))
-    if len(canonical_url) > BATCH_WEBHOOK_MAX_URL_LENGTH:
-        raise ValueError(f"webhook url must be at most {BATCH_WEBHOOK_MAX_URL_LENGTH} characters")
-    return canonical_url
+        raise ValueError(str(exc).replace("outbound url", "webhook url")) from None
 
 
 class BatchWebhookRequest(BaseModel):
@@ -183,7 +126,9 @@ def parse_batch_webhook_request(
     allow_http: bool = False,
     allowed_ports: Collection[int] | None = (443,),
 ) -> BatchWebhookRequest:
-    config = value if isinstance(value, BatchWebhookRequest) else _validate_batch_webhook_request(value)
+    config = (
+        value if isinstance(value, BatchWebhookRequest) else _validate_batch_webhook_request(value)
+    )
 
     if urlsplit(config.url).scheme == "http" and not allow_http:
         raise BatchWebhookValidationError(

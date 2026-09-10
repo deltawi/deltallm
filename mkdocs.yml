@@ -80,6 +80,7 @@ nav:
   - Providers:
       - providers/index.md
       - Capability & Model Catalog: providers/capabilities.md
+      - Direct Compatible Chat Providers: providers/compatible-chat.md
   - Guides:
       - features/index.md
       - Operator Journeys: guides/operator-journeys.md

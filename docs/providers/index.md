@@ -10,6 +10,7 @@ then call the deployment name or route group through DeltaLLM.
 | --- | --- |
 | OpenAI, Anthropic, Azure OpenAI, Gemini, Bedrock, or ElevenLabs | Use the named provider adapter and its native authentication fields |
 | OpenRouter, Groq, Together AI, Fireworks AI, DeepInfra, or Perplexity | Use the named OpenAI-compatible preset |
+| DeepSeek, Z.ai, Qwen, Tencent TokenHub, or MiniMax | Use a named [compatible chat integration](compatible-chat.md) |
 | vLLM, LM Studio, or Ollama | Supply the reachable API base for the self-hosted server |
 | Another OpenAI-compatible service | Configure its provider/model prefix and explicit API base, then verify the required endpoint and parameters |
 

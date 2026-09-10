@@ -1,0 +1,70 @@
+{
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "api_base": "https://api.deepseek.com",
+  "success": {
+    "id": "chatcmpl-deepseek-fixture",
+    "object": "chat.completion",
+    "created": 1788912000,
+    "model": "deepseek-v4-flash",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Sunny.",
+          "reasoning_content": "Check the weather."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "prompt_cache_hit_tokens": 6,
+      "prompt_cache_miss_tokens": 4
+    }
+  },
+  "tool": {
+    "id": "chatcmpl-deepseek-fixture",
+    "object": "chat.completion",
+    "created": 1788912000,
+    "model": "deepseek-v4-flash",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "reasoning_content": "Check the weather.",
+          "tool_calls": [
+            {
+              "id": "call_weather",
+              "type": "function",
+              "function": {
+                "name": "weather",
+                "arguments": "{\"city\":\"Paris\"}"
+              }
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "prompt_cache_hit_tokens": 6,
+      "prompt_cache_miss_tokens": 4
+    }
+  },
+  "stream": [
+    "data: {\"id\":\"chatcmpl-deepseek-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-deepseek-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Check the weather.\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-deepseek-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sunny.\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-deepseek-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14,\"prompt_cache_hit_tokens\":6,\"prompt_cache_miss_tokens\":4}}",
+    "data: [DONE]"
+  ]
+}

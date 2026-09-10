@@ -22,6 +22,10 @@ def dump_openai_chat_request(payload: ChatCompletionRequest) -> dict[str, Any]:
     for source, serialized in zip(payload.messages, messages, strict=True):
         if not isinstance(serialized, dict):
             raise RuntimeError("serialized chat message is not an object")
+        # Legacy adapters retain their previous request contract. Providers that
+        # support reasoning history serialize it explicitly in their adapter.
+        serialized.pop("reasoning_content", None)
+        serialized.pop("reasoning_details", None)
         if (
             isinstance(source, AssistantChatMessage)
             and source.content is None

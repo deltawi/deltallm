@@ -1,0 +1,86 @@
+{
+  "provider": "minimax",
+  "model": "MiniMax-M3",
+  "api_base": "https://api.minimax.io/v1",
+  "success": {
+    "id": "chatcmpl-minimax-fixture",
+    "object": "chat.completion",
+    "created": 1788912000,
+    "model": "MiniMax-M3",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Sunny.",
+          "reasoning_details": [
+            {
+              "type": "reasoning.text",
+              "text": "Check the weather.",
+              "id": "reason-1",
+              "signature": "opaque-test-signature"
+            }
+          ]
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "prompt_tokens_details": {
+        "cached_tokens": 6
+      }
+    }
+  },
+  "tool": {
+    "id": "chatcmpl-minimax-fixture",
+    "object": "chat.completion",
+    "created": 1788912000,
+    "model": "MiniMax-M3",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "reasoning_details": [
+            {
+              "type": "reasoning.text",
+              "text": "Check the weather.",
+              "id": "reason-1",
+              "signature": "opaque-test-signature"
+            }
+          ],
+          "tool_calls": [
+            {
+              "id": "call_weather",
+              "type": "function",
+              "function": {
+                "name": "weather",
+                "arguments": "{\"city\":\"Paris\"}"
+              }
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "prompt_tokens_details": {
+        "cached_tokens": 6
+      }
+    }
+  },
+  "stream": [
+    "data: {\"id\":\"chatcmpl-minimax-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"MiniMax-M3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-minimax-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"MiniMax-M3\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"Check the weather.\",\"id\":\"reason-1\",\"signature\":\"opaque-test-signature\"}]},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-minimax-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"MiniMax-M3\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sunny.\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-minimax-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"MiniMax-M3\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14,\"prompt_tokens_details\":{\"cached_tokens\":6}}}",
+    "data: [DONE]"
+  ]
+}

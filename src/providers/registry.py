@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from fastapi import Request
 
 from src.models.errors import InvalidRequestError, ProxyError
 from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
 from src.providers.resolution import (
     is_openai_compatible_provider,
     resolve_provider,
@@ -25,9 +28,15 @@ class ProviderErrorMapperRegistry:
     anthropic: ProviderAdapter
     gemini: ProviderAdapter
     bedrock: ProviderAdapter
+    compatible_chat: Mapping[str, ProviderAdapter]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "compatible_chat", MappingProxyType(dict(self.compatible_chat)))
 
     def resolve(self, provider: str) -> ProviderAdapter | None:
         normalized = (provider or "").strip().lower()
+        if normalized in self.compatible_chat:
+            return self.compatible_chat[normalized]
         if normalized in {"azure", "azure_openai"}:
             return self.azure_openai
         if normalized == "anthropic":
@@ -66,6 +75,20 @@ def resolve_chat_upstream(
 ) -> ChatUpstream:
     provider = resolve_provider(params)
     timeout = configured_timeout_seconds(params.get("timeout"))
+    profile = CHAT_PROVIDER_PROFILES.get(provider)
+    if profile is not None:
+        api_key = params.get("api_key")
+        if not api_key:
+            raise InvalidRequestError(message="Provider API key is missing for selected model")
+        return ChatUpstream(
+            adapter=request.app.state.provider_error_mapper_registry.compatible_chat[provider],
+            api_base=str(params.get("api_base") or profile.api_base).rstrip("/"),
+            endpoint="/chat/completions",
+            headers=build_openai_compatible_auth_headers(
+                provider=provider, api_key=str(api_key), content_type="application/json"
+            ),
+            timeout=timeout,
+        )
     if provider == "anthropic":
         api_key = params.get("api_key")
         if not api_key:

@@ -220,6 +220,10 @@ config:
     turn_off_message_logging: false
   general_settings:
     deltallm_key_header_name: Authorization
+    # Startup-only provider discovery egress; independent of batch webhook policy.
+    provider_discovery_allow_http: false
+    provider_discovery_allowed_ports: [443]
+    provider_discovery_allowed_private_cidrs: []
     upstream_http_connect_timeout_seconds: 10
     upstream_http_read_timeout_seconds: 300
     upstream_http_write_timeout_seconds: 30

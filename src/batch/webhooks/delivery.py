@@ -1,68 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-import logging
-from threading import Lock
-from typing import Iterator
 
 import httpx
 
 from src.batch.webhooks.network_policy import ResolvedBatchWebhookTarget
-
-
-_HTTPCORE_TRACE_LOGGERS = tuple(
-    logging.getLogger(name)
-    for name in (
-        "httpcore",
-        "httpcore.connection",
-        "httpcore.http11",
-        "httpcore.http2",
-        "httpcore.proxy",
-        "httpcore.socks",
-    )
-)
-_HTTPCORE_LOG_GUARD_LOCK = Lock()
-_httpcore_log_guard_count = 0
-_httpcore_log_guard_previous_levels: tuple[int, ...] | None = None
-_RESPONSE_CLOSE_GRACE_SECONDS = 1.0
-
-
-@contextmanager
-def _suppress_httpcore_debug_traces() -> Iterator[None]:
-    """Prevent dependency traces from logging customer delivery material.
-
-    httpcore's DEBUG traces include TLS SNI hostnames and complete response
-    headers. The guard is process-wide because Python logger levels are global,
-    and reference-counted so concurrent webhook attempts cannot restore DEBUG
-    while another attempt is still active.
-    """
-
-    global _httpcore_log_guard_count, _httpcore_log_guard_previous_levels
-
-    with _HTTPCORE_LOG_GUARD_LOCK:
-        if _httpcore_log_guard_count == 0:
-            _httpcore_log_guard_previous_levels = tuple(
-                logger.level for logger in _HTTPCORE_TRACE_LOGGERS
-            )
-            for logger in _HTTPCORE_TRACE_LOGGERS:
-                logger.setLevel(max(logging.INFO, logger.getEffectiveLevel()))
-        _httpcore_log_guard_count += 1
-    try:
-        yield
-    finally:
-        with _HTTPCORE_LOG_GUARD_LOCK:
-            _httpcore_log_guard_count -= 1
-            if _httpcore_log_guard_count == 0:
-                assert _httpcore_log_guard_previous_levels is not None
-                for logger, previous_level in zip(
-                    _HTTPCORE_TRACE_LOGGERS,
-                    _httpcore_log_guard_previous_levels,
-                    strict=True,
-                ):
-                    logger.setLevel(previous_level)
-                _httpcore_log_guard_previous_levels = None
+from src.outbound.http import close_response_bounded, suppress_httpcore_debug_traces
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,26 +53,6 @@ class BatchWebhookHTTPSender:
         self.timeout_seconds = max(0.001, float(timeout_seconds))
         self.max_response_bytes = max(0, int(max_response_bytes))
 
-    async def _close_response_bounded(
-        self,
-        response: httpx.Response,
-        *,
-        deadline: float,
-    ) -> None:
-        remaining = deadline - asyncio.get_running_loop().time()
-        close_timeout = max(
-            0.001,
-            min(_RESPONSE_CLOSE_GRACE_SECONDS, remaining),
-        )
-        try:
-            async with asyncio.timeout(close_timeout):
-                await response.aclose()
-        except Exception:
-            # Response headers already determine the delivery outcome. Cleanup
-            # failures must neither expose upstream details nor trigger a
-            # duplicate delivery, and cleanup itself must remain bounded.
-            pass
-
     async def send(
         self,
         *,
@@ -157,7 +81,7 @@ class BatchWebhookHTTPSender:
             extensions=extensions,
         )
 
-        with _suppress_httpcore_debug_traces():
+        with suppress_httpcore_debug_traces():
             response: httpx.Response | None = None
             result: BatchWebhookHTTPResponse | None = None
             try:
@@ -187,4 +111,4 @@ class BatchWebhookHTTPSender:
                 raise BatchWebhookTransportError(_transport_error_reason(exc)) from None
             finally:
                 if response is not None:
-                    await self._close_response_bounded(response, deadline=deadline)
+                    await close_response_bounded(response, deadline=deadline)
