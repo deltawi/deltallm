@@ -439,3 +439,38 @@ dependency amplification but do not prove zero latency regression or qualify a
 production SLO. Required durable commit latency now precedes terminal delivery
 by design; it does not precede content delivery and remains under the existing
 end-to-end deadline. No concurrency/pool/replica allocation was increased.
+
+## PR #318 CI repair (2026-09-11)
+
+[PR #318](https://github.com/deltawi/deltallm/pull/318) contains the feature and
+independent-selector fixes described above. Its first application-lane run had
+1,501 passes and one failure: the 150 ms Batch job deadline expired before the
+expected provider stage, with zero selector calls. The aggregate `test` check
+correctly failed because that lane failed. The documentation job separately
+reported two public pages missing from navigation.
+
+The Batch lifetime test now controls wall-clock deadline conversion and advances
+the event-loop clock only after the selector or answer has started. It asserts
+the exact job-deadline limit, real timer-driven cancellation, caller-lease release,
+provider cleanup, no completed item, and retention of an already-paid selector
+receipt. Scheduler turns are bounded and the test owns/drains its execution task.
+Both previously unnavigated pages are now in the Project navigation.
+
+This is a test/documentation-only correction. Runtime deadlines, billing, tenant
+scope, retries, dependency calls, CI timeouts, lane selection and aggregate gates
+are unchanged. Test-only fault injection confirmed failures when the job-deadline
+limit was removed (all four cases) and when the deadline was not propagated to
+answer execution (both answer cases); no injected code remains in the worktree.
+
+Local commands use `UV_CACHE_DIR=/tmp/deltallm-readiness-uv uv run --no-sync`:
+
+- `pytest -q tests/test_dependency_lanes.py tests/batch/test_selector_lifetime.py
+  --tb=short`: 31 passed.
+- `pytest --collect-only -qq --dependency-lane-report`: all 5,556 tests still have
+  exactly one primary lane, with unchanged counts listed above.
+- `pytest -q --confcutdir=tests/docs tests/docs`: 9 passed.
+- All three generated-reference `--check` commands, `report_health.py --check`,
+  `mkdocs build --strict`, and `verify_public_site.py`: passed. All 89 public
+  Markdown pages are navigated; there are no missing H1s or images.
+- `ruff check .`, `ruff format --check tests/batch/test_selector_lifetime.py`,
+  and `git diff --check`: passed.
