@@ -52,7 +52,7 @@ behavior was changed; the historical CI runner's clock was not captured.
 
 ## Local verification
 
-Full final lane results:
+Full local integration lane results at `98abc414`:
 
 | Lane | Passed |
 | --- | ---: |
@@ -92,6 +92,39 @@ An initial sandboxed hermetic run skipped three localhost socket checks;
 the subsequent full runs with socket access executed all cases without skips.
 An earlier successful hermetic run emitted the already-recorded unrelated
 rate-limit retry-task cleanup warning; the final 3,593-case run did not.
+
+## Remote CI follow-up: Batch profile regression
+
+Integration [CI run 34478639197](https://github.com/deltawi/deltallm/actions/runs/34478639197)
+passed seven jobs but the application lane finished with 1,392 passed and one
+failure in `baseline_split_slow`. Its constant-arrival functional test scheduled
+three slices at one per second, with one slice allowed in flight. The first
+slice took 1.149 seconds, so the generator correctly dropped the next arrival:
+two slices/16 items completed, one slice was dropped. The earlier audio test
+passed. This run is not claimed green.
+
+The Batch functional test now uses a finite three-request wave, serialized by
+a test-only lock, so every scenario exercises all three slices regardless of
+CI host speed. It retains all item, capacity, lease, checkpoint, cost and
+provider-call assertions. Two fault-injection cases verify that failed or
+dropped load still raises and remains visible in saved reports. The benchmark
+implementation, real constant-arrival driver, production Batch code and CI
+gates are unchanged. Functional-test wave artifacts are not performance evidence.
+
+Focused profile/load-driver checks: 15 passed. Ruff check and format pass on
+the changed test. Full collection is now 5,409 tests, exactly one lane each
+(3,593 hermetic; 1,395 app; 305 PostgreSQL; 48 Redis; 68 Helm). The five full
+local lane results above precede these two new regression cases; remote CI on
+the follow-up commit remains required.
+
+Separately reran the unchanged strict CLI profile for `baseline_split_slow`
+at its default two slices/second for ten seconds: 20/20 slices, 160/160 items,
+zero drops or sampled queue slope, serial answer peak one, 160 dispatch
+renewals, and zero leaked caller leases/refreshers. Slice p50/p95/p99 was
+344.78/355.71/360.18 ms. Raw samples, summary and item timings are retained under
+`docs/project/benchmarks/model-router-main-readiness/batch-split-followup`.
+This local mock result does not erase the CI-host saturation result or certify
+production capacity.
 
 ## Performance evidence
 
