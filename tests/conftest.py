@@ -23,6 +23,8 @@ from src.providers.azure import AzureOpenAIAdapter
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
+from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
 from src.router import (
     CooldownManager,
@@ -1403,6 +1405,8 @@ async def test_app() -> FastAPI:
         ],
     }
     app.state.http_client = mock_http
+    app.state.control_http_client = mock_http
+    app.state.provider_discovery_runtime = None
     app.state.openai_adapter = OpenAIAdapter(mock_http)  # type: ignore[arg-type]
     app.state.azure_openai_adapter = AzureOpenAIAdapter(mock_http)  # type: ignore[arg-type]
     app.state.anthropic_adapter = AnthropicAdapter(mock_http)  # type: ignore[arg-type]
@@ -1414,6 +1418,10 @@ async def test_app() -> FastAPI:
         anthropic=app.state.anthropic_adapter,
         gemini=app.state.gemini_adapter,
         bedrock=app.state.bedrock_adapter,
+        compatible_chat={
+            name: ProfiledChatAdapter(mock_http, profile)
+            for name, profile in CHAT_PROVIDER_PROFILES.items()
+        },
     )
     app.state.app_config = type(
         "Cfg",

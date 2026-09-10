@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from httpx._utils import get_environment_proxies
 
 from src.providers.error_body import bound_provider_error_response_body
 
@@ -23,7 +24,7 @@ CONTROL_HTTP_READ_TIMEOUT_SECONDS = 20.0
 CONTROL_HTTP_WRITE_TIMEOUT_SECONDS = 10.0
 CONTROL_HTTP_POOL_TIMEOUT_SECONDS = 5.0
 CONTROL_HTTP_MAX_CONNECTIONS = 100
-CONTROL_HTTP_MAX_KEEPALIVE_CONNECTIONS = 20
+CONTROL_HTTP_MAX_KEEPALIVE_CONNECTIONS = 0
 CONTROL_HTTP_KEEPALIVE_EXPIRY_SECONDS = 30.0
 
 
@@ -99,8 +100,49 @@ def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
     )
 
 
-def build_control_http_client() -> httpx.AsyncClient:
+def build_control_http_transport() -> httpx.AsyncHTTPTransport:
+    # Pinned IP origins must never reuse another hostname's TLS connection.
+    # Keep CA environment support; proxies belong to client mounts, not this pool.
+    return httpx.AsyncHTTPTransport(
+        http1=True,
+        http2=False,
+        retries=0,
+        limits=httpx.Limits(
+            max_connections=CONTROL_HTTP_MAX_CONNECTIONS,
+            max_keepalive_connections=0,
+            keepalive_expiry=CONTROL_HTTP_KEEPALIVE_EXPIRY_SECONDS,
+        ),
+    )
+
+
+def build_control_http_client(
+    *, transport: httpx.AsyncBaseTransport | None = None
+) -> httpx.AsyncClient:
+    limits = httpx.Limits(
+        max_connections=CONTROL_HTTP_MAX_CONNECTIONS,
+        max_keepalive_connections=CONTROL_HTTP_MAX_KEEPALIVE_CONNECTIONS,
+        keepalive_expiry=CONTROL_HTTP_KEEPALIVE_EXPIRY_SECONDS,
+    )
+    # HTTPX disables automatic proxy mounts when an explicit transport is given.
+    # Reuse its environment/NO_PROXY parser rather than introduce different proxy
+    # semantics. Keep this dependency seam here and exercise it in transport tests.
+    mounts = {
+        pattern: None
+        if proxy is None
+        else httpx.AsyncHTTPTransport(
+            proxy=proxy,
+            http1=True,
+            http2=False,
+            retries=0,
+            limits=limits,
+        )
+        for pattern, proxy in get_environment_proxies().items()
+    }
     return httpx.AsyncClient(
+        transport=transport if transport is not None else build_control_http_transport(),
+        mounts=mounts,
+        http1=True,
+        http2=False,
         timeout=httpx.Timeout(
             timeout=CONTROL_HTTP_TIMEOUT_SECONDS,
             connect=CONTROL_HTTP_CONNECT_TIMEOUT_SECONDS,
@@ -108,11 +150,7 @@ def build_control_http_client() -> httpx.AsyncClient:
             write=CONTROL_HTTP_WRITE_TIMEOUT_SECONDS,
             pool=CONTROL_HTTP_POOL_TIMEOUT_SECONDS,
         ),
-        limits=httpx.Limits(
-            max_connections=CONTROL_HTTP_MAX_CONNECTIONS,
-            max_keepalive_connections=CONTROL_HTTP_MAX_KEEPALIVE_CONNECTIONS,
-            keepalive_expiry=CONTROL_HTTP_KEEPALIVE_EXPIRY_SECONDS,
-        ),
+        limits=limits,
     )
 
 
@@ -193,7 +231,10 @@ def build_health_check_request_timeout(
     if wrapper_timeout is not None:
         pool_timeout = min(
             configured_pool_timeout,
-            max(MIN_HEALTH_CHECK_POOL_TIMEOUT_SECONDS, wrapper_timeout * HEALTH_CHECK_POOL_TIMEOUT_RATIO),
+            max(
+                MIN_HEALTH_CHECK_POOL_TIMEOUT_SECONDS,
+                wrapper_timeout * HEALTH_CHECK_POOL_TIMEOUT_RATIO,
+            ),
         )
     return build_upstream_request_timeout(
         general_settings,
@@ -215,4 +256,6 @@ def build_upstream_request_timeout_for_request(
     request: Any,
     timeout_seconds: float | int | None,
 ) -> httpx.Timeout:
-    return build_upstream_request_timeout(get_upstream_http_settings_from_request(request), timeout_seconds)
+    return build_upstream_request_timeout(
+        get_upstream_http_settings_from_request(request), timeout_seconds
+    )

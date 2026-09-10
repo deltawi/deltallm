@@ -658,6 +658,13 @@ class GeneralSettings(BaseModel):
     spend_reporting_execution_timeout_seconds: float = Field(default=60.0, gt=0)
     spend_reporting_redis_timeout_seconds: float = Field(default=0.5, gt=0)
     spend_reporting_v2_enabled: bool = False
+    provider_discovery_allow_http: bool = Field(default=False, strict=True)
+    provider_discovery_allowed_ports: list[int] = Field(
+        default_factory=lambda: [443], min_length=1, max_length=64
+    )
+    provider_discovery_allowed_private_cidrs: list[str] = Field(
+        default_factory=list, max_length=128
+    )
     upstream_http_connect_timeout_seconds: float = Field(default=10.0, gt=0)
     upstream_http_read_timeout_seconds: float = Field(default=300.0, gt=0)
     upstream_http_write_timeout_seconds: float = Field(default=30.0, gt=0)
@@ -1002,6 +1009,29 @@ class GeneralSettings(BaseModel):
             return None
         decode_batch_webhook_encryption_key(value)
         return value
+
+    @field_validator("provider_discovery_allowed_ports", mode="before")
+    @classmethod
+    def validate_provider_discovery_ports(cls, value: object) -> object:
+        if not isinstance(value, list) or any(
+            type(port) is not int or not 1 <= port <= 65535 for port in value
+        ):
+            raise ValueError(
+                "provider_discovery_allowed_ports requires integer ports between 1 and 65535"
+            )
+        if len(value) != len(set(value)):
+            raise ValueError("provider_discovery_allowed_ports requires unique ports")
+        return value
+
+    @field_validator("provider_discovery_allowed_private_cidrs")
+    @classmethod
+    def validate_provider_discovery_cidrs(cls, value: list[str]) -> list[str]:
+        try:
+            return list(dict.fromkeys(str(ip_network(cidr, strict=False)) for cidr in value))
+        except ValueError:
+            raise ValueError(
+                "provider_discovery_allowed_private_cidrs requires valid IPv4 or IPv6 CIDRs"
+            ) from None
 
     @field_validator("batch_webhook_allowed_ports")
     @classmethod

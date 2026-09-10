@@ -28,6 +28,11 @@ MODE_LABELS = {
     "rerank": "Rerank",
 }
 PROVIDER_LABELS = {
+    "deepseek": "DeepSeek",
+    "zai": "Z.ai",
+    "qwen": "Qwen (Alibaba Model Studio)",
+    "tencent": "Tencent TokenHub",
+    "minimax": "MiniMax",
     "azure_openai": "Azure OpenAI",
     "bedrock": "Amazon Bedrock",
     "deepinfra": "DeepInfra",

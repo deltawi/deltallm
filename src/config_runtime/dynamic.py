@@ -53,6 +53,9 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
 
 _STARTUP_ONLY_GENERAL_SETTINGS = frozenset(
     {
+        "provider_discovery_allow_http",
+        "provider_discovery_allowed_ports",
+        "provider_discovery_allowed_private_cidrs",
         "database_url",
         "db_pool_size",
         "db_pool_timeout",

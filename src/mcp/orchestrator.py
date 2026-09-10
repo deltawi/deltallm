@@ -7,6 +7,8 @@ from time import perf_counter
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from pydantic import ValidationError
+
 from src.audit.actions import AuditAction
 from src.audit.delivery import AuditDeliveryClass
 from src.guardrails.middleware import GuardrailMiddleware
@@ -153,11 +155,12 @@ class MCPChatOrchestrator:
                 )
                 translated.append(
                     FunctionToolDefinition(
+                        type="function",
                         function={
                             "name": tool.namespaced_name,
                             "description": tool.description,
                             "parameters": dict(tool.input_schema or {"type": "object"}),
-                        }
+                        },
                     )
                 )
 
@@ -369,16 +372,27 @@ class MCPChatOrchestrator:
         message = choice.get("message") if isinstance(choice, dict) else {}
         if not isinstance(message, dict):
             message = {}
-        return AssistantChatMessage(
-            role="assistant",
-            content=message.get("content")
-            if isinstance(message.get("content"), list)
-            else str(message.get("content") or ""),
-            name=message.get("name"),
-            tool_calls=message.get("tool_calls")
-            if isinstance(message.get("tool_calls"), list)
-            else None,
-        )
+        try:
+            return AssistantChatMessage.model_validate(
+                {
+                    "role": "assistant",
+                    **{
+                        key: message[key]
+                        for key in (
+                            "content",
+                            "name",
+                            "tool_calls",
+                            "reasoning_content",
+                            "reasoning_details",
+                        )
+                        if key in message
+                    },
+                }
+            )
+        except ValidationError:
+            raise ServiceUnavailableError(
+                message="Provider returned invalid assistant history"
+            ) from None
 
     @staticmethod
     def _tool_name_from_call(tool_call: dict[str, Any]) -> str:

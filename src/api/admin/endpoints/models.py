@@ -11,12 +11,13 @@ from src.api.admin.endpoints.common import build_connection_summary, model_entri
 from src.api.admin.model_contracts import ModelDeleteResponse, ModelMutationResponse
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
+from src.auth.roles import Permission
 from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
-from src.middleware.admin import require_authenticated, require_master_key
+from src.middleware.admin import require_admin_permission, require_authenticated, require_master_key
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,
@@ -585,7 +586,14 @@ async def list_provider_presets() -> dict[str, Any]:
     return {"data": provider_presets()}
 
 
-@router.post("/ui/api/provider-models/discover", dependencies=[Depends(require_authenticated)])
+@router.post(
+    "/ui/api/provider-models/discover",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+    responses={
+        401: {"description": "Authentication required"},
+        403: {"description": "Platform administrator permission and completed MFA required"},
+    },
+)
 async def discover_models_for_provider(
     request: Request, payload: ProviderModelDiscoveryRequest
 ) -> dict[str, Any]:
@@ -610,7 +618,8 @@ async def discover_models_for_provider(
         named_credential,
     )
     return await discover_provider_models(
-        request.app.state.http_client,
+        request.app.state.control_http_client,
+        discovery_runtime=request.app.state.provider_discovery_runtime,
         provider=payload.provider,
         mode=payload.mode,
         api_key=merged_params.get("api_key"),
@@ -643,7 +652,11 @@ async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
 
 @router.post(
     "/ui/api/models/{deployment_id:path}/health-check",
-    dependencies=[Depends(require_authenticated)],
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+    responses={
+        401: {"description": "Authentication required"},
+        403: {"description": "Platform administrator permission and completed MFA required"},
+    },
 )
 async def check_model_health(request: Request, deployment_id: str) -> dict[str, Any]:
     deployment = _find_runtime_deployment(request.app, deployment_id)
@@ -661,7 +674,7 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
             ) from exc
     else:
         result = await probe_provider_health(
-            request.app.state.http_client,
+            request.app.state.control_http_client,
             deployment.deltallm_params,
             default_openai_base_url=request.app.state.settings.openai_base_url,
             general_settings=getattr(
@@ -670,6 +683,7 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
                 getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
             ),
             health_check_timeout_seconds=30,
+            discovery_runtime=request.app.state.provider_discovery_runtime,
         )
 
     health = await _serialize_deployment_health(request.app, deployment_id)

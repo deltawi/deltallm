@@ -37,6 +37,17 @@ model_list:
       #   # false is not supported until a provider adapter defines safe heterogeneous grouping.
       #   require_homogeneous_params: true
 
+  # Optional direct chat providers: deepseek, zai, qwen, tencent, minimax.
+  # See docs/providers/compatible-chat.md for all five examples and regional bases.
+  # - model_name: deepseek-chat
+  #   deltallm_params:
+  #     provider: deepseek
+  #     model: deepseek-v4-flash
+  #     api_key: os.environ/DEEPSEEK_API_KEY
+  #   model_info:
+  #     mode: chat
+  #     # Configure verified token prices before enabling spend-based limits.
+
 router_settings:
   # Simple defaults are best for a first setup.
   routing_strategy: simple-shuffle
@@ -139,6 +150,10 @@ general_settings:
   # restart the process or roll the Kubernetes deployment after changing them.
   # For Kubernetes, multiply upstream_http_max_connections by workers per pod and pod count
   # when checking provider, NAT gateway, and file descriptor limits.
+  # Startup-only provider discovery egress; independent of batch webhook policy.
+  provider_discovery_allow_http: false
+  provider_discovery_allowed_ports: [443]
+  provider_discovery_allowed_private_cidrs: []
   upstream_http_connect_timeout_seconds: 10
   upstream_http_read_timeout_seconds: 300
   upstream_http_write_timeout_seconds: 30

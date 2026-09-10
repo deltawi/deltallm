@@ -87,6 +87,7 @@ def _provider_error_mapper_registry(client: httpx.AsyncClient) -> ProviderErrorM
         anthropic=AnthropicAdapter(client),
         gemini=GeminiAdapter(client),
         bedrock=BedrockAdapter(client),
+        compatible_chat={},
     )
 
 

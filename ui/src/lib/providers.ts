@@ -1,4 +1,9 @@
 const PROVIDER_LABELS: Record<string, string> = {
+  deepseek: 'DeepSeek',
+  zai: 'Z.ai',
+  qwen: 'Qwen (Alibaba Model Studio)',
+  tencent: 'Tencent TokenHub',
+  minimax: 'MiniMax',
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   azure: 'Azure OpenAI',

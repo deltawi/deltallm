@@ -39,11 +39,19 @@ from src.providers.bedrock import BedrockAdapter
 from src.providers.azure import AzureOpenAIAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
+from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
 from src.services.route_groups import RouteGroupRuntimeCache
 from src.services.ui_branding_assets import UIBrandingAssetService
 from src.services.route_group_mutations import RouteGroupMutationService
-from src.upstream_http import build_control_http_client, build_upstream_http_client
+from src.upstream_http import (
+    build_control_http_client,
+    build_control_http_transport,
+    build_upstream_http_client,
+)
+from src.outbound.network_policy import OutboundNetworkPolicy
+from src.providers.discovery_runtime import ProviderDiscoveryRuntime
 
 
 @dataclass
@@ -130,7 +138,17 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.ui_branding_asset_service = ui_branding_asset_service
 
     http_client = build_upstream_http_client(cfg.general_settings)
-    control_http_client = build_control_http_client()
+    control_transport = build_control_http_transport()
+    control_http_client = build_control_http_client(transport=control_transport)
+    app.state.provider_discovery_runtime = ProviderDiscoveryRuntime(
+        transport=control_transport,
+        policy=OutboundNetworkPolicy(
+            allow_http=cfg.general_settings.provider_discovery_allow_http,
+            allowed_ports=cfg.general_settings.provider_discovery_allowed_ports,
+            allowed_private_cidrs=cfg.general_settings.provider_discovery_allowed_private_cidrs,
+            resolution_timeout_seconds=2.0,
+        ),
+    )
     app.state.upstream_http_settings = cfg.general_settings
     app.state.http_client = http_client
     app.state.control_http_client = control_http_client
@@ -145,6 +163,10 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         anthropic=app.state.anthropic_adapter,
         gemini=app.state.gemini_adapter,
         bedrock=app.state.bedrock_adapter,
+        compatible_chat={
+            name: ProfiledChatAdapter(http_client, profile)
+            for name, profile in CHAT_PROVIDER_PROFILES.items()
+        },
     )
 
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)

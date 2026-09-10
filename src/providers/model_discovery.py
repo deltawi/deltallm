@@ -5,7 +5,14 @@ from typing import Any
 import httpx
 
 from src.config import ModelMode
-from src.providers.model_catalog import canonical_catalog_provider, catalog_model_metadata, catalog_models_for_provider
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES, ChatProviderProfile
+from src.providers.chat_discovery import fetch_chat_models
+from src.providers.discovery_runtime import DiscoveryUnavailable, ProviderDiscoveryRuntime
+from src.providers.model_catalog import (
+    canonical_catalog_provider,
+    catalog_model_metadata,
+    catalog_models_for_provider,
+)
 from src.providers.resolution import PROVIDER_PRESETS, is_openai_compatible_provider
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import build_upstream_request_timeout
@@ -24,7 +31,11 @@ def _response_provider(provider: str | None) -> str:
 
 def _default_api_base(provider: str, *, default_openai_base_url: str) -> str | None:
     if provider == "openai":
-        return str(default_openai_base_url or "").strip() or str(PROVIDER_PRESETS["openai"]["api_base"] or "").strip() or None
+        return (
+            str(default_openai_base_url or "").strip()
+            or str(PROVIDER_PRESETS["openai"]["api_base"] or "").strip()
+            or None
+        )
 
     preset = PROVIDER_PRESETS.get(provider)
     if preset is None:
@@ -314,7 +325,10 @@ def _merge_model_options(
         next_modes = set(option.get("supported_modes") or [])
         combined_modes = sorted(existing_modes | next_modes)
 
-        sources = {str(existing.get("source") or "").strip(), str(option.get("source") or "").strip()}
+        sources = {
+            str(existing.get("source") or "").strip(),
+            str(option.get("source") or "").strip(),
+        }
         if sources == {"catalog", "provider_api"}:
             merged_source = "catalog+provider_api"
         else:
@@ -322,7 +336,8 @@ def _merge_model_options(
 
         merged[key] = {
             "id": model_id,
-            "label": str(option.get("label") or existing.get("label") or model_id).strip() or model_id,
+            "label": str(option.get("label") or existing.get("label") or model_id).strip()
+            or model_id,
             "provider": provider,
             "source": merged_source,
             "supported_modes": combined_modes,
@@ -337,6 +352,57 @@ def _merge_model_options(
     return sorted(merged.values(), key=sort_key)
 
 
+async def _discover_chat_profile(
+    discovery_runtime: ProviderDiscoveryRuntime | None,
+    *,
+    profile: ChatProviderProfile,
+    provider: str,
+    mode: ModelMode | None,
+    api_key: str | None,
+    api_base: str,
+    timeout: httpx.Timeout,
+    catalog_options: list[dict[str, object]],
+) -> dict[str, object]:
+    if mode is not None and mode != "chat":
+        return {"data": [], "warnings": ["This provider currently supports chat mode only."]}
+    warnings: list[str] = []
+    live_options: list[dict[str, object]] = []
+    if profile.discovery == "catalog":
+        warnings.append("Live model discovery is unavailable; showing the curated catalog.")
+    elif api_key:
+        try:
+            if discovery_runtime is None:
+                raise DiscoveryUnavailable("Provider discovery runtime is unavailable")
+            result = await fetch_chat_models(
+                discovery_runtime,
+                profile=profile,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+            )
+            live_options = [
+                _provider_model_option(
+                    model_id=item.id,
+                    label=item.name or item.id,
+                    provider=provider,
+                    supported_modes=["chat"],
+                )
+                for item in result.models
+            ]
+            if result.truncated:
+                warnings.append("Live model discovery returned the first page only.")
+        except (NotImplementedError, DiscoveryUnavailable) as exc:
+            warnings.append(str(exc))
+        except httpx.HTTPStatusError as exc:
+            warnings.append(f"Provider model discovery returned {exc.response.status_code}")
+        except (httpx.HTTPError, TimeoutError, ValueError):
+            warnings.append("Live model discovery failed; showing the curated catalog.")
+    return {
+        "data": _merge_model_options(catalog_options, live_options, mode=mode),
+        "warnings": warnings,
+    }
+
+
 async def discover_provider_models(
     http_client: httpx.AsyncClient,
     *,
@@ -349,13 +415,29 @@ async def discover_provider_models(
     auth_header_format: str | None = None,
     default_openai_base_url: str,
     general_settings: Any | None = None,
+    discovery_runtime: ProviderDiscoveryRuntime | None = None,
 ) -> dict[str, Any]:
     normalized_provider = _normalized_provider(provider)
     response_provider = _response_provider(provider)
     catalog_options = catalog_models_for_provider(response_provider, mode=mode)
     warnings: list[str] = []
 
-    resolved_api_base = str(api_base or "").strip() or _default_api_base(normalized_provider, default_openai_base_url=default_openai_base_url)
+    resolved_api_base = str(api_base or "").strip() or _default_api_base(
+        normalized_provider, default_openai_base_url=default_openai_base_url
+    )
+
+    profile = CHAT_PROVIDER_PROFILES.get(normalized_provider)
+    if profile is not None:
+        return await _discover_chat_profile(
+            discovery_runtime,
+            profile=profile,
+            provider=response_provider,
+            mode=mode,
+            api_key=api_key,
+            api_base=str(resolved_api_base or ""),
+            timeout=build_upstream_request_timeout(general_settings, 10.0),
+            catalog_options=catalog_options,
+        )
 
     try:
         live_options = await _discover_live_models(

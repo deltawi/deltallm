@@ -20,6 +20,7 @@ const testSources = [
   'tests/authSession.test.ts',
   'tests/modelFormShared.test.ts',
   'tests/modelsApi.test.ts',
+  'tests/modelDetailPermissions.test.tsx',
   'tests/namedCredentialsApi.test.ts',
   'tests/batchDetailResource.test.ts',
   'tests/organizationPolicy.test.ts',

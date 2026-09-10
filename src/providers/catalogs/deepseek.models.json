@@ -1,0 +1,27 @@
+{
+  "provider": "deepseek",
+  "last_verified_at": "2026-09-09",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "DeepSeek API models",
+      "url": "https://api-docs.deepseek.com/"
+    }
+  ],
+  "models": [
+    {
+      "id": "deepseek-v4-flash",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ]
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ]
+    }
+  ]
+}

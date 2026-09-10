@@ -1,0 +1,27 @@
+{
+  "provider": "minimax",
+  "last_verified_at": "2026-09-09",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "MiniMax OpenAI compatibility",
+      "url": "https://platform.minimax.io/docs/api-reference/text-openai-api"
+    }
+  ],
+  "models": [
+    {
+      "id": "MiniMax-M3",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ]
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ]
+    }
+  ]
+}
