@@ -55,6 +55,43 @@ async def test_atomic_consumption_and_owner_release_across_clients(capacity_redi
     assert usage["rpm"] == 2 and usage["tpm"] == 200
 
 
+async def test_independent_selector_groups_and_direct_target_share_physical_capacity(
+    capacity_redis,
+):
+    from src.router import build_deployment_registry, build_route_group_policies
+    from src.router.selection.qualification import qualify_selector_groups
+    from tests.router.selection.independent_fixtures import independent_group, independent_models
+
+    first, second, identity = capacity_redis
+    models = independent_models()
+    models["tiny"][0]["deployment_id"] = identity
+    group = independent_group()
+    group["selector"]["classifier_deployment_id"] = identity
+    groups = [group, {**group, "key": "another-selected"}]
+    registry = build_deployment_registry(models, groups)
+    selected = qualify_selector_groups(
+        build_route_group_policies(groups), registry.snapshot(), registry.physical_deployments
+    )
+    refs = [
+        selected["selected"].capacity.health_ref,
+        selected["another-selected"].capacity.health_ref,
+        registry["tiny"][0].health_ref,
+    ]
+    assert refs[0] == refs[1] == refs[2]
+    owners = [RedisStateBackend(first), RedisStateBackend(second)]
+    capacity = AttemptCapacity(
+        limits=(AttemptCapacityLimit("rpm", 100, 1),), max_concurrency=1, require_shared=True
+    )
+    permits = await asyncio.gather(
+        *(owners[index % 2].acquire_attempt(ref, capacity) for index, ref in enumerate(refs))
+    )
+    assert sum(permit.acquired for permit in permits) == 1
+    await asyncio.gather(
+        *(owners[1].release_attempt(permit) for permit in permits if permit.acquired)
+    )
+    assert await owners[0].get_active_requests(identity) == 0
+
+
 async def test_live_owner_replay_does_not_consume_twice_and_expiry_recovers(capacity_redis):
     first, second, identity = capacity_redis
     a, b = RedisStateBackend(first), RedisStateBackend(second)

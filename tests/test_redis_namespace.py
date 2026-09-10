@@ -64,6 +64,6 @@ def test_route_group_runtime_keyspace_isolates_environment_and_revision() -> Non
     staging = RouteGroupRuntimeRedisKeyspace(environment="Staging West")
     production = RouteGroupRuntimeRedisKeyspace(environment="production")
 
-    assert staging.snapshot(7) == ("deltallm:staging-west:v3:route-group-runtime:r7")
+    assert staging.snapshot(7) == ("deltallm:staging-west:v4:route-group-runtime:r7")
     assert staging.snapshot(7) != staging.snapshot(8)
     assert staging.snapshot(7) != production.snapshot(7)

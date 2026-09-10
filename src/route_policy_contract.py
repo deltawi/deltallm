@@ -160,9 +160,24 @@ class RoutePolicyMember(BaseModel):
         return value
 
 
-class SelectorMemberInventory(Protocol):
-    enabled: bool
+class SelectorDeploymentInventory(Protocol):
     workload_mode: str | None
+
+
+class SelectorMemberInventory(SelectorDeploymentInventory, Protocol):
+    enabled: bool
+
+
+def validate_selector_reference(
+    selector: LLMTierSelectorPolicy,
+    deployments: Mapping[str, SelectorDeploymentInventory],
+) -> None:
+    """Resolve an internal classifier dependency, independently of answer membership."""
+    target = deployments.get(selector.classifier_deployment_id)
+    if target is None:
+        raise ValueError("selector classifier must reference an existing concrete deployment")
+    if target.workload_mode != "chat":
+        raise ValueError("selector classifier must reference a chat deployment")
 
 
 def validate_selector_assignments(
@@ -172,7 +187,7 @@ def validate_selector_assignments(
     group_mode: str | None,
     available_members: Mapping[str, SelectorMemberInventory] | None = None,
 ) -> None:
-    """Validate classifier membership and the effective answer-member lane partition."""
+    """Validate only the effective answer-member lane partition."""
 
     if group_mode != "chat":
         raise ValueError("selector requires route group mode 'chat'")
@@ -180,22 +195,6 @@ def validate_selector_assignments(
     member_ids = [member.deployment_id for member in members]
     if len(set(member_ids)) != len(member_ids):
         raise ValueError("selector member deployment ids must be unique")
-    member_by_id = {member.deployment_id: member for member in members}
-    classifier = member_by_id.get(selector.classifier_deployment_id)
-    if classifier is None:
-        raise ValueError("selector classifier must be a member of the route group")
-    if not classifier.enabled:
-        raise ValueError("selector classifier must be enabled by the policy")
-
-    if available_members is not None:
-        classifier_inventory = available_members.get(selector.classifier_deployment_id)
-        if classifier_inventory is None:
-            raise ValueError("selector classifier must be a member of the route group")
-        if not classifier_inventory.enabled:
-            raise ValueError("selector classifier must be an enabled route-group member")
-        if classifier_inventory.workload_mode != "chat":
-            raise ValueError("selector classifier must reference a chat deployment")
-
     lane_ids = {lane.id for lane in selector.lanes}
     active_lane_ids: set[str] = set()
     for member in members:

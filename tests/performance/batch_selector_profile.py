@@ -24,7 +24,7 @@ from scripts.measure_gateway_load import (
     summarize,
     write_results,
 )
-from tests.batch.selector_fixtures import selected_batch
+from tests.batch.selector_fixtures import selected_batch_harness
 from tests.conftest import test_app as app_fixture
 from tests.performance.routing_cache_profile import instrument_async_methods, queue_slope
 from tests.router.selection.provider_fixtures import response_body
@@ -70,10 +70,10 @@ class FixedMicrobatch:
         ]
 
 
-async def measure(output_dir, *, case, duration_seconds=10, rate=2):
+async def measure(output_dir, *, case, duration_seconds=10, rate=2, independent=False):
     app = await app_fixture.__wrapped__()
     with pytest.MonkeyPatch.context() as patch:
-        fixture = selected_batch.__wrapped__(app, patch)
+        fixture = selected_batch_harness(app, patch, independent=independent)
         h = await anext(fixture)
         try:
             return await _measure(h, output_dir, case, duration_seconds, rate)
@@ -278,15 +278,18 @@ async def _measure(h, output_dir, case, duration_seconds, rate):
     return report
 
 
-async def main(output_dir, cases):
+async def main(output_dir, cases, *, independent=False):
     logging.getLogger().setLevel(logging.WARNING)
     for case in cases:
-        await measure(output_dir, case=case)
+        await measure(output_dir, case=case, independent=independent)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--cases", nargs="+", choices=CASES, default=CASES)
+    parser.add_argument(
+        "--independent", action="store_true", help="Use a text-only external classifier"
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.output_dir, args.cases))
+    asyncio.run(main(args.output_dir, args.cases, independent=args.independent))

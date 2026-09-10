@@ -579,14 +579,14 @@ class Router:
 def build_deployment_registry(
     model_registry: dict[str, list[dict[str, Any]]],
     route_groups: list[dict[str, Any]] | None = None,
-) -> dict[str, list[Deployment]]:
+) -> DeploymentRegistryStore:
     return build_deployment_registry_with_route_groups(model_registry, route_groups=route_groups)
 
 
 def build_deployment_registry_with_route_groups(
     model_registry: dict[str, list[dict[str, Any]]],
     route_groups: list[dict[str, Any]] | None,
-) -> dict[str, list[Deployment]]:
+) -> DeploymentRegistryStore:
     registry: dict[str, list[Deployment]] = {}
     deployments_by_id: dict[str, Deployment] = {}
 
@@ -594,12 +594,14 @@ def build_deployment_registry_with_route_groups(
         deployments: list[Deployment] = []
         for index, entry in enumerate(entries):
             deployment = _deployment_from_entry(model_name, entry, index)
+            if deployment.deployment_id in deployments_by_id:
+                raise ValueError(f"duplicate physical deployment id: {deployment.deployment_id}")
             deployments.append(deployment)
             deployments_by_id[deployment.deployment_id] = deployment
         registry[model_name] = deployments
 
     if not route_groups:
-        return registry
+        return DeploymentRegistryStore(registry, physical_deployments=deployments_by_id)
 
     deployment_modes = {
         deployment_id: normalize_route_group_mode(deployment.model_info.get("mode"))
@@ -649,7 +651,7 @@ def build_deployment_registry_with_route_groups(
         # silently receive traffic with different policy semantics.
         registry[group_key] = grouped_deployments
 
-    return registry
+    return DeploymentRegistryStore(registry, physical_deployments=deployments_by_id)
 
 
 def _deployment_from_entry(model_name: str, entry: dict[str, Any], index: int) -> Deployment:

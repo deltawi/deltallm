@@ -1,5 +1,10 @@
 # Route-Group Model Router Design
 
+Current amendment (2026-09-10): [independent selector deployment](model-router-independent-selector.md).
+PRs 1–6 are integrated into the feature branch. The correction supersedes historical
+same-group/enabled-classifier requirements below while retaining policy semantics v3.
+Historical PR checkpoints are not current readiness claims.
+
 Status: accepted design for [issue #304](https://github.com/deltawi/deltallm/issues/304).
 The implementation is split into six reviewable PRs. PRs 1–3 define prerequisites and must not
 activate a selector. PR 4 is the first activation boundary.
@@ -98,7 +103,7 @@ behavior. A selector policy must:
 
 - target a `chat` Route Group;
 - provide an explicit authoritative member list;
-- reference a concrete enabled member of that same group as the classifier;
+- reference an existing concrete deployment as the classifier, independently of answer membership;
 - use a classifier deployment whose workload mode is chat;
 - assign every effectively enabled answer member exactly one configured lane; and
 - leave no configured lane without an effectively enabled member.

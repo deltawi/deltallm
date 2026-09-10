@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { act, useState } from 'react';
+import { act, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { JSDOM } from 'jsdom';
@@ -13,8 +13,91 @@ import RoutingCostSummary from '../src/components/route-groups/RoutingCostSummar
 import { buildPolicyFromGuided, toGuidedPolicy, validateGuidedPolicy } from '../src/lib/routeGroups';
 import { routeGroups } from '../src/lib/api/routeGroups';
 import { useExplicitReport } from '../src/lib/useExplicitReport';
+import { useSelectorOptions } from '../src/lib/useSelectorOptions';
+import type { SelectorOptionsPage, SelectorOptionsQuery } from '../src/lib/api/routeGroups';
 import { emptyCosts, selectorPolicy } from './fixtures/selectorReports';
 import { selectorReports, type RoutingCostPage, type RoutingCostRequest } from '../src/lib/api/selectorReports';
+
+const selectorOptions = ['tiny', 'mini', 'large'].map((id) => ({
+  deployment_id: id, model_name: id, provider: 'openai', mode: 'chat',
+  eligible: true, unavailable_reason: null,
+}));
+
+test('independent selector lookup aborts stale pages and clears protected data across scopes', async () => {
+  const previous = routeGroups.selectorOptions;
+  const calls: Array<{ group: string; query: SelectorOptionsQuery; signal: AbortSignal; resolve: (page: SelectorOptionsPage) => void; reject: (error: Error) => void }> = [];
+  routeGroups.selectorOptions = (group, query = {}, signal) => {
+    assert.ok(signal);
+    return new Promise((resolve, reject) => calls.push({ group, query, signal, resolve, reject }));
+  };
+  try {
+    await withDom(async (root) => {
+      let current: ReturnType<typeof useSelectorOptions> | null = null;
+      function Probe({ scope, selected = 'tiny', allowed = true }: { scope: string; selected?: string; allowed?: boolean }) {
+        const lookup = useSelectorOptions('group', scope, selected, allowed);
+        useEffect(() => { current = lookup; }, [lookup]);
+        return <p>{lookup.data?.selected?.deployment_id ?? 'empty'}</p>;
+      }
+      const page: SelectorOptionsPage = { data: selectorOptions, selected: selectorOptions[0], limit: 20, offset: 0, has_more: true };
+      await act(async () => root.render(<Probe scope="principal-a/group" />));
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].query.selected_id, 'tiny');
+      await act(async () => calls[0].resolve(page));
+      assert.equal(document.querySelector('p')?.textContent, 'tiny');
+      await act(async () => current!.next());
+      assert.equal(calls[1].query.offset, 20);
+      await act(async () => root.render(<Probe scope="principal-a/group" selected="large" />));
+      assert.ok(calls[1].signal.aborted);
+      await act(async () => calls[2].resolve({ ...page, selected: selectorOptions[2], offset: 20 }));
+      await act(async () => calls[1].resolve(page));
+      assert.equal(document.querySelector('p')?.textContent, 'large');
+      await act(async () => { void current!.refresh(); });
+      await act(async () => calls[3].reject(new Error('unavailable')));
+      assert.ok(current!.error);
+      assert.equal(document.querySelector('p')?.textContent, 'large');
+      await act(async () => root.render(<Probe scope="principal-b/group" />));
+      assert.equal(document.querySelector('p')?.textContent, 'empty');
+      await act(async () => root.render(<Probe scope="principal-b/other-group" allowed={false} />));
+      assert.ok(calls[4].signal.aborted);
+      assert.equal(calls.length, 5);
+      await act(async () => calls[4].resolve(page));
+      assert.equal(document.querySelector('p')?.textContent, 'empty');
+    });
+  } finally { routeGroups.selectorOptions = previous; }
+});
+
+test('selector search debounces, resets pagination only for changed search and aborts the old page', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const previous = routeGroups.selectorOptions;
+  const calls: Array<{ query: SelectorOptionsQuery; signal: AbortSignal }> = [];
+  routeGroups.selectorOptions = (_group, query = {}, signal) => {
+    assert.ok(signal);
+    calls.push({ query, signal });
+    return Promise.resolve({ data: [], selected: null, limit: 20, offset: query.offset ?? 0, has_more: true });
+  };
+  try {
+    await withDom(async (root) => {
+      let current: ReturnType<typeof useSelectorOptions> | null = null;
+      function Probe() {
+        const lookup = useSelectorOptions('group', 'principal/group', 'tiny', true);
+        useEffect(() => { current = lookup; }, [lookup]);
+        return null;
+      }
+      await act(async () => root.render(<Probe />));
+      await act(async () => current!.next());
+      assert.equal(calls.at(-1)?.query.offset, 20);
+      await act(async () => context.mock.timers.tick(250));
+      assert.equal(calls.length, 2, 'initial debounce must not reset a selected page');
+      await act(async () => current!.setSearch('tiny model'));
+      await act(async () => context.mock.timers.tick(249));
+      assert.equal(calls.length, 2);
+      await act(async () => context.mock.timers.tick(1));
+      assert.equal(calls.at(-1)?.query.search, 'tiny model');
+      assert.equal(calls.at(-1)?.query.offset, 0);
+      assert.equal(calls.at(-1)?.query.selected_id, 'tiny');
+    });
+  } finally { routeGroups.selectorOptions = previous; context.mock.timers.reset(); }
+});
 
 async function withDom(run: (root: ReturnType<typeof createRoot>, dom: JSDOM) => Promise<void>) {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>');
@@ -87,18 +170,26 @@ test('selector choice stays simple with safe defaults and keyboard-accessible op
     const members = ['mini', 'large'].map((id) => ({ deployment_id: id, mode: 'chat', enabled: true, weight: null, priority: null }));
     function Editor() {
       const [values, onChange] = useState(toGuidedPolicy({}, members));
-      return <PolicySelectorEditor values={values} onChange={onChange} members={members} workloadMode="chat" />;
+      return <PolicySelectorEditor values={values} onChange={onChange} members={members} selectorOptions={selectorOptions} workloadMode="chat" />;
     }
     await act(async () => root.render(<Editor />));
     const select = document.querySelector('select')!;
     assert.equal(select.value, '');
     select.focus();
     assert.equal(document.activeElement, select);
-    await act(async () => { select.value = 'mini'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+    await act(async () => { select.value = 'tiny'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
     assert.match(document.body.textContent!, /customers pay its actual cost/);
     assert.equal(document.querySelector('details')?.open, false);
-    assert.equal((document.querySelector('[aria-label="Answer lane for mini"]') as HTMLSelectElement).value, 'economy');
-    assert.equal((document.querySelector('[aria-label="Answer lane for large"]') as HTMLSelectElement).value, 'quality');
+    assert.equal(document.querySelector('[aria-label="Answer lane for tiny"]'), null);
+    assert.equal((document.querySelector('[aria-label="Answer lane for mini"]') as HTMLSelectElement).value, '');
+    assert.match(document.querySelector('[role="alert"]')!.textContent!, /Assign every/);
+    for (const [id, lane] of [['mini', 'economy'], ['large', 'quality']]) {
+      await act(async () => {
+        const assignment = document.querySelector(`[aria-label="Answer lane for ${id}"]`) as HTMLSelectElement;
+        assignment.value = lane;
+        assignment.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      });
+    }
     assert.match(document.body.innerHTML, /md:flex-row/);
     assert.equal(document.querySelector('[role="alert"]'), null);
     await act(async () => { select.value = ''; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
@@ -126,7 +217,7 @@ for (const width of [375, 1024]) {
           const [values, onChange] = useState(toGuidedPolicy(imported, members));
           const policy = buildPolicyFromGuided(imported, values);
           return <>
-            <PolicySelectorEditor values={values} onChange={onChange} members={members} workloadMode="chat" />
+            <PolicySelectorEditor values={values} onChange={onChange} members={members} selectorOptions={selectorOptions} workloadMode="chat" />
             <PolicyPublishControl policy={policy} activePolicy={active} busy={false}
               disabled={validateGuidedPolicy(values, members, 'chat') !== null}
               onPublish={() => { void routeGroups.publishPolicy('group-id', policy); }} />

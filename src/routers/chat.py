@@ -232,6 +232,7 @@ async def handle_chat_like_request(
                 health_error: Exception | None = None
                 stream_cache_complete = False
                 resolved_usage = None
+                terminal_line: str | None = None
                 try:
                     if (
                         enable_stream_cache
@@ -276,7 +277,10 @@ async def handle_chat_like_request(
                             raise
                         if stream_id is not None and stream_handler is not None:
                             stream_handler.add_chunk_from_line(stream_id, initial)
-                        if not (
+                        if line_info.is_terminal:
+                            terminal_line = initial
+                            stream_cache_complete = True
+                        elif not (
                             line_info.is_usage_only_chunk
                             and not opened_stream.client_stream_usage_requested
                         ):
@@ -288,7 +292,7 @@ async def handle_chat_like_request(
                             if out_line is not None:
                                 yield f"{out_line}\n\n"
                     stream_iterator = opened_stream.translated_stream.__aiter__()
-                    while True:
+                    while terminal_line is None:
                         try:
                             line = await anext(stream_iterator)
                         except StopAsyncIteration:
@@ -309,8 +313,12 @@ async def handle_chat_like_request(
                             raise
                         if stream_id is not None and stream_handler is not None:
                             stream_handler.add_chunk_from_line(stream_id, line)
-                            if line.strip() == "data: [DONE]":
-                                stream_cache_complete = True
+                        if line_info.is_terminal:
+                            # A client may close immediately at DONE. Finish accounting
+                            # before forwarding it, without waiting for provider EOF.
+                            terminal_line = line
+                            stream_cache_complete = True
+                            break
 
                         if (
                             line_info.is_usage_only_chunk
@@ -351,9 +359,12 @@ async def handle_chat_like_request(
                             recovery_token=managed_stream.recovery_token,
                         )
                     finally:
-                        await close_stream_resources(lambda: stream_lifecycle.close(failure_exc))
+                        await close_stream_resources(
+                            lambda: stream_lifecycle.close_upstream(failure_exc)
+                        )
 
                 if stream_error is not None:
+                    await close_stream_resources(lambda: stream_lifecycle.close(failure_exc))
                     failure_params = opened_stream.params
                     failure_api_base = opened_stream.api_base
                     try:
@@ -406,7 +417,7 @@ async def handle_chat_like_request(
                     mode="chat",
                     usage=resolved_usage.usage,
                 )
-                await emit_stream_success(
+                async with emit_stream_success(
                     request=request,
                     auth=auth,
                     payload=payload,
@@ -425,7 +436,18 @@ async def handle_chat_like_request(
                     params=opened_stream.params,
                     usage=resolved_usage.usage,
                     usage_metadata=resolved_usage.metadata(),
-                )
+                ):
+                    try:
+                        if terminal_line is not None:
+                            out_line = (
+                                stream_line_transform(terminal_line)
+                                if stream_line_transform is not None
+                                else terminal_line
+                            )
+                            if out_line is not None:
+                                yield f"{out_line}\n\n"
+                    finally:
+                        await close_stream_resources(stream_lifecycle.close)
 
             try:
                 response = DeadlineStreamingResponse(

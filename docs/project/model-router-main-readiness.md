@@ -4,6 +4,9 @@ Date: 2026-09-10. Integration parents: feature `46075ba5` (all six PRs)
 and main `35ed9843` (provider expansion). This record does not approve or
 perform a merge to main, deployment, or representative quality/savings acceptance.
 
+Latest correction: see the [independent-selector implementation record](#independent-selector-implementation-2026-09-10)
+and its [design/rollout decision](model-router-independent-selector.md).
+
 ## Integration decisions
 
 - Keep `resolve_chat_upstream_from_registry` as the single upstream resolver
@@ -199,3 +202,240 @@ Python and the FastAPI/Starlette/Pydantic/httpx/AnyIO versions were identical.
 
 There is no new temporary plan file. This document is retained design and
 verification evidence, not a claim that the open acceptance items are complete.
+
+## Independent-selector implementation — 2026-09-10
+
+Implemented locally on `fix/issue-304-independent-selector` in
+`.worktrees/issue-304-independent-selector`, from freshly fetched remote feature
+`d41b66afe43154181f1c21f02b1ac9b372c2714a`. No push, PR, remote-issue update,
+main merge, paid provider call or user-demo modification was performed.
+
+The classifier is now independent of answer membership across file configuration,
+durable lifecycle, immutable runtime qualification, cache identity, Chat/Responses,
+Batch and the simple guided editor. Existing explicitly configured dual roles remain.
+Selector cost and Batch checkpoint ownership are unchanged. New physical-ID dependency
+locks protect published references (including disabled groups) against deletion,
+invalid metadata and concurrent selector switches. The temporary plan was removed;
+lasting decisions and rollback instructions are in the linked design document.
+
+### Automated gates
+
+Local dependencies: frozen `uv.lock`, Python 3.11.13, generated Prisma client,
+isolated PostgreSQL 15 on 55438 and Redis 7 on 16383, npm lockfile and Helm CLI.
+The original feature worktree remains clean. Commands below use the installed
+`.venv/bin/python` / `.venv/bin/ruff` equivalents of `uv run`.
+
+| Gate | Final result |
+| --- | --- |
+| `pytest --collect-only -qq --dependency-lane-report` | 5,525 tests, exactly one primary lane each |
+| `pytest -q -m hermetic --tb=short -rs` | 3,609 passed; local socket permissions used, no skips |
+| `pytest -q -m app --tb=short` | 1,474 passed |
+| `pytest -q -m postgres --tb=short` | 323 passed |
+| `pytest -q -m redis --tb=short` | 51 passed |
+| `pytest -q -m helm --tb=short` | 68 passed |
+| `ruff check .`; `ruff format --check <touched Python paths>` | Passed |
+| Touched-file ESLint; `npm --prefix ui run test:unit` | Zero findings; 256 tests passed |
+| `npm --prefix ui run build` | Passed; initial 370.21 KB gzip unchanged, Model Group lazy chunk 26.31 KB |
+| `npm --prefix ui run lint` | Existing 118 errors / 4 warnings, unchanged; not a clean full-lint gate |
+| `python -m scripts.docs.export_openapi --check` | Current; 230 paths / 298 operations |
+| `mkdocs build --strict`; `git diff --check` | Passed |
+
+`uv sync --frozen --extra dev --extra docs --python 3.11` and
+`prisma generate --schema=./prisma/schema.prisma` were run.
+The canonical Docker build uses Node 20; host UI checks used Node 23.6.1 and emitted
+the existing dependency-engine warning. No lockfile/package upgrades were made.
+
+`scripts/verify_migration_paths.py` passed fresh installation, upgrade from
+`v0.1.42`, and the shared-feature migration path, including all 90 migrations.
+Its temporary databases were cleaned up. The new dependency-plan test uses the
+production SQL with 5,000 groups and 20,000 policy revisions: PostgreSQL uses
+`deltallm_routepolicy_selector_dependency_idx`, returning one affected group.
+One observed execution was 0.97 ms (planning 0.687 ms). PostgreSQL chose to scan the
+small group table for its final join, not policy history; this is control-plane
+work, never inference admission.
+
+The first broad app run overlapped a Vite rebuild and had seven fixture setup
+errors while assets were being replaced. A later run exposed the performance
+harness's direct fixture caller after fixture parameterization; that caller was
+fixed through a shared harness. The clean complete app rerun above supersedes
+both failures. No tests were removed or skipped to obtain that result.
+
+### Reproducible mock performance
+
+Raw samples/summaries are retained under
+`docs/project/benchmarks/independent-selector/`. These are fixed local mocks
+with synthetic pricing, not real-provider quality or net-savings evidence.
+
+- Realtime: `python -m tests.performance.realtime_selector_profile --output-dir <dir>`,
+  repeated with `--independent`, 10 RPS for 20 seconds per case. Initial and
+  repeated baseline source runs use feature `d41b66af`; comparison runs use the
+  correction. All cases completed 200/200 with zero drops and zero sampled
+  in-flight slope. Redis and billing call counts match the baseline exactly.
+  Ordinary cases make 200 answer calls; selected cases add exactly 200 classifiers.
+- Batch: `python -m tests.performance.batch_selector_profile --cases baseline_microbatch
+  selector_balanced selector_safe_default --output-dir <dir>`, repeated with
+  `--independent`. Each case completes 20 eight-item slices / 160 items at 16 items/s,
+  no drops or queue slope. Redis counts match; selected items retain 320 checkpoint
+  writes and 160 receipts, ordinary microbatching retains zero selector/checkpoint
+  work. Heartbeat renewals vary with elapsed time (not new per-item I/O).
+- Selected nonstream p50/p95/p99: initial baseline 12.46/16.43/17.36 ms,
+  correction dual-role 8.71/10.14/10.84 ms, external 8.66/9.72/10.52 ms.
+  These short shared-host runs do **not** establish a speed improvement.
+- Streaming tails remain noisy. A separate selected-stream pair measured
+  10.84/17.27/23.11 ms before and 11.04/26.01/28.28 ms external; p95 TTFT
+  14.97 → 21.75 ms. Both retained identical calls, 200/200 success and zero slope.
+- Batch balanced p95 was 43.70 → 41.23 ms; safe-default 58.46 → 40.58 ms.
+  Ordinary microbatch runs included cold-tail outliers (237.88 ms initially,
+  299.76 ms in a repeat). A later unchanged-source control had a comparable
+  median (25.17 ms versus correction 24.92 ms), but not that tail. Retain all
+  samples; do not dismiss or hide these outliers. Controlled tail-latency
+  qualification remains open before claiming production performance readiness.
+
+No new inference SQL/Redis/provider lookup, pool, concurrency allocation or retry
+was introduced. Physical inventory is prepared once per generation; external-selector
+response identity is hashed off-path. The SQL addition is bounded publication/dependency
+coordination, with its own lock deadline, not request routing.
+
+### Final container acceptance and remaining gates
+
+Canonical `docker build -t deltallm-independent-selector:local .` succeeded.
+Final tested image:
+`sha256:a991f0783ae2fe1a4b82b2b89cca5954e30f97f04b47794df89a1258d73fba5b`.
+The unchanged canonical image still defaults to root: non-root release qualification
+is a pre-existing gap, not a newly claimed pass.
+
+The checked-in `tests/performance/independent_selector_profile.yaml`,
+`independent_selector_mock.py` and `independent_selector_smoke.py` define the
+isolated acceptance fixture. A separate migrated `independent_selector_smoke`
+database and Redis DB 1 were used; fixture seeding refuses a non-loopback or
+differently named database. Migrations ran before startup. The gateway ran on
+127.0.0.1:4003, not the user's existing demo port.
+
+Both readiness/liveness were 200. An expiring group-only fixture key exercised
+economy, quality, streaming Chat and Responses successfully, with exactly four
+classifier calls, two economy answers and two quality answers. Direct calls to
+`tiny-selector` returned 403 without another provider call. Public usage was
+answer-only; the first smoke's four selector operations were durably settled.
+The final image repeated the four cases successfully, then completed graceful
+shutdown. Mock/gateway containers are stopped; their logs/data remain recoverable.
+The isolated PostgreSQL/Redis test services remain available.
+
+Browser acceptance is still open. The Browser skill was read from the installed
+newer plugin and connection attempted; its runtime imports a missing older
+`browser-service.mjs`. No browser plugin, profile or user session was modified.
+Component tests at 375/1024px and keyboard/focus tests are not a substitute for
+full browser publication/history/import/rollback acceptance.
+
+Remote CI, controlled tail-latency qualification, browser verification and the
+existing deployment/representative-quality gates remain distinct from completed
+implementation and functional test coverage. Do not enable external references
+until every API and Batch worker runs this correction.
+
+## Stream-completion accounting correction — 2026-09-10
+
+The subsequent live test exposed a shared streaming bug: clients closing at
+`[DONE]` could cancel answer accounting. In outbox mode, the focused correction
+durably accepts the existing answer write and required audit before the terminal marker. Content
+frames remain streamed immediately. Provider EOF is not required; the existing
+response deadline and bounded cleanup owner remain authoritative. See the
+[design and limitations](model-router-independent-selector.md#streaming-completion-correction).
+No additional provider request, charge event, migration, pool or worker was added.
+
+### Verification after the fix
+
+Commands use the same frozen worktree environment and isolated test services
+described above (`.venv/bin/python -m pytest` and `.venv/bin/ruff`).
+
+| Command | Result |
+| --- | --- |
+| `pytest -q tests/test_stream_accounting_commit.py` | 20 passed, including all four wrappers with/without a selector over real loopback HTTP |
+| `pytest -q tests/test_stream_accounting_commit.py tests/test_stream_usage.py tests/test_stream_response.py tests/test_chat.py tests/test_text_endpoints.py tests/router/selection/test_realtime.py` | 141 passed before the final six wrapper cases were added; the 20-case run includes those six |
+| `pytest -q -m hermetic --durations=10` | 3,612 passed |
+| `pytest -q -m app --durations=10` | 1,488 passed in 584.69 seconds; the final six new cases were separately covered above |
+| `pytest -q -m postgres --durations=10` | 323 passed against PostgreSQL 15 |
+| `pytest -q -m redis --durations=10` | 51 passed against Redis 7 |
+| `pytest --collect-only -qq --dependency-lane-report` | 5,548 collected: 3,612 hermetic / 1,494 app / 323 PostgreSQL / 51 Redis / 68 Helm |
+| `ruff check .`; touched Python `ruff format --check` | Passed |
+
+The new regression failed on the original ordering (zero answer writes when
+the terminal was sent). Tests also cover blocked/failed accounting, required-audit
+failure, cancellation/deadline cleanup, no provider retry/cooldown for write failure,
+one charge, and release before post-call hooks. An initial attempt held the
+provider permit through post-call hooks; the unchanged existing regression caught
+this, and the correction now preserves that ordering. No test was weakened.
+Helm/UI were not changed by this follow-up; their preceding results remain dated
+evidence, not reruns. Deprecation warnings remain in the Python suites.
+
+Canonical Docker build:
+`docker build --build-arg INSTALL_PRESIDIO=false -t deltallm-independent-selector:stream-commit .`.
+Tested image: `sha256:8533abe06cf6c93c7a8b7608241af09eea0076f3ee53c99f131a18b97f8efdad`.
+The optional Presidio build argument uses the canonical Dockerfile; no dependency
+or image-hardening changes are part of this fix. Existing root-image debt remains.
+
+The isolated Docker mock on port 4003 returned 200 for Chat, Responses,
+Completions and Messages, closing each client immediately at `[DONE]` or
+`message_stop`. PostgreSQL showed exactly one answer event per correlation ID
+and a settled selector receipt: each fixture charge was $0.000023 for the answer
+and $0.000023 for the selector, with 18 answer tokens. An initial startup failed
+because the test dependencies were not attached to the gateway network; attaching
+the existing isolated test services resolved it, without source/config changes.
+
+The same image replaced only the local Groq gateway on port 4002; existing
+database/Redis data and operator policy were preserved. One bounded live request
+closed at `[DONE]` after 1,046 ms (first content 795 ms). Current policy version 9
+classified it to MiniMax, not the test script's economy expectation. Both charges
+persisted: selector $0.00001146 and answer $0.00016350 for 164 answer tokens,
+using the user's illustrative prices. This confirms terminal-close accounting,
+not routing-quality or savings acceptance. The test key was expired; expired and
+missing credentials returned 401 and direct selector access returned 403.
+
+Historical missing answer charges were **not** synthesized or backfilled.
+The earlier timed-out selector remains unknown/pending. Earlier midstream
+disconnects without final usage and production load qualification remain separate
+work; this fix is not a claim to resolve every incomplete historical operation.
+Changes remain local and unpushed.
+
+Review follow-up P2: the public docs now scope durable charge acceptance to
+`spend_ingestion_mode: outbox`. The default legacy writer is awaited but may log
+and swallow database errors, so its terminal marker is not proof of persistence.
+Eight additional application cases cover all four wrappers in both modes with
+the real ingestion service and legacy writer/ledger, mocking only persistence
+boundaries. They distinguish legacy failure-with-terminal from outbox
+failure-without-terminal, and assert one provider call and upstream cleanup.
+This documentation/test correction does not change billing execution, defaults,
+tenant attribution, retry behavior, dependency counts or latency.
+
+P2 verification: the focused six-file pytest command above now passes **156
+tests** (two existing deprecation warnings); the eight new mode-specific cases
+also passed separately. Full collection with `--dependency-lane-report` selects
+5,556 tests exclusively: 3,612 hermetic / 1,502 app / 323 PostgreSQL / 51 Redis /
+68 Helm. Touched-file Ruff checks/formatting, `mkdocs build --strict` and
+`git diff --check` passed. No live calls, Docker restart or full dependency-lane
+reruns were needed for this documentation/test-only follow-up.
+
+### Streaming dependency and latency evidence
+
+[Raw samples and reproduction instructions](benchmarks/stream-completion-commit/README.md)
+retain initial, paired and final checked-harness runs. Every case offered and
+completed 200 requests at 10 RPS for 20 seconds, with zero drops and zero sampled
+in-flight slope. Provider and Redis command counts match exactly before/after.
+Ordinary streams make one answer call; selected streams make one classifier plus
+one answer and one each of the existing logical reserve/dispatch/receipt operations.
+The fake billing harness does not measure durable SQL calls or commit latency;
+the fix reorders/awaits the same writer, with no new query or transaction shape.
+Docker checks above independently verify persisted results.
+
+Final paired p50/p95/p99, in milliseconds:
+
+| Stream | Before | After |
+| --- | --- | --- |
+| Ordinary | 6.27 / 7.42 / 7.75 | 6.52 / 7.48 / 10.47 |
+| Independent selector | 9.50 / 10.77 / 11.66 | 9.70 / 10.94 / 11.65 |
+
+Measured p95 TTFT was 5.68 → 6.27 ms ordinary and 9.07 → 9.93 ms selected.
+Initial runs were noisier (selected p95 11.05 → 25.36 ms while other checks ran);
+all observations are retained. These short shared-host measurements show no
+dependency amplification but do not prove zero latency regression or qualify a
+production SLO. Required durable commit latency now precedes terminal delivery
+by design; it does not precede content delivery and remains under the existing
+end-to-end deadline. No concurrency/pool/replica allocation was increased.

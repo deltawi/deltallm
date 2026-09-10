@@ -1,0 +1,154 @@
+{
+  "answer_peak_by_model": {},
+  "answer_provider_cost_exact": "0.03680",
+  "answer_quality_score": null,
+  "arrival_window_completion_rps": 2.0,
+  "arrival_window_seconds": 10,
+  "baseline_answer_provider_cost_exact": "0.03680",
+  "basis": "fixed_local_provider_synthetic_prices_no_quality_claim",
+  "billing_operations": {
+    "accept_selector": 0,
+    "dispatch": 0,
+    "reserve": 0
+  },
+  "case": "baseline_microbatch",
+  "checkpoint_transactions": 0,
+  "client_started_count": 20,
+  "client_started_rps": 2.0,
+  "completion_count": 20,
+  "decision_causes": {},
+  "drain_window_seconds": 9.433296509087086e-05,
+  "generator_dropped_count": 0,
+  "in_flight_samples": [
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ]
+  ],
+  "in_flight_slope_per_second": 0.0,
+  "item_count": 160,
+  "item_latency_ms": {
+    "p50": 12.036582978907973,
+    "p95": 237.24616703111678,
+    "p99": 237.2568339924328
+  },
+  "items_per_slice": 8,
+  "latency_seconds": {
+    "max": 0.23787637503119186,
+    "mean": 0.02390201864473056,
+    "p50": 0.012511750042904168,
+    "p95": 0.014747500012163073,
+    "p99": 0.23787637503119186
+  },
+  "max_in_flight_observed": 1,
+  "measurable_mock_penalty_exact": "0",
+  "microbatch_provider_seconds": 0.11286899907281622,
+  "microbatch_sizes": [
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8
+  ],
+  "offered_items_per_second": 16,
+  "provider_calls": {
+    "microbatch": 20
+  },
+  "provider_seconds": {},
+  "real_provider_savings": null,
+  "received_items_per_second": 16.0,
+  "redis_calls": {
+    "eval": 380,
+    "evalsha": 160,
+    "expire": 320,
+    "get": 160,
+    "hgetall": 180,
+    "incr": 160,
+    "incrby": 160,
+    "mget": 180,
+    "pexpire": 20,
+    "script_load": 1,
+    "zadd": 40,
+    "zremrangebyscore": 20
+  },
+  "remaining_caller_leases": 0,
+  "remaining_caller_refreshers": 0,
+  "repository_calls": {
+    "complete_items_with_outbox_bulk": 20,
+    "renew_item_lease": 160
+  },
+  "run_id": "802c08f76a7d478ca71bb2295fc34616",
+  "scheduling_lag_seconds": {
+    "max": 0.0011561670107766986,
+    "mean": 0.0010691271745599806,
+    "p50": 0.0011147920158691704,
+    "p95": 0.00115537503734231,
+    "p99": 0.0011561670107766986
+  },
+  "selected_lanes": {},
+  "selector_provider_cost_exact": "0",
+  "split_dispatch_renewals": 0,
+  "started_at": "2026-09-10T16:54:43.556534+00:00",
+  "status_counts": {
+    "200": 20
+  },
+  "success_count": 20,
+  "synthetic_net_savings_exact": "0.00000",
+  "target_count": 20,
+  "target_rate_rps": 2,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  },
+  "worker_slots": 4
+}

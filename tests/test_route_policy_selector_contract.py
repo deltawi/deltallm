@@ -179,7 +179,7 @@ def test_validate_selector_policy_normalizes_strict_contract():
             lambda policy, inventory: policy["selector"].update(
                 {"classifier_deployment_id": "dep-other"}
             ),
-            "classifier must be a member",
+            "classifier must reference an existing concrete deployment",
         ),
         (
             lambda policy, inventory: inventory.update(
@@ -189,7 +189,7 @@ def test_validate_selector_policy_normalizes_strict_contract():
                     )
                 }
             ),
-            "classifier must be an enabled route-group member",
+            "lanes have no enabled members: economy",
         ),
         (
             lambda policy, inventory: inventory.update(

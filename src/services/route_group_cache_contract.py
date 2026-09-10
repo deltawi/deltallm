@@ -17,7 +17,7 @@ from src.route_policy_contract import (
 )
 from src.router.selection.policy import ensure_selector_activation_supported
 
-ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION = 3
+ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION = 4
 ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -136,8 +136,8 @@ class _CacheGroup(BaseModel):
 class RouteGroupRuntimeCacheEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    schema_version: Literal[3]
-    selector_activation_state: Literal["validated-v3"]
+    schema_version: Literal[4]
+    selector_activation_state: Literal["validated-v4"]
     revision: int = Field(ge=0)
     groups: list[_CacheGroup]
     database_initialized: bool | None

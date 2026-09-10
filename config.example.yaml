@@ -74,6 +74,7 @@ router_settings:
   # Optional chat model router (issue #304). Before enabling, declare each member's
   # model_info.chat_capabilities and positive context capacity. The classifier also needs
   # explicit provider token prices and positive RPM/TPM limits; see docs/configuration/models.md.
+  # The classifier is an independent concrete deployment; it need not be an answer member.
   # Requires general_settings.spend_ingestion_mode: outbox and its enabled healthy worker.
   # Selector cost is charged to customers; budgets remain soft checks, not spending holds.
   # Internal Batch chat selects per item and bypasses microbatch grouping.
@@ -87,7 +88,7 @@ router_settings:
   #       unknown_capacity: exclude
   #     selector:
   #       kind: llm-tier
-  #       classifier_deployment_id: support-mini
+  #       classifier_deployment_id: support-tiny-selector
   #       timeout_ms: 750
   #       max_input_chars: 8000
   #       default_lane: quality

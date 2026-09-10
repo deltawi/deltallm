@@ -22,7 +22,10 @@ async def test_each_item_selects_independently_without_public_usage_or_pricing_c
     h = selected_batch
     items = [h.item(1), h.item(2, "complex reasoning")]
     await h.worker._process_items(h.job, items)
-    assert [call["model"] for call in answer_calls(h)] == ["classifier", "quality"]
+    assert [call["model"] for call in answer_calls(h)] == [
+        h.policy["members"][0]["deployment_id"],
+        "quality",
+    ]
     assert len(selection_calls(h)) == 2 and len(h.checkpoints.writes) == 4
     assert len(h.repository.completed_calls) == 2
     assert all(row["usage"]["total_tokens"] == 18 for row in h.repository.completed_calls)

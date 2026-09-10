@@ -64,7 +64,9 @@ class RoutingRuntimeGeneration:
         requires_reconciliation: bool = False,
     ) -> RoutingRuntimeGeneration:
         selectors = qualify_selector_groups(
-            router_config.route_group_policies, deployment_registry.snapshot()
+            router_config.route_group_policies,
+            deployment_registry.snapshot(),
+            deployment_registry.physical_deployments,
         )
         return cls(
             selectors=selectors,
@@ -90,6 +92,7 @@ class RoutingRuntimeGeneration:
                 groups=route_groups,
                 policies=router_config.route_group_policies,
                 deployments=deployment_registry.snapshot(),
+                physical_deployments=deployment_registry.physical_deployments,
                 default_strategy=strategy,
                 failover_config=failover_config,
                 enable_pre_call_checks=router_config.enable_pre_call_checks,

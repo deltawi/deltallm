@@ -46,6 +46,7 @@ def test_selector_admin_components_stay_separate_from_the_route_page():
     folder = ROOT / "ui/src/components/route-groups"
     for name in (
         "PolicySelectorEditor",
+        "RouteGroupSelectorEditor",
         "PolicySelectorSummary",
         "PolicyPublishControl",
         "SelectorEvaluationPanel",
@@ -55,3 +56,18 @@ def test_selector_admin_components_stay_separate_from_the_route_page():
     ):
         assert len((folder / f"{name}.tsx").read_text().splitlines()) < 400
     assert len((ROOT / "ui/src/pages/RouteGroupDetail.tsx").read_text().splitlines()) < 800
+
+
+@pytest.mark.parametrize(
+    "module", ["services/selector_inventory.py", "db/route_policy_dependencies.py"]
+)
+def test_independent_selector_boundaries_remain_typed_and_off_the_inference_path(module):
+    source = (ROOT / "src" / module).read_text()
+    assert len(source.splitlines()) < 500
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            assert node.end_lineno - node.lineno < 80
+        if isinstance(node, ast.Name):
+            assert node.id not in {"Any", "Request", "getattr", "hasattr", "setattr"}
+        if isinstance(node, ast.ImportFrom):
+            assert not (node.module or "").startswith(("fastapi", "src.api"))

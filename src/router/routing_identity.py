@@ -31,6 +31,7 @@ def build_runtime_routing_fingerprints(
     default_strategy: RoutingStrategy,
     failover_config: FallbackConfig,
     enable_pre_call_checks: bool = False,
+    physical_deployments: Mapping[str, Deployment] | None = None,
 ) -> Mapping[str, str]:
     """Project validated runtime inputs once; never read mutable state on cache lookup."""
 
@@ -73,6 +74,15 @@ def build_runtime_routing_fingerprints(
             {
                 "policy": policy_identity,
                 "deployments": [_deployment_identity(member) for member in members],
+                **(
+                    {
+                        "classifier": _deployment_identity(
+                            physical_deployments[selector.classifier_deployment_id]
+                        )
+                    }
+                    if selector is not None and physical_deployments is not None
+                    else {}
+                ),
                 "pre_call_checks": enable_pre_call_checks,
                 "execution": {
                     "timeout": float(
@@ -148,6 +158,11 @@ def _deployment_identity(deployment: Deployment) -> str:
                 "output_cost_per_token", deployment.output_cost_per_token
             ),
             "cost_per_request": info.get("cost_per_request"),
+            **(
+                {"input_cost_per_token_cache_hit": info["input_cost_per_token_cache_hit"]}
+                if "input_cost_per_token_cache_hit" in info
+                else {}
+            ),
             "rpm": deployment.rpm_limit,
             "tpm": deployment.tpm_limit,
         }

@@ -72,7 +72,7 @@ class RouteGroupRuntimeRedisKeyspace:
 
     environment: str = "dev"
     application: str = "deltallm"
-    schema_version: int = 3
+    schema_version: int = 4
 
     def snapshot(self, revision: int) -> str:
         normalized_revision = int(revision)

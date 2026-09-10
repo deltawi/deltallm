@@ -29,7 +29,7 @@ from tests.router.selection.provider_fixtures import response_body
 from tests.test_routing_cache_identity import _publish
 
 
-async def measure(output_dir, *, selector, streaming):
+async def measure(output_dir, *, selector, streaming, independent=False):
     app = await app_fixture.__wrapped__()
     calls, durations = Counter(), Counter()
 
@@ -59,7 +59,7 @@ async def measure(output_dir, *, selector, streaming):
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as upstream:
-        billing, policy = configure(app, upstream)
+        billing, policy = configure(app, upstream, independent=independent)
         for entry in app.state.model_registry["backing"]:
             entry["model_info"].update(rpm_limit=10000, tpm_limit=100000000)
         if not selector:
@@ -142,15 +142,23 @@ async def measure(output_dir, *, selector, streaming):
     }
 
 
-async def main(output_dir):
+async def main(output_dir, *, independent=False):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("src.services.key_service").setLevel(logging.WARNING)
     for streaming in (False, True):
         for selector in (False, True):
-            await measure(output_dir, selector=selector, streaming=streaming)
+            await measure(
+                output_dir, selector=selector, streaming=streaming, independent=independent
+            )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
-    asyncio.run(main(parser.parse_args().output_dir))
+    parser.add_argument(
+        "--independent",
+        action="store_true",
+        help="Use a text-only classifier outside answer membership",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(args.output_dir, independent=args.independent))

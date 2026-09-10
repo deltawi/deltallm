@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from src.route_group_config import validate_context_routing_workload_mode
+from src.route_policy_contract import SelectorDeploymentInventory, validate_selector_reference
 from src.router.router import RoutingStrategy
 from src.router.selection.policy import (
     CONTEXT_POLICY_SEMANTICS_VERSION,
@@ -468,6 +469,7 @@ def _validate_selector(
     normalized: dict[str, Any],
     *,
     available_members: Mapping[str, PolicyMemberInventoryItem] | None,
+    available_deployments: Mapping[str, SelectorDeploymentInventory] | None,
     group_mode: str | None,
     semantics_version: int,
 ) -> None:
@@ -488,6 +490,11 @@ def _validate_selector(
     try:
         selector = LLMTierSelectorPolicy.model_validate(raw_selector)
         members = [RoutePolicyMember.model_validate(member) for member in normalized["members"]]
+        # Member-only callers can still validate existing dual-role configurations.
+        # Control-plane callers provide the authoritative physical inventory explicitly.
+        targets = available_deployments if available_deployments is not None else available_members
+        if targets is not None:
+            validate_selector_reference(selector, targets)
         validate_selector_assignments(
             selector,
             members,
@@ -670,6 +677,7 @@ def _validate_route_policy_document(
     payload: dict[str, Any],
     *,
     available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
+    available_deployments: Mapping[str, SelectorDeploymentInventory] | None = None,
     semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
     workload_mode: object | None = None,
     validation_kind: PolicyValidationKind,
@@ -731,6 +739,7 @@ def _validate_route_policy_document(
     _validate_selector(
         normalized,
         available_members=available_members,
+        available_deployments=available_deployments,
         group_mode=str(workload_mode) if workload_mode is not None else None,
         semantics_version=semantics_version,
     )
@@ -741,6 +750,7 @@ def validate_route_policy(
     payload: dict[str, Any],
     *,
     available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
+    available_deployments: Mapping[str, SelectorDeploymentInventory] | None = None,
     semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
     workload_mode: object | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
@@ -749,6 +759,7 @@ def validate_route_policy(
     return _validate_route_policy_document(
         payload,
         available_members=available_members,
+        available_deployments=available_deployments,
         semantics_version=semantics_version,
         workload_mode=workload_mode,
         validation_kind=PolicyValidationKind.CLIENT_DOCUMENT,
@@ -759,6 +770,7 @@ def validate_stored_route_policy(
     payload: dict[str, Any],
     *,
     available_members: Mapping[str, PolicyMemberInventoryItem] | None = None,
+    available_deployments: Mapping[str, SelectorDeploymentInventory] | None = None,
     semantics_version: int = CURRENT_POLICY_SEMANTICS_VERSION,
     workload_mode: object | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
@@ -767,6 +779,7 @@ def validate_stored_route_policy(
     return _validate_route_policy_document(
         payload,
         available_members=available_members,
+        available_deployments=available_deployments,
         semantics_version=semantics_version,
         workload_mode=workload_mode,
         validation_kind=PolicyValidationKind.STORED_DOCUMENT,

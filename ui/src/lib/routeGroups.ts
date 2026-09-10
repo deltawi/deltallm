@@ -290,7 +290,7 @@ export function validateGuidedPolicy(
   memberOptions: PolicyMemberOption[],
   workloadMode: string,
 ): string | null {
-  const selectorError = validateGuidedSelector(guided.selector, memberOptions, guided.memberIds, workloadMode);
+  const selectorError = validateGuidedSelector(guided.selector, guided.memberIds, workloadMode);
   if (selectorError) return selectorError;
   const enabledIds = new Set(
     memberOptions.filter((member) => member.enabled).map((member) => member.deployment_id),

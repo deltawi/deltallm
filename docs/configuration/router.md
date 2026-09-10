@@ -224,7 +224,7 @@ The ownership, migration, rollback, and latency decisions are recorded in the
 Version 3 defines a bounded `llm-tier` selector for chat Route Groups. It classifies a request into
 an allowlisted lane; it does not choose a deployment. Lanes have unique contiguous ranks starting at
 zero, and an omitted `default_lane` normalizes to the highest-ranked lane. Selector policies require
-an explicit member list, an enabled same-group chat classifier, and one valid lane for every enabled
+an explicit answer-member list, a concrete chat classifier (inside or outside the group), and one valid lane for every enabled
 answer member.
 
 For an existing version 3 selector draft, omitting `selector` preserves it. A member-only update
@@ -240,7 +240,8 @@ routing generation; in-flight operations finish against their original policy an
 
 Before activation:
 
-- Use a supported concrete chat deployment as the enabled, same-group classifier. Every enabled
+- Use a supported concrete chat deployment ID as the classifier, not an alias or another group.
+  It need not be an answer member. Every enabled
   answer member must declare positive context capacity and explicit
   [`model_info.chat_capabilities`](models.md#model-router-capability-and-price-metadata).
 - Set group `context.unknown_capacity: exclude`. The classifier needs explicit input/output token
@@ -248,6 +249,12 @@ Before activation:
 - Enable `general_settings.spend_ingestion_mode: outbox` and
   `spend_ingestion_worker_enabled: true`, with healthy PostgreSQL and shared Redis admission.
   Missing accounting readiness fails activation/admission; it never becomes a free default call.
+
+The classifier only needs capabilities/context for its bounded textual classification request,
+not the answer's streaming, tools or full context window. Only explicitly assigned answer
+members can answer. Shared selectors retain one physical deployment's health and capacity
+identity across groups and standalone traffic. Choosing a selector does not grant callers
+standalone access to it. See the [independent-selector rollout](../project/model-router-independent-selector.md).
 
 For example, add this block alongside the `selector` and `members` in a policy:
 

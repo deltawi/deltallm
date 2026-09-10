@@ -6,11 +6,12 @@ behavior. There is no shadow mode, background evaluation, or second activation s
 ## Choose, assign, publish
 
 1. Open a chat **Model Group → Advanced → Routing Policy**.
-2. Under **Model selector**, choose an enabled chat deployment already selected
-   in the group. Usually this is your small, inexpensive model.
-3. Review the suggested answer lanes: the initial selector member is placed in
-   `economy`, and the other selected members in `quality`. Adjust these assignments
-   for your actual models; names and prices alone do not prove capability.
+2. Under **Model selector**, choose a configured chat deployment. It does not
+   need to be a group member. Search by name, provider or deployment ID.
+3. Assign the group's answer members to lanes, for example OSS-20B to `economy`
+   and MiniMax to `quality`. A tiny external selector receives no answer lane.
+   Existing assignments are preserved; new ones start at **Choose lane**.
+   Names and prices alone do not prove capability.
 4. Select **Publish** and confirm the data-path and cost consequences. Successful
    publication activates routing directly. **Validate**, **Save Draft**, and
    **Evaluate selector** are optional, not a wizard or publication prerequisite.
@@ -34,11 +35,28 @@ classifier pricing and RPM/TPM limits, plus healthy selector billing/outbox and
 shared admission dependencies. A selector report does not replace these checks.
 See [router configuration](router.md#model-router-policy-contract) for runtime details.
 
-If no selector is offered, check the group's member selection, enabled flags and
-deployment workload modes. Unknown modes are not guessed. Inline errors identify
+If no selector is offered, check the search and configured chat deployments.
+The picker distinguishes missing targets, unavailable inventory and permission denial.
+Incomplete metadata stays visible with a repair warning; publication remains blocked.
+Unknown modes are not guessed. Inline errors identify
 invalid ranks, missing assignments, unsupported workloads and invalid classifiers;
 publication also returns authoritative server errors. Correct the model metadata
 or dependency health instead of disabling qualification.
+
+Choosing or replacing a selector never changes answer membership, enabled flags,
+weights, priorities or existing lanes. A deployment answers only if explicitly
+included as an answer member; an existing dual-role model stays dual-role.
+Disabling its answer membership does not disable the independent selector hop.
+
+Only configuration administrators can attach or enumerate selectors. A caller
+authorized for the group may use its internal selector without gaining permission
+to call that deployment directly. Placement/data-handling restrictions still apply.
+Switch or remove published selector references before deleting their deployment
+or making its metadata incompatible, including for temporarily disabled groups.
+
+All APIs and Batch workers must run the independent-selector release before
+publishing an external reference. See the
+[rollout decision](../project/model-router-independent-selector.md#rollout-and-rollback).
 
 ## Disable, import/export, canary and rollback
 

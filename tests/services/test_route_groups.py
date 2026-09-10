@@ -184,7 +184,7 @@ def test_file_config_selector_requires_loaded_deployment_inventory():
 @pytest.mark.parametrize(
     ("deployment_modes", "message"),
     [
-        ({"dep-large": "chat"}, "classifier must be a member"),
+        ({"dep-large": "chat"}, "classifier must reference an existing concrete deployment"),
         (
             {"dep-mini": "embedding", "dep-large": "chat"},
             "classifier must reference a chat deployment",
@@ -222,7 +222,7 @@ async def test_l2_cached_selector_snapshot_reloads_durable_authority():
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "validated-v3",
+            "selector_activation_state": "validated-v4",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -270,7 +270,7 @@ async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
     assert repository.calls == 1
     rewritten = json.loads(redis.values[_runtime_cache_key(1)])
     assert rewritten["schema_version"] == ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION
-    assert rewritten["selector_activation_state"] == "validated-v3"
+    assert rewritten["selector_activation_state"] == "validated-v4"
 
 
 @pytest.mark.asyncio
@@ -279,7 +279,7 @@ async def test_l2_cache_ignores_invalid_nested_snapshot_and_reloads_durable_stat
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "validated-v3",
+            "selector_activation_state": "validated-v4",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -310,7 +310,7 @@ async def test_l2_cache_ignores_unknown_nested_fields_and_reloads_durable_state(
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "validated-v3",
+            "selector_activation_state": "validated-v4",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -337,7 +337,7 @@ async def test_l2_cache_ignores_member_lane_without_active_selector():
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "validated-v3",
+            "selector_activation_state": "validated-v4",
             "revision": 1,
             "database_initialized": True,
             "groups": [
@@ -369,7 +369,7 @@ async def test_invalid_l2_cache_uses_config_only_after_durable_load_fails():
     redis.values[_runtime_cache_key(1)] = json.dumps(
         {
             "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
-            "selector_activation_state": "validated-v3",
+            "selector_activation_state": "validated-v4",
             "revision": 1,
             "database_initialized": True,
             "groups": [

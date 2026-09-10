@@ -25,6 +25,14 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
+class ClassifierMetadata:
+    pricing: SelectorPriceSnapshot
+    input_bound: int
+    rpm: int
+    tpm: int
+
+
+@dataclass(frozen=True, slots=True)
 class QualifiedSelector:
     routing: SelectorLaneRouting
     identity: SelectorPolicyIdentity
@@ -41,18 +49,23 @@ class QualifiedSelector:
 def qualify_selector_groups(
     policies: Mapping[str, RouteGroupPolicy],
     deployments: Mapping[str, tuple[Deployment, ...]],
+    physical_deployments: Mapping[str, Deployment],
 ) -> Mapping[str, QualifiedSelector]:
     """Compile once per pinned generation, never on a request or Redis cache hit."""
     return MappingProxyType(
         {
-            key: _qualify(policy, deployments.get(key, ()))
+            key: _qualify(policy, deployments.get(key, ()), physical_deployments)
             for key, policy in policies.items()
             if policy.selector is not None
         }
     )
 
 
-def _qualify(policy: RouteGroupPolicy, deployments: tuple[Deployment, ...]) -> QualifiedSelector:
+def _qualify(
+    policy: RouteGroupPolicy,
+    deployments: tuple[Deployment, ...],
+    physical_deployments: Mapping[str, Deployment],
+) -> QualifiedSelector:
     routing = policy.selector
     if routing is None:
         raise ValueError("selector qualification requires a selector")
@@ -63,15 +76,16 @@ def _qualify(policy: RouteGroupPolicy, deployments: tuple[Deployment, ...]) -> Q
     if inventory.keys() != enabled:
         raise ValueError("selector members require concrete enabled deployments")
     capabilities = MappingProxyType({key: _capabilities(dep) for key, dep in inventory.items()})
-    classifier = inventory[routing.policy.classifier_deployment_id]
-    pricing = selector_price_snapshot(classifier.model_info)
-    input_bound = selector_context_capacity(classifier.model_info)
-    rpm, tpm = selector_capacity_limits(classifier.model_info)
+    classifier = physical_deployments.get(routing.policy.classifier_deployment_id)
+    if classifier is None:
+        raise ValueError("selector classifier must reference an existing concrete deployment")
+    metadata = validate_classifier_metadata(classifier.deltallm_params, classifier.model_info)
+    pricing, input_bound = metadata.pricing, metadata.input_bound
     capacity = SelectorCapacityBounds(
         health_ref=classifier.health_ref,
-        rpm=rpm,
-        tpm=tpm,
-        concurrency=rpm,
+        rpm=metadata.rpm,
+        tpm=metadata.tpm,
+        concurrency=metadata.rpm,
         token_allowance=input_bound + 64,
     )
     return QualifiedSelector(
@@ -132,6 +146,23 @@ def _capabilities(deployment: Deployment) -> ChatRoutingCapabilities:
     if value is None:
         raise ValueError("selector members require explicit model_info.chat_capabilities")
     return ChatRoutingCapabilities.model_validate(value)
+
+
+def validate_classifier_metadata(
+    parameters: Mapping[str, object],
+    info: Mapping[str, object],
+) -> ClassifierMetadata:
+    """The classifier's own execution requirements, independent of answer capabilities."""
+    if info.get("mode", "chat") != "chat":
+        raise ValueError("selector classifier must reference a chat deployment")
+    qualify_chat_target(parameters)
+    if info.get("chat_capabilities") is None:
+        raise ValueError("selector classifier requires explicit model_info.chat_capabilities")
+    ChatRoutingCapabilities.model_validate(info["chat_capabilities"])
+    input_bound = selector_context_capacity(info)
+    pricing = selector_price_snapshot(info)
+    rpm, tpm = selector_capacity_limits(info)
+    return ClassifierMetadata(pricing=pricing, input_bound=input_bound, rpm=rpm, tpm=tpm)
 
 
 def selector_price_snapshot(info: Mapping[str, object]) -> SelectorPriceSnapshot:

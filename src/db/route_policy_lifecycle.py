@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from src.db.route_group_identity import RouteGroupIdentityMixin
+from src.db.route_policy_dependencies import (
+    RoutePolicyStateConflictError,
+    lock_policy_group,
+    selector_deployment_id,
+)
 from src.router.policy_validation import (
     CURRENT_POLICY_SEMANTICS_VERSION,
     PolicyMemberInventoryItem,
@@ -22,10 +27,6 @@ from src.router.selection.policy import (
     RouteSelectorActivationUnsupportedError,
     ensure_selector_activation_supported,
 )
-
-
-class RoutePolicyStateConflictError(ValueError):
-    """A stored policy no longer matches the route group's current members."""
 
 
 @dataclass
@@ -53,6 +54,7 @@ class RoutePolicyValidationContext:
     group_key: str
     group_mode: str
     inventory: dict[str, PolicyMemberInventoryItem]
+    deployments: dict[str, PolicyMemberInventoryItem] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,17 @@ class PreparedRoutePolicyWrite:
     document: dict[str, Any]
     normalized: dict[str, Any]
     warnings: tuple[str, ...]
+
+
+def _write_classifier_id(
+    payload: Mapping[str, object],
+    current: StoredRoutePolicyDocument | None,
+) -> str | None:
+    if "selector" in payload:
+        return selector_deployment_id(payload)
+    return (
+        selector_deployment_id(current.policy_json, current.semantics_version) if current else None
+    )
 
 
 def parse_policy_json(value: Any) -> dict[str, Any]:
@@ -125,7 +138,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             )
         self.selector_activation_check()
         try:
-            validate_selector_activation_inventory(document, context.inventory)
+            validate_selector_activation_inventory(document, context.inventory, context.deployments)
         except ValueError as exc:
             raise RouteSelectorActivationUnsupportedError(str(exc)) from exc
 
@@ -172,11 +185,17 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         *,
         published_by: str | None,
     ) -> RoutePolicyWriteResult | None:
-        group_id = await self._lock_group_id(group_key)
+        group_id = await self._lock_group_id(
+            group_key,
+            classifier_id=selector_deployment_id(policy_json),
+        )
         if group_id is None:
             return None
-        context = await self._load_policy_validation_context(group_id)
         current = await self._latest_policy_document(group_id, status="published")
+        context = await self._load_policy_validation_context(
+            group_id,
+            classifier_id=_write_classifier_id(policy_json, current),
+        )
         prepared = self._prepare_policy_write(
             policy_json,
             current=current,
@@ -211,10 +230,12 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         group_key: str,
         policy_json: dict[str, Any],
     ) -> RoutePolicyWriteResult | None:
-        group_id = await self._lock_group_id(group_key)
+        group_id = await self._lock_group_id(
+            group_key,
+            classifier_id=selector_deployment_id(policy_json),
+        )
         if group_id is None:
             return None
-        context = await self._load_policy_validation_context(group_id)
         drafts = await self.prisma.query_raw(
             """
             SELECT route_policy_id, policy_json, semantics_version
@@ -233,6 +254,10 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             )
         else:
             current = await self._latest_policy_document(group_id, status="published")
+        context = await self._load_policy_validation_context(
+            group_id,
+            classifier_id=_write_classifier_id(policy_json, current),
+        )
         prepared = self._prepare_policy_write(
             policy_json,
             current=current,
@@ -336,7 +361,13 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         draft_document = await self._policy_document_by_id(str(drafts[0]["route_policy_id"]))
         if draft_document is None:
             raise RuntimeError("draft policy changed while it was being published")
-        context = await self._load_policy_validation_context(group_id)
+        context = await self._load_policy_validation_context(
+            group_id,
+            classifier_id=selector_deployment_id(
+                draft_document,
+                int(drafts[0].get("semantics_version") or 1),
+            ),
+        )
         try:
             normalized, _ = self._validate_policy_document(
                 draft_document,
@@ -396,7 +427,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         target_version: int,
         published_by: str | None,
     ) -> RoutePolicyRecord | None:
-        group_id = await self._lock_group_id(group_key)
+        group_id = await self._lock_group_id(group_key, target_version=target_version)
         if group_id is None:
             return None
         source = await self.prisma.query_raw(
@@ -414,7 +445,10 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             return None
         source_document = parse_policy_json(source[0].get("policy_json"))
         semantics_version = int(source[0].get("semantics_version") or 1)
-        context = await self._load_policy_validation_context(group_id)
+        context = await self._load_policy_validation_context(
+            group_id,
+            classifier_id=selector_deployment_id(source_document, semantics_version),
+        )
         try:
             normalized, _ = self._validate_policy_document(
                 source_document,
@@ -457,18 +491,19 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         )
         return [to_policy_record(row) for row in rows]
 
-    async def _lock_group_id(self, group_key: str) -> str | None:
-        lookup = self._group_lookup(group_key)
-        rows = await self.prisma.query_raw(
-            f"""
-            SELECT route_group_id
-            FROM deltallm_routegroup
-            WHERE {lookup.column} = $1
-            FOR UPDATE
-            """,
-            lookup.value,
+    async def _lock_group_id(
+        self,
+        group_key: str,
+        *,
+        classifier_id: str | None = None,
+        target_version: int | None = None,
+    ) -> str | None:
+        return await lock_policy_group(
+            self.prisma,
+            self._group_lookup(group_key),
+            classifier_id=classifier_id,
+            target_version=target_version,
         )
-        return str(rows[0]["route_group_id"]) if rows else None
 
     async def _latest_policy_document(
         self,
@@ -510,6 +545,8 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
     async def _load_policy_validation_context(
         self,
         group_id: str,
+        *,
+        classifier_id: str | None = None,
     ) -> RoutePolicyValidationContext:
         rows = await self.prisma.query_raw(
             """
@@ -549,10 +586,32 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
             for row in rows
             if str(row.get("deployment_id") or "")
         }
+        deployments = dict(inventory)
+        if classifier_id is not None and classifier_id not in deployments:
+            target_rows = await self.prisma.query_raw(
+                """
+                SELECT deployment_id, model_info,
+                       deltallm_params->>'model' AS provider_model,
+                       deltallm_params->>'provider' AS provider_name,
+                       COALESCE(model_info->>'mode', 'chat') AS deployment_mode
+                FROM deltallm_modeldeployment WHERE deployment_id = $1
+                """,
+                classifier_id,
+            )
+            if target_rows:
+                target = target_rows[0]
+                deployments[classifier_id] = PolicyMemberInventoryItem(
+                    deployment_id=classifier_id,
+                    workload_mode=str(target.get("deployment_mode") or ""),
+                    model_info=parse_policy_json(target.get("model_info")),
+                    provider_model=target.get("provider_model"),
+                    provider_name=target.get("provider_name"),
+                )
         return RoutePolicyValidationContext(
             group_key=str(rows[0].get("group_key") or ""),
             group_mode=str(rows[0].get("group_mode") or ""),
             inventory=inventory,
+            deployments=deployments,
         )
 
     def _validate_policy_document(
@@ -567,6 +626,7 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         normalized, warnings = validator(
             policy_json,
             available_members=context.inventory,
+            available_deployments=context.deployments,
             semantics_version=semantics_version,
             workload_mode=context.group_mode,
         )
@@ -613,7 +673,13 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
         if not rows:
             return
         try:
-            context = await self._load_policy_validation_context(group_id)
+            context = await self._load_policy_validation_context(
+                group_id,
+                classifier_id=selector_deployment_id(
+                    parse_policy_json(rows[0].get("policy_json")),
+                    int(rows[0].get("semantics_version") or 1),
+                ),
+            )
             normalized, _ = self._validate_policy_document(
                 parse_policy_json(rows[0].get("policy_json")),
                 context=context,
@@ -625,7 +691,11 @@ class RoutePolicyLifecycleMixin(RouteGroupIdentityMixin):
 
                 # Existing active policies must remain qualified during member/model
                 # edits. This reuses the already locked transaction, not readiness.
-                validate_selector_activation_inventory(normalized, context.inventory)
+                validate_selector_activation_inventory(
+                    normalized,
+                    context.inventory,
+                    context.deployments,
+                )
         except ValueError as exc:
             raise RoutePolicyStateConflictError(
                 f"route-group change would invalidate the published policy: {exc}"

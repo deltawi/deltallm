@@ -464,6 +464,7 @@ export default function RouteGroupAdvancedTab({
           {/* Guided editor */}
           {!showAdvancedJson && (
             <fieldset disabled={isPolicyBusy || !canSimulate}><PolicyGuidedEditor
+              routeGroupId={routeGroupId}
               values={guidedPolicy}
               onChange={onGuidedPolicyChange}
               strategyOptions={routeGroupStrategyOptions(guidedPolicy.strategy)}

@@ -18,6 +18,7 @@ import {
   type PolicyMemberOption,
 } from '../lib/routeGroups';
 import PolicySelectorEditor from './route-groups/PolicySelectorEditor';
+import RouteGroupSelectorEditor from './route-groups/RouteGroupSelectorEditor';
 
 const STRATEGY_META: Record<string, { icon: React.ElementType; label: string }> = {
   'simple-shuffle': { icon: Zap, label: 'Simple Shuffle' },
@@ -32,6 +33,7 @@ const STRATEGY_META: Record<string, { icon: React.ElementType; label: string }> 
 };
 
 interface PolicyGuidedEditorProps {
+  routeGroupId?: string;
   values: PolicyGuidedValues;
   onChange: (next: PolicyGuidedValues) => void;
   strategyOptions: string[];
@@ -48,6 +50,7 @@ function CheckIcon() {
 }
 
 export default function PolicyGuidedEditor({
+  routeGroupId,
   values,
   onChange,
   strategyOptions,
@@ -121,7 +124,9 @@ export default function PolicyGuidedEditor({
 
   return (
     <div className="space-y-6">
-      <PolicySelectorEditor values={values} onChange={onChange} members={memberOptions} workloadMode={workloadMode} />
+      {routeGroupId
+        ? <RouteGroupSelectorEditor routeGroupId={routeGroupId} values={values} onChange={onChange} members={memberOptions} workloadMode={workloadMode} />
+        : <PolicySelectorEditor values={values} onChange={onChange} members={memberOptions} workloadMode={workloadMode} />}
       <div>
         <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
           Routing strategy

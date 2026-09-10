@@ -1,5 +1,10 @@
 # PR 6: bounded per-item Batch selection
 
+2026-09-10 amendment: [independent selector deployment](model-router-independent-selector.md).
+The physical classifier no longer needs answer membership. Per-item execution, checkpoint
+format/policy fingerprint, claim fencing, answer-only public usage and customer-paid selector
+accounting remain unchanged. All workers must be upgraded before external references activate.
+
 ## Decision and ownership
 
 Selector-enabled chat items, including groups that can reach a selector through

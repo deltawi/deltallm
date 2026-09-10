@@ -4,9 +4,17 @@ import { buildPolicyFromGuided, restoreDraftPolicyTombstones, toGuidedPolicy, va
 import { chooseSelector, eligibleClassifiers, selectorPublishConfirmation } from '../src/lib/routeGroupSelector';
 
 const members = ['mini', 'large'].map((id) => ({ deployment_id: id, enabled: true, mode: 'chat', weight: null, priority: null }));
-const enabled = () => chooseSelector(toGuidedPolicy({}, members), 'mini');
+const enabled = () => {
+  const guided = chooseSelector(toGuidedPolicy({}, members), 'mini');
+  guided.selector.assignments = { mini: 'economy', large: 'quality' };
+  return guided;
+};
 
-test('choosing a selector supplies safe defaults and explicit reviewable assignments', () => {
+test('choosing a selector keeps safe defaults without guessing answer assignments', () => {
+  const initial = chooseSelector(toGuidedPolicy({}, members), 'external-tiny');
+  assert.deepEqual(initial.memberIds, ['mini', 'large']);
+  assert.deepEqual(initial.selector.assignments, {});
+  assert.match(validateGuidedPolicy(initial, members, 'chat')!, /Assign every/);
   const guided = enabled();
   assert.equal(validateGuidedPolicy(guided, members, 'chat'), null);
   assert.equal(guided.selector.defaultLane, 'quality');
@@ -51,6 +59,7 @@ test('an explicit None choice removes the selector even when imported JSON omitt
     const validated = restoreDraftPolicyTombstones({ strategy: payload.strategy }, payload);
     assert.equal(buildPolicyFromGuided(validated, toGuidedPolicy(validated, members)).selector, null);
     const reenabled = chooseSelector(toGuidedPolicy(roundTrip, members), 'mini');
+    reenabled.selector.assignments = { mini: 'economy', large: 'quality' };
     assert.equal(validateGuidedPolicy(reenabled, members, 'chat'), null);
     assert.equal((buildPolicyFromGuided(roundTrip, reenabled).selector as { classifier_deployment_id: string }).classifier_deployment_id, 'mini');
   }
@@ -112,12 +121,18 @@ test('unknown selector shapes are not silently replaced by guided editing', () =
   assert.deepEqual(buildPolicyFromGuided(base, guided).selector, base.selector);
 });
 
-test('only concrete enabled selected chat members are offered', () => {
-  assert.deepEqual(eligibleClassifiers([
-    ...members, { ...members[0], deployment_id: 'disabled', enabled: false },
-    { ...members[0], deployment_id: 'unknown', mode: undefined },
-    { ...members[0], deployment_id: 'embedding', mode: 'embedding' },
-  ], ['mini', 'disabled', 'unknown', 'embedding']).map((member) => member.deployment_id), ['mini']);
+test('selector options are independent of answer membership and expose incomplete metadata', () => {
+  const options = ['mini', 'external-tiny', 'incomplete', 'embedding'].map((id) => ({
+    deployment_id: id, model_name: id, provider: 'openai',
+    mode: id === 'embedding' ? 'embedding' : 'chat', eligible: id !== 'incomplete',
+    unavailable_reason: id === 'incomplete' ? 'Configure metadata' : null,
+  }));
+  assert.deepEqual(eligibleClassifiers(options).map((model) => model.deployment_id), ['mini', 'external-tiny', 'incomplete']);
+  const before = enabled();
+  const after = chooseSelector(before, 'external-tiny');
+  assert.deepEqual(after.memberIds, before.memberIds);
+  assert.deepEqual(after.selector.assignments, before.selector.assignments);
+  assert.equal(validateGuidedPolicy(after, members, 'chat'), null);
 });
 
 for (const [name, change, message] of [
@@ -136,7 +151,7 @@ for (const [name, change, message] of [
   });
 }
 
-test('unsupported modes and removed classifiers fail locally before publication', () => {
+test('unsupported modes and removed answer members fail locally before publication', () => {
   assert.match(validateGuidedPolicy(enabled(), members, 'embedding')!, /chat groups/);
-  assert.match(validateGuidedPolicy(enabled(), members.slice(1), 'chat')!, /enabled chat/);
+  assert.match(validateGuidedPolicy(enabled(), members.slice(1), 'chat')!, /disabled or no longer available/);
 });

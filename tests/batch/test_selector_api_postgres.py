@@ -122,7 +122,10 @@ async def test_public_upload_to_durable_worker_and_ordered_answer_artifact(
         return
     assert result.json()["status"] == "completed", result.text
     assert len(selection_calls(h)) == len(answer_calls(h)) == 2
-    assert {call["model"] for call in answer_calls(h)} == {"classifier", "quality"}
+    assert {call["model"] for call in answer_calls(h)} == {
+        h.policy["members"][0]["deployment_id"],
+        "quality",
+    }
     output = await client.get(
         f"/v1/files/{result.json()['output_file_id']}/content", headers=headers
     )

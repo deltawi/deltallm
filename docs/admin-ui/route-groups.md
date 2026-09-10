@@ -134,11 +134,12 @@ Embedding deployment forms expose both **Context Window** and **Max Input Tokens
 those values during unrelated edits.
 The feature is inactive when the policy control is disabled.
 
-## Model-router Policy Drafts
+## Model-router Policies
 
-The optional model-router contract currently supports validation and draft storage only; selector
-publication and runtime activation remain explicitly unsupported until the execution prerequisites
-land. See the [model router design](../project/model-router-design.md) for the versioned contract.
+The optional model router supports direct publication after qualification. Choose a configured
+chat selector independently of the group's answer members, assign answer lanes, then publish.
+Drafts and fixture evaluation are optional. An external selector needs no answer membership
+or lane. See [model router administration](../configuration/model-router-admin.md).
 
 For policy writes, `members` can be omitted but cannot be null. An existing version 3 selector and
 its member assignments are preserved when omitted. Unknown authored policy/member fields and

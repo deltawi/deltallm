@@ -82,8 +82,8 @@ async def test_active_selector_roundtrips_l1_l2_and_old_inactive_envelope_reload
 def invalid_envelope(fields):
     return json.dumps(
         {
-            "schema_version": 3,
-            "selector_activation_state": "validated-v3",
+            "schema_version": 4,
+            "selector_activation_state": "validated-v4",
             "revision": 1,
             "database_initialized": True,
             "groups": [{"key": "corrupt", "members": [], **fields}],

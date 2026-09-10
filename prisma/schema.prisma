@@ -1308,6 +1308,7 @@ model DeltaLLM_RoutePolicy {
   route_group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade)
 
   @@unique([route_group_id, version], map: "deltallm_routepolicy_route_group_id_version_key")
+  // Active selector dependency expression/partial index is owned by its SQL migration.
   @@index([route_group_id, status], map: "deltallm_routepolicy_group_status_idx")
   @@map("deltallm_routepolicy")
 }

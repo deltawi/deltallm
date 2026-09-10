@@ -89,8 +89,16 @@ class SelectedBatchHarness:
             self.active -= 1
 
 
-@pytest.fixture
-async def selected_batch(test_app, monkeypatch):
+@pytest.fixture(params=[False, True], ids=["dual-role", "independent"])
+async def selected_batch(test_app, monkeypatch, request):
+    harness = selected_batch_harness(test_app, monkeypatch, independent=request.param)
+    try:
+        yield await anext(harness)
+    finally:
+        await harness.aclose()
+
+
+async def selected_batch_harness(test_app, monkeypatch, *, independent=False):
     checkpoints = Checkpoints()
     repository = _FailureRepository()
     repository.prisma = object()
@@ -98,7 +106,7 @@ async def selected_batch(test_app, monkeypatch):
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: harness.provider(request))
     ) as upstream:
-        billing, policy = configure(test_app, upstream)
+        billing, policy = configure(test_app, upstream, independent=independent)
         worker = BatchExecutorWorker(
             app=test_app,
             repository=repository,

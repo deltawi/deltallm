@@ -25,7 +25,7 @@ class RouteSelectorActivationState(StrEnum):
 
     UNCHECKED = "unchecked"
     INACTIVE = "inactive"
-    VALIDATED = "validated-v3"
+    VALIDATED = "validated-v4"
 
 
 def ensure_selector_activation_supported(

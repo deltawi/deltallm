@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Any
 
@@ -87,10 +88,12 @@ def mark_request_log_emitted(request: Request) -> None:
     setattr(request.state, _REQUEST_LOG_EMITTED_ATTR, True)
 
 
-async def enqueue_request_log_write(request: Request, coro: Any) -> None:
+async def enqueue_request_log_write(
+    request: Request, coro: Awaitable[None], *, wait_for_completion: bool = False
+) -> None:
     mark_request_log_emitted(request)
     service = getattr(request.app.state, "spend_tracking_service", None)
-    if bool(getattr(service, "durable_ingestion_enabled", False)):
+    if wait_for_completion or bool(getattr(service, "durable_ingestion_enabled", False)):
         await coro
         return
     fire_and_forget(coro)

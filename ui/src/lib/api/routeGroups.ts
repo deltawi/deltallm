@@ -234,7 +234,35 @@ export interface RoutePolicySimulationResponse {
   sample_attempts: RoutePolicySimulationAttempt[];
 }
 
+export interface SelectorDeploymentOption {
+  deployment_id: string;
+  model_name: string;
+  provider: string;
+  mode: string;
+  eligible: boolean;
+  unavailable_reason: string | null;
+}
+
+export interface SelectorOptionsQuery {
+  search?: string;
+  selected_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SelectorOptionsPage {
+  data: SelectorDeploymentOption[];
+  selected: SelectorDeploymentOption | null;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export const routeGroups = {
+  selectorOptions: (routeGroupId: string, params: SelectorOptionsQuery, signal?: AbortSignal) =>
+    apiFetch<SelectorOptionsPage>(withQuery(
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/selector-options`, params,
+    ), { signal }),
   list: (
     params?: { search?: string; limit?: number; offset?: number },
     signal?: AbortSignal,

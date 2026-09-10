@@ -6,6 +6,28 @@ import { routeGroupMutationOutcome } from '../src/lib/routeGroups';
 
 const GROUP_ID = '12f410b2-641f-40fb-9ba8-4281b70bc8ca';
 
+test('independent selector options encode opaque IDs and forward abort and bounded pagination', async () => {
+  const previous = globalThis.fetch;
+  const controller = new AbortController();
+  globalThis.fetch = async (url, init) => {
+    const parsed = new URL(String(url), 'https://local.test');
+    assert.equal(parsed.pathname, `/ui/api/route-groups/by-id/${GROUP_ID}/selector-options`);
+    assert.equal(parsed.searchParams.get('selected_id'), 'provider/model?variant#1');
+    assert.equal(parsed.searchParams.get('search'), 'small/model');
+    assert.equal(parsed.searchParams.get('limit'), '20');
+    assert.equal(parsed.searchParams.get('offset'), '40');
+    assert.equal(init?.signal, controller.signal);
+    return new Response(JSON.stringify({ data: [], selected: null, limit: 20, offset: 40, has_more: false }), { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const page = await routeGroups.selectorOptions(GROUP_ID, {
+      selected_id: 'provider/model?variant#1', search: 'small/model', limit: 20, offset: 40,
+    }, controller.signal);
+    assert.equal(page.selected, null);
+    assert.equal(page.has_more, false);
+  } finally { globalThis.fetch = previous; }
+});
+
 test('route-group partial writes retain tombstones and omit untouched fields', async () => {
   const originalFetch = globalThis.fetch;
   const documents: unknown[] = [];

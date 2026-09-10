@@ -31,6 +31,7 @@ from src.api.admin.endpoints import (
     users_router,
 )
 from src.api.admin.endpoints.route_groups_by_id import router as route_groups_by_id_router
+from src.api.admin.endpoints.route_group_selectors import router as route_group_selectors_router
 from src.api.admin.endpoints.selector_evaluations import router as selector_evaluations_router
 from src.api.admin.endpoints.routing_costs import router as routing_costs_router
 from src.ui.routes import ui_router as legacy_ui_router
@@ -62,6 +63,7 @@ admin_router.include_router(tier_capacity_router)
 admin_router.include_router(tiers_router)
 admin_router.include_router(tier_policy_preview_router)
 admin_router.include_router(route_groups_by_id_router)
+admin_router.include_router(route_group_selectors_router)
 admin_router.include_router(selector_evaluations_router)
 admin_router.include_router(route_groups_router)
 admin_router.include_router(prompt_registry_router)

@@ -21,7 +21,11 @@ from src.metrics.route_group_cache import (
 )
 from src.db.route_groups import RouteGroupRepository, RouteGroupRuntimeSnapshot
 from src.route_group_config import ModelMode
-from src.route_policy_contract import RoutePolicyMember, validate_selector_assignments
+from src.route_policy_contract import (
+    RoutePolicyMember,
+    validate_selector_assignments,
+    validate_selector_reference,
+)
 from src.router.policy_validation import PolicyMemberInventoryItem
 from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.router.selection.policy import (
@@ -238,6 +242,10 @@ def route_groups_from_config(
     deployment_modes: Mapping[str, ModelMode] | None = None,
 ) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
+    deployments = {
+        key: PolicyMemberInventoryItem(deployment_id=key, workload_mode=mode)
+        for key, mode in (deployment_modes or {}).items()
+    }
     for item in cfg.router_settings.route_groups:
         policy = item.model_dump(mode="python")
         if item.selector is not None:
@@ -254,6 +262,7 @@ def route_groups_from_config(
                 for member in item.members
                 if member.deployment_id in deployment_modes
             }
+            validate_selector_reference(item.selector, deployments)
             validate_selector_assignments(
                 item.selector,
                 [RoutePolicyMember.model_validate(member.model_dump()) for member in item.members],

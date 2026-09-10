@@ -1,4 +1,5 @@
-import { useId } from 'react';
+import { useId, type ReactNode } from 'react';
+import type { SelectorDeploymentOption } from '../../lib/api/routeGroups';
 import Button from '../Button';
 import type { PolicyGuidedValues, PolicyMemberOption } from '../../lib/routeGroups';
 import { chooseSelector, eligibleClassifiers, validateGuidedSelector, type GuidedSelector } from '../../lib/routeGroupSelector';
@@ -10,15 +11,17 @@ interface Props {
   onChange: (next: PolicyGuidedValues) => void;
   members: PolicyMemberOption[];
   workloadMode: string;
+  selectorOptions?: readonly SelectorDeploymentOption[];
+  lookupControls?: ReactNode;
 }
 
-export default function PolicySelectorEditor({ values, onChange, members, workloadMode }: Props) {
+export default function PolicySelectorEditor({ values, onChange, members, workloadMode, selectorOptions = [], lookupControls }: Props) {
   const errorId = useId();
   const selector = values.selector;
   const enabled = selector.state === 'enabled';
-  const available = eligibleClassifiers(members, values.memberIds);
-  const error = validateGuidedSelector(selector, members, values.memberIds, workloadMode);
-  const classifier = members.find((member) => member.deployment_id === selector.classifier);
+  const available = eligibleClassifiers(selectorOptions);
+  const error = validateGuidedSelector(selector, values.memberIds, workloadMode);
+  const classifier = selectorOptions.find((deployment) => deployment.deployment_id === selector.classifier);
   const update = (next: Partial<GuidedSelector>) => onChange({ ...values, selector: { ...selector, ...next } });
   const updateLane = (index: number, key: 'id' | 'rank' | 'description', value: string) => {
     const previousId = selector.lanes[index].id;
@@ -36,6 +39,7 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
       <legend className="px-1 text-sm font-semibold text-slate-900">Model selector (optional)</legend>
       <p className="text-sm text-slate-600">Use a small model to send routine requests to economy models and harder requests to quality models.</p>
       {selector.state === 'unsupported' ? <p role="alert" id={errorId}>{error}</p> : <>
+        {lookupControls}
         <label className="block space-y-1">
           <span className="text-sm font-medium text-slate-700">Selector model</span>
           <select className={inputClass} value={enabled ? selector.classifier : ''}
@@ -50,7 +54,7 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
           </select>
         </label>
         {workloadMode !== 'chat' ? <p className="text-xs text-slate-500">Selectors support chat groups only.</p>
-          : available.length === 0 && <p className="text-xs text-slate-500">Add and select enabled chat deployments in this group first. Unknown deployment modes are not eligible.</p>}
+          : available.length === 0 && <p className="text-xs text-slate-500">No chat deployments are shown. Search your configured models; the selector does not need to be a group member.</p>}
         {enabled && <>
           <div className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">
             Each uncached request sends bounded prompt text to {classifier?.model_name || selector.classifier}
@@ -58,7 +62,8 @@ export default function PolicySelectorEditor({ values, onChange, members, worklo
             customers pay its actual cost, including when the answer fails. Check that this provider is allowed to receive the request data.
             Publishing makes it active immediately. Cached answers skip selection.
           </div>
-          <p className="text-xs text-slate-500">Review the suggested assignments below. Higher ranks mean more capability; routing can move up, never down. Context checks require known model capacities.</p>
+          <p className="text-xs text-slate-500">Assign the answering members below to lanes. Choosing a selector does not add it as an answer member. Higher ranks mean more capability; routing can move up, never down. Context checks require known model capacities.</p>
+          {values.memberIds.includes(selector.classifier) && <p className="text-xs text-slate-500">This deployment is also explicitly listed as an answer member; its answer role follows the membership and lane settings below.</p>}
           <div className="space-y-2">
             {values.memberIds.map((id) => <label key={id} className="flex flex-col gap-1 md:flex-row md:items-center md:gap-3">
               <span className="min-w-0 flex-1 break-all text-sm text-slate-700">{members.find((member) => member.deployment_id === id)?.model_name || id}</span>

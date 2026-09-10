@@ -2,6 +2,13 @@
 
 Model deployments tell DeltaLLM how to reach a real provider-backed model.
 
+A concrete chat deployment can also classify requests for one or more Model Groups
+without being an answer member. There is no selector-only model type or extra activation
+switch. Configure its own capabilities, context, token prices and RPM/TPM limits, then
+choose it in the group's routing policy. Published references protect it against deletion
+or incompatible metadata changes; switch/remove those references first.
+See [model router administration](model-router-admin.md).
+
 In simple terms:
 
 - clients call a public model name such as `gpt-4o-mini`

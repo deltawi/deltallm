@@ -8,9 +8,8 @@ from src.route_policy_contract import LLMTierSelectorPolicy, RoutePolicyMember
 from src.router.policy_validation import merge_policy_members
 from src.router.selection.policy import SELECTOR_POLICY_SEMANTICS_VERSION
 from src.router.selection.qualification import (
-    selector_price_snapshot,
     selector_context_capacity,
-    selector_capacity_limits,
+    validate_classifier_metadata,
 )
 from src.router.selection.target_validation import qualify_chat_target
 
@@ -25,11 +24,20 @@ class ActivationInventoryMember(Protocol):
 def validate_selector_activation_inventory(
     document: Mapping[str, object],
     inventory: Mapping[str, ActivationInventoryMember],
+    deployments: Mapping[str, ActivationInventoryMember] | None = None,
 ) -> None:
-    """Qualify a validated policy projection against locked effective membership."""
+    """Qualify answer membership and the independently loaded classifier dependency."""
     if document.get("selector") is None:
         return
     selector = LLMTierSelectorPolicy.model_validate(document["selector"])
+    targets = deployments if deployments is not None else inventory
+    classifier = targets.get(selector.classifier_deployment_id)
+    if classifier is None:
+        raise ValueError("selector classifier must reference an existing concrete deployment")
+    validate_classifier_metadata(
+        {"model": classifier.provider_model, "provider": classifier.provider_name},
+        classifier.model_info or {},
+    )
     effective_members = merge_policy_members(
         [{"deployment_id": key, "enabled": item.enabled} for key, item in inventory.items()],
         document.get("members"),
@@ -46,6 +54,3 @@ def validate_selector_activation_inventory(
         qualify_chat_target({"model": loaded.provider_model, "provider": loaded.provider_name})
         ChatRoutingCapabilities.model_validate(info["chat_capabilities"])
         selector_context_capacity(info)
-        if member.deployment_id == selector.classifier_deployment_id:
-            selector_price_snapshot(info)
-            selector_capacity_limits(info)

@@ -71,3 +71,14 @@ terminal `400 invalid_request_error`.
 If a provider fails after a streaming `200` response has already emitted content, DeltaLLM does not
 retry or replace the response. It emits one sanitized Anthropic `event: error` frame and closes the
 stream without a `message_stop` event.
+
+`message_stop` delivery follows the shared text endpoint's configured accounting
+writer and required audit. Closing at that event does not require draining the
+HTTP response to EOF. In `spend_ingestion_mode: outbox`, failed durable charge
+acceptance leaves the stream incomplete without `message_stop`; it does not cause
+a second provider attempt. Required audit failure or finalization timeout also
+withholds the terminal event.
+
+The default `legacy` writer can swallow database-write failures, so `message_stop`
+in that mode does not prove that billing was persisted. See the shared
+[streaming accounting contract](proxy.md#streaming-accounting) for the mode-specific guarantees.

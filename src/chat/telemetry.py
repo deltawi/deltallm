@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -85,6 +87,7 @@ def _resolve_completion_pricing_costs(
     return usage_data, pricing, customer_billing, provider_billing
 
 
+@asynccontextmanager
 async def emit_stream_success(
     *,
     request: Request,
@@ -105,7 +108,14 @@ async def emit_stream_success(
     params: dict[str, Any],
     usage: dict[str, Any] | None = None,
     usage_metadata: dict[str, Any] | None = None,
-) -> None:
+) -> AsyncIterator[None]:
+    """Await configured accounting and required audit before the terminal frame.
+
+    Outbox acceptance is durable; the legacy writer may swallow persistence
+    failures, so its return does not guarantee a committed charge.
+    The caller releases the response permit before leaving this context, so
+    post-call hooks never hold provider capacity. No independent task is spawned.
+    """
     api_provider = resolve_provider(params)
     usage_data, pricing, customer_billing, provider_billing = _resolve_completion_pricing_costs(
         request=request,
@@ -182,37 +192,7 @@ async def emit_stream_success(
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),
         ),
-    )
-    callback_payload = build_standard_logging_payload(
-        call_type="completion",
-        request_id=request_id,
-        model=payload.model,
-        deployment_model=params.get("model"),
-        request_payload=request_data,
-        response_obj={"object": stream_response_object},
-        user_api_key_dict=auth.model_dump(mode="json"),
-        start_time=callback_start,
-        end_time=datetime.now(tz=UTC),
-        api_base=api_base,
-        cache_hit=cache_hit,
-        cache_key=cache_key,
-        response_cost=request_cost,
-        api_provider=api_provider,
-        turn_off_message_logging=bool(
-            getattr(request.app.state, "turn_off_message_logging", False)
-        ),
-    )
-    callback_manager.dispatch_success_callbacks(callback_payload)
-    await callback_manager.execute_post_call_success_hooks(
-        data=request_data,
-        user_api_key_dict=auth.model_dump(mode="json"),
-        response={"object": stream_response_object},
-    )
-    await guardrail_middleware.run_post_call_success(
-        request_data=request_data,
-        user_api_key_dict=auth.model_dump(mode="python"),
-        response_data={"object": stream_response_object},
-        call_type="completion",
+        wait_for_completion=True,
     )
     await emit_text_audit_event(
         request=request,
@@ -237,6 +217,40 @@ async def emit_stream_success(
             },
         ),
     )
+    try:
+        yield
+    finally:
+        callback_payload = build_standard_logging_payload(
+            call_type="completion",
+            request_id=request_id,
+            model=payload.model,
+            deployment_model=params.get("model"),
+            request_payload=request_data,
+            response_obj={"object": stream_response_object},
+            user_api_key_dict=auth.model_dump(mode="json"),
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
+            api_base=api_base,
+            cache_hit=cache_hit,
+            cache_key=cache_key,
+            response_cost=request_cost,
+            api_provider=api_provider,
+            turn_off_message_logging=bool(
+                getattr(request.app.state, "turn_off_message_logging", False)
+            ),
+        )
+        callback_manager.dispatch_success_callbacks(callback_payload)
+        await callback_manager.execute_post_call_success_hooks(
+            data=request_data,
+            user_api_key_dict=auth.model_dump(mode="json"),
+            response={"object": stream_response_object},
+        )
+        await guardrail_middleware.run_post_call_success(
+            request_data=request_data,
+            user_api_key_dict=auth.model_dump(mode="python"),
+            response_data={"object": stream_response_object},
+            call_type="completion",
+        )
 
 
 async def emit_stream_failure(

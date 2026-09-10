@@ -80,6 +80,7 @@ from src.services.route_policy_publication import (
 )
 from src.services.route_group_refresh import refresh_route_group_runtime
 from src.services.route_group_mutations import RouteGroupMutationService
+from src.services.selector_inventory import policy_deployment_inventory
 from src.services.route_groups import RouteGroupRuntimeCache
 
 router = APIRouter(tags=["Admin Route Groups"])
@@ -439,12 +440,14 @@ def _validate_policy_payload(
     payload: dict[str, Any],
     *,
     available_members: dict[str, PolicyMemberInventoryItem],
+    available_deployments: dict[str, PolicyMemberInventoryItem],
     workload_mode: object,
 ) -> tuple[dict[str, Any], list[str]]:
     try:
         normalized, warnings = validate_route_policy(
             payload,
             available_members=available_members,
+            available_deployments=available_deployments,
             workload_mode=workload_mode,
         )
     except ValueError as exc:
@@ -1015,6 +1018,11 @@ async def validate_route_group_policy(
     normalized, warnings = _validate_policy_payload(
         document,
         available_members=await _resolve_policy_members(request, repository, group_key),
+        available_deployments=policy_deployment_inventory(
+            require_routing_runtime_generation(
+                request.app.state
+            ).deployment_registry.physical_deployments
+        ),
         workload_mode=group.mode,
     )
     return {"group_key": group_key, "valid": True, "policy": normalized, "warnings": warnings}

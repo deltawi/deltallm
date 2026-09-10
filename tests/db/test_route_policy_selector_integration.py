@@ -188,9 +188,11 @@ async def test_waiting_draft_write_validates_after_concurrent_group_locked_chang
         def with_db(self, database):
             return ObservedRepository(database)
 
-        async def _lock_group_id(self, key):
+        async def _lock_group_id(self, key, *, classifier_id=None, target_version=None):
             entered.set()
-            return await super()._lock_group_id(key)
+            return await super()._lock_group_id(
+                key, classifier_id=classifier_id, target_version=target_version
+            )
 
     task = None
     try:

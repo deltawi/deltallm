@@ -1,5 +1,5 @@
-import type { PolicyGuidedValues, PolicyMemberOption } from './routeGroups';
-import type { RoutePolicySelectorLane } from './api/routeGroups';
+import type { PolicyGuidedValues } from './routeGroups';
+import type { RoutePolicySelectorLane, SelectorDeploymentOption } from './api/routeGroups';
 
 export interface GuidedSelectorLane {
   id: string;
@@ -95,7 +95,6 @@ export function selectorPublishConfirmation(
 export function chooseSelector(guided: PolicyGuidedValues, classifier: string): PolicyGuidedValues {
   const selector = guided.selector;
   if (!classifier) return { ...guided, selector: { ...selector, state: 'removed' } };
-  const initial = selector.state === 'disabled' || selector.state === 'removed';
   return {
     ...guided, memberSelection: 'explicit',
     // Publication requires known capacity. Do not weaken an existing context policy.
@@ -103,16 +102,13 @@ export function chooseSelector(guided: PolicyGuidedValues, classifier: string): 
     contextUnknownCapacity: 'exclude',
     selector: {
       ...selector, state: 'enabled', classifier,
-      assignments: initial ? Object.fromEntries(guided.memberIds.map((id) => [
-        id, selector.assignments[id] || (id === classifier ? selector.lanes[0]?.id : selector.defaultLane) || '',
-      ])) : selector.assignments,
+      assignments: selector.assignments,
     },
   };
 }
 
-export function eligibleClassifiers(members: PolicyMemberOption[], selectedIds: string[]): PolicyMemberOption[] {
-  return members.filter((member) => member.enabled && member.mode === 'chat'
-    && selectedIds.includes(member.deployment_id));
+export function eligibleClassifiers(deployments: readonly SelectorDeploymentOption[]): SelectorDeploymentOption[] {
+  return deployments.filter((deployment) => deployment.mode === 'chat');
 }
 
 function integerInRange(value: string, min: number, max: number): boolean {
@@ -121,14 +117,12 @@ function integerInRange(value: string, min: number, max: number): boolean {
 }
 
 export function validateGuidedSelector(
-  selector: GuidedSelector, members: PolicyMemberOption[], ids: string[], workload: string,
+  selector: GuidedSelector, ids: string[], workload: string,
 ): string | null {
   if (selector.state === 'disabled' || selector.state === 'removed') return null;
   if (selector.state === 'unsupported') return 'This selector cannot be edited here. Use Raw JSON to preserve its configuration.';
   if (workload !== 'chat') return 'Model selectors are available only for chat groups.';
-  if (!eligibleClassifiers(members, ids).some((member) => member.deployment_id === selector.classifier)) {
-    return 'Choose an enabled chat deployment from the selected group members as the selector.';
-  }
+  if (!selector.classifier.trim()) return 'Choose a chat deployment as the selector.';
   if (selector.lanes.length < 2 || selector.lanes.length > 8) return 'Configure between 2 and 8 lanes.';
   const laneIds = selector.lanes.map((lane) => lane.id.trim());
   if (laneIds.some((id) => !/^[a-z][a-z0-9_-]{0,31}$/.test(id))) return 'Lane IDs must start with a lowercase letter and use up to 32 lowercase letters, digits, hyphens or underscores.';

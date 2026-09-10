@@ -1,5 +1,10 @@
 # Model router admin workflow (PR 5)
 
+2026-09-10 amendment: [independent selector deployment](model-router-independent-selector.md).
+The selector picker reads a bounded, permission-protected physical inventory page, not answer
+membership. First-time lane assignments are explicit; changing selectors preserves answers.
+Historical PR 5 evidence below predates this correction.
+
 ## Ownership and scope
 
 PR 5 starts from remote `feature/issue-304-model-router` at `bd48400b`, including

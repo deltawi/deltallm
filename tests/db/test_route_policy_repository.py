@@ -306,7 +306,16 @@ async def test_publish_policy_locks_group_and_preserves_opaque_fields() -> None:
     assert prisma.started == 1
     assert prisma.committed == 1
     assert prisma.rolled_back == 0
-    assert "FOR UPDATE" in transaction.calls[0][0]
+    assert "SELECT DISTINCT ON (p.status)" in transaction.calls[0][0]
+    group_lock = next(
+        index for index, (sql, _) in enumerate(transaction.calls) if "FOR UPDATE" in sql
+    )
+    validation = next(
+        index
+        for index, (sql, _) in enumerate(transaction.calls)
+        if "COALESCE(d.model_info->>'mode'" in sql
+    )
+    assert group_lock < validation
     assert any("status = $2" in sql for sql, _ in transaction.calls)
     assert sum("COALESCE(d.model_info->>'mode'" in sql for sql, _ in transaction.calls) == 1
     assert "status = 'archived'" in transaction.executions[0][0]
