@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from src.billing.operation_reservation import BillingOperationUnavailable, ComponentState
+from src.db import billing_operations
 from src.db.billing_operations import BillingOperationRepository
 from tests import billing_operation_fixtures as fixtures
 from tests.test_billing_operations_postgres import deadline, hold
@@ -93,9 +94,12 @@ async def test_duplicate_reservation_does_not_hold_capacity_while_waiting_for_op
 
 
 async def test_identical_concurrent_reservations_use_one_hold_and_capacity_slot(
-    review_operation_db,
+    review_operation_db, monkeypatch
 ):
     db, operation, _ = review_operation_db
+    # Check idempotency under contention, not shared CI host throughput inside
+    # the production 250-ms bound. Deadline behavior is covered separately.
+    monkeypatch.setattr(billing_operations, "DB_BUDGET_SECONDS", 2)
     before = await fixtures.capacity(db)
     repositories = [BillingOperationRepository(db), BillingOperationRepository(db)]
     results = await asyncio.gather(
@@ -103,6 +107,27 @@ async def test_identical_concurrent_reservations_use_one_hold_and_capacity_slot(
     )
     assert all(result.selector_state is ComponentState.RESERVED for result in results)
     assert await hold(db, operation) == operation.total_allowance
+    assert await fixtures.capacity(db) == before + 1
+
+
+async def test_contended_duplicate_timeout_keeps_one_hold_and_capacity_slot(review_operation_db):
+    db, operation, _ = review_operation_db
+    before = await fixtures.capacity(db)
+    repository = BillingOperationRepository(db)
+    await repository.reserve(operation, expires_at=deadline())
+    async with db.tx(timeout=timedelta(seconds=2)) as tx:
+        await tx.query_raw(
+            "SELECT operation_id FROM deltallm_billing_operations WHERE operation_id=$1 FOR UPDATE",
+            str(operation.attribution.operation_id),
+        )
+        with pytest.raises(BillingOperationUnavailable):
+            await repository.reserve(operation, expires_at=asyncio.get_running_loop().time() + 0.03)
+    assert await hold(db, operation) == operation.total_allowance
+    assert await fixtures.reserved_totals(db, operation) == [operation.total_allowance] * 5
+    assert await fixtures.capacity(db) == before + 1
+    assert (await repository.reserve(operation, expires_at=deadline())).selector_state is (
+        ComponentState.RESERVED
+    )
     assert await fixtures.capacity(db) == before + 1
 
 

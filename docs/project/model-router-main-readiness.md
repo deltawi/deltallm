@@ -126,6 +126,29 @@ renewals, and zero leaked caller leases/refreshers. Slice p50/p95/p99 was
 This local mock result does not erase the CI-host saturation result or certify
 production capacity.
 
+## Remote CI follow-up: reservation contention test
+
+The next [CI run 34480898409](https://github.com/deltawi/deltallm/actions/runs/34480898409)
+at `77b4c5b0` exposed a different timing assumption: PostgreSQL had 304 passes
+and one failure when eight identical reservations contended within the
+production 250-ms transaction cap. The database log records a statement timeout
+on the duplicate's `SELECT ... FOR UPDATE`; the repository correctly returned
+`BillingOperationUnavailable`. The idempotency test required all eight callers
+to succeed, combining a correctness invariant with shared-runner throughput.
+
+Only that functional test now uses a two-second transaction cap, restored by
+its monkeypatch fixture. Production retains its 250-ms cap and caller deadline,
+and unit tests still assert that cap and interruption/no-retry behavior. A new
+real-PostgreSQL test holds the operation row, expires a duplicate's caller
+deadline, and verifies one hold across all five scopes and one capacity slot;
+a subsequent replay still returns the original reservation.
+
+Focused locking/repository/operation checks: 28 passed. The complete local
+application lane after the Batch test fix also passed: 1,395 tests, no skips.
+The full PostgreSQL lane and remote CI are being rerun; the issue's latest
+readiness update records their completion status. No production code, migration,
+budget semantics, retry behavior or CI gate was changed by either test follow-up.
+
 ## Performance evidence
 
 The unchanged `tests.performance.realtime_selector_profile` runs at 10 RPS for
