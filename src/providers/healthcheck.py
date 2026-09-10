@@ -8,6 +8,9 @@ import httpx
 
 from src.models.errors import GatewayCapacityError, InvalidRequestError
 from src.providers.resolution import is_openai_compatible_provider, resolve_provider
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES, ChatProviderProfile
+from src.providers.chat_discovery import fetch_chat_models
+from src.providers.discovery_runtime import DiscoveryUnavailable, ProviderDiscoveryRuntime
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import build_health_check_request_timeout
 
@@ -25,6 +28,50 @@ def _status_error(prefix: str, status_code: int) -> str:
     return f"{prefix} returned {status_code}"
 
 
+async def _probe_chat_profile(
+    discovery_runtime: ProviderDiscoveryRuntime | None,
+    profile: ChatProviderProfile,
+    params: dict[str, object],
+    request_timeout: httpx.Timeout,
+) -> HealthProbeResult:
+    if profile.discovery == "catalog":
+        return HealthProbeResult(
+            healthy=False,
+            error="This provider has no supported non-billable health probe",
+            affects_deployment_health=False,
+        )
+    api_key = str(params.get("api_key") or "").strip()
+    if not api_key:
+        return HealthProbeResult(healthy=False, error="Provider API key is missing")
+    try:
+        if discovery_runtime is None:
+            raise DiscoveryUnavailable("Provider discovery runtime is unavailable")
+        await fetch_chat_models(
+            discovery_runtime,
+            profile=profile,
+            api_base=str(params.get("api_base") or profile.api_base),
+            api_key=api_key,
+            timeout=request_timeout,
+        )
+        return HealthProbeResult(healthy=True, status_code=200)
+    except (NotImplementedError, DiscoveryUnavailable) as exc:
+        return HealthProbeResult(healthy=False, error=str(exc), affects_deployment_health=False)
+    except httpx.PoolTimeout:
+        return HealthProbeResult(
+            healthy=False, error="Gateway capacity exceeded", affects_deployment_health=False
+        )
+    except httpx.HTTPStatusError as exc:
+        return HealthProbeResult(
+            healthy=False,
+            error=_status_error("Provider health check", exc.response.status_code),
+            status_code=exc.response.status_code,
+        )
+    except (httpx.TimeoutException, TimeoutError):
+        return HealthProbeResult(healthy=False, error="Provider health check timed out")
+    except (httpx.HTTPError, ValueError):
+        return HealthProbeResult(healthy=False, error="Provider health check failed")
+
+
 async def probe_provider_health(
     http_client: httpx.AsyncClient,
     params: dict[str, Any],
@@ -32,6 +79,7 @@ async def probe_provider_health(
     default_openai_base_url: str,
     general_settings: Any | None = None,
     health_check_timeout_seconds: float | int | None = None,
+    discovery_runtime: ProviderDiscoveryRuntime | None = None,
 ) -> HealthProbeResult:
     provider = resolve_provider(params)
     if provider in {"unknown", ""}:
@@ -41,6 +89,9 @@ async def probe_provider_health(
         read_timeout_seconds=10.0,
         health_check_timeout_seconds=health_check_timeout_seconds,
     )
+    profile = CHAT_PROVIDER_PROFILES.get(provider)
+    if profile is not None:
+        return await _probe_chat_profile(discovery_runtime, profile, params, request_timeout)
 
     if provider == "anthropic":
         api_key = str(params.get("api_key") or "").strip()
@@ -63,7 +114,9 @@ async def probe_provider_health(
             return HealthProbeResult(healthy=True, status_code=response.status_code)
         except httpx.PoolTimeout:
             error = GatewayCapacityError()
-            return HealthProbeResult(healthy=False, error=error.message, affects_deployment_health=False)
+            return HealthProbeResult(
+                healthy=False, error=error.message, affects_deployment_health=False
+            )
         except httpx.TimeoutException:
             return HealthProbeResult(healthy=False, error="Anthropic health check timed out")
         except httpx.HTTPError as exc:
@@ -91,19 +144,27 @@ async def probe_provider_health(
             return HealthProbeResult(healthy=True, status_code=response.status_code)
         except httpx.PoolTimeout:
             error = GatewayCapacityError()
-            return HealthProbeResult(healthy=False, error=error.message, affects_deployment_health=False)
+            return HealthProbeResult(
+                healthy=False, error=error.message, affects_deployment_health=False
+            )
         except httpx.TimeoutException:
             return HealthProbeResult(healthy=False, error="Azure OpenAI health check timed out")
         except httpx.HTTPError as exc:
-            return HealthProbeResult(healthy=False, error=f"Azure OpenAI health check failed: {exc}")
+            return HealthProbeResult(
+                healthy=False, error=f"Azure OpenAI health check failed: {exc}"
+            )
 
     if provider == "gemini":
         api_key = str(params.get("api_key") or "").strip()
         if not api_key:
             return HealthProbeResult(healthy=False, error="Provider API key is missing")
-        api_base = str(params.get("api_base") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+        api_base = str(
+            params.get("api_base") or "https://generativelanguage.googleapis.com/v1beta"
+        ).rstrip("/")
         try:
-            response = await http_client.get(f"{api_base}/models?key={api_key}", timeout=request_timeout)
+            response = await http_client.get(
+                f"{api_base}/models?key={api_key}", timeout=request_timeout
+            )
             if response.status_code >= 400:
                 return HealthProbeResult(
                     healthy=False,
@@ -113,7 +174,9 @@ async def probe_provider_health(
             return HealthProbeResult(healthy=True, status_code=response.status_code)
         except httpx.PoolTimeout:
             error = GatewayCapacityError()
-            return HealthProbeResult(healthy=False, error=error.message, affects_deployment_health=False)
+            return HealthProbeResult(
+                healthy=False, error=error.message, affects_deployment_health=False
+            )
         except httpx.TimeoutException:
             return HealthProbeResult(healthy=False, error="Gemini health check timed out")
         except httpx.HTTPError as exc:
@@ -139,7 +202,9 @@ async def probe_provider_health(
             return HealthProbeResult(healthy=True, status_code=response.status_code)
         except httpx.PoolTimeout:
             error = GatewayCapacityError()
-            return HealthProbeResult(healthy=False, error=error.message, affects_deployment_health=False)
+            return HealthProbeResult(
+                healthy=False, error=error.message, affects_deployment_health=False
+            )
         except httpx.TimeoutException:
             return HealthProbeResult(healthy=False, error="ElevenLabs health check timed out")
         except httpx.HTTPError as exc:
@@ -155,13 +220,17 @@ async def probe_provider_health(
         return HealthProbeResult(healthy=True)
 
     if not is_openai_compatible_provider(provider):
-        return HealthProbeResult(healthy=False, error=f"Health checks are not implemented for provider '{provider}'")
+        return HealthProbeResult(
+            healthy=False, error=f"Health checks are not implemented for provider '{provider}'"
+        )
 
     api_key = str(params.get("api_key") or "").strip()
     if not api_key:
         return HealthProbeResult(healthy=False, error="Provider API key is missing")
 
-    api_base = str(params.get("api_base") or (default_openai_base_url if provider == "openai" else "")).rstrip("/")
+    api_base = str(
+        params.get("api_base") or (default_openai_base_url if provider == "openai" else "")
+    ).rstrip("/")
     if not api_base:
         return HealthProbeResult(healthy=False, error="API base URL is missing")
 
@@ -173,7 +242,9 @@ async def probe_provider_health(
             auth_header_format=str(params.get("auth_header_format") or "").strip() or None,
         )
     except (InvalidRequestError, ValueError) as exc:
-        return HealthProbeResult(healthy=False, error=str(exc) or "Provider auth configuration is invalid")
+        return HealthProbeResult(
+            healthy=False, error=str(exc) or "Provider auth configuration is invalid"
+        )
 
     try:
         response = await http_client.get(
@@ -190,7 +261,9 @@ async def probe_provider_health(
         return HealthProbeResult(healthy=True, status_code=response.status_code)
     except httpx.PoolTimeout:
         error = GatewayCapacityError()
-        return HealthProbeResult(healthy=False, error=error.message, affects_deployment_health=False)
+        return HealthProbeResult(
+            healthy=False, error=error.message, affects_deployment_health=False
+        )
     except httpx.TimeoutException:
         return HealthProbeResult(healthy=False, error=f"{provider} health check timed out")
     except httpx.HTTPError as exc:

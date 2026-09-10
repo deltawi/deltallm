@@ -1,0 +1,72 @@
+{
+  "provider": "zai",
+  "model": "glm-5.3",
+  "api_base": "https://api.z.ai/api/paas/v4",
+  "success": {
+    "id": "chatcmpl-zai-fixture",
+    "request_id": "request-fixture",
+    "created": 1788912000,
+    "model": "glm-5.3",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Sunny.",
+          "reasoning_content": "Check the weather."
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "prompt_tokens_details": {
+        "cached_tokens": 6
+      }
+    }
+  },
+  "tool": {
+    "id": "chatcmpl-zai-fixture",
+    "request_id": "request-fixture",
+    "created": 1788912000,
+    "model": "glm-5.3",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "reasoning_content": "Check the weather.",
+          "tool_calls": [
+            {
+              "id": "call_weather",
+              "type": "function",
+              "function": {
+                "name": "weather",
+                "arguments": "{\"city\":\"Paris\"}"
+              }
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 4,
+      "total_tokens": 14,
+      "prompt_tokens_details": {
+        "cached_tokens": 6
+      }
+    }
+  },
+  "stream": [
+    "data: {\"id\":\"chatcmpl-zai-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-zai-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Check the weather.\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-zai-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sunny.\"},\"finish_reason\":null}]}",
+    "data: {\"id\":\"chatcmpl-zai-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1788912000,\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14,\"prompt_tokens_details\":{\"cached_tokens\":6}}}",
+    "data: [DONE]"
+  ]
+}

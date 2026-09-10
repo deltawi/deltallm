@@ -1,0 +1,27 @@
+{
+  "provider": "qwen",
+  "last_verified_at": "2026-09-09",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "Qwen compatible chat models",
+      "url": "https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope"
+    }
+  ],
+  "models": [
+    {
+      "id": "qwen3.8-max",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ]
+    },
+    {
+      "id": "qwen3.8-flash",
+      "status": "active",
+      "supported_modes": [
+        "chat"
+      ]
+    }
+  ]
+}

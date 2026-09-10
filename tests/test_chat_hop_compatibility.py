@@ -45,7 +45,12 @@ async def test_answer_facade_preserves_wire_result_phase_and_dependency_counts(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         adapter = OpenAIAdapter(client)
         adapters = ProviderErrorMapperRegistry(
-            openai=adapter, azure_openai=adapter, anthropic=adapter, gemini=adapter, bedrock=adapter
+            openai=adapter,
+            azure_openai=adapter,
+            anthropic=adapter,
+            gemini=adapter,
+            bedrock=adapter,
+            compatible_chat={},
         )
         # No DB/Redis service is provided. The facade has exactly one canonical usage write.
         request = SimpleNamespace(

@@ -1,0 +1,146 @@
+{
+  "arrival_window_completion_rps": 10.0,
+  "arrival_window_seconds": 20,
+  "billing_operations": {
+    "accept_selector": 200,
+    "dispatch": 200,
+    "reserve": 200,
+    "unattempted": 0
+  },
+  "case": "selector-nonstream",
+  "client_started_count": 200,
+  "client_started_rps": 10.0,
+  "completion_count": 200,
+  "drain_window_seconds": 0.0007514160242862999,
+  "environment": "ASGI; fake billing/Redis; each provider hop fixed 1ms; TTFT observed at first ASGI body",
+  "generator_dropped_count": 0,
+  "in_flight_samples": [
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ],
+    [
+      10,
+      0
+    ],
+    [
+      11,
+      0
+    ],
+    [
+      12,
+      0
+    ],
+    [
+      13,
+      0
+    ],
+    [
+      14,
+      0
+    ],
+    [
+      15,
+      0
+    ],
+    [
+      16,
+      0
+    ],
+    [
+      17,
+      0
+    ],
+    [
+      18,
+      0
+    ],
+    [
+      19,
+      0
+    ]
+  ],
+  "in_flight_slope_per_second": 0.0,
+  "latency_seconds": {
+    "max": 0.05101391702191904,
+    "mean": 0.01660720311803743,
+    "p50": 0.016345999960321933,
+    "p95": 0.022501375002320856,
+    "p99": 0.036208792007528245
+  },
+  "max_in_flight_observed": 1,
+  "provider_calls": {
+    "answer": 200,
+    "selector": 200
+  },
+  "provider_seconds": {
+    "answer": 0.2472730833105743,
+    "selector": 0.2560791329597123
+  },
+  "redis_calls": {
+    "eval": 1600,
+    "expire": 400,
+    "get": 200,
+    "hgetall": 800,
+    "incr": 200,
+    "incrby": 200,
+    "mget": 400,
+    "pexpire": 200,
+    "zadd": 600,
+    "zremrangebyscore": 200
+  },
+  "run_id": "0f574c5afa5040ba9fb73d87e4ef01a4",
+  "scheduling_lag_seconds": {
+    "max": 0.02276508300565183,
+    "mean": 0.001492313651542645,
+    "p50": 0.0012000830611214042,
+    "p95": 0.0014997079852037132,
+    "p99": 0.01722391601651907
+  },
+  "started_at": "2026-09-10T12:40:47.899287+00:00",
+  "status_counts": {
+    "200": 200
+  },
+  "success_count": 200,
+  "target_count": 200,
+  "target_rate_rps": 10,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  }
+}

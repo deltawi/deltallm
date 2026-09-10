@@ -12,12 +12,27 @@ from src.billing.audio_usage import normalize_transcription_usage
 class _SpendRecorder:
     def __init__(self) -> None:
         self.events: list[dict] = []
+        self.recorded = asyncio.Event()
 
     async def log_spend(self, **kwargs):  # noqa: ANN003, ANN201
         self.events.append({"status": "success", **kwargs})
+        self.recorded.set()
 
     async def log_request_failure(self, **kwargs):  # noqa: ANN003, ANN201
         self.events.append({"status": "error", **kwargs})
+        self.recorded.set()
+
+    async def wait_for_event(self) -> None:
+        await asyncio.wait_for(self.recorded.wait(), timeout=1)
+
+
+@pytest.fixture
+def fixed_router_minute(monkeypatch, test_app):
+    # These assertions inspect a per-minute counter, not a lifetime usage total.
+    # Advancing the wall clock between the request and assertion starts a new bucket.
+    monkeypatch.setattr(
+        test_app.state.router_state_backend, "_minute_window", lambda: "2026-09-10T12:00"
+    )
 
 
 def _configure_elevenlabs_stt_deployment(
@@ -71,6 +86,7 @@ def test_normalize_transcription_usage_ignores_public_billable_duration() -> Non
 async def test_audio_transcription_elevenlabs_native_multipart_defaults_and_billing(
     client,
     test_app,
+    fixed_router_minute,
 ):
     test_app.state.spend_tracking_service = _SpendRecorder()
     _configure_elevenlabs_stt_deployment(
@@ -205,7 +221,7 @@ async def test_audio_transcription_elevenlabs_native_multipart_defaults_and_bill
 
     assert "x-deltallm-route-deployment" in response.headers
 
-    await asyncio.sleep(0.05)
+    await test_app.state.spend_tracking_service.wait_for_event()
     last_spend = test_app.state.spend_tracking_service.events[-1]
     billing = (last_spend.get("metadata") or {}).get("billing") or {}
     assert billing["billing_unit"] == "second"
@@ -268,6 +284,7 @@ async def test_audio_transcription_elevenlabs_response_formats(
 async def test_audio_transcription_elevenlabs_multichannel_uses_billable_channel_duration(
     client,
     test_app,
+    fixed_router_minute,
 ):
     test_app.state.spend_tracking_service = _SpendRecorder()
     _configure_elevenlabs_stt_deployment(
@@ -313,7 +330,7 @@ async def test_audio_transcription_elevenlabs_multichannel_uses_billable_channel
     assert response.status_code == 200
     assert response.json() == {"text": "Left channel.\nRight channel."}
 
-    await asyncio.sleep(0.05)
+    await test_app.state.spend_tracking_service.wait_for_event()
     last_spend = test_app.state.spend_tracking_service.events[-1]
     billing = (last_spend.get("metadata") or {}).get("billing") or {}
     assert billing["cost"] == 1.2
@@ -353,7 +370,7 @@ async def test_audio_transcription_elevenlabs_sanitizes_upstream_errors(client, 
     assert response.json()["error"]["message"] == "Provider rejected request"
     assert "bad audio" not in response.text
 
-    await asyncio.sleep(0.05)
+    await test_app.state.spend_tracking_service.wait_for_event()
     last_event = test_app.state.spend_tracking_service.events[-1]
     assert last_event["status"] == "error"
     assert last_event["call_type"] == "audio_transcription"
@@ -390,7 +407,7 @@ async def test_audio_transcription_elevenlabs_invalid_schema_returns_sanitized_e
     assert response.json()["error"]["message"] == "Provider returned an invalid response"
     assert "sk-upstream" not in response.text
 
-    await asyncio.sleep(0.05)
+    await test_app.state.spend_tracking_service.wait_for_event()
     last_event = test_app.state.spend_tracking_service.events[-1]
     assert last_event["status"] == "error"
     assert last_event["call_type"] == "audio_transcription"

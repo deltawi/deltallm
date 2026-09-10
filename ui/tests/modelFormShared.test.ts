@@ -29,6 +29,31 @@ function chatForm(overrides: Partial<ModelFormValues> = {}): ModelFormValues {
   };
 }
 
+for (const provider of ['deepseek', 'zai', 'qwen', 'tencent', 'minimax']) {
+  test(`${provider} model edits retain the named credential and upstream model ID`, () => {
+    const model: ModelDeploymentDetail = {
+      deployment_id: `dep-${provider}`,
+      model_name: `${provider}-chat`,
+      provider,
+      credential_source: 'named',
+      named_credential_id: `credential-${provider}`,
+      deltallm_params: {
+        provider,
+        model: 'vendor/model-version',
+        api_key: '***REDACTED***',
+      },
+      model_info: { mode: 'chat' },
+    };
+    const { form, defaultParams } = formFromModel(model);
+    const payload = buildModelPayload(form, defaultParams, model.model_info);
+    assert.equal(payload.named_credential_id, `credential-${provider}`);
+    assert.equal(payload.deltallm_params.provider, provider);
+    assert.equal(payload.deltallm_params.model, 'vendor/model-version');
+    assert.equal(payload.deltallm_params.api_key, undefined);
+    assert.equal(payload.deltallm_params.auth_header_format, undefined);
+  });
+}
+
 test('formFromModel loads existing scheduler capacity values', () => {
   const { form } = formFromModel({
     deployment_id: 'dep-1',

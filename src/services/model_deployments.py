@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from src.config import AppConfig
+from src.providers.resolution import resolve_provider_connection_defaults
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.repositories import (
     ModelDeploymentRecord,
@@ -30,11 +31,11 @@ def resolve_runtime_deltallm_params(
     named_credential: NamedCredentialRecord | None = None,
 ) -> dict[str, Any]:
     resolved = merge_named_credential_params(params, named_credential)
-    if not resolved.get("api_key") and getattr(settings, "openai_api_key", None):
-        resolved["api_key"] = settings.openai_api_key
-    if not resolved.get("api_base") and getattr(settings, "openai_base_url", None):
-        resolved["api_base"] = settings.openai_base_url
-    return resolved
+    return resolve_provider_connection_defaults(
+        resolved,
+        default_api_key=getattr(settings, "openai_api_key", None),
+        default_api_base=getattr(settings, "openai_base_url", None),
+    )
 
 
 async def _named_credentials_by_id(

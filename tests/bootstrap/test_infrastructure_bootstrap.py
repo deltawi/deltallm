@@ -48,6 +48,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         def get_app_config(self):  # noqa: ANN201
             return SimpleNamespace(
                 general_settings=SimpleNamespace(
+                    provider_discovery_allow_http=False,
+                    provider_discovery_allowed_ports=[443],
+                    provider_discovery_allowed_private_cidrs=[],
                     upstream_http_connect_timeout_seconds=7,
                     upstream_http_read_timeout_seconds=301,
                     upstream_http_write_timeout_seconds=33,
@@ -66,7 +69,18 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.closed = True
 
     class FakeHTTPClient:
-        def __init__(self, *, timeout, limits, event_hooks=None) -> None:  # noqa: ANN001
+        def __init__(
+            self,
+            *,
+            timeout,
+            limits,
+            event_hooks=None,
+            transport=None,
+            http1=True,
+            http2=False,
+            mounts=None,
+        ) -> None:  # noqa: ANN001
+            self.transport = transport
             self.timeout = timeout
             self.limits = limits
             self.event_hooks = event_hooks
@@ -75,6 +89,8 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
         async def aclose(self) -> None:
             self.closed = True
+            if self.transport is not None:
+                await self.transport.aclose()
 
     class FakeRedis:
         def __init__(self, **kwargs) -> None:  # noqa: ANN003
@@ -232,12 +248,13 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert runtime.http_client.event_hooks == {"response": [bound_provider_error_response_body]}
     assert app.state.control_http_client is runtime.control_http_client
     assert runtime.control_http_client is not runtime.http_client
+    assert app.state.provider_discovery_runtime.transport is runtime.control_http_client.transport
     assert runtime.control_http_client.timeout.connect == 5
     assert runtime.control_http_client.timeout.read == 20
     assert runtime.control_http_client.timeout.write == 10
     assert runtime.control_http_client.timeout.pool == 5
     assert runtime.control_http_client.limits.max_connections == 100
-    assert runtime.control_http_client.limits.max_keepalive_connections == 20
+    assert runtime.control_http_client.limits.max_keepalive_connections == 0
     assert runtime.control_http_client.limits.keepalive_expiry == 30
     assert runtime.control_http_client.event_hooks is None
     assert app.state.openai_adapter[0] == "openai"

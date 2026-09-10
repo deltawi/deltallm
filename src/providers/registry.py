@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from fastapi import Request
@@ -20,9 +22,15 @@ class ProviderErrorMapperRegistry:
     anthropic: ProviderAdapter
     gemini: ProviderAdapter
     bedrock: ProviderAdapter
+    compatible_chat: Mapping[str, ProviderAdapter]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "compatible_chat", MappingProxyType(dict(self.compatible_chat)))
 
     def resolve(self, provider: str) -> ProviderAdapter | None:
         normalized = (provider or "").strip().lower()
+        if normalized in self.compatible_chat:
+            return self.compatible_chat[normalized]
         if normalized in {"azure", "azure_openai"}:
             return self.azure_openai
         if normalized == "anthropic":

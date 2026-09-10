@@ -8,6 +8,8 @@ from src.providers.azure import AzureOpenAIAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
+from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
 from src.router.selection.contracts import SelectorPrompt
 from src.router.selection.provider import ConcreteSelectorTarget, SelectorProviderHop
@@ -48,6 +50,10 @@ def registry(client):
         anthropic=AnthropicAdapter(client),
         gemini=GeminiAdapter(client),
         bedrock=BedrockAdapter(client),
+        compatible_chat={
+            name: ProfiledChatAdapter(client, profile)
+            for name, profile in CHAT_PROVIDER_PROFILES.items()
+        },
     )
 
 

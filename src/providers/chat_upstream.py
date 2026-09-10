@@ -8,6 +8,7 @@ from typing import Protocol
 
 from src.models.errors import InvalidRequestError
 from src.providers.base import ProviderAdapter
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
 from src.providers.resolution import (
     is_openai_compatible_provider,
     resolve_provider,
@@ -79,6 +80,17 @@ def resolve_chat_upstream_from_registry(
     api_key = params.get("api_key")
     if not api_key:
         raise InvalidRequestError(message="Provider API key is missing for selected model")
+    profile = CHAT_PROVIDER_PROFILES.get(provider)
+    if profile is not None:
+        return ChatUpstream(
+            adapter=adapter,
+            api_base=str(params.get("api_base") or profile.api_base).rstrip("/"),
+            endpoint="/chat/completions",
+            headers=build_openai_compatible_auth_headers(
+                provider=provider, api_key=str(api_key), content_type="application/json"
+            ),
+            timeout=timeout,
+        )
     if provider in {"anthropic", "azure", "azure_openai", "gemini"}:
         return _native_upstream(
             adapter,

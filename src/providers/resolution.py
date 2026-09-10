@@ -4,9 +4,11 @@ from collections.abc import Mapping, MutableMapping
 
 from src.config import ModelDeployment, ModelMode
 from src.metrics.prometheus import sanitize_label
+from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
 
 # Providers that are generally expected to expose OpenAI-compatible APIs.
 OPENAI_COMPATIBLE_PROVIDERS = {
+    *CHAT_PROVIDER_PROFILES,
     "openai",
     "openrouter",
     "groq",
@@ -29,9 +31,14 @@ OPENAI_FAMILY_PROVIDERS = {
 }
 
 # Providers where requesting the final OpenAI stream usage chunk is supported.
-STREAM_USAGE_REQUEST_PROVIDERS = OPENAI_FAMILY_PROVIDERS | {"vllm"}
+STREAM_USAGE_REQUEST_PROVIDERS = (
+    OPENAI_FAMILY_PROVIDERS
+    | {"vllm"}
+    | {provider for provider, profile in CHAT_PROVIDER_PROFILES.items() if profile.stream_usage}
+)
 
 PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
+    **{provider: (f"{provider}/",) for provider in CHAT_PROVIDER_PROFILES},
     "openai": ("openai/",),
     "anthropic": ("anthropic/",),
     "azure": ("azure/", "azure_openai/"),
@@ -42,6 +49,7 @@ PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
 }
 
 PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
+    **{provider: {"chat"} for provider in CHAT_PROVIDER_PROFILES},
     "openai": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
     "anthropic": {"chat"},
     "azure": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
@@ -74,6 +82,10 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
 }
 
 PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
+    **{
+        provider: {"provider": provider, "api_base": profile.api_base, "compat": "openai"}
+        for provider, profile in CHAT_PROVIDER_PROFILES.items()
+    },
     "openai": {"provider": "openai", "api_base": "https://api.openai.com/v1", "compat": "openai"},
     "anthropic": {
         "provider": "anthropic",
@@ -148,6 +160,27 @@ def resolve_provider(params: Mapping[str, object] | None) -> str:
         return sanitize_label(str(explicit)).lower()
 
     return provider_from_model(str(params.get("model") or ""))
+
+
+def resolve_provider_connection_defaults(
+    params: Mapping[str, object],
+    *,
+    default_api_key: str | None,
+    default_api_base: str | None,
+) -> dict[str, object]:
+    """Apply connection defaults once while constructing the runtime snapshot."""
+    resolved = dict(params)
+    profile = CHAT_PROVIDER_PROFILES.get(resolve_provider(resolved))
+    if profile is not None:
+        if not resolved.get("api_base"):
+            resolved["api_base"] = profile.api_base
+        # A new provider must never inherit credentials belonging to OpenAI.
+        return resolved
+    if not resolved.get("api_key") and default_api_key:
+        resolved["api_key"] = default_api_key
+    if not resolved.get("api_base") and default_api_base:
+        resolved["api_base"] = default_api_base
+    return resolved
 
 
 def resolve_provider_required_chat_output_tokens(

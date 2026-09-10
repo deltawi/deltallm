@@ -288,15 +288,15 @@ async def test_streaming_cache_respects_policy_identity_and_reuses_equivalent_ge
     assert test_app.state.http_client.stream_calls == 2
 
 
-@pytest.mark.parametrize("version", ["v2", "v3"])
+@pytest.mark.parametrize("version", ["v2", "v3", "v4"])
 async def test_prior_namespace_is_not_read(client, test_app, version):
     backend = _enable_cache(test_app)
     body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "version"}]}
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     await client.post("/v1/chat/completions", json=body, headers=headers)
     key, entry = next(iter(backend._cache.items()))
-    assert "schema:v4:" in key
-    backend._cache[key.replace("schema:v4:", f"schema:{version}:")] = entry
+    assert "schema:v5:" in key
+    backend._cache[key.replace("schema:v5:", f"schema:{version}:")] = entry
     del backend._cache[key]
     response = await client.post("/v1/chat/completions", json=body, headers=headers)
     assert response.status_code == 200

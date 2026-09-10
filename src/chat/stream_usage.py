@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from src.models.requests import ChatCompletionRequest
+from src.models.requests import AssistantChatMessage, ChatCompletionRequest
 from src.providers.openai_stream_contract import OpenAIStreamDeltaField
 
 StreamUsageSource = Literal["provider", "estimated"]
@@ -98,6 +98,10 @@ def estimate_chat_prompt_tokens(payload: ChatCompletionRequest) -> int:
     for message in payload.messages:
         total_chars += len(message.role)
         total_chars += _content_chars(message.content)
+        if isinstance(message, AssistantChatMessage):
+            total_chars += len(message.reasoning_content or "")
+            if message.reasoning_details:
+                total_chars += len(json.dumps(message.reasoning_details))
     return _estimate_tokens_from_chars(total_chars, minimum=1)
 
 

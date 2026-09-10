@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
 
+from pydantic import JsonValue
+
 from src.metrics.counters import (
     ProviderStreamValidationFailureReason,
     increment_provider_stream_validation_failure,
@@ -108,6 +110,7 @@ async def translate_openai_compatible_stream(
     provider_stream: AsyncIterator[str],
     *,
     classify_failure: ProviderFailureClassifier,
+    normalize_usage: Callable[[object], dict[str, JsonValue]] | None = None,
 ) -> AsyncIterator[str]:
     """Validate an OpenAI-compatible stream before releasing its pre-output frames."""
 
@@ -154,6 +157,10 @@ async def translate_openai_compatible_stream(
 
         if "error" in payload:
             raise _map_openai_compatible_stream_error(payload, classify_failure)
+
+        if normalize_usage is not None and payload.get("usage"):
+            payload = {**payload, "usage": normalize_usage(payload["usage"])}
+            line = "data: " + json.dumps(payload, separators=(",", ":"))
 
         choices = payload.get("choices")
         if not isinstance(choices, list):

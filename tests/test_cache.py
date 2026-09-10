@@ -510,8 +510,8 @@ async def test_cache_keys_are_versioned_and_separated_by_response_mode(client, t
     assert stream_response.status_code == 200
     keys = list(test_app.state.cache_backend._cache)
     assert len(keys) == 2
-    assert any("schema:v4:mode:json:" in key for key in keys)
-    assert any("schema:v4:mode:stream:" in key for key in keys)
+    assert any("schema:v5:mode:json:" in key for key in keys)
+    assert any("schema:v5:mode:stream:" in key for key in keys)
 
 
 @pytest.mark.asyncio

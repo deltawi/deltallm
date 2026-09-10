@@ -47,7 +47,7 @@ from .metrics import CacheMetricsProtocol, NoopCacheMetrics
 from .pricing import has_cache_hit_only_pricing, provider_cache_miss_usage
 
 logger = logging.getLogger(__name__)
-_CACHE_SCHEMA_VERSION = "v4"
+_CACHE_SCHEMA_VERSION = "v5"
 
 
 class CacheControl(str, Enum):
