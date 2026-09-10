@@ -31,10 +31,12 @@ def test_microbatch_keys_isolate_runtime_generations_with_the_same_revision() ->
     second_runtime = SimpleNamespace(generation_id="generation-b", revision=7)
     deployment = SimpleNamespace(deployment_id="deployment-a")
     first_chat = SimpleNamespace(
+        selector=None,
         routing_generation=first_runtime,
         primary_deployment=deployment,
     )
     second_chat = SimpleNamespace(
+        selector=None,
         routing_generation=second_runtime,
         primary_deployment=deployment,
     )

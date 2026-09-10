@@ -302,8 +302,16 @@ drain in-flight operations; disposable runtime-cache envelopes use a new version
 the durable policy source. Equivalent policy reloads keep response-cache identity, while selector,
 lane, capability or fallback-dependency changes invalidate it naturally.
 
-Batch items whose group or configured fallback topology contains a selector return
-`batch_model_router_selector_unsupported` until PR 6. Non-chat workloads reject selector policies.
+Internal Batch chat items select independently. Items whose group or configured
+normal/context/content-policy fallback topology contains a selector execute individually
+within the existing worker concurrency limit; selector-free microbatching is unchanged.
+The first reached selector is lazy, and its saved decision survives answer retries and
+worker reclaim. Customers pay the classifier's regular provider cost; answer pricing still
+uses the existing Batch tier. Public Batch usage contains only answer tokens.
+An uncertain or incompatible saved decision returns `batch_selector_checkpoint_unavailable`
+through bounded Batch retry handling, never another paid classification. See
+[Batch selector rollout and tradeoffs](../features/batching.md#model-selectors-in-chat-batches).
+Non-chat workloads reject selector policies.
 Deterministic policy simulation does not run selectors. The guided editor and optional fixture
 evaluation are described in [Model router administration](model-router-admin.md).
 Streaming with managed MCP tools retains its existing unsupported error.

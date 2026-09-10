@@ -1486,6 +1486,7 @@ model DeltaLLM_BatchItem {
   custom_id          String
   status             String
   request_body       Json
+  selector_checkpoint Json?
   response_body      Json?
   error_body         Json?
   usage              Json?

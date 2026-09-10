@@ -55,6 +55,13 @@ class BatchPreflightResult:
     auth: UserAPIKeyAuth
     token_estimate: int
     context_input_tokens: int
+    auth_verified: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedBatchAuth:
+    auth: UserAPIKeyAuth
+    verified: bool
 
 
 def _looks_like_api_key_hash(value: str | None) -> bool:
@@ -73,14 +80,14 @@ def _fallback_auth_for_job(job: Any) -> UserAPIKeyAuth:
     )
 
 
-async def resolve_batch_job_auth(app: Any, job: Any) -> UserAPIKeyAuth:
+async def resolve_batch_job_auth(app: Any, job: Any) -> ResolvedBatchAuth:
     token_hash = getattr(job, "created_by_api_key", None)
     key_service = getattr(app.state, "key_service", None)
     if key_service is not None and _looks_like_api_key_hash(token_hash):
         loader = getattr(key_service, "get_auth_by_token_hash", None)
         if callable(loader):
-            return await loader(str(token_hash))
-    return _fallback_auth_for_job(job)
+            return ResolvedBatchAuth(await loader(str(token_hash)), verified=True)
+    return ResolvedBatchAuth(_fallback_auth_for_job(job), verified=False)
 
 
 def record_batch_policy_failure(*, endpoint: str, exc: Exception) -> None:
@@ -105,7 +112,8 @@ async def run_batch_request_preflight(
 ) -> BatchPreflightResult:
     endpoint = batch_call_type_for_endpoint(str(getattr(job, "endpoint", "")))
     started = perf_counter()
-    auth = await resolve_batch_job_auth(app, job)
+    resolved_auth = await resolve_batch_job_auth(app, job)
+    auth = resolved_auth.auth
     try:
         callback_manager: CallbackManager = (
             getattr(app.state, "callback_manager", None) or CallbackManager()
@@ -177,6 +185,7 @@ async def run_batch_request_preflight(
         auth=auth,
         token_estimate=token_estimate,
         context_input_tokens=context_input_tokens,
+        auth_verified=resolved_auth.verified,
     )
 
 

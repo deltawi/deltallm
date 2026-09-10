@@ -176,4 +176,5 @@ def item_from_row(row: dict[str, Any]) -> BatchItemRecord:
         not_before_at=parse_datetime(row.get("not_before_at")),
         last_scheduled_at=parse_datetime(row.get("last_scheduled_at")),
         claim_epoch=int(row.get("claim_epoch") or 0),
+        selector_checkpoint=row.get("selector_checkpoint"),
     )

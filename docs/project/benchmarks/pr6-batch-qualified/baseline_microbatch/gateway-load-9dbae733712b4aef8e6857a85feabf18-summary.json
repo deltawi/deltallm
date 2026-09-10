@@ -1,0 +1,144 @@
+{
+  "answer_provider_cost_exact": "0.03680",
+  "answer_quality_score": null,
+  "arrival_window_completion_rps": 2.0,
+  "arrival_window_seconds": 10,
+  "baseline_answer_provider_cost_exact": "0.03680",
+  "basis": "fixed_local_provider_synthetic_prices_no_quality_claim",
+  "billing_operations": {
+    "accept_selector": 0,
+    "dispatch": 0,
+    "reserve": 0
+  },
+  "case": "baseline_microbatch",
+  "checkpoint_transactions": 0,
+  "client_started_count": 20,
+  "client_started_rps": 2.0,
+  "completion_count": 20,
+  "drain_window_seconds": 9.970902465283871e-05,
+  "generator_dropped_count": 0,
+  "in_flight_samples": [
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ]
+  ],
+  "in_flight_slope_per_second": 0.0,
+  "item_count": 160,
+  "item_latency_ms": {
+    "p50": 11.770041950512677,
+    "p95": 13.156500004697591,
+    "p99": 13.169125013519078
+  },
+  "items_per_slice": 8,
+  "latency_seconds": {
+    "max": 0.014092082972638309,
+    "mean": 0.01249114164384082,
+    "p50": 0.012270875042304397,
+    "p95": 0.01329541701124981,
+    "p99": 0.014092082972638309
+  },
+  "max_in_flight_observed": 1,
+  "measurable_mock_penalty_exact": "0",
+  "microbatch_provider_seconds": 0.11328062711982056,
+  "microbatch_sizes": [
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8,
+    8
+  ],
+  "offered_items_per_second": 16,
+  "provider_calls": {
+    "microbatch": 20
+  },
+  "provider_seconds": {},
+  "real_provider_savings": null,
+  "received_items_per_second": 16.0,
+  "redis_calls": {
+    "eval": 380,
+    "evalsha": 161,
+    "expire": 320,
+    "get": 160,
+    "hgetall": 180,
+    "incr": 160,
+    "incrby": 160,
+    "mget": 180,
+    "pexpire": 20,
+    "script_load": 1,
+    "zadd": 40,
+    "zremrangebyscore": 20
+  },
+  "run_id": "9dbae733712b4aef8e6857a85feabf18",
+  "scheduling_lag_seconds": {
+    "max": 0.0011728330282494426,
+    "mean": 0.0009773370547918603,
+    "p50": 0.0011265409993939102,
+    "p95": 0.0011565830209292471,
+    "p99": 0.0011728330282494426
+  },
+  "selector_provider_cost_exact": "0",
+  "started_at": "2026-09-09T19:48:44.189536+00:00",
+  "status_counts": {
+    "200": 20
+  },
+  "success_count": 20,
+  "synthetic_net_savings_exact": "0.00000",
+  "target_count": 20,
+  "target_rate_rps": 2,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  },
+  "worker_slots": 4
+}

@@ -153,6 +153,7 @@ nav:
       - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
       - Route-Group Model Router Design: project/model-router-design.md
       - Model Router Admin Design: project/model-router-admin-design.md
+      - Model Router Batch Design: project/model-router-batch.md
       - Documentation Governance: project/documentation-governance.md
       - Context-capacity Routing Decision: project/context-routing-design.md
       - Route-group Admin Addressing: project/route-group-addressing.md

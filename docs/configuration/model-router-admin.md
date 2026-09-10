@@ -202,7 +202,11 @@ starting guidance (not enforced defaults or a production-quality claim), require
 
 Small fixture sets are useful smoke tests, not statistical certification.
 Canary and observe real quality, total cost and latency before broad activation.
-Batch selector execution and whole-feature production benchmarking remain PR 6.
+Internal Batch chat uses the same published selector automatically, with an independent
+decision per item. There is no additional Batch activation switch. Selected items run
+individually rather than in upstream microbatches; see the
+[Batch tradeoff and rollout notes](../features/batching.md#model-selectors-in-chat-batches).
+Whole-feature production quality and savings still require representative operator evidence.
 
 PR 5 adds no settings, migrations, pools or deployment topology. Architectural
 ownership and capacity notes are in the [admin design](../project/model-router-admin-design.md).

@@ -1,0 +1,642 @@
+[
+  {
+    "item_id": "selected-1",
+    "latency_ms": 16.472916991915554
+  },
+  {
+    "item_id": "selected-2",
+    "latency_ms": 23.430207977071404
+  },
+  {
+    "item_id": "selected-3",
+    "latency_ms": 30.275208002422005
+  },
+  {
+    "item_id": "selected-4",
+    "latency_ms": 36.86858300352469
+  },
+  {
+    "item_id": "selected-5",
+    "latency_ms": 43.55966695584357
+  },
+  {
+    "item_id": "selected-6",
+    "latency_ms": 50.257291994057596
+  },
+  {
+    "item_id": "selected-7",
+    "latency_ms": 56.58491695066914
+  },
+  {
+    "item_id": "selected-8",
+    "latency_ms": 63.49095795303583
+  },
+  {
+    "item_id": "selected-9",
+    "latency_ms": 20.830791036132723
+  },
+  {
+    "item_id": "selected-10",
+    "latency_ms": 29.032249993178993
+  },
+  {
+    "item_id": "selected-11",
+    "latency_ms": 37.056041008327156
+  },
+  {
+    "item_id": "selected-12",
+    "latency_ms": 44.98537501785904
+  },
+  {
+    "item_id": "selected-13",
+    "latency_ms": 53.065375017467886
+  },
+  {
+    "item_id": "selected-14",
+    "latency_ms": 60.49254100071266
+  },
+  {
+    "item_id": "selected-15",
+    "latency_ms": 68.59833298949525
+  },
+  {
+    "item_id": "selected-16",
+    "latency_ms": 76.76341600017622
+  },
+  {
+    "item_id": "selected-17",
+    "latency_ms": 18.450916977599263
+  },
+  {
+    "item_id": "selected-18",
+    "latency_ms": 25.11533402139321
+  },
+  {
+    "item_id": "selected-19",
+    "latency_ms": 32.28866698918864
+  },
+  {
+    "item_id": "selected-20",
+    "latency_ms": 39.32208399055526
+  },
+  {
+    "item_id": "selected-21",
+    "latency_ms": 45.971416984684765
+  },
+  {
+    "item_id": "selected-22",
+    "latency_ms": 54.04195899609476
+  },
+  {
+    "item_id": "selected-23",
+    "latency_ms": 61.90079200314358
+  },
+  {
+    "item_id": "selected-24",
+    "latency_ms": 68.61183402361348
+  },
+  {
+    "item_id": "selected-25",
+    "latency_ms": 21.96708304109052
+  },
+  {
+    "item_id": "selected-26",
+    "latency_ms": 29.32316600345075
+  },
+  {
+    "item_id": "selected-27",
+    "latency_ms": 37.44375001406297
+  },
+  {
+    "item_id": "selected-28",
+    "latency_ms": 45.02383299404755
+  },
+  {
+    "item_id": "selected-29",
+    "latency_ms": 52.70466604270041
+  },
+  {
+    "item_id": "selected-30",
+    "latency_ms": 60.89016603073105
+  },
+  {
+    "item_id": "selected-31",
+    "latency_ms": 68.96170799154788
+  },
+  {
+    "item_id": "selected-32",
+    "latency_ms": 77.56337500177324
+  },
+  {
+    "item_id": "selected-33",
+    "latency_ms": 21.783291012980044
+  },
+  {
+    "item_id": "selected-34",
+    "latency_ms": 30.14524996979162
+  },
+  {
+    "item_id": "selected-35",
+    "latency_ms": 37.92033297941089
+  },
+  {
+    "item_id": "selected-36",
+    "latency_ms": 45.76337500475347
+  },
+  {
+    "item_id": "selected-37",
+    "latency_ms": 53.96345799090341
+  },
+  {
+    "item_id": "selected-38",
+    "latency_ms": 61.61400000564754
+  },
+  {
+    "item_id": "selected-39",
+    "latency_ms": 68.64258297719061
+  },
+  {
+    "item_id": "selected-40",
+    "latency_ms": 75.54845797130838
+  },
+  {
+    "item_id": "selected-41",
+    "latency_ms": 19.850959011819214
+  },
+  {
+    "item_id": "selected-42",
+    "latency_ms": 26.774334022775292
+  },
+  {
+    "item_id": "selected-43",
+    "latency_ms": 34.97020900249481
+  },
+  {
+    "item_id": "selected-44",
+    "latency_ms": 42.31087502557784
+  },
+  {
+    "item_id": "selected-45",
+    "latency_ms": 49.72825001459569
+  },
+  {
+    "item_id": "selected-46",
+    "latency_ms": 57.2416249779053
+  },
+  {
+    "item_id": "selected-47",
+    "latency_ms": 64.83612500596792
+  },
+  {
+    "item_id": "selected-48",
+    "latency_ms": 72.05204199999571
+  },
+  {
+    "item_id": "selected-49",
+    "latency_ms": 16.790791996754706
+  },
+  {
+    "item_id": "selected-50",
+    "latency_ms": 23.82162504363805
+  },
+  {
+    "item_id": "selected-51",
+    "latency_ms": 30.700750008691102
+  },
+  {
+    "item_id": "selected-52",
+    "latency_ms": 37.037250003777444
+  },
+  {
+    "item_id": "selected-53",
+    "latency_ms": 43.85412501869723
+  },
+  {
+    "item_id": "selected-54",
+    "latency_ms": 50.488708016928285
+  },
+  {
+    "item_id": "selected-55",
+    "latency_ms": 56.821958045475185
+  },
+  {
+    "item_id": "selected-56",
+    "latency_ms": 63.562292023561895
+  },
+  {
+    "item_id": "selected-57",
+    "latency_ms": 16.87012502225116
+  },
+  {
+    "item_id": "selected-58",
+    "latency_ms": 23.888249997980893
+  },
+  {
+    "item_id": "selected-59",
+    "latency_ms": 30.763374990783632
+  },
+  {
+    "item_id": "selected-60",
+    "latency_ms": 37.151833006646484
+  },
+  {
+    "item_id": "selected-61",
+    "latency_ms": 43.88420801842585
+  },
+  {
+    "item_id": "selected-62",
+    "latency_ms": 50.569500017445534
+  },
+  {
+    "item_id": "selected-63",
+    "latency_ms": 56.93004099885002
+  },
+  {
+    "item_id": "selected-64",
+    "latency_ms": 63.688083027955145
+  },
+  {
+    "item_id": "selected-65",
+    "latency_ms": 17.13362499140203
+  },
+  {
+    "item_id": "selected-66",
+    "latency_ms": 24.18549999129027
+  },
+  {
+    "item_id": "selected-67",
+    "latency_ms": 30.886416032444686
+  },
+  {
+    "item_id": "selected-68",
+    "latency_ms": 37.10995800793171
+  },
+  {
+    "item_id": "selected-69",
+    "latency_ms": 44.898000021930784
+  },
+  {
+    "item_id": "selected-70",
+    "latency_ms": 52.95391601976007
+  },
+  {
+    "item_id": "selected-71",
+    "latency_ms": 60.54979102918878
+  },
+  {
+    "item_id": "selected-72",
+    "latency_ms": 67.87458300823346
+  },
+  {
+    "item_id": "selected-73",
+    "latency_ms": 19.507999997586012
+  },
+  {
+    "item_id": "selected-74",
+    "latency_ms": 35.91333300573751
+  },
+  {
+    "item_id": "selected-75",
+    "latency_ms": 43.507791007868946
+  },
+  {
+    "item_id": "selected-76",
+    "latency_ms": 51.07295798370615
+  },
+  {
+    "item_id": "selected-77",
+    "latency_ms": 59.203875018283725
+  },
+  {
+    "item_id": "selected-78",
+    "latency_ms": 66.64079101756215
+  },
+  {
+    "item_id": "selected-79",
+    "latency_ms": 73.4953330247663
+  },
+  {
+    "item_id": "selected-80",
+    "latency_ms": 79.6537910355255
+  },
+  {
+    "item_id": "selected-81",
+    "latency_ms": 21.024374989792705
+  },
+  {
+    "item_id": "selected-82",
+    "latency_ms": 28.075583977624774
+  },
+  {
+    "item_id": "selected-83",
+    "latency_ms": 35.75241699581966
+  },
+  {
+    "item_id": "selected-84",
+    "latency_ms": 43.721708992961794
+  },
+  {
+    "item_id": "selected-85",
+    "latency_ms": 50.623084011022
+  },
+  {
+    "item_id": "selected-86",
+    "latency_ms": 57.52974998904392
+  },
+  {
+    "item_id": "selected-87",
+    "latency_ms": 64.11833397578448
+  },
+  {
+    "item_id": "selected-88",
+    "latency_ms": 70.51708397921175
+  },
+  {
+    "item_id": "selected-89",
+    "latency_ms": 15.856459038332105
+  },
+  {
+    "item_id": "selected-90",
+    "latency_ms": 22.807291999924928
+  },
+  {
+    "item_id": "selected-91",
+    "latency_ms": 29.605209012515843
+  },
+  {
+    "item_id": "selected-92",
+    "latency_ms": 35.95312498509884
+  },
+  {
+    "item_id": "selected-93",
+    "latency_ms": 42.76304203085601
+  },
+  {
+    "item_id": "selected-94",
+    "latency_ms": 49.36570901190862
+  },
+  {
+    "item_id": "selected-95",
+    "latency_ms": 55.5447920341976
+  },
+  {
+    "item_id": "selected-96",
+    "latency_ms": 62.52516701351851
+  },
+  {
+    "item_id": "selected-97",
+    "latency_ms": 15.628417022526264
+  },
+  {
+    "item_id": "selected-98",
+    "latency_ms": 22.399250010494143
+  },
+  {
+    "item_id": "selected-99",
+    "latency_ms": 30.916833027731627
+  },
+  {
+    "item_id": "selected-100",
+    "latency_ms": 38.63020800054073
+  },
+  {
+    "item_id": "selected-101",
+    "latency_ms": 46.15887504769489
+  },
+  {
+    "item_id": "selected-102",
+    "latency_ms": 54.25783304963261
+  },
+  {
+    "item_id": "selected-103",
+    "latency_ms": 62.95270804548636
+  },
+  {
+    "item_id": "selected-104",
+    "latency_ms": 71.64183299755678
+  },
+  {
+    "item_id": "selected-105",
+    "latency_ms": 22.030833992175758
+  },
+  {
+    "item_id": "selected-106",
+    "latency_ms": 28.258459002245218
+  },
+  {
+    "item_id": "selected-107",
+    "latency_ms": 36.07495897449553
+  },
+  {
+    "item_id": "selected-108",
+    "latency_ms": 42.690959002356976
+  },
+  {
+    "item_id": "selected-109",
+    "latency_ms": 49.03179197572172
+  },
+  {
+    "item_id": "selected-110",
+    "latency_ms": 56.29574996419251
+  },
+  {
+    "item_id": "selected-111",
+    "latency_ms": 63.72437498066574
+  },
+  {
+    "item_id": "selected-112",
+    "latency_ms": 70.71554200956598
+  },
+  {
+    "item_id": "selected-113",
+    "latency_ms": 23.155834001954645
+  },
+  {
+    "item_id": "selected-114",
+    "latency_ms": 30.794834019616246
+  },
+  {
+    "item_id": "selected-115",
+    "latency_ms": 38.57066697673872
+  },
+  {
+    "item_id": "selected-116",
+    "latency_ms": 46.5053339721635
+  },
+  {
+    "item_id": "selected-117",
+    "latency_ms": 54.51079201884568
+  },
+  {
+    "item_id": "selected-118",
+    "latency_ms": 62.222749984357506
+  },
+  {
+    "item_id": "selected-119",
+    "latency_ms": 70.32658398384228
+  },
+  {
+    "item_id": "selected-120",
+    "latency_ms": 77.72433396894485
+  },
+  {
+    "item_id": "selected-121",
+    "latency_ms": 17.77516701258719
+  },
+  {
+    "item_id": "selected-122",
+    "latency_ms": 24.915750022046268
+  },
+  {
+    "item_id": "selected-123",
+    "latency_ms": 31.97079204255715
+  },
+  {
+    "item_id": "selected-124",
+    "latency_ms": 39.30583404144272
+  },
+  {
+    "item_id": "selected-125",
+    "latency_ms": 46.546583995223045
+  },
+  {
+    "item_id": "selected-126",
+    "latency_ms": 54.09937503281981
+  },
+  {
+    "item_id": "selected-127",
+    "latency_ms": 62.19770904863253
+  },
+  {
+    "item_id": "selected-128",
+    "latency_ms": 70.18495904048905
+  },
+  {
+    "item_id": "selected-129",
+    "latency_ms": 21.582583023700863
+  },
+  {
+    "item_id": "selected-130",
+    "latency_ms": 28.343542013317347
+  },
+  {
+    "item_id": "selected-131",
+    "latency_ms": 35.021500021684915
+  },
+  {
+    "item_id": "selected-132",
+    "latency_ms": 42.21954202512279
+  },
+  {
+    "item_id": "selected-133",
+    "latency_ms": 50.3872080007568
+  },
+  {
+    "item_id": "selected-134",
+    "latency_ms": 58.99520800448954
+  },
+  {
+    "item_id": "selected-135",
+    "latency_ms": 67.80212500598282
+  },
+  {
+    "item_id": "selected-136",
+    "latency_ms": 76.78237499203533
+  },
+  {
+    "item_id": "selected-137",
+    "latency_ms": 17.299166996963322
+  },
+  {
+    "item_id": "selected-138",
+    "latency_ms": 26.031083019915968
+  },
+  {
+    "item_id": "selected-139",
+    "latency_ms": 34.02875002939254
+  },
+  {
+    "item_id": "selected-140",
+    "latency_ms": 43.8456250121817
+  },
+  {
+    "item_id": "selected-141",
+    "latency_ms": 52.8235420351848
+  },
+  {
+    "item_id": "selected-142",
+    "latency_ms": 59.35741704888642
+  },
+  {
+    "item_id": "selected-143",
+    "latency_ms": 66.32858305238187
+  },
+  {
+    "item_id": "selected-144",
+    "latency_ms": 72.80466699739918
+  },
+  {
+    "item_id": "selected-145",
+    "latency_ms": 15.726417012047023
+  },
+  {
+    "item_id": "selected-146",
+    "latency_ms": 22.615959052927792
+  },
+  {
+    "item_id": "selected-147",
+    "latency_ms": 29.357750026974827
+  },
+  {
+    "item_id": "selected-148",
+    "latency_ms": 36.91045904997736
+  },
+  {
+    "item_id": "selected-149",
+    "latency_ms": 43.83841704111546
+  },
+  {
+    "item_id": "selected-150",
+    "latency_ms": 50.62112503219396
+  },
+  {
+    "item_id": "selected-151",
+    "latency_ms": 57.01254203449935
+  },
+  {
+    "item_id": "selected-152",
+    "latency_ms": 63.80179204279557
+  },
+  {
+    "item_id": "selected-153",
+    "latency_ms": 26.50816604727879
+  },
+  {
+    "item_id": "selected-154",
+    "latency_ms": 33.85370800970122
+  },
+  {
+    "item_id": "selected-155",
+    "latency_ms": 40.47925001941621
+  },
+  {
+    "item_id": "selected-156",
+    "latency_ms": 47.099290997721255
+  },
+  {
+    "item_id": "selected-157",
+    "latency_ms": 53.732333006337285
+  },
+  {
+    "item_id": "selected-158",
+    "latency_ms": 61.49804103188217
+  },
+  {
+    "item_id": "selected-159",
+    "latency_ms": 69.26829100120813
+  },
+  {
+    "item_id": "selected-160",
+    "latency_ms": 75.9350000298582
+  }
+]

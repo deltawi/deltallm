@@ -37,6 +37,7 @@ UPGRADE_MODEL_DEPLOYMENT_SECOND_ID = "migration-upgrade-model-deployment-second"
 UPGRADE_MODEL_NAME = "migration-upgrade-model"
 STABLE_RELEASE_TAG_PATTERN = re.compile(r"\Av\d+\.\d+\.\d+\Z")
 SHARED_ROUTE_POLICY_MIGRATION_REF = "3372602bf7bff6107ee9595217b7f2fd75da61cd"
+SELECTOR_VALIDATION_MIGRATION = "20260910000100_batch_selector_checkpoint_validation"
 
 
 def database_url_for(base_url: str, database_name: str) -> str:
@@ -742,6 +743,32 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             base_schema = _extract_prisma_at_ref(base_ref, temp_root / "base")
             _migrate(prisma, schema=base_schema, database_url=upgrade_url)
             _seed_upgrade_fixture(prisma, upgrade_url, base_schema)
+            _db_execute(
+                prisma,
+                schema=base_schema,
+                database_url=upgrade_url,
+                sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_seed.sql").read_text(),
+            )
+            base_validation = (
+                base_schema.parent / "migrations" / SELECTOR_VALIDATION_MIGRATION / "migration.sql"
+            )
+            # Deploy cannot undo validation already applied by a newer upgrade base.
+            if not base_validation.is_file():
+                staged_root = temp_root / "selector-install"
+                shutil.copytree(
+                    CURRENT_SCHEMA.parent,
+                    staged_root,
+                    ignore=shutil.ignore_patterns(SELECTOR_VALIDATION_MIGRATION),
+                )
+                _migrate(prisma, schema=staged_root / "schema.prisma", database_url=upgrade_url)
+                _db_execute(
+                    prisma,
+                    schema=CURRENT_SCHEMA,
+                    database_url=upgrade_url,
+                    sql=(
+                        REPO_ROOT / "scripts/migration_fixtures/batch_selector_installed.sql"
+                    ).read_text(),
+                )
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=upgrade_url)
             shared_schema = _extract_prisma_at_ref(
                 SHARED_ROUTE_POLICY_MIGRATION_REF,
@@ -751,6 +778,12 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             _seed_shared_migration_fixture(prisma, shared_url, shared_schema)
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
         _verify_upgrade_database(prisma, upgrade_url)
+        _db_execute(
+            prisma,
+            schema=CURRENT_SCHEMA,
+            database_url=upgrade_url,
+            sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_verify.sql").read_text(),
+        )
         _verify_shared_migration_database(prisma, shared_url)
         _verify_operation_reservations(prisma, upgrade_url)
         _verify_operation_reservations(prisma, shared_url)
