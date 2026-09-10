@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 import contextlib
+import inspect
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
@@ -11,8 +12,16 @@ from time import perf_counter
 from typing import Any, Awaitable, Iterator
 
 from src.batch.endpoints import batch_call_type_for_endpoint
-from src.batch.policy import BatchPolicyLease, acquire_batch_policy_lease, release_batch_policy_lease
-from src.batch.worker_types import BatchItemLeaseLostError, _PreparedChatItem, _PreparedEmbeddingItem
+from src.batch.policy import (
+    BatchPolicyLease,
+    acquire_batch_policy_lease,
+    release_batch_policy_lease,
+)
+from src.batch.worker_types import (
+    BatchItemLeaseLostError,
+    _PreparedChatItem,
+    _PreparedEmbeddingItem,
+)
 from src.billing.tier_pricing import (
     PricingResolution,
     TokenBillingResolution,
@@ -194,7 +203,9 @@ class WorkerPersistenceMixin:
         for prepared in prepared_items:
             self._observe_prepared_item_lease_lost(prepared)
 
-    async def _acquire_prepared_policy_lease(self, *, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+    async def _acquire_prepared_policy_lease(
+        self, *, prepared: _PreparedEmbeddingItem | _PreparedChatItem
+    ) -> None:
         if prepared.policy_lease is not None:
             return
         if prepared.policy_auth is None:
@@ -206,7 +217,9 @@ class WorkerPersistenceMixin:
         )
         self._start_prepared_policy_lease_refresher(prepared)
 
-    async def _release_prepared_policy_lease(self, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+    async def _release_prepared_policy_lease(
+        self, prepared: _PreparedEmbeddingItem | _PreparedChatItem
+    ) -> None:
         await self._stop_prepared_policy_lease_refresher(prepared)
         lease = prepared.policy_lease
         if lease is None:
@@ -218,7 +231,9 @@ class WorkerPersistenceMixin:
         self._queue_policy_lease_release_retry(lease)
         prepared.policy_lease = None
 
-    def _start_prepared_policy_lease_refresher(self, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+    def _start_prepared_policy_lease_refresher(
+        self, prepared: _PreparedEmbeddingItem | _PreparedChatItem
+    ) -> None:
         lease = prepared.policy_lease
         limiter = getattr(getattr(self.app, "state", None), "limit_counter", None)
         if lease is None or limiter is None:
@@ -230,14 +245,18 @@ class WorkerPersistenceMixin:
         if refresher.start():
             prepared.policy_lease_refresher = refresher
 
-    async def _stop_prepared_policy_lease_refresher(self, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+    async def _stop_prepared_policy_lease_refresher(
+        self, prepared: _PreparedEmbeddingItem | _PreparedChatItem
+    ) -> None:
         refresher = getattr(prepared, "policy_lease_refresher", None)
         if refresher is None:
             return
         prepared.policy_lease_refresher = None
         await refresher.stop()
 
-    async def _release_prepared_policy_leases(self, prepared_items: list[_PreparedEmbeddingItem] | list[_PreparedChatItem]) -> None:
+    async def _release_prepared_policy_leases(
+        self, prepared_items: list[_PreparedEmbeddingItem] | list[_PreparedChatItem]
+    ) -> None:
         for prepared in prepared_items:
             await self._release_prepared_policy_lease(prepared)
 
@@ -266,7 +285,11 @@ class WorkerPersistenceMixin:
         label: str,
     ) -> Any:
         if lease_lost_event.is_set():
-            raise BatchItemLeaseLostError(f"batch item lease lost before provider call target={label}")
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            raise BatchItemLeaseLostError(
+                f"batch item lease lost before provider call target={label}"
+            )
 
         provider_task = asyncio.ensure_future(awaitable)
         lease_task = asyncio.create_task(lease_lost_event.wait())
@@ -277,8 +300,7 @@ class WorkerPersistenceMixin:
             )
             if lease_lost_event.is_set():
                 provider_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await provider_task
+                await asyncio.gather(provider_task, return_exceptions=True)
                 raise BatchItemLeaseLostError(
                     f"batch item lease lost during provider call target={label}"
                 )
@@ -289,6 +311,7 @@ class WorkerPersistenceMixin:
                 await lease_task
             if not provider_task.done():
                 provider_task.cancel()
+            await asyncio.gather(provider_task, return_exceptions=True)
 
     def _build_completion_outbox_payload(
         self,
@@ -335,6 +358,8 @@ class WorkerPersistenceMixin:
             payload["microbatch_size"] = int(microbatch_size)
         if microbatch_id is not None:
             payload["microbatch_id"] = microbatch_id
+        if isinstance(prepared, _PreparedChatItem) and prepared.selector is not None:
+            payload["billing_event_id"] = str(prepared.selector.operation_id)
         return payload
 
     async def _persist_completion_rows_with_outbox(

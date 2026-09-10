@@ -30,7 +30,9 @@ def normalize_batch_job_status(status: str | BatchJobStatus) -> BatchJobStatus:
     try:
         return BatchJobStatus(normalized)
     except ValueError as exc:
-        raise ValueError("batch job status must be one of: " + ", ".join(BATCH_JOB_STATUS_VALUES)) from exc
+        raise ValueError(
+            "batch job status must be one of: " + ", ".join(BATCH_JOB_STATUS_VALUES)
+        ) from exc
 
 
 def normalize_batch_completion_window(completion_window: object) -> str:
@@ -257,6 +259,7 @@ class BatchItemRecord:
     not_before_at: datetime | None = None
     last_scheduled_at: datetime | None = None
     claim_epoch: int = 0
+    selector_checkpoint: object | None = None
 
 
 @dataclass

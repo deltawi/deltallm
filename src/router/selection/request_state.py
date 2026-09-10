@@ -71,6 +71,15 @@ class RequestSelectorState:
             raise SelectorInvariantError()
         self._usage = usage
 
+    def restore(self, decision: SelectorDecision) -> None:
+        """Rehydrate an externally validated durable Batch decision, never rerun it."""
+        if self._state is not SelectorState.NEW:
+            raise SelectorInvariantError()
+        self._deadline.require_remaining()
+        self._decision = decision
+        self._usage = decision.usage
+        self._state = SelectorState.DECIDED
+
     async def select_once(
         self, produce: Callable[[], Awaitable[SelectorDecision]]
     ) -> SelectorDecision:

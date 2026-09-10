@@ -725,12 +725,14 @@ class BatchRepository:
         worker_id: str,
         lease_seconds: int,
         claim_epoch: int | None = None,
+        expires_at: float | None = None,
     ) -> bool:
         return await self.items.renew_item_lease(
             item_id=item_id,
             worker_id=worker_id,
             lease_seconds=lease_seconds,
             claim_epoch=claim_epoch,
+            expires_at=expires_at,
         )
 
     async def release_items_for_retry(

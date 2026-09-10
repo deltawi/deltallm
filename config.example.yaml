@@ -60,12 +60,13 @@ router_settings:
   #         weight: 3
   #       - deployment_id: embeddings-secondary
   #         weight: 1
-  # Optional real-time model router (issue #304). Before enabling, declare each member's
+  # Optional chat model router (issue #304). Before enabling, declare each member's
   # model_info.chat_capabilities and positive context capacity. The classifier also needs
   # explicit provider token prices and positive RPM/TPM limits; see docs/configuration/models.md.
   # Requires general_settings.spend_ingestion_mode: outbox and its enabled healthy worker.
   # Selector cost is charged to customers; budgets remain soft checks, not spending holds.
-  # Batch and deterministic selector simulation remain unsupported.
+  # Internal Batch chat selects per item and bypasses microbatch grouping.
+  # Deterministic policy simulation does not execute the selector.
   # route_groups:
   #   - key: support-chat
   #     mode: chat

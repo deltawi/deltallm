@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from src.metrics import increment_router_health_update_failure
+from src.router.attempt_capacity import attempt_capacity
 from src.models.errors import (
     FailureClassification,
     GatewayCapacityError,
@@ -362,7 +363,7 @@ class FailoverManager:
             return _NormalizedExecutionError(
                 error=error,
                 classification=_classify_failure(error),
-                allow_classified_fallbacks=True,
+                allow_classified_fallbacks=not isinstance(error, GatewayCapacityError),
                 retry_source=error,
             )
 
@@ -941,6 +942,52 @@ class FailoverManager:
         return None
 
     async def _execute_attempt(
+        self,
+        deployment: Deployment,
+        execute: Callable[[Deployment], Awaitable[Any]],
+        routing_context: dict[str, Any],
+        attempted_ids: set[str],
+        attempt_history: list[str],
+        deadline: RequestDeadline,
+        *,
+        on_attempt: Callable[[Deployment], None] | None,
+        timeout_seconds: float | None,
+        timeout_for_deployment: TimeoutForDeployment | None,
+        defer_success: bool = False,
+    ) -> tuple[bool, Any, AttemptPermit | None]:
+        capacity = attempt_capacity(routing_context)
+        attempt_deadline = deadline
+        if capacity is not None:
+            attempt_deadline = RequestDeadline(
+                min(
+                    deadline.expires_at,
+                    asyncio.get_running_loop().time()
+                    + self._effective_attempt_timeout(
+                        deployment, timeout_seconds, timeout_for_deployment
+                    ),
+                )
+            )
+
+        async def admitted() -> tuple[bool, Any, AttemptPermit | None]:
+            return await self._execute_admitted_attempt(
+                deployment,
+                execute,
+                routing_context,
+                attempted_ids,
+                attempt_history,
+                attempt_deadline,
+                on_attempt=on_attempt,
+                timeout_seconds=timeout_seconds,
+                timeout_for_deployment=timeout_for_deployment,
+                defer_success=defer_success,
+            )
+
+        if capacity is None:
+            return await admitted()
+        async with capacity.slot(deployment, attempt_deadline):
+            return await admitted()
+
+    async def _execute_admitted_attempt(
         self,
         deployment: Deployment,
         execute: Callable[[Deployment], Awaitable[Any]],

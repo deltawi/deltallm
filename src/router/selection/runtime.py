@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import httpx
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from src.billing.operation_reservation import (
     BillingOperationUnavailable,
@@ -50,6 +50,7 @@ class SelectorExecutionFactory:
         cache: ResponseCacheEligibility,
         capacity_owner: SelectorCapacityOwner,
         classifier_allowed: bool = True,
+        after_admission: Callable[[], Awaitable[None]] | None = None,
     ) -> SelectorService:
         self.require_ready()
         provider = SelectorProviderHop(
@@ -68,6 +69,7 @@ class SelectorExecutionFactory:
         hop = _ContextCheckedHop(hop, input_capacity=qualified.capacity.token_allowance - 64)
         return SelectorService(
             hop,
+            after_admission=after_admission,
             admission=ReservedSelectorAdmission(
                 store=self._billing, operation=operation, cache=cache
             ),

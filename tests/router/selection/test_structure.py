@@ -29,6 +29,13 @@ NEW_MODULES = (
     "chat_capabilities.py",
     "providers/chat_hop.py",
     "providers/chat_upstream.py",
+    "batch/selector_checkpoint.py",
+    "batch/selector_identity.py",
+    "batch/selector_execution.py",
+    "batch/chat_capacity.py",
+    "batch/chat_lease_lifecycle.py",
+    "batch/public_errors.py",
+    "router/attempt_capacity.py",
 )
 
 
@@ -63,6 +70,12 @@ def test_selector_execution_is_owned_by_the_authenticated_edge_and_selection_pac
             continue
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.ImportFrom):
+                if (
+                    path == ROOT / "src/batch/selector_execution.py"
+                    and node.module == "src.router.selection.request_state"
+                ):
+                    assert [alias.name for alias in node.names] == ["RequestSelectorState"]
+                    continue
                 assert node.module not in targets, path
             elif isinstance(node, ast.Import):
                 assert not any(alias.name in targets for alias in node.names), path
@@ -86,6 +99,28 @@ def test_planning_does_not_own_selector_provider_execution():
             "_plan_eligible_group",
         }:
             assert node.end_lineno - node.lineno < 80
+
+
+def test_batch_selector_boundaries_do_not_grow_worker_or_reimplement_provider_policy():
+    for module in ("batch/selector_edge.py", "batch/repositories/selector_repository.py"):
+        source = (ROOT / "src" / module).read_text()
+        assert len(source.splitlines()) < 150
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.end_lineno - node.lineno < 80, (module, node.name)
+            if isinstance(node, ast.Name):
+                assert node.id not in {"Any", "Request"}
+    for module, limit in (
+        ("batch/chat_worker_execution.py", 800),
+        ("batch/chat_item_execution.py", 400),
+        ("batch/chat_dispatch.py", 250),
+    ):
+        assert len((ROOT / "src" / module).read_text().splitlines()) < limit
+    edge = (ROOT / "src/batch/selector_edge.py").read_text()
+    assert "preflight.auth_verified" in edge and "factory.require_ready()" in edge
+    source = (ROOT / "src/batch/selector_execution.py").read_text()
+    assert "SelectorOperation(" in source
+    assert "SelectorService(" not in source and "SelectorProviderHop(" not in source
 
 
 def test_answer_facade_and_selector_bridge_share_one_signing_and_transport_owner():

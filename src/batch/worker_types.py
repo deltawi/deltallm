@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    from src.batch.selector_execution import BatchSelectorExecution
 
 from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
@@ -202,3 +205,4 @@ class _PreparedChatItem:
     policy_auth: Any | None = None
     policy_lease: Any | None = None
     policy_lease_refresher: Any | None = None
+    selector: BatchSelectorExecution | None = None

@@ -1,0 +1,134 @@
+{
+  "answer_provider_cost_exact": "0.03680",
+  "answer_quality_score": null,
+  "arrival_window_completion_rps": 2.0,
+  "arrival_window_seconds": 10,
+  "baseline_answer_provider_cost_exact": "0.03680",
+  "basis": "fixed_local_provider_synthetic_prices_no_quality_claim",
+  "billing_operations": {
+    "accept_selector": 160,
+    "dispatch": 160,
+    "reserve": 160
+  },
+  "case": "selector_safe_default",
+  "checkpoint_transactions": 320,
+  "client_started_count": 20,
+  "client_started_rps": 2.0,
+  "completion_count": 20,
+  "decision_causes": {
+    "invalid_json": 160
+  },
+  "drain_window_seconds": 9.97919705696404e-05,
+  "generator_dropped_count": 0,
+  "in_flight_samples": [
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ]
+  ],
+  "in_flight_slope_per_second": 0.0,
+  "item_count": 160,
+  "item_latency_ms": {
+    "p50": 36.770083010196686,
+    "p95": 39.45362498052418,
+    "p99": 39.79149996303022
+  },
+  "items_per_slice": 8,
+  "latency_seconds": {
+    "max": 0.0401238749618642,
+    "mean": 0.03877632904332131,
+    "p50": 0.03858891600975767,
+    "p95": 0.04004129098029807,
+    "p99": 0.0401238749618642
+  },
+  "max_in_flight_observed": 1,
+  "measurable_mock_penalty_exact": "0",
+  "microbatch_provider_seconds": 0.0,
+  "microbatch_sizes": [],
+  "offered_items_per_second": 16,
+  "provider_calls": {
+    "answer": 160,
+    "microbatch": 0,
+    "selector": 160
+  },
+  "provider_seconds": {
+    "answer": 0.8944260812131688,
+    "selector": 0.8843548279255629
+  },
+  "real_provider_savings": null,
+  "received_items_per_second": 16.0,
+  "redis_calls": {
+    "eval": 1120,
+    "evalsha": 161,
+    "expire": 320,
+    "get": 160,
+    "hgetall": 640,
+    "incr": 160,
+    "incrby": 160,
+    "mget": 320,
+    "pexpire": 160,
+    "script_load": 1,
+    "zadd": 480,
+    "zremrangebyscore": 160
+  },
+  "run_id": "ac17b2a2bff14b01a779f22c560fa7e6",
+  "scheduling_lag_seconds": {
+    "max": 0.0011738340253941715,
+    "mean": 0.0009519733546767383,
+    "p50": 0.0011212090030312538,
+    "p95": 0.0011729170219041407,
+    "p99": 0.0011738340253941715
+  },
+  "selected_lanes": {
+    "quality": 160
+  },
+  "selector_provider_cost_exact": "0.003680000000000000",
+  "started_at": "2026-09-09T20:05:51.059427+00:00",
+  "status_counts": {
+    "200": 20
+  },
+  "success_count": 20,
+  "synthetic_net_savings_exact": "-0.003680000000000000",
+  "target_count": 20,
+  "target_rate_rps": 2,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  },
+  "worker_slots": 4
+}

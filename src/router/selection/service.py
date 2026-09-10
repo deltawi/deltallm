@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 
 from src.billing.operation_reservation import BillingOperationUnavailable
 from src.metrics.selector import (
@@ -32,10 +33,15 @@ class SelectorService:
     """One bounded decision composed by the authenticated execution owner."""
 
     def __init__(
-        self, hop: SelectorModelHop, *, admission: SelectorAdmission | None = None
+        self,
+        hop: SelectorModelHop,
+        *,
+        admission: SelectorAdmission | None = None,
+        after_admission: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._hop = hop
         self._admission = admission
+        self._after_admission = after_admission
 
     async def select_once(
         self,
@@ -116,6 +122,8 @@ class SelectorService:
             try:
                 async with asyncio.timeout_at(expires_at):
                     await self._admission.admit(expires_at=expires_at)
+                    if self._after_admission is not None:
+                        await self._after_admission()
             except TimeoutError:
                 # An ambiguous reservation is not permission to answer in a default
                 # lane. Only provider/selection timeouts may default after admission.

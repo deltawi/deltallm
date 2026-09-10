@@ -1,31 +1,31 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 import logging
 from time import perf_counter
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any, Sequence
+from src.batch.chat_item_execution import ChatItemExecutionMixin
+from src.batch.chat_dispatch import ChatDispatchMixin
+from src.batch.chat_capacity import bind_chat_capacity
+from src.batch.chat_lease_lifecycle import ChatItemLeaseWatch, stop_chat_watches
+from src.router.attempt_capacity import attempt_capacity, bind_attempt_capacity
 
 from src.batch.chat_batching import (
     ChatBatchingSettings,
     ChatMicrobatchExecutor,
-    classify_chat_microbatch_request,
     estimate_chat_input_tokens,
     normalize_chat_microbatch_results,
     resolve_chat_batching_settings,
 )
 from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_for_batch_endpoint
 from src.batch.error_sanitization import persisted_batch_error_message
-from src.batch.policy import record_batch_policy_failure, run_batch_request_preflight
+from src.batch.policy import record_batch_policy_failure
 from src.batch.retry import BatchResponseShapeError, BatchRetryDecision, classify_batch_retry
-from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
 from src.batch.worker_types import (
     BatchItemLeaseLostError,
     _PreparedChatItem,
-    _PreparedEmbeddingItem,
-    _RequestShim,
-    capture_batch_routing_runtime,
     routing_generation_batch_key,
 )
 from src.metrics import (
@@ -34,30 +34,22 @@ from src.metrics import (
     increment_batch_chat_microbatch_request,
     observe_batch_chat_microbatch_size,
     observe_batch_chat_provider_latency,
-    set_batch_worker_saturation,
 )
-from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailableError
-from src.models.request_serialization import dump_request_for_preflight
-from src.models.requests import ChatCompletionRequest, MCPToolDefinition
+from src.models.errors import ProxyError, ServiceUnavailableError
 from src.providers.base import map_standard_provider_error, sanitize_provider_proxy_error
 from src.providers.resolution import resolve_provider
 from src.router import (
     ProviderAttemptResult,
-    ROUTING_MODE_CONTEXT_KEY,
-    require_initial_deployment,
 )
 from src.router.context_policy import (
-    RequestTokenDemand,
     build_combined_request_context,
-    set_request_token_demand,
 )
 from src.router.execution import (
+    RequestDeadline,
     attach_failover_attempt_context,
     get_failover_attempt_context,
 )
 from src.router.health_policy import affects_deployment_health
-from src.router.selection.reachability import require_batch_selector_support
-from src.routers.routing_decision import route_failover_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +67,7 @@ CHAT_MICROBATCH_UNSUPPORTED_REASONS = frozenset(
 )
 
 
-class ChatWorkerExecutionMixin:
+class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
     def _sanitize_chat_microbatch_executor_error(
         self, deployment: Any, exc: Exception
     ) -> ProxyError:
@@ -92,272 +84,6 @@ class ChatWorkerExecutionMixin:
         else:
             mapped_error = map_standard_provider_error(exc)
         return sanitize_provider_proxy_error(mapped_error)
-
-    async def prepare_chat_item_for_execution(self, job, item) -> _PreparedChatItem:  # noqa: ANN001
-        started_at_monotonic = perf_counter()
-        chat_request = ChatCompletionRequest.model_validate(item.request_body)
-        self._validate_batch_chat_request(chat_request)
-        routing_generation = capture_batch_routing_runtime(self.app.state)
-        preflight = await run_batch_request_preflight(
-            app=self.app,
-            job=job,
-            payload=chat_request,
-            request_data=dump_request_for_preflight(chat_request),
-            call_type="completion",
-            routing_runtime=routing_generation,
-        )
-        chat_request = preflight.payload
-        self._validate_batch_chat_request(chat_request)
-
-        request_context: dict[str, Any] = {
-            "metadata": chat_request.metadata or {},
-            "user_id": preflight.auth.user_id or preflight.auth.api_key or "batch-worker",
-            ROUTING_MODE_CONTEXT_KEY: "chat",
-        }
-        set_request_token_demand(
-            request_context,
-            RequestTokenDemand(
-                input_tokens=preflight.context_input_tokens,
-                requested_output_tokens=chat_request.max_tokens,
-            ),
-        )
-        app_router = routing_generation.router
-        model_group = app_router.resolve_model_group(chat_request.model)
-        require_batch_selector_support(model_group, routing_generation.selector_reachable_groups)
-        await self._raise_if_model_group_deferred(model_group)
-
-        primary_deployment = await require_initial_deployment(
-            router=app_router,
-            failover_manager=routing_generation.failover_manager,
-            model_group=model_group,
-            request_context=request_context,
-        )
-        return _PreparedChatItem(
-            item=item,
-            started_at_monotonic=started_at_monotonic,
-            payload=chat_request,
-            model_name=chat_request.model,
-            model_group=model_group,
-            primary_deployment=primary_deployment,
-            request_context=request_context,
-            failover_kwargs=route_failover_kwargs(request_context),
-            request_shim=_RequestShim(app=self.app),
-            routing_generation=routing_generation,
-            policy_auth=preflight.auth,
-        )
-
-    def _validate_batch_chat_request(self, payload: ChatCompletionRequest) -> None:
-        if payload.stream is True:
-            raise InvalidRequestError(
-                message="Chat batch requests support non-streaming requests only; stream must be false"
-            )
-        if any(isinstance(tool, MCPToolDefinition) for tool in payload.tools or []):
-            raise InvalidRequestError(message="MCP tools are not supported in batch chat yet")
-
-    def _build_chat_completion_persistence_row(
-        self,
-        *,
-        job,
-        prepared: _PreparedChatItem,
-        response_body: dict[str, Any],
-        usage: dict[str, Any],
-        served_deployment: Any,
-        batch_execution_mode: str,
-        microbatch_size: int | None = None,
-        microbatch_id: str | None = None,
-    ) -> dict[str, Any]:
-        response_body = dict(response_body)
-        usage = dict(usage)
-        response_body["usage"] = usage
-        api_provider = resolve_provider(served_deployment.deltallm_params)
-        api_base = served_deployment.deltallm_params.get("api_base")
-        deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
-        item_costs = self._batch_item_costs(
-            prepared=prepared,
-            usage=usage,
-            served_deployment=served_deployment,
-        )
-        billed_cost = item_costs.billed_cost
-        provider_cost = item_costs.provider_cost
-        pricing = item_costs.pricing
-        customer_billing = item_costs.customer_billing
-        provider_billing = item_costs.provider_billing
-        return {
-            "item_id": prepared.item.item_id,
-            "claim_epoch": prepared.item.claim_epoch,
-            "response_body": response_body,
-            "usage": usage,
-            "provider_cost": provider_cost,
-            "billed_cost": billed_cost,
-            "outbox_payload": self._build_completion_outbox_payload(
-                job=job,
-                prepared=prepared,
-                usage=usage,
-                api_provider=api_provider,
-                billed_cost=billed_cost,
-                provider_cost=provider_cost,
-                api_base=api_base,
-                deployment_model=deployment_model,
-                pricing_metadata=pricing.spend_metadata(
-                    provider_cost=provider_cost,
-                    billing=customer_billing.billing,
-                    provider_billing=provider_billing.billing,
-                    effective_pricing_sources=(customer_billing.pricing_sources_used),
-                    missing_pricing_fields=(customer_billing.missing_pricing_fields),
-                    pricing_tier="batch",
-                ),
-                batch_execution_mode=batch_execution_mode,
-                microbatch_size=microbatch_size,
-                microbatch_id=microbatch_id,
-            ),
-            "outbox_max_attempts": COMPLETION_OUTBOX_MAX_ATTEMPTS,
-        }
-
-    async def _execute_prepared_chat_item(
-        self,
-        job,
-        prepared: _PreparedChatItem,
-        *,
-        batch_execution_mode: str = "concurrent",
-    ) -> None:  # noqa: ANN001
-        item_heartbeat: asyncio.Task[None] | None = None
-        item_lease_lost = asyncio.Event()
-        try:
-            await self._acquire_prepared_policy_lease(prepared=prepared)
-        except Exception as exc:
-            record_batch_policy_failure(
-                endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc
-            )
-            await self._mark_item_failed(
-                job=job,
-                item=prepared.item,
-                model_name=prepared.model_name,
-                exc=exc,
-                deployment_id=None,
-                started_at_monotonic=prepared.started_at_monotonic,
-            )
-            increment_batch_chat_item_executed(mode=batch_execution_mode, status="error")
-            return
-
-        try:
-            item_heartbeat = self._start_heartbeat_fn(
-                renew=lambda: self.repository.renew_item_lease(
-                    item_id=prepared.item.item_id,
-                    worker_id=self.config.worker_id,
-                    lease_seconds=self.config.item_lease_seconds,
-                    claim_epoch=prepared.item.claim_epoch,
-                ),
-                label=f"item:{prepared.item.item_id}",
-                lease_lost_event=item_lease_lost,
-            )
-            (
-                (
-                    response_body,
-                    api_latency_ms,
-                ),
-                served_deployment,
-            ) = await self._await_with_lease_loss_cancellation(
-                prepared.routing_generation.failover_manager.execute_with_failover(
-                    primary_deployment=prepared.primary_deployment,
-                    model_group=prepared.model_group,
-                    execute=lambda dep: self._execute_chat(
-                        prepared.request_shim,
-                        prepared.payload,
-                        dep,
-                        record_usage=False,
-                    ),
-                    return_deployment=True,
-                    routing_context=prepared.request_context,
-                    **prepared.failover_kwargs,
-                ),
-                lease_lost_event=item_lease_lost,
-                label=f"item:{prepared.item.item_id}",
-            )
-            response_body = dict(response_body)
-            usage = dict(response_body.get("usage") or {})
-            served_deployment_id = str(
-                getattr(served_deployment, "deployment_id", None)
-                or getattr(prepared.primary_deployment, "deployment_id", None)
-                or ""
-            )
-            observe_batch_chat_provider_latency(
-                mode=batch_execution_mode,
-                status="success",
-                latency_seconds=max(0.0, float(api_latency_ms or 0.0) / 1000.0),
-            )
-            await self._record_upstream_success_runtime_hooks(
-                batch_id=job.batch_id,
-                deployment_id=served_deployment_id,
-                mode=router_usage_mode_for_batch_endpoint(job.endpoint),
-                usage=usage,
-                reference=prepared.item.item_id,
-            )
-            if item_lease_lost.is_set() or not await self._renew_item_lease_once(
-                prepared.item.item_id,
-                claim_epoch=prepared.item.claim_epoch,
-            ):
-                item_lease_lost.set()
-                self._observe_prepared_item_lease_lost(prepared)
-                logger.warning(
-                    "batch chat completion skipped after lease loss batch_id=%s item_id=%s",
-                    job.batch_id,
-                    prepared.item.item_id,
-                )
-                return
-            if item_heartbeat is not None:
-                await self._stop_heartbeat_fn(item_heartbeat)
-                item_heartbeat = None
-            persisted = await self._persist_completion_rows_with_outbox(
-                items=[
-                    self._build_chat_completion_persistence_row(
-                        job=job,
-                        prepared=prepared,
-                        response_body=response_body,
-                        usage=usage,
-                        served_deployment=served_deployment,
-                        batch_execution_mode=batch_execution_mode,
-                    )
-                ],
-                item_ids=[prepared.item.item_id],
-                context_label="chat",
-            )
-            if persisted:
-                self._observe_item_execution_latency(
-                    status="success",
-                    latency_seconds=perf_counter() - prepared.started_at_monotonic,
-                    reference=prepared.item.item_id,
-                )
-                increment_batch_chat_item_executed(mode=batch_execution_mode, status="success")
-        except BatchItemLeaseLostError as exc:
-            self._observe_prepared_item_lease_lost(prepared)
-            logger.warning(
-                "batch chat provider call cancelled after lease loss batch_id=%s item_id=%s error=%s",
-                job.batch_id,
-                prepared.item.item_id,
-                exc,
-            )
-            return
-        except Exception as exc:
-            observe_batch_chat_provider_latency(
-                mode=batch_execution_mode,
-                status="error",
-                latency_seconds=perf_counter() - prepared.started_at_monotonic,
-            )
-            await self._mark_item_failed(
-                job=job,
-                item=prepared.item,
-                model_name=prepared.model_name,
-                exc=exc,
-                deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "")
-                or None,
-                started_at_monotonic=prepared.started_at_monotonic,
-            )
-            increment_batch_chat_item_executed(mode=batch_execution_mode, status="error")
-            return
-        finally:
-            if item_heartbeat is not None:
-                await self._stop_heartbeat_fn(item_heartbeat)
-            await self._release_prepared_policy_lease(prepared)
 
     @staticmethod
     def _chat_deployment_key(prepared: _PreparedChatItem) -> tuple[str, str]:
@@ -685,9 +411,20 @@ class ChatWorkerExecutionMixin:
         self,
         job,
         prepared_items: list[_PreparedChatItem],
-        *,
-        settings: ChatBatchingSettings | None = None,
     ) -> None:
+        async with AsyncExitStack() as cleanup:
+            for prepared in prepared_items:
+                cleanup.push_async_callback(self._release_owned_chat_policy_lease, prepared)
+            await self._execute_owned_chat_microbatch_chunk(job, prepared_items, cleanup)
+
+    async def _execute_owned_chat_microbatch_chunk(
+        self, job, prepared_items: list[_PreparedChatItem], cleanup: AsyncExitStack
+    ) -> None:
+        capacity = attempt_capacity(prepared_items[0].request_context) if prepared_items else None
+        if capacity is None:
+            capacity = bind_chat_capacity(
+                prepared_items, worker_concurrency=self.config.worker_concurrency
+            )
         prepared_items = await self._acquire_chat_policy_leases_for_chunk(
             job=job,
             prepared_items=prepared_items,
@@ -704,14 +441,24 @@ class ChatWorkerExecutionMixin:
         batch_id = job.batch_id
         chunk_size = len(prepared_items)
         first_item = prepared_items[0]
+        deadline = first_item.routing_generation.failover_manager.create_request_deadline(
+            first_item.failover_kwargs.get("timeout_seconds")
+        )
+        if job.expires_at is not None:
+            expires = (
+                job.expires_at.replace(tzinfo=UTC)
+                if job.expires_at.tzinfo is None
+                else job.expires_at
+            )
+            deadline = RequestDeadline.after(
+                min(deadline.remaining(), max(0.0, (expires - datetime.now(UTC)).total_seconds()))
+            )
         failover_routing_context = build_combined_request_context(
             [prepared.request_context for prepared in prepared_items]
         )
-        chat_settings = settings or resolve_chat_batching_settings(
-            first_item.primary_deployment.deltallm_params
-        )
+        bind_attempt_capacity(failover_routing_context, capacity)
         item_ids = [prepared.item.item_id for prepared in prepared_items]
-        item_heartbeats: dict[str, asyncio.Task[None]] = {}
+        item_heartbeats: dict[str, ChatItemLeaseWatch] = {}
         item_lease_lost = asyncio.Event()
         microbatch_id = f"{batch_id}:{item_ids[0]}:{chunk_size}"
         chunk_started_at = perf_counter()
@@ -776,7 +523,7 @@ class ChatWorkerExecutionMixin:
 
         try:
             for prepared in prepared_items:
-                item_heartbeats[prepared.item.item_id] = self._start_heartbeat_fn(
+                task = self._start_heartbeat_fn(
                     renew=lambda item_id=prepared.item.item_id, claim_epoch=prepared.item.claim_epoch: (
                         self.repository.renew_item_lease(
                             item_id=item_id,
@@ -789,6 +536,10 @@ class ChatWorkerExecutionMixin:
                     lease_lost_event=item_lease_lost,
                 )
 
+                watch = ChatItemLeaseWatch(task, item_lease_lost, self._stop_heartbeat_fn)
+                item_heartbeats[prepared.item.item_id] = watch
+                cleanup.push_async_callback(watch.stop)
+
             observe_batch_chat_microbatch_size(batch_size=chunk_size)
             normalized_results, served_deployment = await self._await_with_lease_loss_cancellation(
                 first_item.routing_generation.failover_manager.execute_with_failover(
@@ -797,11 +548,14 @@ class ChatWorkerExecutionMixin:
                     execute=_execute_for_deployment,
                     return_deployment=True,
                     routing_context=failover_routing_context,
-                    **first_item.failover_kwargs,
+                    **{**first_item.failover_kwargs, "request_deadline": deadline},
                 ),
                 lease_lost_event=item_lease_lost,
                 label=f"chat_microbatch:{microbatch_id}",
             )
+        except asyncio.CancelledError:
+            await stop_chat_watches(item_heartbeats.values())
+            raise
         except BatchItemLeaseLostError as exc:
             logger.warning(
                 "batch chat microbatch provider call cancelled after lease loss batch_id=%s size=%s item_ids=%s error=%s",
@@ -811,12 +565,10 @@ class ChatWorkerExecutionMixin:
                 exc,
             )
             self._observe_prepared_items_lease_lost(prepared_items)
-            await self._stop_heartbeat_tasks(item_heartbeats.values())
+            await stop_chat_watches(item_heartbeats.values())
             item_heartbeats.clear()
             return
         except Exception as exc:
-            await self._stop_heartbeat_tasks(item_heartbeats.values())
-            item_heartbeats.clear()
             if self._is_chat_microbatch_unsupported_error(exc):
                 if last_retryable_microbatch_exc is None:
                     observe_batch_chat_provider_latency(
@@ -832,7 +584,8 @@ class ChatWorkerExecutionMixin:
                     await self._execute_chat_microbatch_fallback_items(
                         job,
                         prepared_items,
-                        max_in_flight=chat_settings.max_in_flight,
+                        watches=item_heartbeats,
+                        deadline=deadline,
                     )
                     return
                 terminal_context = get_failover_attempt_context(exc)
@@ -843,6 +596,8 @@ class ChatWorkerExecutionMixin:
                         model_group=terminal_context.model_group,
                         attempted_deployment_ids=list(terminal_context.attempted_deployment_ids),
                     )
+            await stop_chat_watches(item_heartbeats.values())
+            item_heartbeats.clear()
             retry_decision = classify_batch_retry(exc)
             requeued = await self._release_failed_chat_microbatch_for_retry(
                 job=job,
@@ -857,7 +612,6 @@ class ChatWorkerExecutionMixin:
                     latency_seconds=perf_counter() - chunk_started_at,
                 )
                 increment_batch_chat_microbatch_request(status="retry")
-                await self._release_prepared_policy_leases(prepared_items)
                 return
 
             observe_batch_chat_provider_latency(
@@ -876,7 +630,6 @@ class ChatWorkerExecutionMixin:
                     started_at_monotonic=prepared.started_at_monotonic,
                 )
                 increment_batch_chat_item_executed(mode="sync_microbatch", status="error")
-            await self._release_prepared_policy_leases(prepared_items)
             return
 
         success_rows: list[dict[str, Any]] = []
@@ -892,7 +645,7 @@ class ChatWorkerExecutionMixin:
                     chunk_size,
                     item_ids,
                 )
-                await self._stop_heartbeat_tasks(item_heartbeats.values())
+                await stop_chat_watches(item_heartbeats.values())
                 item_heartbeats.clear()
                 return
             prepared = prepared_items[result.index]
@@ -900,7 +653,7 @@ class ChatWorkerExecutionMixin:
                 failure_count += 1
                 item_heartbeat = item_heartbeats.pop(prepared.item.item_id, None)
                 if item_heartbeat is not None:
-                    await self._stop_heartbeat_fn(item_heartbeat)
+                    await item_heartbeat.stop()
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
@@ -919,7 +672,7 @@ class ChatWorkerExecutionMixin:
                 )
                 item_heartbeat = item_heartbeats.pop(prepared.item.item_id, None)
                 if item_heartbeat is not None:
-                    await self._stop_heartbeat_fn(item_heartbeat)
+                    await item_heartbeat.stop()
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
@@ -963,12 +716,12 @@ class ChatWorkerExecutionMixin:
                     batch_id,
                     prepared.item.item_id,
                 )
-                await self._stop_heartbeat_tasks(item_heartbeats.values())
+                await stop_chat_watches(item_heartbeats.values())
                 item_heartbeats.clear()
                 return
             item_heartbeat = item_heartbeats.pop(prepared.item.item_id, None)
             if item_heartbeat is not None:
-                await self._stop_heartbeat_fn(item_heartbeat)
+                await item_heartbeat.stop()
 
         status = "success" if failure_count == 0 else "mixed" if success_rows else "error"
         observe_batch_chat_provider_latency(
@@ -978,28 +731,24 @@ class ChatWorkerExecutionMixin:
         )
         increment_batch_chat_microbatch_request(status=status)
 
-        try:
-            if success_rows:
-                persisted = await self._persist_completion_rows_with_outbox(
-                    items=success_rows,
-                    item_ids=[prepared.item.item_id for prepared in success_prepared],
-                    context_label=f"chat_microbatch:{served_deployment_id or 'unknown'}",
-                )
-                if persisted:
-                    for prepared in success_prepared:
-                        self._observe_item_execution_latency(
-                            status="success",
-                            latency_seconds=perf_counter() - prepared.started_at_monotonic,
-                            reference=prepared.item.item_id,
-                        )
-                    increment_batch_chat_item_executed(
-                        mode="sync_microbatch",
+        if success_rows:
+            persisted = await self._persist_completion_rows_with_outbox(
+                items=success_rows,
+                item_ids=[prepared.item.item_id for prepared in success_prepared],
+                context_label=f"chat_microbatch:{served_deployment_id or 'unknown'}",
+            )
+            if persisted:
+                for prepared in success_prepared:
+                    self._observe_item_execution_latency(
                         status="success",
-                        count=len(success_rows),
+                        latency_seconds=perf_counter() - prepared.started_at_monotonic,
+                        reference=prepared.item.item_id,
                     )
-        finally:
-            await self._stop_heartbeat_tasks(item_heartbeats.values())
-            await self._release_prepared_policy_leases(prepared_items)
+                increment_batch_chat_item_executed(
+                    mode="sync_microbatch",
+                    status="success",
+                    count=len(success_rows),
+                )
 
     async def _acquire_chat_policy_leases_for_chunk(
         self,
@@ -1012,7 +761,11 @@ class ChatWorkerExecutionMixin:
         for prepared in prepared_items:
             try:
                 await self._acquire_prepared_policy_lease(prepared=prepared)
+            except asyncio.CancelledError:
+                await self._release_prepared_policy_leases([*allowed, prepared])
+                raise
             except Exception as exc:
+                await self._release_prepared_policy_lease(prepared)
                 record_batch_policy_failure(
                     endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc
                 )
@@ -1028,215 +781,3 @@ class ChatWorkerExecutionMixin:
                 continue
             allowed.append(prepared)
         return allowed
-
-    async def _execute_chat_microbatch_fallback_items(
-        self,
-        job,
-        prepared_items: list[_PreparedChatItem],
-        *,
-        max_in_flight: int | None = None,
-    ) -> None:
-        configured_limit = max_in_flight or self.config.worker_concurrency
-        fallback_limit = max(
-            1, min(int(configured_limit), self.config.worker_concurrency, len(prepared_items))
-        )
-        fallback_semaphore = asyncio.Semaphore(fallback_limit)
-
-        async def _execute_single(prepared: _PreparedChatItem) -> None:
-            async with fallback_semaphore:
-                await self._execute_prepared_chat_item(
-                    job,
-                    prepared,
-                    batch_execution_mode="sync_microbatch_fallback",
-                )
-
-        async with asyncio.TaskGroup() as task_group:
-            for prepared in prepared_items:
-                task_group.create_task(_execute_single(prepared))
-
-    async def _process_chat_items(
-        self,
-        job,
-        items,
-        *,
-        prepare_item: Callable[[Any, Any], Awaitable[_PreparedEmbeddingItem | _PreparedChatItem]],
-    ) -> None:  # noqa: ANN001
-        raw_items: deque[Any] = deque(items)
-        prepared_items: list[_PreparedChatItem] = []
-        prepared_lock = asyncio.Lock()
-        queue_lock = asyncio.Lock()
-        active = 0
-
-        logger.info(
-            "batch chat item planning started batch_id=%s claimed_items=%s",
-            job.batch_id,
-            len(items),
-        )
-
-        async def _prepare_runner() -> None:
-            nonlocal active
-            while True:
-                async with queue_lock:
-                    if not raw_items:
-                        return
-                    item = raw_items.popleft()
-
-                active += 1
-                set_batch_worker_saturation(
-                    worker_id=self.config.worker_id,
-                    active=active,
-                    capacity=self.config.worker_concurrency,
-                )
-                started_at_monotonic = perf_counter()
-                request_body = item.request_body if isinstance(item.request_body, dict) else {}
-                model_name = str(request_body.get("model") or job.model or "")
-                try:
-                    prepared = await prepare_item(job, item)
-                    if not isinstance(prepared, _PreparedChatItem):
-                        raise InvalidRequestError(
-                            message="Prepared batch chat item has an invalid execution shape"
-                        )
-                    async with prepared_lock:
-                        prepared_items.append(prepared)
-                except Exception as exc:
-                    await self._mark_item_failed(
-                        job=job,
-                        item=item,
-                        model_name=model_name,
-                        exc=exc,
-                        deployment_id=None,
-                        started_at_monotonic=started_at_monotonic,
-                    )
-                finally:
-                    active -= 1
-                    set_batch_worker_saturation(
-                        worker_id=self.config.worker_id,
-                        active=active,
-                        capacity=self.config.worker_concurrency,
-                    )
-
-        prepare_runner_count = min(max(1, self.config.worker_concurrency), len(items))
-        async with asyncio.TaskGroup() as task_group:
-            for _ in range(prepare_runner_count):
-                task_group.create_task(_prepare_runner())
-
-        work_units: deque[
-            tuple[tuple[int, str], ChatBatchingSettings, Callable[[], Awaitable[None]]]
-        ] = deque()
-        by_deployment: dict[tuple[int, str], list[_PreparedChatItem]] = {}
-        for prepared in prepared_items:
-            by_deployment.setdefault(self._chat_deployment_key(prepared), []).append(prepared)
-
-        def _queue_single(
-            prepared: _PreparedChatItem, settings: ChatBatchingSettings, *, mode: str
-        ) -> None:
-            work_units.append(
-                (
-                    self._chat_deployment_key(prepared),
-                    settings,
-                    lambda prepared=prepared, mode=mode: self._execute_prepared_chat_item(
-                        job,
-                        prepared,
-                        batch_execution_mode=mode,
-                    ),
-                )
-            )
-
-        for deployment_key, deployment_items in by_deployment.items():
-            settings = resolve_chat_batching_settings(
-                deployment_items[0].primary_deployment.deltallm_params
-            )
-            if settings.mode in {"disabled", "concurrent"}:
-                for prepared in deployment_items:
-                    _queue_single(prepared, settings, mode=settings.mode)
-                continue
-
-            executor = self._resolve_chat_microbatch_executor(deployment_items[0])
-            if executor is None:
-                increment_batch_chat_microbatch_fallback(
-                    reason="executor_unavailable",
-                    count=len(deployment_items),
-                )
-                for prepared in deployment_items:
-                    _queue_single(prepared, settings, mode="sync_microbatch_fallback")
-                continue
-
-            grouped_candidates: dict[tuple[Any, ...], list[tuple[_PreparedChatItem, int]]] = {}
-            for prepared in deployment_items:
-                eligibility = classify_chat_microbatch_request(
-                    payload=prepared.payload,
-                    deployment=prepared.primary_deployment,
-                    model_group=prepared.model_group,
-                    failover_kwargs=prepared.failover_kwargs,
-                )
-                if not eligibility.eligible or eligibility.group_key is None:
-                    increment_batch_chat_microbatch_fallback(
-                        reason=eligibility.reason or "ineligible"
-                    )
-                    _queue_single(prepared, settings, mode="sync_microbatch_fallback")
-                    continue
-                grouped_candidates.setdefault(eligibility.group_key, []).append(
-                    (prepared, eligibility.input_tokens)
-                )
-
-            for candidates in grouped_candidates.values():
-                chunks, fallbacks = self._split_chat_microbatch_candidates(candidates, settings)
-                for prepared, reason in fallbacks:
-                    increment_batch_chat_microbatch_fallback(reason=reason)
-                    _queue_single(prepared, settings, mode="sync_microbatch_fallback")
-                for chunk in chunks:
-                    work_units.append(
-                        (
-                            deployment_key,
-                            settings,
-                            lambda chunk=list(chunk): self._execute_prepared_chat_microbatch_chunk(
-                                job,
-                                chunk,
-                                settings=settings,
-                            ),
-                        )
-                    )
-
-        if not work_units:
-            return
-
-        semaphores: dict[str, asyncio.Semaphore] = {}
-        for deployment_key, settings, _ in work_units:
-            limit = settings.max_in_flight or self.config.worker_concurrency
-            semaphores.setdefault(
-                deployment_key,
-                asyncio.Semaphore(max(1, min(int(limit), max(1, self.config.worker_concurrency)))),
-            )
-
-        work_lock = asyncio.Lock()
-        active = 0
-
-        async def _execution_runner() -> None:
-            nonlocal active
-            while True:
-                async with work_lock:
-                    if not work_units:
-                        return
-                    deployment_key, _, work_unit = work_units.popleft()
-
-                async with semaphores[deployment_key]:
-                    active += 1
-                    set_batch_worker_saturation(
-                        worker_id=self.config.worker_id,
-                        active=active,
-                        capacity=self.config.worker_concurrency,
-                    )
-                    try:
-                        await work_unit()
-                    finally:
-                        active -= 1
-                        set_batch_worker_saturation(
-                            worker_id=self.config.worker_id,
-                            active=active,
-                            capacity=self.config.worker_concurrency,
-                        )
-
-        runner_count = min(max(1, self.config.worker_concurrency), len(work_units))
-        async with asyncio.TaskGroup() as task_group:
-            for _ in range(runner_count):
-                task_group.create_task(_execution_runner())

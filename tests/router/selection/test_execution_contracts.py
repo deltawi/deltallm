@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.chat_capabilities import ChatRoutingCapabilities
-from src.models.errors import InvalidRequestError
+from src.batch.selector_checkpoint import BatchSelectorUnavailable
 from src.models.requests import ChatCompletionRequest
 from src.router.context_policy import ContextRoutingPolicy
 from src.router.failover import FallbackConfig
@@ -18,7 +18,6 @@ from src.router.selection.eligibility import (
 from src.router.selection.planning import selector_context_policy
 from src.router.selection.qualification import selector_price_snapshot
 from src.router.selection.reachability import (
-    require_batch_selector_support,
     selector_reachable_groups,
 )
 from src.routers.selector_edge import _while_connected, SelectorClientDisconnectedError
@@ -27,17 +26,13 @@ from src.routers.selector_edge import _while_connected, SelectorClientDisconnect
 @pytest.mark.parametrize(
     "field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"]
 )
-def test_batch_rejects_direct_and_transitive_selector_targets_even_through_cycles(field):
+def test_batch_isolates_direct_and_transitive_selector_targets_even_through_cycles(field):
     reachable = selector_reachable_groups(
         ["selected"],
         FallbackConfig(**{field: {"root": ["middle"], "middle": ["root", "selected"]}}),
     )
     assert reachable == {"root", "middle", "selected"}
-    for group in reachable:
-        with pytest.raises(InvalidRequestError) as error:
-            require_batch_selector_support(group, reachable)
-        assert error.value.code == "batch_model_router_selector_unsupported"
-    require_batch_selector_support("ordinary", reachable)
+    assert "ordinary" not in reachable
 
 
 @pytest.mark.parametrize(
@@ -124,7 +119,7 @@ async def test_connection_owner_cancels_and_joins_work(disconnect):
     assert closed.is_set()
 
 
-async def test_batch_worker_rejects_selector_before_planning_or_provider(monkeypatch):
+async def test_batch_worker_requires_selector_dependencies_before_planning_or_provider(monkeypatch):
     from tests.test_batch_worker import (
         _AllowAllCallableTargetGrantService,
         _build_chat_batch_worker,
@@ -140,13 +135,13 @@ async def test_batch_worker_rejects_selector_before_planning_or_provider(monkeyp
 
     runtime = replace(runtime, selector_reachable_groups=frozenset({"gpt-oss"}))
     monkeypatch.setattr(
-        "src.batch.chat_worker_execution.capture_batch_routing_runtime", lambda _: runtime
+        "src.batch.chat_item_execution.capture_batch_routing_runtime", lambda _: runtime
     )
     planner = AsyncMock(side_effect=AssertionError("must not plan"))
-    monkeypatch.setattr("src.batch.chat_worker_execution.require_initial_deployment", planner)
-    with pytest.raises(InvalidRequestError) as error:
+    monkeypatch.setattr("src.batch.chat_item_execution.require_initial_deployment", planner)
+    with pytest.raises(BatchSelectorUnavailable) as error:
         await worker._prepare_item_for_execution(
             _build_chat_batch_job(), _build_chat_batch_item("selector-1", "hello")
         )
-    assert error.value.code == "batch_model_router_selector_unsupported"
+    assert error.value.code == "batch_selector_checkpoint_unavailable"
     planner.assert_not_awaited()

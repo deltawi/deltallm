@@ -1049,6 +1049,8 @@ async def get_batch(
             SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
                    last_error,
                    LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
+                   CASE WHEN LENGTH(error_body ->> 'code') <= 64
+                        THEN error_body ->> 'code' END AS _error_code,
                    request_body IS NOT NULL AS has_request_body,
                    response_body IS NOT NULL AS has_response_body,
                    error_body IS NOT NULL AS has_error_body,
@@ -1068,6 +1070,8 @@ async def get_batch(
             SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
                    last_error,
                    LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
+                   CASE WHEN LENGTH(error_body ->> 'code') <= 64
+                        THEN error_body ->> 'code' END AS _error_code,
                    request_body IS NOT NULL AS has_request_body,
                    response_body IS NOT NULL AS has_response_body,
                    error_body IS NOT NULL AS has_error_body,
@@ -1192,6 +1196,8 @@ async def get_batch_item(
                last_error, request_body, response_body,
                error_body IS NOT NULL AS _has_error_body,
                LEFT(error_body ->> 'retry_category', 64) AS _error_retry_category,
+               CASE WHEN LENGTH(error_body ->> 'code') <= 64
+                    THEN error_body ->> 'code' END AS _error_code,
                usage,
                created_at, started_at, completed_at
         FROM deltallm_batch_item
