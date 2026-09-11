@@ -9,6 +9,11 @@ from uuid import uuid4
 from src.db.callable_key_locks import lock_callable_keys
 from src.db.key_repository import KeyRecord, KeyRepository
 from src.db.routing_runtime import RoutingRuntimeRevisionRepository
+from src.db.route_policy_dependencies import (
+    DEPENDENT_GROUPS_QUERY,
+    dependency_lock_errors,
+    lock_deployment_dependencies,
+)
 
 AUDIT_METADATA_RETENTION_DAYS_KEY = "audit_metadata_retention_days"
 AUDIT_PAYLOAD_RETENTION_DAYS_KEY = "audit_payload_retention_days"
@@ -356,17 +361,12 @@ class ModelDeploymentRepository:
         self,
         deployment_id: str,
     ) -> list[tuple[str, str]]:
-        rows = await self.prisma.query_raw(
-            """
-            SELECT g.route_group_id, g.group_key
-            FROM deltallm_routegroup g
-            JOIN deltallm_routegroupmember m ON m.route_group_id = g.route_group_id
-            WHERE m.deployment_id = $1
-            ORDER BY g.group_key ASC
-            FOR UPDATE OF g
-            """,
-            deployment_id,
-        )
+        await lock_deployment_dependencies(self.prisma, {deployment_id})
+        with dependency_lock_errors():
+            rows = await self.prisma.query_raw(
+                DEPENDENT_GROUPS_QUERY,
+                deployment_id,
+            )
         return [
             (str(row.get("route_group_id") or ""), str(row.get("group_key") or ""))
             for row in rows

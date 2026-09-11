@@ -1,18 +1,35 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from src.config import AppConfig
 from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.router.selection.policy import (
+    RouteSelectorActivationState,
+    RouteSelectorActivationUnsupportedError,
+)
+from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.services.route_groups import (
+    ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES,
+    ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
     RouteGroupRuntimeCache,
     StaleRouteGroupSnapshotError,
+    UnvalidatedRouteGroupSnapshotError,
     load_route_group_snapshot,
     load_route_group_snapshot_result,
     load_route_groups,
+    route_groups_from_config,
 )
+
+
+_ROUTE_GROUP_RUNTIME_KEYSPACE = RouteGroupRuntimeRedisKeyspace()
+
+
+def _runtime_cache_key(revision: int) -> str:
+    return _ROUTE_GROUP_RUNTIME_KEYSPACE.snapshot(revision)
 
 
 class _FakeRouteGroupRepository:
@@ -36,7 +53,13 @@ class _FakeRouteGroupRepository:
             self.revision,
             list(self.groups),
             database_initialized=self.database_initialized,
+            selector_activation_state=RouteSelectorActivationState.VALIDATED,
         )
+
+
+class _SelectorBlockedRepository(_FakeRouteGroupRepository):
+    async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
+        raise RouteSelectorActivationUnsupportedError("cannot be activated")
 
 
 class _FakeRedis:
@@ -62,6 +85,370 @@ class _FakeRedis:
             raise RuntimeError("redis unavailable")
         self.values.pop(key, None)
         self.delete_calls += 1
+
+
+def _selector_config() -> AppConfig:
+    return AppConfig.model_validate(
+        {
+            "router_settings": {
+                "route_groups": [
+                    {
+                        "key": "support-chat",
+                        "mode": "chat",
+                        "selector": {
+                            "kind": "llm-tier",
+                            "classifier_deployment_id": "dep-mini",
+                            "lanes": [
+                                {
+                                    "id": "economy",
+                                    "rank": 0,
+                                    "description": "Routine work",
+                                },
+                                {
+                                    "id": "quality",
+                                    "rank": 1,
+                                    "description": "Complex work",
+                                },
+                            ],
+                        },
+                        "members": [
+                            {"deployment_id": "dep-mini", "lane": "economy"},
+                            {"deployment_id": "dep-large", "lane": "quality"},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+
+
+def test_selector_free_config_runtime_shape_is_unchanged():
+    cfg = AppConfig.model_validate(
+        {
+            "router_settings": {
+                "route_groups": [
+                    {
+                        "key": "support-chat",
+                        "mode": "chat",
+                        "strategy": "weighted",
+                        "members": [{"deployment_id": "dep-mini", "weight": 2}],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert route_groups_from_config(cfg) == [
+        {
+            "key": "support-chat",
+            "mode": "chat",
+            "enabled": True,
+            "strategy": "weighted",
+            "access_groups": [],
+            "members": [
+                {
+                    "deployment_id": "dep-mini",
+                    "enabled": True,
+                    "weight": 2,
+                    "priority": None,
+                }
+            ],
+        }
+    ]
+
+
+def test_file_config_selector_activation_requires_safe_context_policy():
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="unknown_capacity=exclude"):
+        route_groups_from_config(
+            _selector_config(),
+            deployment_modes={"dep-mini": "chat", "dep-large": "chat"},
+        )
+
+
+def test_file_config_retains_selector_and_lanes_for_qualified_runtime_publication():
+    document = _selector_config().model_dump(mode="json")
+    document["router_settings"]["route_groups"][0]["context"] = {"unknown_capacity": "exclude"}
+    cfg = AppConfig.model_validate(document)
+    groups = route_groups_from_config(
+        cfg, deployment_modes={"dep-mini": "chat", "dep-large": "chat"}
+    )
+    assert groups[0]["selector"]["kind"] == "llm-tier"
+    assert {member["lane"] for member in groups[0]["members"]} == {"economy", "quality"}
+
+
+def test_file_config_selector_requires_loaded_deployment_inventory():
+    with pytest.raises(ValueError, match="requires loaded deployment inventory"):
+        route_groups_from_config(_selector_config())
+
+
+@pytest.mark.parametrize(
+    ("deployment_modes", "message"),
+    [
+        ({"dep-large": "chat"}, "classifier must reference an existing concrete deployment"),
+        (
+            {"dep-mini": "embedding", "dep-large": "chat"},
+            "classifier must reference a chat deployment",
+        ),
+        (
+            {"dep-mini": "chat"},
+            "selector member 'dep-large' must be a route-group member",
+        ),
+    ],
+)
+def test_file_config_selector_rejects_incomplete_or_incompatible_inventory(
+    deployment_modes,
+    message: str,
+):
+    with pytest.raises(ValueError, match=message):
+        route_groups_from_config(
+            _selector_config(),
+            deployment_modes=deployment_modes,
+        )
+
+
+@pytest.mark.asyncio
+async def test_database_selector_gate_never_falls_back_to_config():
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+        await load_route_group_snapshot_result(_SelectorBlockedRepository(), cfg)
+
+
+@pytest.mark.asyncio
+async def test_l2_cached_selector_snapshot_reloads_durable_authority():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "validated-v4",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "selector-route",
+                    "policy_semantics_version": 3,
+                    "selector": {"kind": "llm-tier"},
+                    "members": [],
+                }
+            ],
+        }
+    )
+    cache = RouteGroupRuntimeCache(redis)
+
+    repository = _FakeRouteGroupRepository([{"key": "durable", "members": []}])
+    snapshot, source = await cache.get_snapshot(repository)
+    assert source == "db"
+    assert snapshot.groups == repository.groups
+    assert repository.calls == 1
+    assert redis.setex_calls == 1
+
+    await cache.invalidate()
+    # Once PostgreSQL itself carries the selector, the durable gate still fails closed.
+    redis.values[_runtime_cache_key(1)] = "invalid"
+    with pytest.raises(RouteSelectorActivationUnsupportedError, match="cannot be activated"):
+        await cache.get_snapshot(_SelectorBlockedRepository())
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_legacy_envelope_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [{"key": "legacy-cache", "members": []}],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+    rewritten = json.loads(redis.values[_runtime_cache_key(1)])
+    assert rewritten["schema_version"] == ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION
+    assert rewritten["selector_activation_state"] == "validated-v4"
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_invalid_nested_snapshot_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "validated-v4",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "policy_semantics_version": "invalid",
+                    "members": [],
+                }
+            ],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+
+    result = await load_route_group_snapshot_result(repository, cfg, RouteGroupRuntimeCache(redis))
+
+    assert result.source == "db"
+    assert result.database_available is True
+    assert result.snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_unknown_nested_fields_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "validated-v4",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "members": [],
+                    "unknown_runtime_field": True,
+                }
+            ],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_member_lane_without_active_selector():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "validated-v4",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "policy_semantics_version": 3,
+                    "members": [{"deployment_id": "dep-a", "lane": "economy"}],
+                }
+            ],
+        }
+    )
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_l2_cache_uses_config_only_after_durable_load_fails():
+    class SnapshotFailingRepository(_FakeRouteGroupRepository):
+        async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
+            self.calls += 1
+            raise RuntimeError("db snapshot unavailable")
+
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = json.dumps(
+        {
+            "schema_version": ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
+            "selector_activation_state": "validated-v4",
+            "revision": 1,
+            "database_initialized": True,
+            "groups": [
+                {
+                    "key": "invalid-cache",
+                    "policy_semantics_version": "invalid",
+                    "members": [],
+                }
+            ],
+        }
+    )
+    repository = SnapshotFailingRepository()
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+
+    result = await load_route_group_snapshot_result(repository, cfg, RouteGroupRuntimeCache(redis))
+
+    assert result.source == "config_db_unavailable"
+    assert result.database_available is False
+    assert result.snapshot.groups[0]["key"] == "config-fallback"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_ignores_oversized_envelope_and_reloads_durable_state():
+    redis = _FakeRedis()
+    redis.values[_runtime_cache_key(1)] = "x" * (ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES + 1)
+    repository = _FakeRouteGroupRepository(groups=[{"key": "durable-state", "members": []}])
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "durable-state"
+    assert repository.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_l2_cache_skips_oversized_snapshot_write():
+    redis = _FakeRedis()
+    repository = _FakeRouteGroupRepository(
+        groups=[
+            {
+                "key": "oversized-state",
+                "metadata": {"payload": "x" * ROUTE_GROUP_RUNTIME_CACHE_MAX_BYTES},
+                "members": [],
+            }
+        ]
+    )
+
+    snapshot, source = await RouteGroupRuntimeCache(redis).get_snapshot(repository)
+
+    assert source == "db"
+    assert snapshot.groups[0]["key"] == "oversized-state"
+    assert redis.setex_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unvalidated_database_snapshot_fails_closed_without_cache_write():
+    class UnvalidatedRepository(_FakeRouteGroupRepository):
+        async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
+            self.calls += 1
+            return RouteGroupRuntimeSnapshot(
+                revision=self.revision,
+                groups=[{"key": "unchecked", "members": []}],
+            )
+
+    redis = _FakeRedis()
+
+    with pytest.raises(UnvalidatedRouteGroupSnapshotError, match="has not passed"):
+        await RouteGroupRuntimeCache(redis).get_snapshot(UnvalidatedRepository())
+
+    assert redis.setex_calls == 0
+
+    cfg = AppConfig.model_validate(
+        {"router_settings": {"route_groups": [{"key": "config-fallback", "members": []}]}}
+    )
+    with pytest.raises(UnvalidatedRouteGroupSnapshotError, match="has not passed"):
+        await load_route_group_snapshot_result(UnvalidatedRepository(), cfg)
 
 
 @pytest.mark.asyncio
@@ -348,6 +735,45 @@ async def test_two_replica_caches_reload_from_durable_state_after_invalidation()
 
 
 @pytest.mark.asyncio
+async def test_route_group_l2_cache_is_isolated_by_environment():
+    cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})
+    redis = _FakeRedis()
+    staging_repo = _FakeRouteGroupRepository(
+        groups=[{"key": "staging-route", "enabled": True, "members": []}]
+    )
+    production_repo = _FakeRouteGroupRepository(
+        groups=[{"key": "production-route", "enabled": True, "members": []}]
+    )
+    staging = RouteGroupRuntimeCache(
+        redis,
+        keyspace=RouteGroupRuntimeRedisKeyspace(environment="staging"),
+    )
+    production = RouteGroupRuntimeCache(
+        redis,
+        keyspace=RouteGroupRuntimeRedisKeyspace(environment="production"),
+    )
+
+    staging_groups, staging_source = await load_route_groups(
+        staging_repo,
+        cfg,
+        route_group_cache=staging,
+    )
+    production_groups, production_source = await load_route_groups(
+        production_repo,
+        cfg,
+        route_group_cache=production,
+    )
+
+    assert staging_source == "db"
+    assert production_source == "db"
+    assert staging_groups[0]["key"] == "staging-route"
+    assert production_groups[0]["key"] == "production-route"
+    assert staging_repo.calls == 1
+    assert production_repo.calls == 1
+    assert len(redis.values) == 2
+
+
+@pytest.mark.asyncio
 async def test_older_in_flight_database_load_cannot_overwrite_newer_generation():
     class BarrierRepository(_FakeRouteGroupRepository):
         def __init__(self) -> None:
@@ -362,7 +788,11 @@ async def test_older_in_flight_database_load_cannot_overwrite_newer_generation()
             if self.calls == 1:
                 self.first_started.set()
                 await self.release_first.wait()
-            return RouteGroupRuntimeSnapshot(revision, groups)
+            return RouteGroupRuntimeSnapshot(
+                revision,
+                groups,
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
+            )
 
     cfg = AppConfig.model_validate({"router_settings": {"route_groups": []}})
     repository = BarrierRepository()

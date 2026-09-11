@@ -14,6 +14,7 @@ _TOKEN_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
 @dataclass(frozen=True, slots=True)
 class StreamLineInfo:
     is_usage_only_chunk: bool = False
+    is_terminal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +53,9 @@ class StreamUsageTracker:
         if not line.startswith("data:"):
             return StreamLineInfo()
         payload = line[len("data:") :].strip()
-        if not payload or payload == "[DONE]":
+        if payload == "[DONE]":
+            return StreamLineInfo(is_terminal=True)
+        if not payload:
             return StreamLineInfo()
         try:
             chunk = json.loads(payload)

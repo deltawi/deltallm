@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -12,6 +14,16 @@ from src.batch.scheduling import estimate_request_work_units
 from src.metrics import increment_batch_item_reclaim
 
 logger = logging.getLogger(__name__)
+
+RENEW_ITEM_LEASE_SQL = """
+    UPDATE deltallm_batch_item
+    SET lease_expires_at = NOW() + ($3 || ' seconds')::interval
+    WHERE item_id = $1
+      AND locked_by = $2
+      AND status = 'in_progress'
+      AND claim_epoch = $4::bigint
+    RETURNING item_id
+"""
 
 
 class BatchItemRepository:
@@ -26,7 +38,9 @@ class BatchItemRepository:
         if len(items) > self._MAX_BULK_INSERT_ROWS:
             inserted = 0
             for start in range(0, len(items), self._MAX_BULK_INSERT_ROWS):
-                inserted += await self.create_items(batch_id, items[start : start + self._MAX_BULK_INSERT_ROWS])
+                inserted += await self.create_items(
+                    batch_id, items[start : start + self._MAX_BULK_INSERT_ROWS]
+                )
             return inserted
 
         values_sql: list[str] = []
@@ -35,16 +49,18 @@ class BatchItemRepository:
         inserted = 0
         for item in items:
             item_id = str(uuid4())
-            scheduling_model = str(
-                getattr(item, "scheduling_model", None)
-                or (item.request_body or {}).get("model")
-                or ""
-            ).strip() or None
-            scheduling_model_group = str(
-                getattr(item, "scheduling_model_group", None)
-                or scheduling_model
-                or ""
-            ).strip() or None
+            scheduling_model = (
+                str(
+                    getattr(item, "scheduling_model", None)
+                    or (item.request_body or {}).get("model")
+                    or ""
+                ).strip()
+                or None
+            )
+            scheduling_model_group = (
+                str(getattr(item, "scheduling_model_group", None) or scheduling_model or "").strip()
+                or None
+            )
             estimated_work_units = max(
                 1,
                 int(
@@ -284,7 +300,9 @@ class BatchItemRepository:
     ) -> list[str]:
         if self.prisma is None or not item_ids:
             return []
-        if item_claim_epochs is None or any(item_id not in item_claim_epochs for item_id in item_ids):
+        if item_claim_epochs is None or any(
+            item_id not in item_claim_epochs for item_id in item_ids
+        ):
             logger.warning("refusing retry release without claim epochs")
             return []
 
@@ -416,25 +434,38 @@ class BatchItemRepository:
         worker_id: str,
         lease_seconds: int,
         claim_epoch: int | None = None,
+        expires_at: float | None = None,
     ) -> bool:
         if self.prisma is None:
             return False
-        rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_batch_item
-            SET lease_expires_at = NOW() + ($3 || ' seconds')::interval
-            WHERE item_id = $1
-              AND locked_by = $2
-              AND status = 'in_progress'
-              AND claim_epoch = $4::bigint
-            RETURNING item_id
-            """,
-            item_id,
-            worker_id,
-            lease_seconds,
-            claim_epoch,
-        )
+        args = (item_id, worker_id, lease_seconds, claim_epoch)
+        if expires_at is not None:
+            return await self._renew_item_lease_before_dispatch(args, expires_at)
+        rows = await self.prisma.query_raw(RENEW_ITEM_LEASE_SQL, *args)
         return bool(rows)
+
+    async def _renew_item_lease_before_dispatch(
+        self, args: tuple[str, str, int, int | None], expires_at: float
+    ) -> bool:
+        remaining = min(0.25, expires_at - asyncio.get_running_loop().time())
+        if not math.isfinite(expires_at) or remaining <= 0:
+            return False
+        try:
+            async with asyncio.timeout(remaining):
+                async with self.prisma.tx(
+                    max_wait=timedelta(seconds=remaining), timeout=timedelta(seconds=remaining)
+                ) as tx:
+                    await tx.query_raw(
+                        "SELECT set_config('statement_timeout',$1,true), "
+                        "set_config('lock_timeout',$1,true)",
+                        f"{max(1, int(remaining * 1000))}ms",
+                    )
+                    rows = await tx.query_raw(RENEW_ITEM_LEASE_SQL, *args)
+            return bool(rows)
+        except Exception:
+            # An ambiguous or unavailable primary cannot authorize paid dispatch.
+            logger.warning("batch pre-dispatch lease renewal unavailable")
+            return False
 
     async def mark_pending_items_cancelled(self, batch_id: str) -> None:
         if self.prisma is None:
@@ -489,6 +520,7 @@ class BatchItemRepository:
                 i.custom_id,
                 i.status,
                 i.request_body,
+                i.selector_checkpoint,
                 i.response_body,
                 i.error_body,
                 i.usage,
@@ -625,8 +657,12 @@ class BatchItemRepository:
         return {
             "pending_items": int(row.get("pending_items") or 0),
             "in_progress_items": int(row.get("in_progress_items") or 0),
-            "oldest_pending_item_age_seconds": float(row.get("oldest_pending_item_age_seconds") or 0.0),
-            "oldest_in_progress_item_age_seconds": float(row.get("oldest_in_progress_item_age_seconds") or 0.0),
+            "oldest_pending_item_age_seconds": float(
+                row.get("oldest_pending_item_age_seconds") or 0.0
+            ),
+            "oldest_in_progress_item_age_seconds": float(
+                row.get("oldest_in_progress_item_age_seconds") or 0.0
+            ),
         }
 
     async def requeue_expired_in_progress_items(self, batch_id: str) -> int:

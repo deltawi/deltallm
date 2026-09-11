@@ -29,6 +29,7 @@ from src.providers.error_body import (
     bound_provider_error_response_body as bound_provider_error_response_body,
     provider_error_body_is_unavailable,
 )
+from src.providers.token_receipt import ProviderTokenReceipt, TokenReceiptObserver
 
 _MAX_CLASSIFICATION_MESSAGE_CHARS = 2048
 _PROVIDER_ERROR_READ_CHUNK_BYTES = 8192
@@ -423,6 +424,34 @@ class ProviderAdapter(ABC):
             raise
         except Exception as exc:
             raise invalid_provider_response_error() from exc
+
+    async def translate_single_success_response(
+        self,
+        response: httpx.Response,
+        model_name: str,
+        *,
+        receipt_observer: TokenReceiptObserver | None = None,
+    ) -> ChatCompletionResponse:
+        """Opt-in single-result contract without changing ordinary answer translation."""
+        payload = parse_provider_json_response(response)
+        try:
+            if receipt_observer is not None:
+                receipt_observer(self.reported_token_receipt(payload))
+            self.validate_single_result_payload(payload)
+            canonical = await self.translate_response(payload, model_name)
+            if len(canonical.choices) != 1:
+                raise invalid_provider_response_error()
+            return canonical
+        except ProxyError:
+            raise
+        except Exception as exc:
+            raise invalid_provider_response_error() from exc
+
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return None
+
+    def validate_single_result_payload(self, payload: object) -> None:
+        """Adapters that collapse results or finish states validate before translation."""
 
     @abstractmethod
     async def translate_stream(

@@ -32,12 +32,16 @@ class ManagedStreamLifecycle:
         self._closed = False
         self._close_lock = anyio.Lock()
 
+    async def close_upstream(self, exc: BaseException | None = None) -> None:
+        """Provider completion does not release the downstream response's permit."""
+        await self.opened_stream.close(exc)
+
     async def close(self, exc: BaseException | None = None) -> None:
         async with self._close_lock:
             if self._closed:
                 return
             try:
-                await self.opened_stream.close(exc)
+                await self.close_upstream(exc)
             finally:
                 await self.managed_stream.release()
             self._closed = True

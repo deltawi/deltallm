@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from copy import deepcopy
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, JsonValue, StrictBool, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ModelWrapValidatorHandler,
+    PrivateAttr,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 from pydantic_core import PydanticCustomError
+
+from src.route_policy_contract import LLMTierSelectorPolicy, RoutePolicyMember
 
 
 class RouteGroupResponse(BaseModel):
@@ -65,6 +78,109 @@ class RoutePolicyMutationResponse(BaseModel):
 
 class RoutePolicyRollbackResponse(RoutePolicyMutationResponse):
     rolled_back_from_version: int
+
+
+class RoutePolicyContextDocument(BaseModel):
+    """Typed context-routing fields with forward-compatible opaque extensions."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: Literal["eligible-only", "smallest-sufficient"] = "eligible-only"
+    unknown_capacity: Literal["allow", "exclude"] = "allow"
+    default_output_tokens: int = Field(default=1024, ge=0)
+    safety_margin_tokens: int = Field(default=256, ge=0)
+
+    @field_validator("default_output_tokens", "safety_margin_tokens", mode="before")
+    @classmethod
+    def reject_boolean_token_settings(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("context token settings must be non-negative integers")
+        return value
+
+
+class RoutePolicyDocumentRequest(BaseModel):
+    """Typed latest policy shape with opaque compatibility for selector-free documents."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: object | None = None
+    strategy: object | None = None
+    members: list[RoutePolicyMember | dict[str, object]] = Field(default_factory=list)
+    timeouts: dict[str, object] | object | None = None
+    retry: dict[str, object] | object | None = None
+    context: RoutePolicyContextDocument | dict[str, object] | None = None
+    selector: LLMTierSelectorPolicy | None = None
+    _document: dict[str, Any] = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def preserve_authored_document(
+        cls, value: Any, handler: ModelWrapValidatorHandler[Self]
+    ) -> Self:
+        result = handler(value)
+        # Inherited-selector strictness is decided under the repository's group lock.
+        # Transport normalization must not erase values, unknown keys, or tombstones.
+        if isinstance(value, dict):
+            result._document = deepcopy(value)
+        return result
+
+    def to_policy_document(self) -> dict[str, Any]:
+        return deepcopy(self._document)
+
+
+class RoutePolicyTimeoutsDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    global_ms: int | None = Field(default=None, ge=1)
+    global_seconds: float | None = Field(default=None, gt=0)
+
+
+class RoutePolicyRetryDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    max_attempts: int | None = Field(default=None, ge=0)
+    retryable_error_classes: list[str] | None = None
+
+
+class RoutePolicyMemberResponse(RoutePolicyMember):
+    """Read compatibility for historical selector-free deployment identifiers.
+
+    Writes continue through the strict selector/legacy semantic validators. Do not
+    apply a new selector-only length limit to a valid legacy response projection.
+    """
+
+    deployment_id: str = Field(min_length=1)
+
+
+class RoutePolicyDocumentResponse(BaseModel):
+    """Normalized latest policy projection; unknown future fields remain readable."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: str | None = None
+    strategy: str | None = None
+    members: list[RoutePolicyMemberResponse] | None = None
+    timeouts: RoutePolicyTimeoutsDocument | None = None
+    retry: RoutePolicyRetryDocument | None = None
+    context: RoutePolicyContextDocument | None = None
+    selector: LLMTierSelectorPolicy | None = None
+
+
+class RoutePolicyCurrentResponse(BaseModel):
+    group_key: str
+    policy: RoutePolicyResponse | None
+
+
+class RoutePolicyHistoryResponse(BaseModel):
+    group_key: str
+    policies: list[RoutePolicyResponse]
+
+
+class RoutePolicyValidationResponse(BaseModel):
+    group_key: str
+    valid: Literal[True] = True
+    policy: RoutePolicyDocumentResponse
+    warnings: list[str] = Field(default_factory=list)
 
 
 RoutePolicySimulationOutcome = Literal[
@@ -178,23 +294,6 @@ class RouteGroupDetailResponse(BaseModel):
 class RouteGroupResolutionResponse(BaseModel):
     route_group_id: str
     group_key: str
-
-
-class RouteGroupPolicyResponse(BaseModel):
-    group_key: str
-    policy: RoutePolicyResponse | None
-
-
-class RouteGroupPolicyHistoryResponse(BaseModel):
-    group_key: str
-    policies: list[RoutePolicyResponse]
-
-
-class RouteGroupPolicyValidationResponse(BaseModel):
-    group_key: str
-    valid: bool
-    policy: dict[str, JsonValue]
-    warnings: list[str]
 
 
 class RouteGroupUpdateRequest(BaseModel):

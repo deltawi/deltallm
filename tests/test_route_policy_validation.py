@@ -8,6 +8,7 @@ from src.router.policy_validation import (
     merge_policy_document_for_write,
     merge_policy_members,
     validate_route_policy,
+    validate_stored_route_policy,
 )
 
 
@@ -322,3 +323,270 @@ def test_policy_write_distinguishes_omitted_context_from_explicit_deletion():
 
     assert omitted["context"] == existing["context"]
     assert "context" not in deleted
+
+
+def test_policy_write_distinguishes_omitted_selector_from_explicit_deletion():
+    selector = {"kind": "llm-tier", "classifier_deployment_id": "dep-a"}
+    members = [
+        {
+            "deployment_id": "dep-a",
+            "enabled": True,
+            "weight": 2,
+            "priority": 1,
+            "lane": "economy",
+            "server_assignment": "stable",
+        }
+    ]
+    existing = {"strategy": "weighted", "selector": selector, "members": members}
+
+    omitted = merge_policy_document_for_write(existing, {"strategy": "least-busy"})
+    deleted = merge_policy_document_for_write(
+        existing,
+        {"strategy": "least-busy", "selector": None},
+    )
+
+    assert omitted["selector"] == selector
+    assert omitted["members"] == members
+    assert "selector" not in deleted
+    assert deleted["members"] == [
+        {
+            "deployment_id": "dep-a",
+            "enabled": True,
+            "weight": 2,
+            "priority": 1,
+            "server_assignment": "stable",
+        }
+    ]
+
+
+def test_policy_write_preserves_lanes_omitted_from_replacement_members():
+    selector = {"kind": "llm-tier", "classifier_deployment_id": "dep-a"}
+    existing = {
+        "strategy": "least-busy",
+        "selector": selector,
+        "members": [
+            {
+                "deployment_id": "dep-a",
+                "weight": 2,
+                "lane": "economy",
+                "server_assignment": "stable",
+            },
+            {"deployment_id": "dep-b", "lane": "quality"},
+        ],
+    }
+
+    merged = merge_policy_document_for_write(
+        existing,
+        {
+            "members": [
+                {"deployment_id": "dep-a", "weight": 7},
+                {"deployment_id": "dep-b"},
+            ]
+        },
+    )
+
+    assert merged["selector"] == selector
+    assert merged["members"] == [
+        {
+            "server_assignment": "stable",
+            "deployment_id": "dep-a",
+            "weight": 7,
+            "lane": "economy",
+        },
+        {"deployment_id": "dep-b", "lane": "quality"},
+    ]
+
+
+def test_policy_write_does_not_restore_removed_or_new_selector_members():
+    existing = {
+        "selector": {"kind": "llm-tier", "classifier_deployment_id": "dep-a"},
+        "members": [
+            {"deployment_id": "dep-a", "lane": "economy"},
+            {"deployment_id": "dep-b", "lane": "quality"},
+        ],
+    }
+
+    merged = merge_policy_document_for_write(
+        existing,
+        {
+            "members": [
+                {"deployment_id": "dep-a"},
+                {"deployment_id": "dep-new"},
+            ]
+        },
+    )
+
+    assert merged["members"] == [
+        {"deployment_id": "dep-a", "lane": "economy"},
+        {"deployment_id": "dep-new"},
+    ]
+
+
+def test_policy_write_selector_removal_keeps_submitted_members_authoritative():
+    existing = {
+        "selector": {"kind": "llm-tier", "classifier_deployment_id": "dep-a"},
+        "members": [
+            {"deployment_id": "dep-a", "lane": "economy"},
+            {
+                "deployment_id": "dep-b",
+                "lane": "quality",
+                "server_assignment": "stable",
+            },
+        ],
+    }
+
+    merged = merge_policy_document_for_write(
+        existing,
+        {
+            "selector": None,
+            "members": [{"deployment_id": "dep-b", "weight": 9, "lane": "economy"}],
+        },
+    )
+
+    assert "selector" not in merged
+    assert merged["members"] == [
+        {
+            "server_assignment": "stable",
+            "deployment_id": "dep-b",
+            "weight": 9,
+        }
+    ]
+
+
+def test_policy_write_replaced_selector_does_not_inherit_old_lanes():
+    existing = {
+        "selector": {"kind": "llm-tier", "classifier_deployment_id": "dep-a"},
+        "members": [{"deployment_id": "dep-a", "lane": "economy"}],
+    }
+    replacement_selector = {"kind": "llm-tier", "classifier_deployment_id": "dep-a"}
+
+    merged = merge_policy_document_for_write(
+        existing,
+        {
+            "selector": replacement_selector,
+            "members": [{"deployment_id": "dep-a"}],
+        },
+    )
+
+    assert merged["selector"] == replacement_selector
+    assert merged["members"] == [{"deployment_id": "dep-a"}]
+
+    incomplete_replacement = merge_policy_document_for_write(
+        existing,
+        {"selector": replacement_selector},
+    )
+
+    assert "members" not in incomplete_replacement
+
+
+def test_stored_selector_policy_validates_routing_projection_and_preserves_trust_boundary():
+    payload = {
+        "strategy": "least-busy",
+        "server_revision": 9,
+        "selector": {
+            "kind": "llm-tier",
+            "classifier_deployment_id": "dep-a",
+            "lanes": [
+                {"id": "economy", "rank": 0, "description": "Routine work"},
+                {"id": "quality", "rank": 1, "description": "Complex work"},
+            ],
+        },
+        "members": [
+            {
+                "deployment_id": "dep-a",
+                "lane": "economy",
+                "server_assignment": "stable",
+            },
+            {"deployment_id": "dep-b", "lane": "quality"},
+        ],
+    }
+    inventory = {
+        deployment_id: PolicyMemberInventoryItem(
+            deployment_id,
+            enabled=True,
+            workload_mode="chat",
+        )
+        for deployment_id in ("dep-a", "dep-b")
+    }
+
+    with pytest.raises(ValueError, match="unknown fields: server_revision"):
+        validate_route_policy(payload, available_members=inventory, workload_mode="chat")
+
+    normalized, warnings = validate_stored_route_policy(
+        payload,
+        available_members=inventory,
+        workload_mode="chat",
+    )
+
+    assert "server_revision" not in normalized
+    assert "server_assignment" not in normalized["members"][0]
+    assert normalized["selector"]["default_lane"] == "quality"
+    assert warnings == [
+        "Ignored opaque policy fields: server_revision",
+        "Ignored opaque members[0] fields: server_assignment",
+    ]
+
+
+def test_stored_selector_policy_keeps_nested_selector_contract_strict():
+    payload = {
+        "selector": {
+            "kind": "llm-tier",
+            "classifier_deployment_id": "dep-a",
+            "server_selector_field": True,
+            "lanes": [
+                {"id": "economy", "rank": 0, "description": "Routine work"},
+                {"id": "quality", "rank": 1, "description": "Complex work"},
+            ],
+        },
+        "members": [
+            {"deployment_id": "dep-a", "lane": "economy"},
+            {"deployment_id": "dep-b", "lane": "quality"},
+        ],
+    }
+    inventory = {
+        deployment_id: PolicyMemberInventoryItem(
+            deployment_id,
+            enabled=True,
+            workload_mode="chat",
+        )
+        for deployment_id in ("dep-a", "dep-b")
+    }
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        validate_stored_route_policy(
+            payload,
+            available_members=inventory,
+            workload_mode="chat",
+        )
+
+
+def test_v3_write_does_not_promote_legacy_selector_shaped_opaque_fields():
+    merged = merge_policy_document_for_write(
+        {
+            "strategy": "weighted",
+            "selector": {"kind": "future-selector", "opaque": True},
+            "members": [
+                {
+                    "deployment_id": "dep-a",
+                    "lane": "legacy-opaque-lane",
+                    "server_assignment": "stable",
+                }
+            ],
+        },
+        {
+            "strategy": "least-busy",
+            "members": [{"deployment_id": "dep-a", "enabled": True}],
+        },
+        existing_semantics_version=2,
+    )
+
+    assert merged == {
+        "strategy": "least-busy",
+        "members": [
+            {
+                "deployment_id": "dep-a",
+                "enabled": True,
+                "server_assignment": "stable",
+            }
+        ],
+    }

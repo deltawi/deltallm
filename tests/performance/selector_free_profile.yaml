@@ -1,0 +1,24 @@
+model_list:
+  - model_name: pr2-local-chat
+    deltallm_params:
+      provider: openai
+      model: openai/local-fixed
+      api_key: local-mock-only
+      api_base: http://127.0.0.1:59441/v1
+    model_info:
+      id: pr2-local-chat
+      mode: chat
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+router_settings:
+  num_retries: 0
+  timeout: 10
+general_settings:
+  master_key: os.environ/DELTALLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+  model_deployment_source: config_only
+  cache_enabled: false
+  audit_enabled: false
+  organization_deletion_worker_enabled: false
+  audit_retention_worker_enabled: false

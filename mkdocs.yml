@@ -75,6 +75,7 @@ nav:
       - configuration/index.md
       - Model Deployments: configuration/models.md
       - Router Settings: configuration/router.md
+      - Model Router Administration: configuration/model-router-admin.md
       - General Settings Guide: configuration/general.md
       - Complete Settings Index: configuration/general-settings-reference.md
   - Providers:
@@ -151,6 +152,12 @@ nav:
       - Upstream HTTP Tuning: deployment/upstream-http.md
   - Project:
       - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
+      - Route-Group Model Router Design: project/model-router-design.md
+      - Model Router Admin Design: project/model-router-admin-design.md
+      - Model Router Batch Design: project/model-router-batch.md
+      - Independent Selector Deployment: project/model-router-independent-selector.md
+      - Model Router Integration Readiness: project/model-router-main-readiness.md
+      - Stream-completion Benchmark Evidence: project/benchmarks/stream-completion-commit/README.md
       - Documentation Governance: project/documentation-governance.md
       - Context-capacity Routing Decision: project/context-routing-design.md
       - Route-group Admin Addressing: project/route-group-addressing.md

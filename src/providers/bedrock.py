@@ -17,6 +17,7 @@ from src.models.errors import (
 )
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
 from src.providers.base import (
     ProviderAdapter,
     ProviderErrorDetails,
@@ -204,8 +205,36 @@ def _classified_stream_finish_reason(failure: ProxyError) -> str:
 
 
 class BedrockAdapter(ProviderAdapter):
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return native_token_receipt(
+            payload,
+            usage_key="usage",
+            input_key="inputTokens",
+            output_key="outputTokens",
+            total_key="totalTokens",
+            cache_key="cacheReadInputTokens",
+            unsupported_usage_keys=("cacheWriteInputTokens",),
+        )
+
     provider_name = "bedrock"
     stream_uses_bytes = True
+
+    def validate_single_result_payload(self, payload: object) -> None:
+        stop = payload.get("stopReason") if isinstance(payload, dict) else None
+        if not isinstance(stop, str) or stop not in _STOP_REASON_MAP:
+            raise invalid_provider_response_error()
+        output = payload.get("output") if isinstance(payload, dict) else None
+        message = output.get("message") if isinstance(output, dict) else None
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            raise invalid_provider_response_error()
+        blocks = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(blocks, list) or any(
+            not isinstance(block, dict)
+            or not (set(block) == {"text"} or set(block) == {"toolUse"})
+            or ("text" in block and not isinstance(block["text"], str))
+            for block in blocks
+        ):
+            raise invalid_provider_response_error()
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client

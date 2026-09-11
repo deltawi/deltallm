@@ -198,6 +198,9 @@ runtime:
       urlKey: REDIS_URL
 
 config:
+  # Selector-enabled chat members require model_info.chat_capabilities and context limits.
+  # Classifiers additionally require explicit provider prices and positive RPM/TPM limits.
+  # Activate only with spend_ingestion_mode: outbox and its enabled worker; see router docs.
   model_list: []
   router_settings:
     routing_strategy: simple-shuffle

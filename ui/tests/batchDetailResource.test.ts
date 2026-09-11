@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   ApiError,
+  batches,
+  type BatchJobItemDetail,
   type BatchJobDetail,
   type BatchWebhookDelivery,
   type BatchWebhookDeliveryList,
@@ -27,6 +29,26 @@ const params = {
 };
 
 const liveJob = { batch_id: 'batch-1' } as BatchJobDetail;
+
+test('item detail retains the safe selector recovery code for existing rendering', async () => {
+  const item = {
+    batch_id: 'batch-1', item_id: 'item-1', line_number: 1, attempts: 3, status: 'failed',
+    error_body: {
+      type: 'BatchItemError', code: 'batch_selector_checkpoint_unavailable',
+      message: 'Batch selector checkpoint is unavailable; selection cannot be repeated safely',
+    },
+  } satisfies BatchJobItemDetail;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(item), {
+    headers: { 'content-type': 'application/json' },
+  });
+  try {
+    const result = await batches.getItem('batch-1', 'item-1');
+    assert.deepEqual(result.error_body, item.error_body);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 const archivedDelivery = {
   batch_id: 'batch-1',
   capabilities: { view: true, cancel: false, replay_webhook: true },

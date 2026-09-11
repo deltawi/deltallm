@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
+from dataclasses import dataclass
 
 import httpx
 from fastapi import FastAPI, Request
@@ -30,6 +31,7 @@ from src.main import create_app
 from src.chat.executor import execute_chat, open_stream_with_first_chunk
 from src.models.requests import ChatCompletionRequest
 from src.providers.openai import OpenAIAdapter
+from src.providers.base import ProviderAdapter
 from src.router.router import Deployment
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
@@ -131,22 +133,30 @@ def mock_response(stream: bool) -> httpx.Response:
     )
 
 
+@dataclass
+class MeasurementAdapters:
+    """One configured adapter, compatible with both historical and shared resolvers."""
+
+    compatible_chat: dict[str, ProviderAdapter]
+
+    def resolve(self, provider: str) -> ProviderAdapter | None:
+        return self.compatible_chat.get(provider)
+
+
 def configure_app(upstream: httpx.AsyncClient, provider: str) -> FastAPI:
     app = create_app()
     logging.getLogger("httpx").setLevel(logging.WARNING)
     app.state.settings = SimpleNamespace(openai_base_url="https://fixed-provider.invalid/v1")
     app.state.http_client = upstream
     app.state.openai_adapter = OpenAIAdapter(upstream)
+    adapter = app.state.openai_adapter
     if provider != "openai":
         # Lazy imports let this identical script measure the pre-change checkout.
         from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
         from src.providers.profiled_chat import ProfiledChatAdapter
 
-        app.state.provider_error_mapper_registry = SimpleNamespace(
-            compatible_chat={
-                provider: ProfiledChatAdapter(upstream, CHAT_PROVIDER_PROFILES[provider])
-            }
-        )
+        adapter = ProfiledChatAdapter(upstream, CHAT_PROVIDER_PROFILES[provider])
+    app.state.provider_error_mapper_registry = MeasurementAdapters({provider: adapter})
     return app
 
 

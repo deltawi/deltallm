@@ -174,6 +174,9 @@ async def test_email_delivery_audit_reconciliation_is_claimed_separately() -> No
     email_id = str(uuid4())
     audit_event_id = str(uuid4())
     try:
+        # Claims use the database clock; the container and host can be skewed.
+        clock = await db.query_raw("SELECT EXTRACT(EPOCH FROM NOW())::double precision AS now")
+        due_at = datetime.fromtimestamp(clock[0]["now"], tz=UTC) - timedelta(seconds=1)
         await repository.enqueue(
             EmailOutboxRecord(
                 email_id=email_id,
@@ -183,7 +186,7 @@ async def test_email_delivery_audit_reconciliation_is_claimed_separately() -> No
                 from_address="noreply@example.com",
                 subject="integration",
                 text_body="integration",
-                next_attempt_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+                next_attempt_at=due_at,
             )
         )
         delivery_claim = await repository.claim_due(
@@ -221,7 +224,7 @@ async def test_email_delivery_audit_reconciliation_is_claimed_separately() -> No
             worker_id="audit-worker-1",
             claim_token=audit_claim[0].delivery_audit_claim_token,
             error="audit unavailable",
-            next_attempt_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+            next_attempt_at=due_at,
         )
 
         assert await repository.claim_due(limit=1) == []

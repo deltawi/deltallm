@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import JsonValue
 
 from src.api.admin.endpoints import route_groups as operations
-from src.api.admin.request_validation import BadRequestValidationRoute
+from src.api.admin.request_validation import (
+    BadRequestValidationRoute,
+    PolicyBadRequestValidationRoute,
+)
 from src.api.admin.route_group_contracts import (
     RouteGroupDeleteResponse,
     RouteGroupDetailResponse,
@@ -14,16 +16,17 @@ from src.api.admin.route_group_contracts import (
     RouteGroupMemberMutationResponse,
     RouteGroupMemberWriteRequest,
     RouteGroupMutationResponse,
-    RouteGroupPolicyHistoryResponse,
-    RouteGroupPolicyResponse,
-    RouteGroupPolicyValidationResponse,
     RouteGroupResolutionResponse,
     RouteGroupUpdateRequest,
+    RoutePolicyCurrentResponse,
+    RoutePolicyDocumentRequest,
+    RoutePolicyHistoryResponse,
     RoutePolicyMutationResponse,
     RoutePolicyRollbackRequest,
     RoutePolicyRollbackResponse,
     RoutePolicySimulationRequest,
     RoutePolicySimulationResponse,
+    RoutePolicyValidationResponse,
 )
 from src.api.admin.route_group_dependencies import resolve_route_group_id, route_group_repository
 from src.auth.roles import Permission
@@ -41,6 +44,8 @@ router = APIRouter(
         400: {"description": "Invalid request"},
     },
 )
+
+policy_router = APIRouter(route_class=PolicyBadRequestValidationRoute)
 
 GroupKey = Annotated[str, Depends(resolve_route_group_id)]
 _READ = [Depends(require_admin_permission(Permission.CONFIG_READ))]
@@ -131,53 +136,54 @@ async def remove_route_group_member_by_id(
     )
 
 
-@router.get(_BASE + "/policy", response_model=RouteGroupPolicyResponse, dependencies=_READ)
+@router.get(_BASE + "/policy", response_model=RoutePolicyCurrentResponse, dependencies=_READ)
 async def get_route_group_policy_by_id(
     request: Request, group_key: GroupKey
-) -> RouteGroupPolicyResponse:
-    return RouteGroupPolicyResponse.model_validate(
+) -> RoutePolicyCurrentResponse:
+    return RoutePolicyCurrentResponse.model_validate(
         await operations.get_route_group_policy(request, group_key)
     )
 
 
-@router.get(_BASE + "/policies", response_model=RouteGroupPolicyHistoryResponse, dependencies=_READ)
+@router.get(_BASE + "/policies", response_model=RoutePolicyHistoryResponse, dependencies=_READ)
 async def list_route_group_policies_by_id(
     request: Request, group_key: GroupKey
-) -> RouteGroupPolicyHistoryResponse:
-    return RouteGroupPolicyHistoryResponse.model_validate(
+) -> RoutePolicyHistoryResponse:
+    return RoutePolicyHistoryResponse.model_validate(
         await operations.list_route_group_policies(request, group_key)
     )
 
 
-@router.post(
+@policy_router.post(
     _BASE + "/policy/validate",
-    response_model=RouteGroupPolicyValidationResponse,
+    response_model=RoutePolicyValidationResponse,
+    response_model_exclude_unset=True,
     dependencies=_WRITE,
 )
 async def validate_route_group_policy_by_id(
-    request: Request, group_key: GroupKey, payload: dict[str, JsonValue]
-) -> RouteGroupPolicyValidationResponse:
-    return RouteGroupPolicyValidationResponse.model_validate(
+    request: Request, group_key: GroupKey, payload: RoutePolicyDocumentRequest
+) -> RoutePolicyValidationResponse:
+    return RoutePolicyValidationResponse.model_validate(
         await operations.validate_route_group_policy(request, group_key, payload)
     )
 
 
-@router.post(
+@policy_router.post(
     _BASE + "/policy/draft", response_model=RoutePolicyMutationResponse, dependencies=_WRITE
 )
 async def save_route_group_policy_draft_by_id(
-    request: Request, group_key: GroupKey, payload: dict[str, JsonValue]
+    request: Request, group_key: GroupKey, payload: RoutePolicyDocumentRequest
 ) -> RoutePolicyMutationResponse:
     return RoutePolicyMutationResponse.model_validate(
         await operations.save_route_group_policy_draft(request, group_key, payload)
     )
 
 
-@router.post(
+@policy_router.post(
     _BASE + "/policy/publish", response_model=RoutePolicyMutationResponse, dependencies=_WRITE
 )
 async def publish_route_group_policy_by_id(
-    request: Request, group_key: GroupKey, payload: dict[str, JsonValue] | None = None
+    request: Request, group_key: GroupKey, payload: RoutePolicyDocumentRequest | None = None
 ) -> RoutePolicyMutationResponse:
     return RoutePolicyMutationResponse.model_validate(
         await operations.publish_route_group_policy_v2(request, group_key, payload)
@@ -206,3 +212,6 @@ async def simulate_route_group_policy_by_id(
     return RoutePolicySimulationResponse.model_validate(
         await operations.simulate_route_group_policy(request, group_key, payload)
     )
+
+
+router.include_router(policy_router)

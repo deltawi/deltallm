@@ -365,10 +365,24 @@ class FakeRedis:
             if cooldown_key in self.store:
                 return [0, "cooldown", 0]
             capacity_count = int(argv[0])
+            owner_token = argv[3]
+            shared = len(argv) > 6 + capacity_count * 2 and int(argv[6 + capacity_count * 2]) == 1
+            if shared:
+                for score, member in self.zset_store.get(owners_key, []):
+                    if member == owner_token:
+                        return [1, "acquired", current_active, score, 0]
+            concurrency = int(argv[5 + capacity_count]) if len(argv) > 5 + capacity_count else 0
+            if concurrency and current_active >= concurrency:
+                return [0, "capacity", 0]
             for index in range(capacity_count):
                 current = int(self.store.get(keys[5 + index], 0) or 0)
                 limit = int(argv[4 + index])
-                if current >= limit:
+                consume = (
+                    int(argv[6 + capacity_count + index])
+                    if len(argv) > 6 + capacity_count + index
+                    else 0
+                )
+                if current >= limit or current + consume > limit:
                     return [0, "capacity", 0]
 
             lease_ttl_ms = int(argv[1])
@@ -384,6 +398,16 @@ class FakeRedis:
                 self.ttl_store[recovery_key] = max(1, lease_ttl_ms // 1000)
                 recovery = 1
             expires_at_ms = now_ms + lease_ttl_ms
+            for index in range(capacity_count):
+                consume = (
+                    int(argv[6 + capacity_count + index])
+                    if len(argv) > 6 + capacity_count + index
+                    else 0
+                )
+                if consume:
+                    key = keys[5 + index]
+                    self.store[key] = int(self.store.get(key, 0) or 0) + consume
+                    self.ttl_store[key] = 120
             await self.zadd(owners_key, {owner_token: expires_at_ms})
             active = current_active + 1
             self.store[active_key] = active

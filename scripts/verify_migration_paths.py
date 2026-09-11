@@ -37,6 +37,7 @@ UPGRADE_MODEL_DEPLOYMENT_SECOND_ID = "migration-upgrade-model-deployment-second"
 UPGRADE_MODEL_NAME = "migration-upgrade-model"
 STABLE_RELEASE_TAG_PATTERN = re.compile(r"\Av\d+\.\d+\.\d+\Z")
 SHARED_ROUTE_POLICY_MIGRATION_REF = "3372602bf7bff6107ee9595217b7f2fd75da61cd"
+SELECTOR_VALIDATION_MIGRATION = "20260910000100_batch_selector_checkpoint_validation"
 
 
 def database_url_for(base_url: str, database_name: str) -> str:
@@ -666,6 +667,57 @@ $migration_verify$;
     )
 
 
+def _verify_operation_reservations(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql="""
+DO $reservation_verify$
+BEGIN
+  IF to_regclass('public.deltallm_billing_operations') IS NULL
+     OR to_regprocedure('deltallm_adjust_operation_hold(text,numeric)') IS NULL
+     OR to_regprocedure('deltallm_recover_operation(text)') IS NULL
+     OR to_regprocedure('deltallm_recover_operation_isolated(text)') IS NULL THEN
+    RAISE EXCEPTION 'billing operation prerequisite objects are missing';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND column_name='reserved_spend_exact'
+        AND numeric_precision=38 AND numeric_scale=18
+        AND table_name IN ('deltallm_verificationtoken','deltallm_usertable',
+          'deltallm_teamtable','deltallm_organizationtable','deltallm_teammodelspend')) <> 5 THEN
+    RAISE EXCEPTION 'exact billing hold counters are missing';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM deltallm_telemetry_ingestion_capacity
+      WHERE queue_name='billing_operations' AND pending_count=0) THEN
+    RAISE EXCEPTION 'billing operation capacity seed is invalid';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_billing_operations'
+        AND column_name IN ('recovery_blocked_at','recovery_error_code')) <> 2
+     OR NOT EXISTS (SELECT 1 FROM pg_constraint
+      WHERE conrelid='deltallm_billing_operations'::regclass AND contype='c'
+        AND pg_get_constraintdef(oid) LIKE '%recovery_blocked_at IS NULL%recovery_error_code IS NULL%') THEN
+    RAISE EXCEPTION 'billing recovery quarantine contract is missing';
+  END IF;
+  IF (SELECT count(*) FROM pg_index
+      WHERE indexrelid IN ('deltallm_billing_operations_recovery_idx'::regclass,
+        'deltallm_billing_operations_receipt_idx'::regclass)
+        AND pg_get_expr(indpred,indrelid) LIKE '%recovery_blocked_at IS NULL%') <> 2 THEN
+    RAISE EXCEPTION 'billing recovery indexes must exclude quarantined rows';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger
+      WHERE tgname IN ('deltallm_key_hold_delete_guard','deltallm_user_hold_delete_guard',
+        'deltallm_team_hold_delete_guard','deltallm_org_hold_delete_guard',
+        'deltallm_model_hold_delete_guard') AND NOT tgisinternal) <> 5 THEN
+    RAISE EXCEPTION 'economic hold deletion guards are missing';
+  END IF;
+END
+$reservation_verify$;
+""",
+    )
+
+
 def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> None:
     suffix = uuid.uuid4().hex[:12]
     fresh_name = f"deltallm_migration_verify_{suffix}_fresh"
@@ -684,12 +736,39 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         shared_url = database_url_for(admin_url, shared_name)
         _migrate(prisma, schema=CURRENT_SCHEMA, database_url=fresh_url)
         _verify_fresh_database(prisma, fresh_url)
+        _verify_operation_reservations(prisma, fresh_url)
 
         with tempfile.TemporaryDirectory(prefix="deltallm-migration-base-") as temp:
             temp_root = Path(temp)
             base_schema = _extract_prisma_at_ref(base_ref, temp_root / "base")
             _migrate(prisma, schema=base_schema, database_url=upgrade_url)
             _seed_upgrade_fixture(prisma, upgrade_url, base_schema)
+            _db_execute(
+                prisma,
+                schema=base_schema,
+                database_url=upgrade_url,
+                sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_seed.sql").read_text(),
+            )
+            base_validation = (
+                base_schema.parent / "migrations" / SELECTOR_VALIDATION_MIGRATION / "migration.sql"
+            )
+            # Deploy cannot undo validation already applied by a newer upgrade base.
+            if not base_validation.is_file():
+                staged_root = temp_root / "selector-install"
+                shutil.copytree(
+                    CURRENT_SCHEMA.parent,
+                    staged_root,
+                    ignore=shutil.ignore_patterns(SELECTOR_VALIDATION_MIGRATION),
+                )
+                _migrate(prisma, schema=staged_root / "schema.prisma", database_url=upgrade_url)
+                _db_execute(
+                    prisma,
+                    schema=CURRENT_SCHEMA,
+                    database_url=upgrade_url,
+                    sql=(
+                        REPO_ROOT / "scripts/migration_fixtures/batch_selector_installed.sql"
+                    ).read_text(),
+                )
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=upgrade_url)
             shared_schema = _extract_prisma_at_ref(
                 SHARED_ROUTE_POLICY_MIGRATION_REF,
@@ -699,7 +778,15 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             _seed_shared_migration_fixture(prisma, shared_url, shared_schema)
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
         _verify_upgrade_database(prisma, upgrade_url)
+        _db_execute(
+            prisma,
+            schema=CURRENT_SCHEMA,
+            database_url=upgrade_url,
+            sql=(REPO_ROOT / "scripts/migration_fixtures/batch_selector_verify.sql").read_text(),
+        )
         _verify_shared_migration_database(prisma, shared_url)
+        _verify_operation_reservations(prisma, upgrade_url)
+        _verify_operation_reservations(prisma, shared_url)
     finally:
         primary_error = sys.exc_info()[1]
         cleanup_errors: list[subprocess.CalledProcessError] = []

@@ -134,6 +134,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.get_settings",
         lambda: SimpleNamespace(
+            app_env="test",
             config_path="config.yaml",
             database_url="postgresql://env-user:env-pass@env-host:5432/env-db",
             db_pool_size=25,
@@ -191,7 +192,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.RouteGroupRuntimeCache",
-        lambda redis_client: ("route-cache", redis_client),
+        lambda redis_client, keyspace: ("route-cache", redis_client, keyspace),
     )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.ModelDeploymentRepository",
@@ -219,7 +220,10 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
     assert app.state.settings.config_path == "config.yaml"
     assert app.state.redis is created["redis"]
-    assert app.state.route_group_runtime_cache == ("route-cache", created["redis"])
+    route_cache, route_cache_redis, route_cache_keyspace = app.state.route_group_runtime_cache
+    assert route_cache == "route-cache"
+    assert route_cache_redis is created["redis"]
+    assert route_cache_keyspace.environment == "test"
     assert app.state.prisma_manager.client == "db-client"
     assert app.state.prisma_manager.database_settings is not None
     assert app.state.prisma_manager.database_settings.pool_size == 25

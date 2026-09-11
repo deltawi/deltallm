@@ -211,6 +211,7 @@ class FakeAuthorizationDB:
                     error_body = row.pop("error_body", None)
                     row["_has_error_body"] = error_body is not None
                     row["_error_retry_category"] = (error_body or {}).get("retry_category")
+                    row["_error_code"] = (error_body or {}).get("code")
                 return rows
             if "request_body IS NOT NULL AS has_request_body" in query:
                 if "line_number > $2" in query:
@@ -238,6 +239,7 @@ class FakeAuthorizationDB:
                         "_error_retry_category": (item.get("error_body") or {}).get(
                             "retry_category"
                         ),
+                        "_error_code": (item.get("error_body") or {}).get("code"),
                         "has_request_body": item.get("request_body") is not None,
                         "has_response_body": item.get("response_body") is not None,
                         "has_error_body": item.get("error_body") is not None,
@@ -865,9 +867,14 @@ async def test_get_batch_item_returns_payload_on_demand(client, test_app, monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint", [False, True])
+@pytest.mark.parametrize("pagination", ["items_offset=0", "after_line_number=0"])
 async def test_batch_ui_endpoints_sanitize_historical_provider_errors(
-    client, test_app, monkeypatch
+    client, test_app, monkeypatch, checkpoint, pagination
 ):
+    from src.batch.public_errors import BatchPublicErrorCode
+
+    code = BatchPublicErrorCode.SELECTOR_CHECKPOINT_UNAVAILABLE
     fake_db = FakeAuthorizationDB()
     sensitive = "provider api_key=sk-historical-secret https://provider.internal/private"
     fake_db.batch_items[0].update(
@@ -878,6 +885,7 @@ async def test_batch_ui_endpoints_sanitize_historical_provider_errors(
             "message": sensitive,
             "type": "HTTPStatusError",
             "retry_category": "upstream_5xx",
+            "code": code.value if checkpoint else "unsafe-provider-code",
             "provider_payload": {"secret": sensitive},
         },
     )
@@ -896,7 +904,7 @@ async def test_batch_ui_endpoints_sanitize_historical_provider_errors(
 
     headers = {"Authorization": "Bearer mk-test"}
     list_response = await client.get(
-        "/ui/api/batches/batch-1?items_limit=1&items_offset=0",
+        f"/ui/api/batches/batch-1?items_limit=1&{pagination}",
         headers=headers,
     )
     detail_response = await client.get(
@@ -908,12 +916,14 @@ async def test_batch_ui_endpoints_sanitize_historical_provider_errors(
     assert detail_response.status_code == 200
     list_item = list_response.json()["items"]["data"][0]
     detail_item = detail_response.json()
-    assert list_item["last_error"] == "Provider unavailable"
-    assert detail_item["last_error"] == "Provider unavailable"
+    message = code.message if checkpoint else "Provider unavailable"
+    assert list_item["last_error"] == message
+    assert detail_item["last_error"] == message
     assert detail_item["error_body"] == {
-        "message": "Provider unavailable",
+        "message": message,
         "type": "BatchItemError",
         "retry_category": "upstream_5xx",
+        **({"code": code.value} if checkpoint else {}),
     }
     detail_query = next(
         query
@@ -921,6 +931,8 @@ async def test_batch_ui_endpoints_sanitize_historical_provider_errors(
         if "WHERE batch_id = $1 AND item_id = $2" in query
     )
     assert "error_body IS NOT NULL AS _has_error_body" in detail_query
+    assert "END AS _error_code" in detail_query
+    assert "_error_code" not in detail_item and "_error_code" not in list_item
     assert "response_body, error_body" not in detail_query
     assert sensitive not in list_response.text
     assert sensitive not in detail_response.text

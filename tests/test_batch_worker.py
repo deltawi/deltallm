@@ -44,7 +44,11 @@ from src.models.responses import UserAPIKeyAuth
 from src.rate_limit_policy import estimate_tokens
 from src.router import Router
 from src.router.context_policy import RequestTokenDemand, get_request_token_demand
-from src.router.execution import ProviderAttemptResult, attach_failover_attempt_context
+from src.router.execution import (
+    ProviderAttemptResult,
+    RequestDeadline,
+    attach_failover_attempt_context,
+)
 
 
 class _AllowAllCallableTargetGrantService:
@@ -645,6 +649,9 @@ async def test_batch_worker_processes_chat_item_with_chat_batch_accounting(monke
     assert isinstance(token_demand, RequestTokenDemand)
     assert token_demand.input_tokens > 0
     assert token_demand.requested_output_tokens is None
+    from src.batch.chat_capacity import ChatDeploymentCapacity
+
+    assert isinstance(router_contexts[0].pop("_deltallm_attempt_capacity"), ChatDeploymentCapacity)
     assert router_contexts == [
         {
             "metadata": {"tags": ["batch-blue"]},
@@ -933,6 +940,9 @@ def _build_chat_batch_worker(
             return deployment
 
     class _Failover:
+        def create_request_deadline(self, timeout_seconds=None):
+            return RequestDeadline.after(timeout_seconds or 600.0)
+
         def __init__(self) -> None:
             self.aggregate_health_errors: list[Exception] = []
             self.calls: list[dict] = []
@@ -1542,6 +1552,9 @@ async def test_batch_worker_sync_microbatch_uses_failover_served_deployment():
             return deployment
 
     class _Failover:
+        def create_request_deadline(self, timeout_seconds=None):
+            return RequestDeadline.after(timeout_seconds or 600.0)
+
         async def execute_with_failover(
             self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs
         ):
@@ -1680,6 +1693,9 @@ async def test_batch_worker_sync_microbatch_primary_failure_with_unsupported_fal
             return deployment
 
     class _Failover:
+        def create_request_deadline(self, timeout_seconds=None):
+            return RequestDeadline.after(timeout_seconds or 600.0)
+
         def __init__(self) -> None:
             self.failures: list[tuple[str, bool | None, str | None]] = []
 
@@ -1786,6 +1802,9 @@ async def test_batch_worker_sync_microbatch_primary_failure_with_unsupported_fal
 async def test_batch_worker_sync_microbatch_unsupported_fallback_respects_max_in_flight(
     monkeypatch,
 ):
+    from src.router.attempt_capacity import attempt_capacity
+    from src.router.execution import RequestDeadline
+
     active = 0
     max_active = 0
     fallback_reasons: list[tuple[str, int]] = []
@@ -1864,16 +1883,26 @@ async def test_batch_worker_sync_microbatch_unsupported_fallback_respects_max_in
             return deployment
 
     class _Failover:
+        def create_request_deadline(self, timeout_seconds=None):
+            return RequestDeadline.after(timeout_seconds or 600.0)
+
         async def execute_with_failover(
             self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs
         ):
-            del model_group, kwargs
+            del model_group
+            capacity = attempt_capacity(kwargs["routing_context"])
+            assert capacity is not None
+
+            async def admitted(deployment):
+                async with capacity.slot(deployment, RequestDeadline.after(1)):
+                    return await execute(deployment)
+
             try:
-                data = await execute(primary_deployment)
+                data = await admitted(primary_deployment)
                 served_deployment = primary_deployment
             except ServiceUnavailableError as exc:
                 primary_failure_codes.append(exc.code)
-                data = await execute(fallback)
+                data = await admitted(fallback)
                 served_deployment = fallback
             if return_deployment:
                 return data, served_deployment
@@ -1968,6 +1997,9 @@ async def test_batch_worker_sync_microbatch_validates_response_inside_served_att
             return deployment
 
     class _Failover:
+        def create_request_deadline(self, timeout_seconds=None):
+            return RequestDeadline.after(timeout_seconds or 600.0)
+
         def __init__(self) -> None:
             self.validation_failure_deployment_id: str | None = None
 

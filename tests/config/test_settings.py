@@ -860,6 +860,52 @@ def test_route_group_config_rejects_context_for_unsupported_explicit_mode():
         )
 
 
+def test_route_group_config_validates_model_router_contract():
+    group = RouteGroupConfig.model_validate(
+        {
+            "key": "support-chat",
+            "mode": "chat",
+            "selector": {
+                "kind": "llm-tier",
+                "classifier_deployment_id": "dep-mini",
+                "lanes": [
+                    {"id": "economy", "rank": 0, "description": "Routine work"},
+                    {"id": "quality", "rank": 1, "description": "Complex work"},
+                ],
+            },
+            "members": [
+                {"deployment_id": "dep-mini", "lane": "economy"},
+                {"deployment_id": "dep-large", "lane": "quality"},
+            ],
+        }
+    )
+
+    assert group.selector is not None
+    assert group.selector.default_lane == "quality"
+    assert [member.lane for member in group.members] == ["economy", "quality"]
+
+
+def test_route_group_config_requires_explicit_chat_mode_for_selector():
+    with pytest.raises(ValueError, match="requires route group mode 'chat'"):
+        RouteGroupConfig.model_validate(
+            {
+                "key": "legacy-mode",
+                "selector": {
+                    "kind": "llm-tier",
+                    "classifier_deployment_id": "dep-mini",
+                    "lanes": [
+                        {"id": "economy", "rank": 0, "description": "Routine work"},
+                        {"id": "quality", "rank": 1, "description": "Complex work"},
+                    ],
+                },
+                "members": [
+                    {"deployment_id": "dep-mini", "lane": "economy"},
+                    {"deployment_id": "dep-large", "lane": "quality"},
+                ],
+            }
+        )
+
+
 def test_route_group_config_rejects_unknown_context_keys():
     with pytest.raises(ValueError, match="unknown_capcity"):
         RouteGroupConfig.model_validate(
@@ -867,6 +913,17 @@ def test_route_group_config_rejects_unknown_context_keys():
                 "key": "support-fast",
                 "mode": "chat",
                 "context": {"unknown_capcity": "exclude"},
+            }
+        )
+
+
+def test_route_group_config_rejects_member_lane_without_selector():
+    with pytest.raises(ValueError, match="member lanes require a selector"):
+        RouteGroupConfig.model_validate(
+            {
+                "key": "support-chat",
+                "mode": "chat",
+                "members": [{"deployment_id": "dep-mini", "lane": "economy"}],
             }
         )
 
@@ -885,6 +942,131 @@ def test_context_capacity_config_rejects_booleans(value: bool):
     with pytest.raises(ValueError, match="non-negative integers"):
         RouteGroupConfig.model_validate(
             {"key": "support-fast", "context": {"safety_margin_tokens": value}}
+        )
+
+
+def test_selector_free_route_group_keeps_legacy_unknown_field_behavior():
+    group = RouteGroupConfig.model_validate(
+        {
+            "key": "support-chat",
+            "future_group_field": True,
+            "members": [
+                {
+                    "deployment_id": "dep-mini",
+                    "future_member_field": "opaque",
+                }
+            ],
+        }
+    )
+
+    assert "future_group_field" not in group.model_dump()
+    assert "future_member_field" not in group.members[0].model_dump()
+
+
+def test_selector_free_route_group_preserves_legacy_member_coercion_and_ranges():
+    long_deployment_id = "dep-" + ("x" * 300)
+
+    group = RouteGroupConfig.model_validate(
+        {
+            "key": "legacy-compatible",
+            "members": [
+                {
+                    "deployment_id": long_deployment_id,
+                    "enabled": "false",
+                    "weight": 0,
+                    "priority": -1,
+                }
+            ],
+        }
+    )
+
+    assert group.members[0].deployment_id == long_deployment_id
+    assert group.members[0].enabled is False
+    assert group.members[0].weight == 0
+    assert group.members[0].priority == -1
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("enabled", "true", "valid boolean"),
+        ("weight", "2", "valid integer"),
+        ("priority", "0", "valid integer"),
+    ],
+)
+def test_selector_route_group_rejects_legacy_member_coercion(
+    field: str,
+    value: object,
+    message: str,
+):
+    member = {"deployment_id": "dep-mini", "lane": "economy", field: value}
+
+    with pytest.raises(ValueError, match=message):
+        RouteGroupConfig.model_validate(
+            {
+                "key": "support-chat",
+                "mode": "chat",
+                "selector": {
+                    "kind": "llm-tier",
+                    "classifier_deployment_id": "dep-mini",
+                    "lanes": [
+                        {"id": "economy", "rank": 0, "description": "Routine work"},
+                        {"id": "quality", "rank": 1, "description": "Complex work"},
+                    ],
+                },
+                "members": [
+                    member,
+                    {"deployment_id": "dep-large", "lane": "quality"},
+                ],
+            }
+        )
+
+
+def test_selector_route_group_rejects_unknown_group_and_member_fields():
+    payload = {
+        "key": "support-chat",
+        "mode": "chat",
+        "selector": {
+            "kind": "llm-tier",
+            "classifier_deployment_id": "dep-mini",
+            "lanes": [
+                {"id": "economy", "rank": 0, "description": "Routine work"},
+                {"id": "quality", "rank": 1, "description": "Complex work"},
+            ],
+        },
+        "members": [
+            {"deployment_id": "dep-mini", "lane": "economy"},
+            {"deployment_id": "dep-large", "lane": "quality"},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="unknown fields: typo"):
+        RouteGroupConfig.model_validate({**payload, "typo": True})
+
+    payload["members"][0]["typo"] = True
+    with pytest.raises(ValueError, match="member 0 contains unknown fields: typo"):
+        RouteGroupConfig.model_validate(payload)
+
+
+def test_selector_route_group_rejects_duplicate_members():
+    with pytest.raises(ValueError, match="member deployment ids must be unique"):
+        RouteGroupConfig.model_validate(
+            {
+                "key": "support-chat",
+                "mode": "chat",
+                "selector": {
+                    "kind": "llm-tier",
+                    "classifier_deployment_id": "dep-mini",
+                    "lanes": [
+                        {"id": "economy", "rank": 0, "description": "Routine work"},
+                        {"id": "quality", "rank": 1, "description": "Complex work"},
+                    ],
+                },
+                "members": [
+                    {"deployment_id": "dep-mini", "lane": "economy"},
+                    {"deployment_id": "dep-mini", "lane": "quality"},
+                ],
+            }
         )
 
 

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import Request
 
 from src.providers.resolution import resolve_provider
+from src.telemetry.selector_decision import ProtectedSelectorDecision
 
 _FAILURE_TARGET_ATTR = "_failure_target"
 
@@ -88,6 +89,9 @@ def capture_initial_route_decision(
     if not isinstance(decision, dict):
         return None
     stored = deepcopy(decision)
+    previous = getattr(request.state, "route_decision", None)
+    if isinstance(previous, dict) and "selector" in previous:
+        stored["selector"] = deepcopy(previous["selector"])
     request.state.route_decision = stored
     _refresh_request_resolution(request)
     return stored
@@ -119,6 +123,14 @@ def route_decision_metadata(request: Request) -> dict[str, Any] | None:
     if not isinstance(decision, dict):
         return None
     return deepcopy(decision)
+
+
+def attach_selector_decision(request: Request, decision: ProtectedSelectorDecision) -> None:
+    """Protected metadata only; public route-decision headers remain unchanged."""
+    current = route_decision_metadata(request) or {}
+    current["selector"] = decision.model_dump(mode="json")
+    request.state.route_decision = current
+    _refresh_request_resolution(request)
 
 
 def set_prompt_provenance(

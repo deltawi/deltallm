@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
 from scripts import verify_migration_paths
@@ -155,3 +159,125 @@ def test_default_base_ref_fails_without_stable_main_release(
 
     with pytest.raises(RuntimeError, match="no stable release tag reachable from origin/main"):
         verify_migration_paths._default_base_ref()  # noqa: SLF001
+
+
+def test_migration_verifier_checks_exact_reservations_and_deletion_guards(monkeypatch):
+    statements = []
+    monkeypatch.setattr(
+        verify_migration_paths, "_db_execute", lambda *args, sql, **kwargs: statements.append(sql)
+    )
+    verify_migration_paths._verify_operation_reservations(
+        "prisma", "postgresql://localhost/upgrade"
+    )
+    assert len(statements) == 1
+    for invariant in (
+        "reserved_spend_exact",
+        "numeric_precision=38",
+        "numeric_scale=18",
+        "deltallm_recover_operation",
+        "deltallm_recover_operation_isolated",
+        "recovery_blocked_at",
+        "recovery_error_code",
+        "pg_get_constraintdef",
+        "pg_get_expr",
+        "deltallm_key_hold_delete_guard",
+        "pending_count=0",
+    ):
+        assert invariant in statements[0]
+
+
+@pytest.fixture
+def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    verifier = verify_migration_paths
+    base_schema = tmp_path / "base" / "schema.prisma"
+    base_schema.parent.mkdir()
+    base_schema.touch()
+    state = SimpleNamespace(validated=False, installed_checks=0, final_checks=0)
+    steps: list[str] = []
+    created, dropped = Mock(), Mock()
+    validation = Path("migrations") / verifier.SELECTOR_VALIDATION_MIGRATION / "migration.sql"
+
+    def extract(base_ref: str, _destination: Path) -> Path:
+        return base_schema if base_ref == "upgrade-base" else verifier.CURRENT_SCHEMA
+
+    def migrate(_prisma: str, *, schema: Path, database_url: str) -> None:
+        if database_url.endswith("_upgrade"):
+            steps.append(
+                "base"
+                if schema == base_schema
+                else ("current" if schema == verifier.CURRENT_SCHEMA else "staged")
+            )
+            # Deploy never undoes an already-applied validation migration.
+            state.validated |= (schema.parent / validation).is_file()
+
+    def execute(_prisma: str, *, schema: Path, database_url: str, sql: str) -> None:
+        if "Batch checkpoint installation must commit before validation" in sql:
+            assert not state.validated, "intermediate check cannot follow applied validation"
+            state.installed_checks += 1
+            steps.append("installed-check")
+        if "Batch checkpoint validation did not finish" in sql:
+            assert state.validated
+            state.final_checks += 1
+            steps.append("final-check")
+
+    monkeypatch.setattr(verifier, "_extract_prisma_at_ref", extract)
+    monkeypatch.setattr(verifier, "_migrate", migrate)
+    monkeypatch.setattr(verifier, "_db_execute", execute)
+    monkeypatch.setattr(verifier, "_create_database", created)
+    monkeypatch.setattr(verifier, "_drop_database", dropped)
+    return SimpleNamespace(
+        schema=base_schema,
+        validation=validation,
+        state=state,
+        steps=steps,
+        created=created,
+        dropped=dropped,
+    )
+
+
+@pytest.mark.parametrize("base_state", ["before-install", "installed", "validated"])
+def test_upgrade_verifier_handles_selector_migration_already_in_base(
+    selector_upgrade_verifier, base_state: str
+) -> None:
+    h = selector_upgrade_verifier
+    if base_state != "before-install":
+        install = (
+            h.schema.parent / "migrations/20260909000100_batch_selector_checkpoint/migration.sql"
+        )
+        install.parent.mkdir(parents=True)
+        install.touch()
+    if base_state == "validated":
+        validation = h.schema.parent / h.validation
+        validation.parent.mkdir(parents=True)
+        validation.touch()
+
+    verify_migration_paths.verify_migration_paths(
+        admin_url="postgresql://localhost/admin", base_ref="upgrade-base", prisma="unused"
+    )
+
+    intermediate = [] if base_state == "validated" else ["staged", "installed-check"]
+    assert h.steps == ["base", *intermediate, "current", "final-check"]
+    assert h.state.installed_checks == int(base_state != "validated")
+    assert h.state.final_checks == 1
+    assert h.created.call_count == h.dropped.call_count == 3
+    assert h.dropped.call_args_list == list(reversed(h.created.call_args_list))
+
+
+def test_upgrade_verifier_preserves_intermediate_failure_and_cleans_databases(
+    selector_upgrade_verifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifier, h = verify_migration_paths, selector_upgrade_verifier
+    execute = verifier._db_execute
+
+    def fail_install_check(*args: object, sql: str, **kwargs: object) -> None:
+        if "Batch checkpoint installation must commit before validation" in sql:
+            raise RuntimeError("invalid staged installation")
+        execute(*args, sql=sql, **kwargs)
+
+    monkeypatch.setattr(verifier, "_db_execute", fail_install_check)
+    with pytest.raises(RuntimeError, match="invalid staged installation"):
+        verifier.verify_migration_paths(
+            admin_url="postgresql://localhost/admin", base_ref="upgrade-base", prisma="unused"
+        )
+    assert h.state.final_checks == 0
+    assert h.dropped.call_args_list == list(reversed(h.created.call_args_list))

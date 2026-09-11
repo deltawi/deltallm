@@ -9,6 +9,7 @@ from typing import Any
 from src.batch.backpressure import BatchModelGroupDeferred
 from src.batch.error_sanitization import persisted_batch_error_message
 from src.batch.models import BatchItemRecord, BatchJobRecord
+from src.batch.public_errors import exception_public_error_code
 from src.batch.retry import (
     BatchRetryCategory,
     BatchRetryDecision,
@@ -160,6 +161,10 @@ class WorkerFailureHandlingMixin:
             "attempt": int(item.attempts),
             "max_attempts": int(self.config.max_attempts),
         }
+        public_code = exception_public_error_code(exc)
+        if public_code is not None:
+            error_payload["code"] = public_code.value
+            error_payload["message"] = public_code.message
         if retryable:
             error_payload["retry_delay_seconds"] = int(retry_delay_seconds)
         else:

@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, cast
 
-from src.config import (
+from src.route_group_config import (
     ModelMode,
     SUPPORTED_MODEL_MODES,
     validate_context_routing_workload_mode,

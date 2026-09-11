@@ -1,35 +1,45 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
-from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time
 import json
 import logging
-from time import monotonic, perf_counter
-from typing import Any, Literal, TypeVar
+from time import perf_counter
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
-from src.api.admin.endpoints.common import db_or_503, get_auth_scope, log_admin_query_timing, to_json_value
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    get_auth_scope,
+    log_admin_query_timing,
+    to_json_value,
+)
 from src.auth.roles import Permission
 from src.billing.spend_read import SpendReadSource, get_spend_read_source
+from src.db.spend_components import external_request_sql
 from src.middleware.admin import require_any_admin_permission
 from src.providers.resolution import provider_from_model, resolve_provider
-from src.services.spend_reporting_cache import (
-    ReportingLoadLimiter,
-    ReportingQueryTimedOut,
-    ReportingRefreshBusy,
-    SpendReportingCache,
-    SpendReportingCacheResult,
-    reporting_cache_ttl,
+from src.services.spend_reporting_cache import reporting_cache_ttl
+from src.api.admin.spend_reporting_dependencies import (
+    _resolve_reporting_visibility,
+    _reporting_v2_enabled,
+    _reporting_context,
+    _reporting_cache,
+    _reporting_cache_revalidation_requested,
+    _load_reporting_response,
+    _run_uncached_reporting_response,
+)
+from src.db.reporting import (
+    _run_reporting_query,
+    _run_reporting_transaction,
+    _run_reporting_statement,
 )
 from src.services.spend_visibility import (
     SPEND_VISIBILITY_PERMISSIONS,
     SpendVisibility,
     apply_spend_visibility,
-    resolve_spend_visibility,
 )
 
 router = APIRouter(tags=["Spend"])
@@ -40,9 +50,6 @@ _USAGE_SCOPE_COLUMNS = {
     "team": "team_id",
     "user": "user_column",
 }
-_REPORTING_CANCELLATION_GRACE_MAX_SECONDS = 1.0
-_REPORTING_ADVISORY_LOCK_NAMESPACE = 1_144_204_621
-_ReportingResult = TypeVar("_ReportingResult")
 
 
 def _date_start(value: date | None) -> datetime | None:
@@ -233,7 +240,9 @@ def _grouped_spend_config(
         }
     if group_by == "organization":
         return {
-            "joins": ["LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id"],
+            "joins": [
+                "LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id"
+            ],
             "group_expr": "s.organization_id",
             "display_expr": "NULLIF(TRIM(COALESCE(o.organization_name, '')), '')",
             "group_by_exprs": [
@@ -315,274 +324,6 @@ def _user_identity_labels_visible(scope: Any, visibility: SpendVisibility) -> bo
     return bool(checks) and all(checks)
 
 
-def _resolve_reporting_visibility(
-    request: Request,
-    scope: Any,
-    requested_view: Literal["organization", "team", "self"] | None,
-) -> SpendVisibility:
-    try:
-        visibility = resolve_spend_visibility(
-            scope,
-            requested_view,
-            scoped_views_enabled=_reporting_v2_enabled(request),
-        )
-        if not visibility.available_views:
-            raise ValueError("Usage reporting is not enabled for this account")
-        return visibility
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-
-
-def _reporting_v2_enabled(request: Request) -> bool:
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
-    return bool(getattr(general_settings, "spend_reporting_v2_enabled", False))
-
-
-def _reporting_context(request: Request, visibility: SpendVisibility) -> dict[str, Any]:
-    return {
-        "api_version": 2 if _reporting_v2_enabled(request) else 1,
-        "active_view": visibility.view,
-    }
-
-
-async def _reporting_cache(request: Request) -> SpendReportingCache:
-    redis_client = getattr(request.app.state, "redis", None)
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
-    max_concurrent_loads = int(getattr(general_settings, "spend_reporting_max_concurrency", 2))
-    global_max_concurrent_loads = int(
-        getattr(general_settings, "spend_reporting_global_max_concurrency", 2)
-    )
-    queue_timeout_seconds = float(
-        getattr(general_settings, "spend_reporting_queue_timeout_seconds", 10.0)
-    )
-    execution_timeout_seconds = float(
-        getattr(general_settings, "spend_reporting_execution_timeout_seconds", 60.0)
-    )
-    redis_timeout_seconds = float(
-        getattr(general_settings, "spend_reporting_redis_timeout_seconds", 0.5)
-    )
-
-    guard = getattr(request.app.state, "spend_reporting_cache_guard", None)
-    if not isinstance(guard, asyncio.Lock):
-        guard = asyncio.Lock()
-        request.app.state.spend_reporting_cache_guard = guard
-
-    async with guard:
-        existing = getattr(request.app.state, "spend_reporting_cache", None)
-        if isinstance(existing, SpendReportingCache) and existing.redis is redis_client:
-            await existing.reconfigure(
-                max_concurrent_loads=max_concurrent_loads,
-                global_max_concurrent_loads=global_max_concurrent_loads,
-                load_queue_timeout_seconds=queue_timeout_seconds,
-                load_execution_timeout_seconds=execution_timeout_seconds,
-                redis_operation_timeout_seconds=redis_timeout_seconds,
-            )
-            return existing
-
-        limiter = (
-            existing.load_limiter
-            if isinstance(existing, SpendReportingCache)
-            else ReportingLoadLimiter(max_concurrent_loads)
-        )
-        await limiter.reconfigure(max_concurrent_loads)
-        cache = SpendReportingCache(
-            redis_client,
-            max_concurrent_loads=max_concurrent_loads,
-            global_max_concurrent_loads=global_max_concurrent_loads,
-            load_queue_timeout_seconds=queue_timeout_seconds,
-            load_execution_timeout_seconds=execution_timeout_seconds,
-            redis_operation_timeout_seconds=redis_timeout_seconds,
-            load_limiter=limiter,
-        )
-        request.app.state.spend_reporting_cache = cache
-        return cache
-
-
-def _reporting_cache_revalidation_requested(cache_control: str | None) -> bool:
-    directives = {
-        directive.strip().lower()
-        for directive in str(cache_control or "").split(",")
-        if directive.strip()
-    }
-    return "no-cache" in directives or "max-age=0" in directives
-
-
-async def _load_reporting_response(
-    *,
-    cache: SpendReportingCache,
-    cache_key: str,
-    cache_ttl: int,
-    loader: Callable[[], Awaitable[dict[str, Any]]],
-    force_refresh: bool,
-) -> SpendReportingCacheResult:
-    try:
-        return await cache.get_or_load(
-            cache_key,
-            cache_ttl,
-            loader,
-            force_refresh=force_refresh,
-        )
-    except ReportingRefreshBusy as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Usage reporting capacity is currently full. Please try again shortly.",
-            headers={"Retry-After": "2"},
-        ) from exc
-    except ReportingQueryTimedOut as exc:
-        logger.warning(
-            "spend reporting request exceeded its execution deadline; timeout_seconds=%s",
-            cache.load_execution_timeout_seconds,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="This usage report took too long to generate. Please try a shorter range or retry shortly.",
-            headers={"Retry-After": "5"},
-        ) from exc
-
-
-async def _run_uncached_reporting_response(
-    *,
-    cache: SpendReportingCache,
-    loader: Callable[[], Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    try:
-        return await cache.run_uncached(loader)
-    except ReportingRefreshBusy as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Usage reporting capacity is currently full. Please try again shortly.",
-            headers={"Retry-After": "2"},
-        ) from exc
-    except ReportingQueryTimedOut as exc:
-        logger.warning(
-            "spend reporting request exceeded its execution deadline; timeout_seconds=%s",
-            cache.load_execution_timeout_seconds,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="This usage report took too long to generate. Please try a shorter range or retry shortly.",
-            headers={"Retry-After": "5"},
-        ) from exc
-
-
-def _reporting_cancellation_grace_seconds(execution_timeout: float) -> float:
-    return min(
-        _REPORTING_CANCELLATION_GRACE_MAX_SECONDS,
-        max(0.005, execution_timeout * 0.1),
-    )
-
-
-def _reporting_statement_timeout_ms(deadline: float, cancellation_grace: float) -> int:
-    usable_seconds = deadline - monotonic() - cancellation_grace
-    if usable_seconds <= 0:
-        raise ReportingQueryTimedOut(
-            "Reporting query exhausted its execution deadline before the next database statement"
-        )
-    return max(1, int(usable_seconds * 1000))
-
-
-def _is_reporting_database_timeout(exc: Exception) -> bool:
-    metadata = getattr(exc, "meta", None)
-    error_text = f"{exc} {metadata or ''}".lower()
-    error_code = str(getattr(exc, "code", "") or "").lower()
-    return (
-        "statement timeout" in error_text
-        or ("57014" in error_text and "canceling statement" in error_text)
-        or "p2028" in error_code
-        or "p2028" in error_text
-        or "unable to start a transaction in the given time" in error_text
-        or "transaction already closed" in error_text
-        or ("transaction" in error_text and "timed out" in error_text)
-    )
-
-
-async def _run_reporting_statement(
-    tx: Any,
-    *,
-    deadline: float,
-    cancellation_grace: float,
-    query: str,
-    params: tuple[Any, ...],
-) -> list[Any]:
-    statement_timeout_ms = _reporting_statement_timeout_ms(deadline, cancellation_grace)
-    try:
-        await tx.query_raw(
-            "SELECT set_config('statement_timeout', $1, true)",
-            f"{statement_timeout_ms}ms",
-        )
-        return await tx.query_raw(query, *params)
-    except ReportingQueryTimedOut:
-        raise
-    except Exception as exc:
-        if _is_reporting_database_timeout(exc):
-            raise ReportingQueryTimedOut(
-                f"PostgreSQL cancelled a reporting query after {statement_timeout_ms}ms"
-            ) from exc
-        raise
-
-
-async def _run_reporting_transaction(
-    db: Any,
-    cache: SpendReportingCache,
-    operation: Callable[[Any, float, float], Awaitable[_ReportingResult]],
-) -> _ReportingResult:
-    """Run a reporting transaction within one connection-and-query deadline."""
-
-    load_budget = cache.active_load_budget
-    execution_timeout = load_budget.execution_timeout_seconds
-    cancellation_grace = _reporting_cancellation_grace_seconds(execution_timeout)
-    deadline = monotonic() + execution_timeout
-    max_wait_seconds = max(0.001, execution_timeout - cancellation_grace)
-    try:
-        async with db.tx(
-            max_wait=timedelta(seconds=max_wait_seconds),
-            timeout=timedelta(seconds=execution_timeout),
-        ) as tx:
-            admission_rows = await tx.query_raw(
-                """
-                SELECT slot
-                FROM generate_series(0, $2::integer - 1) AS slot
-                WHERE pg_try_advisory_xact_lock($1::integer, slot)
-                LIMIT 1
-                """,
-                _REPORTING_ADVISORY_LOCK_NAMESPACE,
-                load_budget.global_max_concurrent_loads,
-            )
-            if not admission_rows:
-                raise ReportingRefreshBusy(
-                    "Global reporting query capacity is currently full"
-                )
-            return await operation(tx, deadline, cancellation_grace)
-    except ReportingQueryTimedOut:
-        raise
-    except Exception as exc:
-        if _is_reporting_database_timeout(exc):
-            raise ReportingQueryTimedOut(
-                "The reporting transaction exceeded its database execution deadline"
-            ) from exc
-        raise
-
-
-async def _run_reporting_query(
-    db: Any,
-    cache: SpendReportingCache,
-    query: str,
-    *params: Any,
-) -> list[Any]:
-    """Run a report with a transaction-local PostgreSQL statement deadline."""
-
-    async def run_query(tx: Any, deadline: float, cancellation_grace: float) -> list[Any]:
-        return await _run_reporting_statement(
-            tx,
-            deadline=deadline,
-            cancellation_grace=cancellation_grace,
-            query=query,
-            params=params,
-        )
-
-    return await _run_reporting_transaction(db, cache, run_query)
-
-
 def _reporting_scope_cache_payload(visibility: SpendVisibility) -> dict[str, Any]:
     return visibility.cache_payload()
 
@@ -596,6 +337,7 @@ def _summary_reporting_cache_payload(
 ) -> dict[str, Any]:
     return {
         "endpoint": "summary",
+        "component_count_schema": 1,
         "source": source.table,
         "scope": _reporting_scope_cache_payload(visibility),
         "start_date": start_date.isoformat() if start_date else None,
@@ -631,18 +373,20 @@ def _spend_report_cache_payload(
         "scope_type": scope_type,
         "scope_id": scope_id,
         "scope_unassigned": scope_unassigned,
-        "response_schema": 2,
+        "response_schema": 3,
     }
     if group_by == "day":
         payload["interval"] = interval
         return payload
 
-    payload.update({
-        "search": search,
-        "sort_by": sort_by,
-        "limit": limit,
-        "offset": offset,
-    })
+    payload.update(
+        {
+            "search": search,
+            "sort_by": sort_by,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
     if group_by == "provider":
         payload["model_provider_overrides"] = model_provider_overrides
     if group_by == "user":
@@ -705,12 +449,14 @@ async def spend_summary(
     source = get_spend_read_source()
     cache_ttl = reporting_cache_ttl(start_date, end_date)
     force_refresh = _reporting_cache_revalidation_requested(cache_control)
-    cache_key = cache.key(_summary_reporting_cache_payload(
-        source=source,
-        visibility=visibility,
-        start_date=start_date,
-        end_date=end_date,
-    ))
+    cache_key = cache.key(
+        _summary_reporting_cache_payload(
+            source=source,
+            visibility=visibility,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    )
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -741,10 +487,10 @@ async def spend_summary(
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
                 COALESCE(SUM({source.prompt_tokens_column}), 0) AS prompt_tokens,
                 COALESCE(SUM({source.completion_tokens_column}), 0) AS completion_tokens,
-                COUNT(*) AS total_requests,
+                COUNT(*) FILTER (WHERE {external_request_sql()}) AS total_requests,
                 COUNT(DISTINCT model) FILTER (WHERE NULLIF(TRIM(model), '') IS NOT NULL) AS unique_models,
-                COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
-                COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
+                COUNT(*) FILTER (WHERE {external_request_sql()} AND COALESCE(status, 'success') = 'success') AS successful_requests,
+                COUNT(*) FILTER (WHERE {external_request_sql()} AND status = 'error') AS failed_requests
             FROM {source.table}
             {where_sql}
             """,
@@ -785,7 +531,9 @@ async def spend_summary(
 )
 async def spend_report(
     request: Request,
-    group_by: str = Query(default="day", pattern="^(model|provider|day|user|team|organization|api_key)$"),
+    group_by: str = Query(
+        default="day", pattern="^(model|provider|day|user|team|organization|api_key)$"
+    ),
     interval: Literal["day", "week", "month"] = Query(default="day"),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
@@ -818,38 +566,42 @@ async def spend_report(
     )
     visibility = _resolve_reporting_visibility(request, scope, view)
     if group_by not in visibility.allowed_groupings:
-        raise HTTPException(status_code=403, detail="This usage dimension is outside your reporting scope")
+        raise HTTPException(
+            status_code=403, detail="This usage dimension is outside your reporting scope"
+        )
     if scope_type is not None and scope_type not in visibility.allowed_dimensions:
-        raise HTTPException(status_code=403, detail="This usage filter is outside your reporting scope")
+        raise HTTPException(
+            status_code=403, detail="This usage filter is outside your reporting scope"
+        )
     db = db_or_503(request)
     source = get_spend_read_source()
     user_identity_labels_visible = _user_identity_labels_visible(scope, visibility)
     model_provider_overrides = (
-        _legacy_cache_model_provider_overrides(request)
-        if group_by == "provider"
-        else None
+        _legacy_cache_model_provider_overrides(request) if group_by == "provider" else None
     )
     cache = await _reporting_cache(request)
     cache_ttl = reporting_cache_ttl(start_date, end_date)
     force_refresh = _reporting_cache_revalidation_requested(cache_control)
     normalized_search = search.strip() if search and search.strip() else None
-    cache_key = cache.key(_spend_report_cache_payload(
-        source=source,
-        visibility=visibility,
-        group_by=group_by,
-        interval=interval,
-        start_date=start_date,
-        end_date=end_date,
-        search=normalized_search,
-        sort_by=sort_by,
-        scope_type=scope_type,
-        scope_id=scope_id,
-        scope_unassigned=scope_unassigned,
-        model_provider_overrides=model_provider_overrides,
-        user_identity_labels_visible=user_identity_labels_visible,
-        limit=limit,
-        offset=offset,
-    ))
+    cache_key = cache.key(
+        _spend_report_cache_payload(
+            source=source,
+            visibility=visibility,
+            group_by=group_by,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            search=normalized_search,
+            sort_by=sort_by,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            scope_unassigned=scope_unassigned,
+            model_provider_overrides=model_provider_overrides,
+            user_identity_labels_visible=user_identity_labels_visible,
+            limit=limit,
+            offset=offset,
+        )
+    )
     if group_by == "day":
         bucket_expr = {
             "day": "DATE(start_time)",
@@ -891,10 +643,10 @@ async def spend_report(
                 SELECT
                     {bucket_expr} AS group_key,
                     COALESCE(SUM(spend), 0) AS total_spend,
-                    COUNT(*) AS request_count,
+                    COUNT(*) FILTER (WHERE {external_request_sql()}) AS request_count,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                    COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
-                    COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
+                    COUNT(*) FILTER (WHERE {external_request_sql()} AND COALESCE(status, 'success') = 'success') AS successful_requests,
+                    COUNT(*) FILTER (WHERE {external_request_sql()} AND status = 'error') AS failed_requests
                 FROM {source.table}
                 {where_sql}
                 GROUP BY {bucket_expr}
@@ -995,7 +747,7 @@ async def spend_report(
                     ({group_expr}) IS NULL AS is_unassigned,
                     {display_expr} AS display_name,
                     COALESCE(SUM(s.spend), 0) AS total_spend,
-                    COUNT(*) AS request_count,
+                    COUNT(*) FILTER (WHERE {external_request_sql(alias="s")}) AS request_count,
                     COALESCE(SUM(s.total_tokens), 0) AS total_tokens,
                     COALESCE(SUM(s.{source.prompt_tokens_column}), 0) AS prompt_tokens,
                     COALESCE(SUM(s.{source.completion_tokens_column}), 0) AS completion_tokens
@@ -1046,11 +798,7 @@ async def spend_report(
         response = {
             "group_by": group_by,
             "data": [
-                to_json_value({
-                    k: v
-                    for k, v in dict(row).items()
-                    if k != "total_count"
-                })
+                to_json_value({k: v for k, v in dict(row).items() if k != "total_count"})
                 for row in data_rows
             ],
             "pagination": {
@@ -1110,7 +858,9 @@ async def spend_feature_status(
         required_permission=Permission.SPEND_READ,
     )
     visibility = _resolve_reporting_visibility(request, scope, None)
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    general_settings = getattr(
+        getattr(request.app.state, "app_config", None), "general_settings", None
+    )
     return {
         "cache_enabled": bool(getattr(general_settings, "cache_enabled", False)),
         "reporting_api_version": 2 if _reporting_v2_enabled(request) else 1,
@@ -1178,9 +928,7 @@ async def request_logs(
     if cursor:
         cursor_time, cursor_id = _decode_request_log_cursor(cursor)
         params.extend((cursor_time, cursor_id))
-        clauses.append(
-            f"(start_time, id) < (${len(params) - 1}::timestamp, ${len(params)})"
-        )
+        clauses.append(f"(start_time, id) < (${len(params) - 1}::timestamp, ${len(params)})")
     apply_spend_visibility(
         clauses=clauses,
         params=params,
@@ -1238,11 +986,7 @@ async def request_logs(
                 )
                 total = int((total_rows[0] if total_rows else {}).get("total") or 0)
 
-            has_more = (
-                offset + limit < total
-                if total is not None
-                else len(logs) > limit
-            )
+            has_more = offset + limit < total if total is not None else len(logs) > limit
             page_logs = logs[:limit]
             next_cursor = None
             if has_more and page_logs and not offset_pagination:

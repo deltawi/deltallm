@@ -42,7 +42,7 @@ from src.router.router import (
     build_deployment_registry,
     build_route_group_policies,
 )
-from src.router.redis_keys import RouterRedisKeyspace
+from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace, RouterRedisKeyspace
 from src.router.registry import DeploymentRegistryStore
 from src.router.state import DeploymentStateBackend, RedisStateBackend
 
@@ -68,6 +68,7 @@ __all__ = [
     "ManagedFailoverResult",
     "ProviderAttemptResult",
     "RedisStateBackend",
+    "RouteGroupRuntimeRedisKeyspace",
     "RouterRedisKeyspace",
     "RequestDeadline",
     "ROUTING_MODE_CONTEXT_KEY",

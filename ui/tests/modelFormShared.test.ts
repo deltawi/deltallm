@@ -107,6 +107,15 @@ test('buildModelPayload sets scheduler capacity and preserves unknown model_info
   assert.equal(payload.model_info.priority, 3);
 });
 
+test('unrelated model-form saves preserve selector capability qualification', () => {
+  const capabilities = { tools: true, streaming: true, image: false, json_schema: true };
+  const existing = { chat_capabilities: capabilities, provider_private_metadata: { region: 'eu' } };
+  const payload = buildModelPayload(chatForm(), [], existing);
+  assert.deepEqual(payload.model_info.chat_capabilities, capabilities);
+  assert.deepEqual(payload.model_info.provider_private_metadata, existing.provider_private_metadata);
+  assert.deepEqual(existing.chat_capabilities, capabilities);
+});
+
 test('buildModelPayload preserves existing scheduler capacity on unrelated saves', () => {
   const existingModel: ModelDeploymentDetail = {
     deployment_id: 'dep-1',

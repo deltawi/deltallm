@@ -15,6 +15,9 @@ import {
 import { Link } from 'react-router-dom';
 import PolicyGuidedEditor from '../PolicyGuidedEditor';
 import RouteGroupPolicySimulationPanel from './RouteGroupPolicySimulationPanel';
+import PolicySelectorSummary from './PolicySelectorSummary';
+import PolicyPublishControl from './PolicyPublishControl';
+import SelectorTools from './SelectorTools';
 import {
   routeGroupStrategyOptions,
   type PolicyAction,
@@ -108,6 +111,7 @@ interface RouteGroupAdvancedTabProps {
 
   /* Routing Policy */
   routeGroupId: string;
+  groupKey: string;
   workloadMode: string;
   guidedPolicy: PolicyGuidedValues;
   members: RouteGroupMemberDetail[];
@@ -137,7 +141,7 @@ interface RouteGroupAdvancedTabProps {
   loadingPolicies: boolean;
   hasPoliciesError: boolean;
   onRollbackVersionChange: (next: number | null) => void;
-  onRollback: () => void;
+  onRollback: (version?: number) => void;
 }
 
 /* ─── Component ───────────────────────────────────────────────────────────── */
@@ -164,6 +168,7 @@ export default function RouteGroupAdvancedTab({
   onSaveBinding,
   onDeleteBinding,
   routeGroupId,
+  groupKey,
   workloadMode,
   guidedPolicy,
   members,
@@ -193,7 +198,7 @@ export default function RouteGroupAdvancedTab({
   onRollbackVersionChange,
   onRollback,
 }: RouteGroupAdvancedTabProps) {
-  const [openSections, setOpenSections] = useState<Set<string>>(new Set(['prompt-binding']));
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set(['routing-policy']));
   const toggle = (id: string) =>
     setOpenSections((prev) => {
       const next = new Set(prev);
@@ -379,7 +384,7 @@ export default function RouteGroupAdvancedTab({
         iconBg="bg-blue-100"
         iconColor="text-brand-primary-ink"
         title="Routing Policy"
-        subtitle="Override the default shuffle only when you need weighted splits, ordered fallback, or rate-limit awareness."
+        subtitle="Choose a model selector and routing strategy, then publish to make them active."
         borderAccent="border-blue-200"
         badge={
           publishedPolicy ? (
@@ -394,6 +399,7 @@ export default function RouteGroupAdvancedTab({
         }
       >
         <div className="px-5 py-5 space-y-5">
+          {publishedPolicy && <PolicySelectorSummary policy={publishedPolicy.policy_json} label={`Active selector (v${publishedPolicy.version})`} />}
           {/* Header actions row */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             {/* Guided / Raw JSON toggle */}
@@ -438,14 +444,8 @@ export default function RouteGroupAdvancedTab({
               >
                 {policyAction === 'save-draft' ? 'Saving…' : 'Save Draft'}
               </button>
-              <button
-                type="button"
-                onClick={onPublish}
-                disabled={isPolicyBusy || !hasMembers}
-                className="rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary shadow-sm hover:bg-brand-primary-hover disabled:opacity-50 transition-colors"
-              >
-                {policyAction === 'publish-json' ? 'Publishing…' : 'Publish ↑'}
-              </button>
+              <PolicyPublishControl policy={simulationPolicy} activePolicy={publishedPolicy?.policy_json ?? null}
+                busy={isPolicyBusy} disabled={!hasMembers || !canSimulate} onPublish={onPublish} />
             </div>
           </div>
 
@@ -463,22 +463,24 @@ export default function RouteGroupAdvancedTab({
 
           {/* Guided editor */}
           {!showAdvancedJson && (
-            <PolicyGuidedEditor
+            <fieldset disabled={isPolicyBusy || !canSimulate}><PolicyGuidedEditor
+              routeGroupId={routeGroupId}
               values={guidedPolicy}
               onChange={onGuidedPolicyChange}
               strategyOptions={routeGroupStrategyOptions(guidedPolicy.strategy)}
               memberOptions={members}
               workloadMode={workloadMode}
-            />
+            /></fieldset>
           )}
 
           {/* Policy preview / raw JSON */}
-          <div className="space-y-1.5">
-            <p className="text-[10px] uppercase tracking-widest font-semibold text-slate-400">
+          <details className="space-y-1.5" open={showAdvancedJson}>
+            <summary className="cursor-pointer text-xs font-medium text-slate-500">
               {showAdvancedJson ? 'Raw JSON Editor' : 'Effective Policy Preview'}
-            </p>
+            </summary>
             {showAdvancedJson ? (
               <textarea
+                aria-label="Policy JSON (import or export)"
                 value={policyText}
                 onChange={(e) => onPolicyTextChange(e.target.value)}
                 rows={10}
@@ -490,11 +492,12 @@ export default function RouteGroupAdvancedTab({
                 <pre className="text-sm text-green-400 font-mono leading-relaxed">{guidedPreview}</pre>
               </div>
             )}
-          </div>
+          </details>
         </div>
       </AccordionCard>
 
       {/* ── 3. Policy Simulation ── */}
+      <SelectorTools routeGroupId={routeGroupId} groupKey={groupKey} policy={simulationPolicy} />
       <AccordionCard
         id="policy-simulation"
         open={openSections.has('policy-simulation')}
@@ -572,7 +575,7 @@ export default function RouteGroupAdvancedTab({
                 </div>
                 <button
                   type="button"
-                  onClick={onRollback}
+                  onClick={() => onRollback()}
                   disabled={!selectedRollbackVersion || isPolicyBusy}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
@@ -633,12 +636,13 @@ export default function RouteGroupAdvancedTab({
                         </span>
                       )}
                     </div>
+                    <PolicySelectorSummary policy={policy.policy_json} label="Version selector" />
                     {isNonPublished && (
                       <button
                         type="button"
-                        onClick={() => { onRollbackVersionChange(policy.version); onRollback(); }}
+                        onClick={() => onRollback(policy.version)}
                         disabled={isPolicyBusy}
-                        className="mt-2 sm:mt-0 self-start sm:self-auto text-xs font-medium text-slate-500 hover:text-slate-800 opacity-0 group-hover:opacity-100 rounded-lg border border-slate-200 px-2.5 py-1 hover:bg-slate-50 disabled:opacity-50 transition-all"
+                        className="mt-2 sm:mt-0 self-start sm:self-auto text-xs font-medium text-slate-500 hover:text-slate-800 rounded-lg border border-slate-200 px-2.5 py-1 hover:bg-slate-50 disabled:opacity-50 transition-all"
                       >
                         Restore v{policy.version}
                       </button>

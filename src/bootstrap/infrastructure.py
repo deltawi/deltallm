@@ -42,6 +42,7 @@ from src.providers.openai import OpenAIAdapter
 from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
 from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
+from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.services.route_groups import RouteGroupRuntimeCache
 from src.services.ui_branding_assets import UIBrandingAssetService
 from src.services.route_group_mutations import RouteGroupMutationService
@@ -94,7 +95,10 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
     redis_client = _build_redis_client(settings, cfg)
     app.state.redis = redis_client
-    app.state.route_group_runtime_cache = RouteGroupRuntimeCache(redis_client=redis_client)
+    app.state.route_group_runtime_cache = RouteGroupRuntimeCache(
+        redis_client=redis_client,
+        keyspace=RouteGroupRuntimeRedisKeyspace(environment=str(settings.app_env)),
+    )
 
     database_settings = resolve_database_settings(cfg, settings)
     await prisma_manager.connect(database_settings)

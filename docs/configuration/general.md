@@ -318,6 +318,13 @@ See [Organization Deletion](../features/organization-deletion.md) for lifecycle 
 
 Pool settings are applied by appending Prisma's `connection_limit` and `pool_timeout` query parameters to the effective database URL at startup. Durable telemetry uses a second Prisma manager and therefore cannot consume request-pool connections. Database URLs, pool settings, and ingestion modes are startup-only: the admin API returns `409 restart_required` if a dynamic update changes them. Batch, capacity, retry, and cleanup settings may be reloaded where supported.
 
+For text streams, the accounting writer is awaited before the terminal marker in
+both spend modes. Only `outbox` requires durable charge acceptance at that point.
+The default `legacy` writer logs and swallows database-write failures and updates
+ledgers non-atomically; a terminal marker is not a billing receipt in that mode.
+Model-router selectors require outbox mode. See the
+[streaming accounting contract](../api/proxy.md#streaming-accounting) for failure behavior.
+
 Keep both reporting concurrency limits comfortably below the database pool size so gateway authentication, spend writes, and control-plane operations retain database capacity. PostgreSQL advisory-lock slots enforce the global limit without blocking, while the per-worker limit bounds local queues. Cache hits do not consume reporting query slots. Reporting concurrency and timeout settings are applied to subsequent report loads when dynamic configuration changes; active loads retain the immutable limits with which they started.
 
 Leave `spend_reporting_v2_enabled` disabled during the initial rolling deployment. Follow the [scoped usage reporting rollout](../deployment/usage-reporting-v2.md) before enabling it.

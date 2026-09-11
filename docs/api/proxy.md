@@ -95,6 +95,28 @@ DeltaLLM uses the sanitized classification for retry and failover. After a strea
 emitted content, it never retries: a provider failure closes the OpenAI-compatible stream without a
 `[DONE]` marker, so clients must treat a missing terminal marker as an incomplete response.
 
+#### Streaming accounting
+
+For successful text streams, DeltaLLM awaits the configured answer-accounting
+writer and required audit before forwarding `[DONE]` (or the translated
+`message_stop` event). Clients may close at that marker without draining the HTTP
+connection to EOF. Content tokens are still delivered immediately. This ordering
+applies to Chat, Completions, Responses, and the Messages-compatible wrapper.
+
+With `general_settings.spend_ingestion_mode: outbox` (required for model-router
+selectors), the answer charge must be durably accepted before the terminal marker.
+If that acceptance fails, required audit fails, or finalization exceeds the request
+deadline, the stream ends without a successful terminal marker; already generated
+tokens may still be chargeable. Durable acceptance does not mean that the background
+worker has already applied every reporting/ledger update.
+
+The default `legacy` spend mode is also awaited, but its existing writer logs and
+swallows database-write failures and does not atomically update all ledgers.
+Consequently, `[DONE]` or `message_stop` in legacy mode is **not proof that the
+charge was persisted**. Awaiting this writer fixes close-at-terminal cancellation,
+not its historical durability limitations. Use outbox mode when durable charge
+acceptance is required.
+
 ### Completions (Legacy)
 
 ```text

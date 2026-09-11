@@ -11,7 +11,12 @@ from src.providers.base import (
     reject_openai_compatible_failure_response,
 )
 from src.providers.chat_profiles import ChatProviderProfile
-from src.providers.chat_usage import CompatibleChatResponse, normalize_chat_usage
+from src.providers.chat_usage import (
+    CompatibleChatResponse,
+    normalize_chat_usage,
+    reported_chat_token_receipt,
+)
+from src.providers.token_receipt import ProviderTokenReceipt
 from src.providers.openai import OpenAIAdapter
 from src.providers.openai_compatible import (
     translate_openai_compatible_stream,
@@ -43,6 +48,9 @@ class ProfiledChatAdapter(OpenAIAdapter):
         super().__init__(http_client)
         self.profile = profile
         self.provider_name = profile.provider
+
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return reported_chat_token_receipt(payload)
 
     async def translate_request(
         self, canonical_request: ChatCompletionRequest, provider_config: Mapping[str, object]

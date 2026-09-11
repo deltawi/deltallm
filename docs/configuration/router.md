@@ -141,6 +141,7 @@ Route-group policies currently support:
 - `context.unknown_capacity`
 - `context.default_output_tokens`
 - `context.safety_margin_tokens`
+- optional version 3 `selector` and member `lane` fields for the model-router contract
 
 Legacy mode aliases accepted on input:
 
@@ -217,6 +218,119 @@ existing batched state reads.
 
 The ownership, migration, rollback, and latency decisions are recorded in the
 [context-capacity routing decision](../project/context-routing-design.md).
+
+### Model-router policy contract
+
+Version 3 defines a bounded `llm-tier` selector for chat Route Groups. It classifies a request into
+an allowlisted lane; it does not choose a deployment. Lanes have unique contiguous ranks starting at
+zero, and an omitted `default_lane` normalizes to the highest-ranked lane. Selector policies require
+an explicit answer-member list, a concrete chat classifier (inside or outside the group), and one valid lane for every enabled
+answer member.
+
+For an existing version 3 selector draft, omitting `selector` preserves it. A member-only update
+may omit existing lane assignments; DeltaLLM preserves those lanes by deployment ID while treating
+the submitted member list as authoritative. Use `"selector": null` to disable selection. That
+removes the selector and all member lanes without discarding the member list, enabled flags,
+weights, priorities, or server-owned member metadata.
+
+Publishing a qualified selector policy activates it for real-time Chat Completions and Responses,
+including streaming. File-configured groups use the same qualification at runtime load. There is
+no shadow mode or background classification of production requests. New operations pin one complete
+routing generation; in-flight operations finish against their original policy and credentials.
+
+Before activation:
+
+- Use a supported concrete chat deployment ID as the classifier, not an alias or another group.
+  It need not be an answer member. Every enabled
+  answer member must declare positive context capacity and explicit
+  [`model_info.chat_capabilities`](models.md#model-router-capability-and-price-metadata).
+- Set group `context.unknown_capacity: exclude`. The classifier needs explicit input/output token
+  prices (zero is allowed when genuinely free) and positive `rpm_limit` and `tpm_limit` metadata.
+- Enable `general_settings.spend_ingestion_mode: outbox` and
+  `spend_ingestion_worker_enabled: true`, with healthy PostgreSQL and shared Redis admission.
+  Missing accounting readiness fails activation/admission; it never becomes a free default call.
+
+The classifier only needs capabilities/context for its bounded textual classification request,
+not the answer's streaming, tools or full context window. Only explicitly assigned answer
+members can answer. Shared selectors retain one physical deployment's health and capacity
+identity across groups and standalone traffic. Choosing a selector does not grant callers
+standalone access to it. See the [independent-selector rollout](../project/model-router-independent-selector.md).
+
+For example, add this block alongside the `selector` and `members` in a policy:
+
+```yaml
+context:
+  mode: smallest-sufficient
+  unknown_capacity: exclude
+  safety_margin_tokens: 256
+```
+
+The execution order is normalized prompt/hook/guardrail processing, authentication and caller
+admission, whole-response cache lookup, deterministic member filtering, bounded selector admission
+and classification, then normal answer placement/retry/failover. A cache hit skips classification
+and selector accounting entirely. The selector sees a bounded projection of the final prompt,
+recent context and structural features, not credentials, unrestricted metadata, tool schemas or
+attachment contents. That prompt content goes to the configured classifier's provider: qualify its
+data-handling policy and required routing tags before publishing.
+
+Classification makes at most one provider attempt per external operation. Provider/parse/timeout
+or capacity failures select the configured safe lane; authentication, accounting and parent-deadline
+failures do not. The selected minimum rank is reused across retries, stream setup, MCP continuations
+and later selector-bearing fallback groups, even if lane names differ. A first selector reached
+through fallback runs only when needed. Normal strategy/context ordering applies independently
+within eligible lanes, with upward-only escalation. Selector-free fallback members retain their
+existing equivalence contract. Client disconnect cancels and joins selector work before streaming
+headers are sent. A disconnect terminates locally with `client_disconnected` (499), without opening
+the answer stream. Selector and answer share the original deadline; receipt/lease cleanup has a
+small bounded grace period and never replays a provider call.
+
+Customers pay the selector's actual provider cost, with no selector markup. Its linked, idempotent
+spend component is attributed to the caller even if the answer later fails or disconnects. Public
+OpenAI-compatible `usage` remains answer-only. Reported receipts use frozen exact pricing; unknown
+dispatch usage remains pending reconciliation, not zero. Compare savings as avoided answer spend
+minus selector spend; include cache/model-switch effects when evaluating.
+
+Budgets remain **soft admission checks**, not strict spending reservations. The selector's
+conservative estimate uses configured classifier input capacity plus its 64-token output bound;
+concurrently admitted requests may overshoot. Actual reported usage is still charged, including
+above that estimate. Ordinary traffic gains no new reservation calls. The classifier consumes
+shared provider RPM/TPM/concurrency capacity, while caller RPM is charged once. TPM admission uses
+the conservative context allowance, so configure enough TPM for the intended selector throughput.
+If a team-model budget is configured, its maintained spend counter must exist. Missing counter
+data fails selector admission as accounting unavailable; repair/reconcile it through the existing
+billing owner before retrying. Admission never rebuilds counters by scanning spend history.
+
+Use the existing policy validate/draft/publish/history/rollback API endpoints. Invalid activation
+does not archive the working policy; active member/model changes are requalified transactionally.
+Publish `{"selector": null}` to disable selection, or roll back to a selector-free revision. Rolling
+back to a selector-bearing revision revalidates and reactivates it. Canary through a separately
+authorized group. Before rolling back binaries to pre-PR-4 versions, remove active selectors and
+drain in-flight operations; disposable runtime-cache envelopes use a new version and reload from
+the durable policy source. Equivalent policy reloads keep response-cache identity, while selector,
+lane, capability or fallback-dependency changes invalidate it naturally.
+
+Internal Batch chat items select independently. Items whose group or configured
+normal/context/content-policy fallback topology contains a selector execute individually
+within the existing worker concurrency limit; selector-free microbatching is unchanged.
+The first reached selector is lazy, and its saved decision survives answer retries and
+worker reclaim. Customers pay the classifier's regular provider cost; answer pricing still
+uses the existing Batch tier. Public Batch usage contains only answer tokens.
+An uncertain or incompatible saved decision returns `batch_selector_checkpoint_unavailable`
+through bounded Batch retry handling, never another paid classification. See
+[Batch selector rollout and tradeoffs](../features/batching.md#model-selectors-in-chat-batches).
+Non-chat workloads reject selector policies.
+Deterministic policy simulation does not run selectors. The guided editor and optional fixture
+evaluation are described in [Model router administration](model-router-admin.md).
+Streaming with managed MCP tools retains its existing unsupported error.
+
+Monitor bounded selector decision/default/termination counters, duration, terminal rank and
+escalation counters, and selector contribution to streaming TTFT. Detailed lane and policy identity
+stay in protected routing telemetry, not public selector headers. Investigate high defaults by
+checking classifier capacity, provider health, context/capability metadata and strict lane output;
+investigate missing spend through the durable pending-reconciliation state, not synthetic zeroes.
+
+The complete design, bounds, compatibility behavior, rollout, and rollback order
+are documented in [Route-Group Model Router Design](../project/model-router-design.md).
 
 ## Fallback Configuration
 

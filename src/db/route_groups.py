@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,10 @@ from src.db.route_policy_lifecycle import (
 )
 from src.db.routing_runtime import ROUTING_RUNTIME_STATE_KEY, RoutingRuntimeRevisionRepository
 from src.router.policy_validation import merge_policy_members
+from src.router.selection.policy import (
+    RouteSelectorActivationState,
+    ensure_selector_activation_supported,
+)
 from src.router.route_group_validation import (
     deployment_modes_by_id,
     validate_route_group_member_modes,
@@ -121,6 +126,7 @@ class RouteGroupRuntimeSnapshot:
     revision: int
     groups: list[dict[str, Any]]
     database_initialized: bool | None = None
+    selector_activation_state: RouteSelectorActivationState = RouteSelectorActivationState.UNCHECKED
 
     def __post_init__(self) -> None:
         if self.database_initialized is None:
@@ -128,17 +134,32 @@ class RouteGroupRuntimeSnapshot:
 
 
 class RouteGroupRepository(RoutePolicyLifecycleMixin):
-    def __init__(self, prisma_client: Any | None = None, *, use_transactions: bool = True) -> None:
+    def __init__(
+        self,
+        prisma_client: Any | None = None,
+        *,
+        use_transactions: bool = True,
+        selector_activation_check: Callable[[], None] | None = None,
+    ) -> None:
         self.prisma = prisma_client
         self._use_transactions = use_transactions
+        self.selector_activation_check = selector_activation_check
 
     def with_db(self, prisma_client: Any) -> RouteGroupRepository:
-        repository = RouteGroupRepository(prisma_client, use_transactions=False)
+        repository = RouteGroupRepository(
+            prisma_client,
+            use_transactions=False,
+            selector_activation_check=self.selector_activation_check,
+        )
         repository._identity = self._identity
         return repository
 
     def for_identity(self, identity: RouteGroupIdentity) -> RouteGroupRepository:
-        repository = RouteGroupRepository(self.prisma, use_transactions=self._use_transactions)
+        repository = RouteGroupRepository(
+            self.prisma,
+            use_transactions=self._use_transactions,
+            selector_activation_check=self.selector_activation_check,
+        )
         repository._identity = identity
         return repository
 
@@ -653,7 +674,11 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
 
     async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
         if self.prisma is None:
-            return RouteGroupRuntimeSnapshot(revision=0, groups=[])
+            return RouteGroupRuntimeSnapshot(
+                revision=0,
+                groups=[],
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
+            )
 
         groups = await self.prisma.query_raw(
             """
@@ -708,7 +733,11 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         ):
             raise RouteGroupIdentityNotFoundError("Route group not found")
         if not groups:
-            return RouteGroupRuntimeSnapshot(revision=0, groups=[])
+            return RouteGroupRuntimeSnapshot(
+                revision=0,
+                groups=[],
+                selector_activation_state=RouteSelectorActivationState.VALIDATED,
+            )
 
         revision = int(groups[0].get("runtime_revision") or 0)
         database_initialized = bool(groups[0].get("route_groups_initialized", False))
@@ -744,6 +773,10 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                 if isinstance(member, dict) and str(member.get("deployment_id") or "")
             ]
             semantics_version = int(row.get("policy_semantics_version") or 1)
+            ensure_selector_activation_supported(
+                policy_json,
+                semantics_version=semantics_version,
+            )
             merged_members = merge_policy_members(
                 base_members,
                 policy_json.get("members"),
@@ -765,6 +798,11 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                     "timeouts": timeouts if isinstance(timeouts, dict) else None,
                     "retry": retry if isinstance(retry, dict) else None,
                     "context": context if isinstance(context, dict) else None,
+                    **(
+                        {"selector": policy_json["selector"]}
+                        if semantics_version >= 3 and policy_json.get("selector") is not None
+                        else {}
+                    ),
                     "default_prompt": _extract_default_prompt(metadata),
                     "access_groups": metadata.get("access_groups")
                     if isinstance(metadata, dict)
@@ -777,6 +815,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             revision=revision,
             groups=runtime_groups,
             database_initialized=database_initialized,
+            selector_activation_state=RouteSelectorActivationState.VALIDATED,
         )
 
     async def _bump_runtime_revision(self) -> int:

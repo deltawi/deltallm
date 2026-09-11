@@ -1,5 +1,5 @@
 from src.redis_namespace import build_redis_channel, build_redis_key
-from src.router.redis_keys import RouterRedisKeyspace
+from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace, RouterRedisKeyspace
 
 
 def test_redis_channel_is_scoped_by_application_environment_and_schema() -> None:
@@ -58,3 +58,12 @@ def test_router_keyspace_namespaces_every_shared_state_capability() -> None:
     assert keyspace.health_probe(deployment_id, "manual") == (
         "deltallm:production-west:v1:router-health-probe:manual:deployment%3Aa%2Fb:legacy"
     )
+
+
+def test_route_group_runtime_keyspace_isolates_environment_and_revision() -> None:
+    staging = RouteGroupRuntimeRedisKeyspace(environment="Staging West")
+    production = RouteGroupRuntimeRedisKeyspace(environment="production")
+
+    assert staging.snapshot(7) == ("deltallm:staging-west:v4:route-group-runtime:r7")
+    assert staging.snapshot(7) != staging.snapshot(8)
+    assert staging.snapshot(7) != production.snapshot(7)

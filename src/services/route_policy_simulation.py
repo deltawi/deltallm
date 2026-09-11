@@ -40,7 +40,9 @@ from src.router.context_policy import (
     set_request_token_demand,
 )
 from src.router.runtime_generation import RoutingRuntimeGeneration
+from src.router.route_group_validation import deployment_modes_by_id
 from src.router.simulation_state import RoutingSimulationState, RoutingStateSnapshotMiss
+from src.router.selection.reachability import selector_reachable_groups
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 
 _MAX_SAMPLE_ATTEMPTS = 50
@@ -147,6 +149,10 @@ class RoutePolicySimulationService:
                     available_members=membership.inventory,
                     workload_mode=group.mode,
                 )
+                if normalized.get("selector") is not None:
+                    raise ValueError(
+                        "Selector policy simulation is not supported until offline evaluation is available"
+                    )
             except ValueError as exc:
                 raise RoutePolicySimulationInvalidError(str(exc)) from exc
             warnings.extend(policy_warnings)
@@ -158,6 +164,16 @@ class RoutePolicySimulationService:
                 base_strategy=group.routing_strategy,
             )
 
+        selector_groups = [
+            str(item["key"])
+            for item in runtime_groups
+            if item.get("selector") is not None
+            and int(item.get("policy_semantics_version") or 3) >= 3
+        ]
+        if group_key in selector_reachable_groups(selector_groups, self._runtime.failover_config):
+            raise RoutePolicySimulationInvalidError(
+                "Selector policy simulation is not supported until offline evaluation is available"
+            )
         metadata, prompt, prompt_warnings = await self._resolve_prompt(
             group_key,
             dict(request.metadata),
@@ -340,10 +356,14 @@ class RoutePolicySimulationService:
 
     async def _policy_membership(self, group_key: str) -> _PolicyMembership:
         members = await self._route_groups.list_members(group_key)
+        deployment_modes = deployment_modes_by_id(
+            entry for deployments in self._runtime.model_registry.values() for entry in deployments
+        )
         inventory = {
             member.deployment_id.strip(): PolicyMemberInventoryItem(
                 deployment_id=member.deployment_id.strip(),
                 enabled=member.enabled,
+                workload_mode=deployment_modes.get(member.deployment_id.strip()),
             )
             for member in members
             if isinstance(member.deployment_id, str) and member.deployment_id.strip()
@@ -496,6 +516,7 @@ def _apply_policy_override(
         )
         patched["timeouts"] = policy.get("timeouts")
         patched["retry"] = policy.get("retry")
+        patched.pop("selector", None)
         context = merge_context_policy_block(group.get("context"), policy)
         if context is None:
             patched.pop("context", None)

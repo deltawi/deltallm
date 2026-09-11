@@ -1,10 +1,70 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { routeGroups } from '../src/lib/api';
+import { routeGroups, type RoutePolicy } from '../src/lib/api';
 import { routeGroupMutationOutcome } from '../src/lib/routeGroups';
 
 const GROUP_ID = '12f410b2-641f-40fb-9ba8-4281b70bc8ca';
+
+test('independent selector options encode opaque IDs and forward abort and bounded pagination', async () => {
+  const previous = globalThis.fetch;
+  const controller = new AbortController();
+  globalThis.fetch = async (url, init) => {
+    const parsed = new URL(String(url), 'https://local.test');
+    assert.equal(parsed.pathname, `/ui/api/route-groups/by-id/${GROUP_ID}/selector-options`);
+    assert.equal(parsed.searchParams.get('selected_id'), 'provider/model?variant#1');
+    assert.equal(parsed.searchParams.get('search'), 'small/model');
+    assert.equal(parsed.searchParams.get('limit'), '20');
+    assert.equal(parsed.searchParams.get('offset'), '40');
+    assert.equal(init?.signal, controller.signal);
+    return new Response(JSON.stringify({ data: [], selected: null, limit: 20, offset: 40, has_more: false }), { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const page = await routeGroups.selectorOptions(GROUP_ID, {
+      selected_id: 'provider/model?variant#1', search: 'small/model', limit: 20, offset: 40,
+    }, controller.signal);
+    assert.equal(page.selected, null);
+    assert.equal(page.has_more, false);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('route-group partial writes retain tombstones and omit untouched fields', async () => {
+  const originalFetch = globalThis.fetch;
+  const documents: unknown[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    documents.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ warnings: [] }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    await routeGroups.savePolicyDraft(GROUP_ID, {
+      members: [{ deployment_id: 'dep-a', lane: null }],
+    });
+    await routeGroups.publishPolicy(GROUP_ID, { selector: null, context: null });
+    assert.deepEqual(documents, [
+      { members: [{ deployment_id: 'dep-a', lane: null }] },
+      { selector: null, context: null },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('route-group policy input errors preserve the server error message', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    detail: 'Invalid route policy request fields or types',
+  }), { status: 400, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    await assert.rejects(
+      routeGroups.savePolicyDraft(GROUP_ID, { selector: null }),
+      /Invalid route policy request fields or types/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test('route-group policy responses preserve semantics and post-commit warnings', async () => {
   const originalFetch = globalThis.fetch;
@@ -35,6 +95,86 @@ test('route-group policy responses preserve semantics and post-commit warnings',
         message: 'Published policy version 3. Runtime warning: Runtime refresh is pending',
       },
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('route-group policy history keeps future semantics opaque on reads', async () => {
+  const historicalPolicy: RoutePolicy = {
+    route_policy_id: 'policy-future',
+    route_group_id: 'group-1',
+    version: 9,
+    semantics_version: 99,
+    status: 'archived',
+    policy_json: {
+      selector: {
+        kind: 'future-selector',
+        server_owned_revision: 7,
+      },
+    },
+    published_at: null,
+    published_by: null,
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    group_key: 'support',
+    policies: [historicalPolicy],
+  }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+  try {
+    const result = await routeGroups.listPolicies(GROUP_ID);
+
+    assert.deepEqual(result.policies[0].policy_json, historicalPolicy.policy_json);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('route-group policy validation preserves typed selector and context fields', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    group_key: 'support',
+    valid: true,
+    policy: {
+      strategy: 'least-busy',
+      context: {
+        mode: 'smallest-sufficient',
+        unknown_capacity: 'exclude',
+        default_output_tokens: 2048,
+        safety_margin_tokens: 512,
+      },
+      selector: {
+        kind: 'llm-tier',
+        classifier_deployment_id: 'dep-mini',
+        timeout_ms: 750,
+        max_input_chars: 8000,
+        default_lane: 'quality',
+        lanes: [
+          { id: 'economy', rank: 0, description: 'Routine work' },
+          { id: 'quality', rank: 1, description: 'Complex work' },
+        ],
+      },
+    },
+    warnings: [],
+  }), { headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+  try {
+    const result = await routeGroups.validatePolicy(GROUP_ID, {
+      context: { mode: 'smallest-sufficient' },
+      selector: {
+        kind: 'llm-tier',
+        classifier_deployment_id: 'dep-mini',
+        lanes: [
+          { id: 'economy', rank: 0, description: 'Routine work' },
+          { id: 'quality', rank: 1, description: 'Complex work' },
+        ],
+      },
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.policy.context?.default_output_tokens, 2048);
+    assert.equal(result.policy.selector?.default_lane, 'quality');
   } finally {
     globalThis.fetch = originalFetch;
   }

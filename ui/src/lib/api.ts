@@ -1,4 +1,5 @@
 import type { Paginated, Pagination } from './api/pagination';
+import type { BatchItemError } from './api/batchContracts';
 export type { Paginated, Pagination } from './api/pagination';
 import { apiFetch, withQuery } from './api/transport';
 import {
@@ -432,7 +433,7 @@ export interface BatchJobItem {
   has_usage?: boolean;
   request_body?: Record<string, unknown> | null;
   response_body?: Record<string, unknown> | null;
-  error_body?: Record<string, unknown> | null;
+  error_body?: BatchItemError | null;
   usage?: Record<string, unknown> | null;
 }
 
@@ -826,12 +827,21 @@ export type {
   RouteGroupMutationResponse,
   RouteGroupWritePayload,
   RoutePolicy,
+  RoutePolicyContextDocument,
+  RoutePolicyCurrentResponse,
+  RoutePolicyDocument,
+  RoutePolicyHistoryResponse,
+  RoutePolicyMemberDocument,
   RoutePolicyMutationResponse,
+  RoutePolicySelector,
+  RoutePolicySelectorLane,
   RoutePolicySimulationAttempt,
   RoutePolicySimulationOutcome,
   RoutePolicySimulationRequest,
   RoutePolicySimulationResponse,
   RoutePolicySimulationSelection,
+  RoutePolicyValidationResponse,
+  StoredRoutePolicyDocument,
 } from './api/routeGroups';
 
 export * from './api/promptRegistry';

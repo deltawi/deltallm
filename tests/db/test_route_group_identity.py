@@ -32,7 +32,7 @@ async def test_id_lookup_preserves_exact_keys_and_separate_fallback_identity() -
         assert (await pinned.get_group(group_key)).route_group_id == group_id
         assert (await pinned.get_group(fallback_key)).route_group_id == fallback_id
         policy = await pinned.publish_policy(group_key, {"strategy": "weighted"})
-        assert policy is not None and policy.route_group_id == group_id
+        assert policy is not None and policy.policy.route_group_id == group_id
         snapshot = await pinned.load_runtime_snapshot()
         assert {group_key, fallback_key} <= {group["key"] for group in snapshot.groups}
         updated = await pinned.update_group(
@@ -127,7 +127,7 @@ async def test_deleted_id_cannot_read_or_mutate_a_reused_key() -> None:
         assert len(await repository.list_members(group_key)) == 1
         assert (
             await repository.get_published_policy(group_key)
-        ).route_policy_id == published.route_policy_id
+        ).route_policy_id == published.policy.route_policy_id
     finally:
         await _cleanup_group(db, old_id)
         await _cleanup_group(db, new_id)

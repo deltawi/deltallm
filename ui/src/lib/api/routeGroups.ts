@@ -32,13 +32,66 @@ export interface RouteGroupMemberDetail extends RouteGroupMember {
   healthy?: boolean | null;
 }
 
+export interface RoutePolicySelectorLane {
+  id: string;
+  rank: number;
+  description: string;
+}
+
+export interface RoutePolicySelector {
+  kind: 'llm-tier';
+  classifier_deployment_id: string;
+  timeout_ms?: number;
+  max_input_chars?: number;
+  default_lane?: string | null;
+  lanes: RoutePolicySelectorLane[];
+}
+
+export interface RoutePolicyMemberDocument {
+  deployment_id: string;
+  enabled?: boolean;
+  weight?: number | null;
+  priority?: number | null;
+  lane?: string | null;
+  [opaqueField: string]: unknown;
+}
+
+export interface RoutePolicyContextDocument {
+  mode?: 'eligible-only' | 'smallest-sufficient';
+  unknown_capacity?: 'allow' | 'exclude';
+  default_output_tokens?: number;
+  safety_margin_tokens?: number;
+  [opaqueField: string]: unknown;
+}
+
+export interface RoutePolicyDocument {
+  mode?: string | null;
+  strategy?: string | null;
+  members?: RoutePolicyMemberDocument[];
+  timeouts?: {
+    global_ms?: number;
+    global_seconds?: number;
+    [opaqueField: string]: unknown;
+  };
+  retry?: {
+    max_attempts?: number;
+    retryable_error_classes?: string[];
+    [opaqueField: string]: unknown;
+  };
+  context?: RoutePolicyContextDocument | null;
+  selector?: RoutePolicySelector | null;
+  [opaqueField: string]: unknown;
+}
+
+export type StoredRoutePolicyDocument = Record<string, unknown>;
+
 export interface RoutePolicy {
   route_policy_id: string;
   route_group_id: string;
   version: number;
   semantics_version: number;
   status: string;
-  policy_json: Record<string, unknown>;
+  policy_json: StoredRoutePolicyDocument;
   published_at: string | null;
   published_by: string | null;
   created_at?: string | null;
@@ -76,6 +129,23 @@ export interface RollbackRoutePolicyResponse extends RoutePolicyMutationResponse
   rolled_back_from_version: number;
 }
 
+export interface RoutePolicyCurrentResponse {
+  group_key: string;
+  policy: RoutePolicy | null;
+}
+
+export interface RoutePolicyHistoryResponse {
+  group_key: string;
+  policies: RoutePolicy[];
+}
+
+export interface RoutePolicyValidationResponse {
+  group_key: string;
+  valid: true;
+  policy: RoutePolicyDocument;
+  warnings: string[];
+}
+
 export interface RouteGroupWritePayload {
   group_key?: string;
   name?: string | null;
@@ -111,7 +181,7 @@ export interface RoutePolicySimulationRequest {
   iterations?: number;
   input_tokens?: number;
   requested_output_tokens?: number | null;
-  policy?: Record<string, unknown> | null;
+  policy?: RoutePolicyDocument | null;
   metadata?: Record<string, unknown>;
   user_id?: string;
   prompt_ref?: Record<string, unknown> | null;
@@ -164,7 +234,35 @@ export interface RoutePolicySimulationResponse {
   sample_attempts: RoutePolicySimulationAttempt[];
 }
 
+export interface SelectorDeploymentOption {
+  deployment_id: string;
+  model_name: string;
+  provider: string;
+  mode: string;
+  eligible: boolean;
+  unavailable_reason: string | null;
+}
+
+export interface SelectorOptionsQuery {
+  search?: string;
+  selected_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SelectorOptionsPage {
+  data: SelectorDeploymentOption[];
+  selected: SelectorDeploymentOption | null;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export const routeGroups = {
+  selectorOptions: (routeGroupId: string, params: SelectorOptionsQuery, signal?: AbortSignal) =>
+    apiFetch<SelectorOptionsPage>(withQuery(
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/selector-options`, params,
+    ), { signal }),
   list: (
     params?: { search?: string; limit?: number; offset?: number },
     signal?: AbortSignal,
@@ -217,33 +315,31 @@ export const routeGroups = {
       { method: 'DELETE', signal },
     ),
   getPolicy: (routeGroupId: string, signal?: AbortSignal) =>
-    apiFetch<{ group_key: string; policy: RoutePolicy | null }>(
+    apiFetch<RoutePolicyCurrentResponse>(
       `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy`,
       { signal },
     ),
   listPolicies: (routeGroupId: string, signal?: AbortSignal) =>
-    apiFetch<{ group_key: string; policies: RoutePolicy[] }>(
+    apiFetch<RoutePolicyHistoryResponse>(
       `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policies`,
       { signal },
     ),
   validatePolicy: (
     routeGroupId: string,
-    payload: Record<string, unknown>,
+    payload: RoutePolicyDocument,
     signal?: AbortSignal,
   ) =>
-    apiFetch<{
-      group_key: string;
-      valid: boolean;
-      policy: Record<string, unknown>;
-      warnings: string[];
-    }>(`/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/validate`, {
-      method: 'POST',
-      json: payload,
-      signal,
-    }),
+    apiFetch<RoutePolicyValidationResponse>(
+      `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/policy/validate`,
+      {
+        method: 'POST',
+        json: payload,
+        signal,
+      },
+    ),
   savePolicyDraft: (
     routeGroupId: string,
-    payload: Record<string, unknown>,
+    payload: RoutePolicyDocument,
     signal?: AbortSignal,
   ) =>
     apiFetch<RoutePolicyMutationResponse>(
@@ -252,7 +348,7 @@ export const routeGroups = {
     ),
   publishPolicy: (
     routeGroupId: string,
-    payload?: Record<string, unknown>,
+    payload?: RoutePolicyDocument,
     signal?: AbortSignal,
   ) =>
     apiFetch<RoutePolicyMutationResponse>(

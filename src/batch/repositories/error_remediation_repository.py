@@ -19,7 +19,9 @@ class BatchErrorRemediationRepository:
                    status,
                    last_error IS NOT NULL AS has_last_error,
                    error_body IS NOT NULL AS has_error_body,
-                   LEFT(error_body ->> 'retry_category', 64) AS retry_category
+                   LEFT(error_body ->> 'retry_category', 64) AS retry_category,
+                   CASE WHEN LENGTH(error_body ->> 'code') <= 64
+                        THEN error_body ->> 'code' END AS error_code
             FROM deltallm_batch_item
             WHERE item_id > $1
               AND status IN ('completed', 'failed', 'cancelled')

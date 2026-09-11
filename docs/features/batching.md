@@ -4,6 +4,88 @@ Process large volumes of embedding or non-streaming chat completion requests asy
 
 This page is the main batch reference. It covers the public API, worker behavior, production configuration, scheduler sizing, monitoring, and troubleshooting.
 
+## Model selectors in chat batches
+
+Chat batches can use a Route Group's published model selector without another setup
+step. Each item is classified independently after hooks, guardrails, authorization
+and caller admission. The selector sees the same minimized text/features described
+in [Model router configuration](../configuration/router.md); it does not receive
+the whole Batch file or another item's prompt.
+
+To keep Batch execution simple, items with a selector anywhere in their configured
+fallback topology use bounded individual execution, even when a deployment requests
+`sync_microbatch`. Unrelated selector-free groups retain normal microbatching.
+There is no regrouping queue or shared decision. A selector in a fallback group is
+called only if execution actually reaches that group.
+
+Customers pay the selector's actual regular provider cost, without a selector
+markup or assumed Batch discount. Answers retain normal Batch pricing. Public
+output `usage` remains answer-only; protected routing-cost reports link selector
+and answer spend. A missing/unknown receipt is pending, not free. Budgets remain
+soft admission checks, so simultaneous requests can overshoot.
+
+The item stores its decision before the answer starts and reuses it on answer
+retry or worker reclaim. Changes to normalized input, ownership or policy semantics
+cannot silently reinterpret an old decision. If a worker disappears between
+starting selection and saving its decision, the item returns
+`batch_selector_checkpoint_unavailable` and follows existing bounded retries.
+It never pays for another classifier attempt; uncertain incurred costs remain with
+the existing accounting recovery owner. The rare affected item may ultimately fail.
+The checkpoint starts only after successful billing admission. A rejected or
+rolled-back admission can retry without a pending checkpoint or classifier cost.
+Error files and admin item details preserve the stable checkpoint error code;
+lists show its safe message instead of a generic provider-outage message.
+
+Selected and ordinary answers share the chosen deployment's existing
+`chat_batching.max_in_flight` cap. No selector-specific concurrency setting is
+needed. Fallback releases the previous deployment's slot before taking another.
+
+Apply migrations and drain old workers before admitting selector-enabled batches.
+Constraint installation and historical validation run as separate migrations,
+so the validation scan does not retain the strong installation lock.
+For binary rollback, drain selected items and their completion outboxes first;
+keep the additive checkpoint column. Removing the selector affects fresh items,
+but incompatible checkpointed items fail safely. Batch Responses, streaming, MCP
+tools and selectors for non-chat workloads remain unsupported.
+
+The throughput tradeoff is deliberate: selecting cheaper answers may save money,
+but selected items give up upstream microbatch packing and add one classifier call.
+Measure with your workload and reserve realtime provider headroom using existing
+Batch capacity settings. [The PR 6 design and verification record](../project/model-router-batch.md)
+documents ownership, recovery, dependency budgets and reproducible local measurements.
+
+### Selector Batch example
+
+After publishing a selector on the chat Route Group `text-router`, use the same
+Files and Batch endpoints as any other chat batch. There is no separate Batch
+selector switch. Save these two lines as `selector-input.jsonl`:
+
+```jsonl
+{"custom_id":"routine","method":"POST","url":"/v1/chat/completions","body":{"model":"text-router","messages":[{"role":"user","content":"Extract the city: the meeting is in Paris."}],"max_tokens":100}}
+{"custom_id":"complex","method":"POST","url":"/v1/chat/completions","body":{"model":"text-router","messages":[{"role":"user","content":"Compare two migration designs, explain failure modes, and propose a rollback strategy."}],"max_tokens":500}}
+```
+
+Upload it with `POST /v1/files` (`file` multipart field, `purpose=batch`), then
+send the returned file ID to `POST /v1/batches`:
+
+```json
+{"input_file_id":"file-REPLACE","endpoint":"/v1/chat/completions","completion_window":"24h"}
+```
+
+Poll `GET /v1/batches/{id}`. When it completes, download
+`GET /v1/files/{output_file_id}/content`, and the error file if present.
+Successful output retains source order and `custom_id` (`routine`, then
+`complex`); one item's failure does not assign its decision to another item.
+These prompts illustrate likely economy/quality work, not guaranteed lane labels.
+The classifier, current policy, eligibility and upward escalation determine the route.
+No checkpoint or internal billing ID is exposed in the output.
+
+In the Route Group's **Selector costs**, explicitly load the desired time window
+after spend ingestion. The existing protected
+[`GET /ui/api/spend/routing-costs` report](../configuration/model-router-admin.md#optional-recorded-cost-reports)
+links each selector cost to its answer. Pending receipts stay pending; real net
+savings requires a supplied comparable baseline and penalty evidence.
+
 ## Recommended Production Setup
 
 For production, run batch as dedicated worker pods with shared storage and distributed coordination. The API/UI/gateway pods should stay focused on synchronous traffic.
@@ -723,6 +805,19 @@ batch items with `scripts/sanitize_batch_item_errors.py`. Supply the database UR
 `--database-url-file`, run `inspect` first, then run `apply --confirm-sanitize` in bounded pages.
 When `has_more=true`, resume with the reported `next_after_item_id` as `--after-item-id`. Take a
 database backup before `apply`; the discarded historical text cannot be reconstructed by DeltaLLM.
+
+When an unsupported microbatch splits into individual calls, the chunk runs
+them serially within its existing worker slot. Queued items retain their original
+claim heartbeats and caller admission; handoff does not consume caller RPM/TPM
+again. Completion, failure and cancellation clean up all remaining chunk leases
+and refreshers, including items that have not started.
+
+Each split provider attempt rechecks the item's worker/claim-epoch fence after
+waiting for deployment capacity and before provider admission. The short renewal
+transaction is capped at 250 ms and the remaining shared request/job deadline.
+Lost or uncertain ownership stops dispatch locally without marking the provider
+unhealthy; existing claim recovery handles the unfinished items. Successful
+ordinary microbatching and normal standalone calls do not incur this extra check.
 
 ## Monitoring
 

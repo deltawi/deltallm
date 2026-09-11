@@ -4,10 +4,17 @@ from dataclasses import replace
 from typing import Any
 from urllib.parse import quote
 
+from fastapi import FastAPI
 import pytest
 
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.prompt_registry import PromptResolvedRecord
+from src.db.route_policy_lifecycle import (
+    RoutePolicyValidationContext,
+    RoutePolicyWriteResult,
+    StoredRoutePolicyDocument,
+)
+from src.db.route_groups import RouteGroupRepository
 from src.db.route_groups import (
     RouteGroupBindingRecord,
     RouteGroupMemberRecord,
@@ -16,10 +23,16 @@ from src.db.route_groups import (
 )
 from src.router import FallbackConfig, build_deployment_registry
 from src.router.policy_validation import (
-    merge_policy_document_for_write,
+    CURRENT_POLICY_SEMANTICS_VERSION,
+    PolicyMemberInventoryItem,
     merge_policy_members,
 )
+from src.router.registry import DeploymentRegistryStore
 from src.router.runtime_generation import rebuild_routing_runtime_generation
+from src.router.selection.policy import (
+    RouteSelectorActivationUnsupportedError,
+    ensure_selector_activation_supported,
+)
 from src.services.asset_ownership import owner_scope_from_metadata
 from src.services.asset_scopes import normalize_scope_type
 from src.services.callable_targets import build_callable_target_catalog
@@ -41,6 +54,46 @@ def _extract_default_prompt(metadata: dict[str, Any] | None) -> dict[str, str] |
     return payload
 
 
+def _selector_policy_payload() -> dict[str, Any]:
+    return {
+        "strategy": "least-busy",
+        "selector": {
+            "kind": "llm-tier",
+            "classifier_deployment_id": "dep-a",
+            "lanes": [
+                {"id": "economy", "rank": 0, "description": "Routine work"},
+                {"id": "quality", "rank": 1, "description": "Complex work"},
+            ],
+        },
+        "members": [
+            {"deployment_id": "dep-a", "lane": "economy"},
+            {"deployment_id": "dep-b", "lane": "quality"},
+        ],
+    }
+
+
+def _set_selector_model_inventory(test_app: Any, *, classifier_mode: str = "chat") -> None:
+    test_app.state.route_group_repository.deployment_modes = {
+        "dep-a": classifier_mode,
+        "dep-b": "chat",
+    }
+    test_app.state.model_registry = {
+        "selector-test": [
+            {
+                "deployment_id": "dep-a",
+                "deltallm_params": {},
+                "model_info": {"mode": classifier_mode},
+            },
+            {
+                "deployment_id": "dep-b",
+                "deltallm_params": {},
+                "model_info": {"mode": "chat"},
+            },
+        ]
+    }
+    _publish_test_model_registry(test_app)
+
+
 def _publish_test_model_registry(test_app: Any) -> None:
     """Keep the immutable routing generation aligned with test registry overrides."""
 
@@ -53,9 +106,37 @@ def _publish_test_model_registry(test_app: Any) -> None:
             model_registry=model_registry,
             route_groups=list(current.route_groups),
             callable_target_catalog=build_callable_target_catalog(model_registry),
-            deployment_registry=build_deployment_registry(model_registry),
+            deployment_registry=DeploymentRegistryStore(build_deployment_registry(model_registry)),
         )
     )
+
+
+def test_published_model_registry_shares_one_deployment_store(test_app: FastAPI) -> None:
+    store = test_app.state.routing_runtime_generation_store
+    previous = store.require_snapshot()
+    test_app.state.model_registry = {
+        "selector-test": [
+            {
+                "deployment_id": "dep-selector",
+                "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    }
+
+    _publish_test_model_registry(test_app)
+
+    published = store.require_snapshot()
+    assert published is not previous
+    assert published.deployment_registry is published.router.deployment_registry
+    assert published.deployment_registry is not previous.deployment_registry
+    assert [
+        deployment.deployment_id
+        for deployment in published.deployment_registry.snapshot()["selector-test"]
+    ] == ["dep-selector"]
+    assert "selector-test" in published.routing_fingerprints
+    assert "selector-test" not in previous.deployment_registry
+    assert "selector-test" not in previous.routing_fingerprints
 
 
 class _FakeRouteGroupRepository:
@@ -263,43 +344,63 @@ class _FakeRouteGroupRepository:
                         semantics_version=(
                             policy.semantics_version
                             if policy is not None and policy.status == "published"
-                            else 2
+                            else CURRENT_POLICY_SEMANTICS_VERSION
                         ),
                     ),
                 }
             )
         return runtime_groups
 
+    def _prepare_policy_write(self, group_key: str, document: dict):  # noqa: ANN201
+        current = self.policies.get(group_key)
+        return RouteGroupRepository(None)._prepare_policy_write(
+            document,
+            current=(
+                StoredRoutePolicyDocument(current.policy_json, current.semantics_version)
+                if current
+                else None
+            ),
+            context=RoutePolicyValidationContext(
+                group_key=group_key,
+                group_mode=self.groups[group_key].mode,
+                inventory={
+                    member.deployment_id: PolicyMemberInventoryItem(
+                        deployment_id=member.deployment_id,
+                        enabled=member.enabled,
+                        workload_mode=self.deployment_modes.get(member.deployment_id, "chat"),
+                    )
+                    for member in self.members.get(group_key, [])
+                },
+            ),
+        )
+
+    deployment_modes: dict[str, str] = {}
+
     async def save_draft_policy(self, group_key: str, policy_json: dict):  # noqa: ANN001, ANN201
         group = self.groups.get(group_key)
         if group is None:
             return None
-        current = self.policies.get(group_key)
-        effective = merge_policy_document_for_write(
-            current.policy_json if current is not None else None,
-            policy_json,
-        )
+        prepared = self._prepare_policy_write(group_key, policy_json)
         self._policy_counter += 1
         policy = RoutePolicyRecord(
             route_policy_id=f"p-{self._policy_counter}",
             route_group_id=group.route_group_id,
             version=self._policy_counter,
             status="draft",
-            policy_json=effective,
-            semantics_version=2,
+            policy_json=prepared.document,
+            semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             published_by=None,
         )
         self.policies[group_key] = policy
-        return policy
+        return RoutePolicyWriteResult(policy, prepared.warnings)
 
     async def publish_policy(self, group_key: str, policy_json: dict, *, published_by=None):  # noqa: ANN001, ANN201
         group = self.groups.get(group_key)
         if group is None:
             return None
-        current = self.policies.get(group_key)
-        effective = merge_policy_document_for_write(
-            current.policy_json if current is not None else None,
-            policy_json,
+        prepared = self._prepare_policy_write(group_key, policy_json)
+        ensure_selector_activation_supported(
+            prepared.normalized, semantics_version=CURRENT_POLICY_SEMANTICS_VERSION
         )
         self._policy_counter += 1
         policy = RoutePolicyRecord(
@@ -307,12 +408,12 @@ class _FakeRouteGroupRepository:
             route_group_id=group.route_group_id,
             version=self._policy_counter,
             status="published",
-            policy_json=effective,
-            semantics_version=2,
+            policy_json=prepared.document,
+            semantics_version=CURRENT_POLICY_SEMANTICS_VERSION,
             published_by=published_by,
         )
         self.policies[group_key] = policy
-        return policy
+        return RoutePolicyWriteResult(policy, prepared.warnings)
 
     async def publish_latest_draft(self, group_key: str, *, published_by=None):  # noqa: ANN001, ANN201
         policy = self.policies.get(group_key)
@@ -320,6 +421,9 @@ class _FakeRouteGroupRepository:
             return None
         if policy.status != "draft":
             return None
+        ensure_selector_activation_supported(
+            policy.policy_json, semantics_version=policy.semantics_version
+        )
         published = replace(policy, status="published", published_by=published_by)
         self.policies[group_key] = published
         return published
@@ -498,7 +602,7 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     )
     assert policy_response.status_code == 200
     assert policy_response.json()["policy"]["status"] == "published"
-    assert policy_response.json()["policy"]["semantics_version"] == 2
+    assert policy_response.json()["policy"]["semantics_version"] == 3
     assert policy_response.json()["warnings"] == []
     assert policy_response.headers["link"] == (
         '</ui/api/route-groups/support-route/policy/publish>; rel="successor-version"'
@@ -715,7 +819,7 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     )
     assert draft_response.status_code == 200
     assert draft_response.json()["policy"]["status"] == "draft"
-    assert draft_response.json()["policy"]["semantics_version"] == 2
+    assert draft_response.json()["policy"]["semantics_version"] == 3
 
     publish_response = await client.post(
         "/ui/api/route-groups/ops-route/policy/publish",
@@ -724,12 +828,12 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     )
     assert publish_response.status_code == 200
     assert publish_response.json()["policy"]["status"] == "published"
-    assert publish_response.json()["policy"]["semantics_version"] == 2
+    assert publish_response.json()["policy"]["semantics_version"] == 3
 
     list_response = await client.get("/ui/api/route-groups/ops-route/policies", headers=headers)
     assert list_response.status_code == 200
     assert len(list_response.json()["policies"]) == 1
-    assert list_response.json()["policies"][0]["semantics_version"] == 2
+    assert list_response.json()["policies"][0]["semantics_version"] == 3
 
     rollback_response = await client.post(
         "/ui/api/route-groups/ops-route/policy/rollback",
@@ -738,7 +842,7 @@ async def test_route_group_policy_draft_validate_publish_and_rollback(client, te
     )
     assert rollback_response.status_code == 200
     assert rollback_response.json()["policy"]["status"] == "published"
-    assert rollback_response.json()["policy"]["semantics_version"] == 2
+    assert rollback_response.json()["policy"]["semantics_version"] == 3
     assert rollback_response.json()["warnings"] == []
     assert runtime_cache.invalidate_calls == 0
 
@@ -949,6 +1053,243 @@ async def test_route_group_policy_validate_rejects_unknown_members(client, test_
 
     assert response.status_code == 400
     assert "unknown members" in response.text
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_api_validates_and_saves_selector_draft(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    repository.groups["selector-route"] = RouteGroupRecord(
+        route_group_id="rg-1",
+        group_key="selector-route",
+        mode="chat",
+        routing_strategy="least-busy",
+    )
+    repository.members["selector-route"] = [
+        RouteGroupMemberRecord(
+            membership_id=f"m-{index}",
+            route_group_id="rg-1",
+            deployment_id=deployment_id,
+        )
+        for index, deployment_id in enumerate(("dep-a", "dep-b"), start=1)
+    ]
+    test_app.state.route_group_repository = repository
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    _set_selector_model_inventory(test_app)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    validation = await client.post(
+        "/ui/api/route-groups/selector-route/policy/validate",
+        headers=headers,
+        json=_selector_policy_payload(),
+    )
+    draft = await client.post(
+        "/ui/api/route-groups/selector-route/policy/draft",
+        headers=headers,
+        json=_selector_policy_payload(),
+    )
+
+    assert validation.status_code == 200
+    assert validation.json()["policy"]["selector"]["default_lane"] == "quality"
+    assert draft.status_code == 200
+    assert draft.json()["policy"]["semantics_version"] == 3
+    assert draft.json()["policy"]["policy_json"]["members"][0]["lane"] == "economy"
+
+    member_update = await client.post(
+        "/ui/api/route-groups/selector-route/policy/draft",
+        headers=headers,
+        json={
+            "members": [
+                {"deployment_id": "dep-a", "weight": 7},
+                {"deployment_id": "dep-b"},
+            ]
+        },
+    )
+
+    assert member_update.status_code == 200
+    assert member_update.json()["policy"]["policy_json"]["members"] == [
+        {"deployment_id": "dep-a", "enabled": True, "weight": 7, "lane": "economy"},
+        {"deployment_id": "dep-b", "enabled": True, "lane": "quality"},
+    ]
+
+    selector_removal = await client.post(
+        "/ui/api/route-groups/selector-route/policy/draft",
+        headers=headers,
+        json={"selector": None},
+    )
+
+    assert selector_removal.status_code == 200
+    removed_policy = selector_removal.json()["policy"]["policy_json"]
+    assert "selector" not in removed_policy
+    assert removed_policy["members"] == [
+        {"deployment_id": "dep-a", "enabled": True, "weight": 7},
+        {"deployment_id": "dep-b", "enabled": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_api_rejects_selector_publication(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    repository.groups["selector-route"] = RouteGroupRecord(
+        route_group_id="rg-1",
+        group_key="selector-route",
+        mode="chat",
+        routing_strategy="least-busy",
+    )
+    repository.members["selector-route"] = [
+        RouteGroupMemberRecord(
+            membership_id=f"m-{index}",
+            route_group_id="rg-1",
+            deployment_id=deployment_id,
+        )
+        for index, deployment_id in enumerate(("dep-a", "dep-b"), start=1)
+    ]
+    test_app.state.route_group_repository = repository
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    _set_selector_model_inventory(test_app)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/route-groups/selector-route/policy/publish",
+        headers=headers,
+        json=_selector_policy_payload(),
+    )
+
+    assert response.status_code == 400
+    assert "unknown_capacity=exclude" in response.text
+    assert repository.policies == {}
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_api_rejects_nonchat_classifier_inventory(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    repository.groups["selector-route"] = RouteGroupRecord(
+        route_group_id="rg-1",
+        group_key="selector-route",
+        mode="chat",
+        routing_strategy="least-busy",
+    )
+    repository.members["selector-route"] = [
+        RouteGroupMemberRecord(
+            membership_id=f"m-{index}",
+            route_group_id="rg-1",
+            deployment_id=deployment_id,
+        )
+        for index, deployment_id in enumerate(("dep-a", "dep-b"), start=1)
+    ]
+    test_app.state.route_group_repository = repository
+    _set_selector_model_inventory(test_app, classifier_mode="embedding")
+
+    response = await client.post(
+        "/ui/api/route-groups/selector-route/policy/validate",
+        headers={"Authorization": "Bearer mk-test"},
+        json=_selector_policy_payload(),
+    )
+
+    assert response.status_code == 400
+    assert "classifier must reference a chat deployment" in response.text
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_api_reports_selector_rollback_gate(client, test_app, monkeypatch):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repository
+    headers = {"Authorization": "Bearer mk-test"}
+
+    async def reject_selector_rollback(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        del args, kwargs
+        raise RouteSelectorActivationUnsupportedError("cannot be activated")
+
+    monkeypatch.setattr(repository, "rollback_policy", reject_selector_rollback)
+
+    response = await client.post(
+        "/ui/api/route-groups/selector-route/policy/rollback",
+        headers=headers,
+        json={"version": 3},
+    )
+
+    assert response.status_code == 400
+    assert "cannot be activated" in response.text
+
+
+@pytest.mark.asyncio
+async def test_route_group_policy_simulation_rejects_selector(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeRouteGroupRepository()
+    repository.groups["selector-route"] = RouteGroupRecord(
+        route_group_id="rg-1",
+        group_key="selector-route",
+        mode="chat",
+        routing_strategy="least-busy",
+    )
+    repository.members["selector-route"] = [
+        RouteGroupMemberRecord(
+            membership_id=f"m-{index}",
+            route_group_id="rg-1",
+            deployment_id=deployment_id,
+        )
+        for index, deployment_id in enumerate(("dep-a", "dep-b"), start=1)
+    ]
+    test_app.state.route_group_repository = repository
+    _set_selector_model_inventory(test_app)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/route-groups/selector-route/policy/simulate",
+        headers=headers,
+        json={"iterations": 1, "policy": _selector_policy_payload()},
+    )
+
+    assert response.status_code == 400
+    assert "simulation is not supported" in response.text
+
+
+@pytest.mark.asyncio
+async def test_route_policy_openapi_exposes_typed_selector_contract(client):
+    response = await client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schemas = response.json()["components"]["schemas"]
+    assert schemas["LLMTierSelectorPolicy"]["properties"]["timeout_ms"]["minimum"] == 100
+    assert schemas["LLMTierSelectorPolicy"]["properties"]["timeout_ms"]["maximum"] == 5000
+    assert schemas["SelectorLane"]["properties"]["rank"]["minimum"] == 0
+    request_schema = response.json()["paths"]["/ui/api/route-groups/{group_key}/policy/validate"][
+        "post"
+    ]["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema["$ref"].endswith("/RoutePolicyDocumentRequest")
+    request_properties = schemas["RoutePolicyDocumentRequest"]["properties"]
+    assert request_properties["context"]["anyOf"][0]["$ref"].endswith("/RoutePolicyContextDocument")
+    assert request_properties["selector"]["anyOf"][0]["$ref"].endswith("/LLMTierSelectorPolicy")
+
+    paths = response.json()["paths"]
+    current_response = paths["/ui/api/route-groups/{group_key}/policy"]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    history_response = paths["/ui/api/route-groups/{group_key}/policies"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]["schema"]
+    validation_response = paths["/ui/api/route-groups/{group_key}/policy/validate"]["post"][
+        "responses"
+    ]["200"]["content"]["application/json"]["schema"]
+
+    assert current_response["$ref"].endswith("/RoutePolicyCurrentResponse")
+    assert history_response["$ref"].endswith("/RoutePolicyHistoryResponse")
+    assert validation_response["$ref"].endswith("/RoutePolicyValidationResponse")
+    assert (
+        schemas["RoutePolicyResponse"]["properties"]["policy_json"]["additionalProperties"] is True
+    )
+    validation_policy = schemas["RoutePolicyValidationResponse"]["properties"]["policy"]
+    assert validation_policy["$ref"].endswith("/RoutePolicyDocumentResponse")
+    response_properties = schemas["RoutePolicyDocumentResponse"]["properties"]
+    assert response_properties["context"]["anyOf"][0]["$ref"].endswith(
+        "/RoutePolicyContextDocument"
+    )
+    assert response_properties["selector"]["anyOf"][0]["$ref"].endswith("/LLMTierSelectorPolicy")
 
 
 @pytest.mark.asyncio

@@ -71,6 +71,39 @@ router_settings:
   #         weight: 3
   #       - deployment_id: embeddings-secondary
   #         weight: 1
+  # Optional chat model router (issue #304). Before enabling, declare each member's
+  # model_info.chat_capabilities and positive context capacity. The classifier also needs
+  # explicit provider token prices and positive RPM/TPM limits; see docs/configuration/models.md.
+  # The classifier is an independent concrete deployment; it need not be an answer member.
+  # Requires general_settings.spend_ingestion_mode: outbox and its enabled healthy worker.
+  # Selector cost is charged to customers; budgets remain soft checks, not spending holds.
+  # Internal Batch chat selects per item and bypasses microbatch grouping.
+  # Deterministic policy simulation does not execute the selector.
+  # route_groups:
+  #   - key: support-chat
+  #     mode: chat
+  #     strategy: least-busy
+  #     context:
+  #       mode: smallest-sufficient
+  #       unknown_capacity: exclude
+  #     selector:
+  #       kind: llm-tier
+  #       classifier_deployment_id: support-tiny-selector
+  #       timeout_ms: 750
+  #       max_input_chars: 8000
+  #       default_lane: quality
+  #       lanes:
+  #         - id: economy
+  #           rank: 0
+  #           description: Routine extraction, formatting, and simple questions
+  #         - id: quality
+  #           rank: 1
+  #           description: Complex reasoning, ambiguity, and advanced tool use
+  #     members:
+  #       - deployment_id: support-mini
+  #         lane: economy
+  #       - deployment_id: support-large
+  #         lane: quality
 
 general_settings:
   instance_name: DeltaLLM
@@ -98,7 +131,7 @@ general_settings:
   gateway_preflight_lease_ttl_seconds: 30
   # The outbox mode durably accepts one small event on the request path and
   # applies idempotent spend/ledger updates in a bounded background worker.
-  spend_ingestion_mode: legacy
+  spend_ingestion_mode: legacy # Use outbox before activating a model-router selector.
   spend_ingestion_batch_size: 100
   spend_ingestion_flush_interval_ms: 100
   spend_ingestion_lease_seconds: 30

@@ -1358,7 +1358,7 @@ async def test_enabled_route_group_owns_colliding_model_key_when_empty():
         deployment_registry=registry,
     )
 
-    assert registry["shared-route"] == []
+    assert registry["shared-route"] == ()
     selected = await router.select_deployment(
         "shared-route",
         {ROUTING_MODE_CONTEXT_KEY: "chat"},

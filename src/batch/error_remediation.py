@@ -68,7 +68,7 @@ async def remediate_terminal_batch_item_errors(
 def _sanitized_update(row: dict[str, Any]) -> dict[str, Any]:
     retry_category = row.get("retry_category")
     safe_error = sanitize_batch_artifact_error(
-        {"retry_category": retry_category} if retry_category is not None else None,
+        {"retry_category": retry_category, "code": row.get("error_code")},
         cancelled=str(row.get("status") or "") == "cancelled",
     )
     return {

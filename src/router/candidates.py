@@ -36,15 +36,42 @@ class AttemptRejectionReason(str, Enum):
 class AttemptCapacityLimit:
     counter: UsageCounterName
     limit: int
+    consume: int = 0
 
     def __post_init__(self) -> None:
         if self.limit <= 0:
             raise ValueError("attempt capacity limit must be positive")
+        if type(self.consume) is not int or self.consume < 0:
+            raise ValueError("attempt consumption must be a nonnegative integer")
 
 
 @dataclass(frozen=True, slots=True)
 class AttemptCapacity:
     limits: tuple[AttemptCapacityLimit, ...] = ()
+    max_concurrency: int | None = None
+    require_shared: bool = False
+    owner_token: str | None = None
+
+    def __post_init__(self) -> None:
+        if len({item.counter for item in self.limits}) != len(self.limits):
+            raise ValueError("attempt counters must be unique")
+        if self.max_concurrency is not None and (
+            type(self.max_concurrency) is not int or not 1 <= self.max_concurrency <= 2**31 - 1
+        ):
+            raise ValueError("attempt concurrency must be positive")
+        if self.require_shared and any(
+            type(item.limit) is not int
+            or not 1 <= item.limit <= 2**31 - 1
+            or item.consume > 2**31 - 1
+            for item in self.limits
+        ):
+            raise ValueError("shared attempt limits must be bounded integers")
+        if self.owner_token is not None and not 16 <= len(self.owner_token) <= 128:
+            raise ValueError("attempt owner token must be bounded")
+        if (
+            self.max_concurrency or any(item.consume for item in self.limits)
+        ) and not self.require_shared:
+            raise ValueError("reserved provider capacity requires shared coordination")
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +88,15 @@ class AttemptPermit:
 
 
 @dataclass(frozen=True, slots=True)
+class RouteCandidateLane:
+    """A policy lane after hard eligibility; lower lanes are empty after selection."""
+
+    lane: str
+    rank: int
+    deployments: tuple[Deployment, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RouteCandidatePlan:
     """Request-scoped, policy-ordered deployments eligible for failover attempts."""
 
@@ -72,6 +108,8 @@ class RouteCandidatePlan:
     filtered_count: int
     rejection_reason: str | None = None
     context_eligible_count: int | None = None
+    lanes: tuple[RouteCandidateLane, ...] = ()
+    minimum_rank: int | None = None
 
 
 class RouteCandidatePlanner(Protocol):

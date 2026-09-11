@@ -108,8 +108,9 @@ before granting application access.
 Upgrade API replicas and batch workers before configuring these provider IDs.
 Before rolling back to an older release, disable their deployments and stop
 scheduling their batch work. No schema migration or additional infrastructure
-is required. Response-cache schema version 3 prevents reuse of entries from
-before reasoning-history support; old entries expire under their existing TTLs.
+is required. Response-cache schema version 5 combines reasoning-history support
+with selector-policy identity and prevents reuse of entries from either earlier
+branch format. Old entries expire under their existing TTLs.
 
 ## Discovery authorization and outbound policy
 

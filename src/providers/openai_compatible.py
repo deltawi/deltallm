@@ -25,6 +25,19 @@ from src.providers.base import (
 )
 from src.providers.openai_stream_contract import inspect_openai_stream_choices
 
+
+def validate_openai_single_result(payload: object) -> None:
+    """Reject lossy/ambiguous classifier envelopes before canonical normalization."""
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        raise invalid_provider_response_error()
+    message = choices[0].get("message")
+    if not isinstance(message, dict) or message.get("refusal") is not None:
+        raise invalid_provider_response_error()
+    if message.get("function_call") is not None:
+        raise invalid_provider_response_error()
+
+
 _MAX_PRECOMMIT_STREAM_FRAMES = 32
 _MAX_PRECOMMIT_STREAM_CHARS = 262_144
 _MAX_STREAM_FRAME_CHARS = 1_048_576

@@ -73,7 +73,19 @@ export interface ModelRuntimeParams extends Record<string, unknown> {
   weight?: number | null;
 }
 
+export interface ChatRoutingCapabilities {
+  tools?: boolean;
+  json_object?: boolean;
+  json_schema?: boolean;
+  image?: boolean;
+  audio?: boolean;
+  file?: boolean;
+  streaming?: boolean;
+  multiple_choices?: boolean;
+}
+
 export interface ModelInfo extends Record<string, unknown> {
+  chat_capabilities?: ChatRoutingCapabilities | null;
   mode?: string;
   max_tokens?: number | null;
   max_input_tokens?: number | null;

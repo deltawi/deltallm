@@ -10,6 +10,7 @@ import httpx
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
 from src.providers.base import (
     ProviderAdapter,
     ProviderErrorDetails,
@@ -126,10 +127,35 @@ def _is_valid_gemini_success_payload(data: Mapping[str, Any]) -> bool:
 
 
 class GeminiAdapter(ProviderAdapter):
+    def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
+        return native_token_receipt(
+            payload,
+            usage_key="usageMetadata",
+            input_key="promptTokenCount",
+            output_key="candidatesTokenCount",
+            total_key="totalTokenCount",
+            cache_key="cachedContentTokenCount",
+        )
+
     provider_name = "gemini"
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
+
+    def validate_single_result_payload(self, payload: object) -> None:
+        candidates = payload.get("candidates") if isinstance(payload, dict) else None
+        if not isinstance(candidates, list) or len(candidates) != 1:
+            raise invalid_provider_response_error()
+        candidate = candidates[0]
+        content = candidate.get("content") if isinstance(candidate, dict) else None
+        if not isinstance(content, dict) or content.get("role") != "model":
+            raise invalid_provider_response_error()
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list) or any(
+            not isinstance(part, dict) or set(part) != {"text"} or not isinstance(part["text"], str)
+            for part in parts
+        ):
+            raise invalid_provider_response_error()
 
     async def translate_request(
         self,

@@ -5,7 +5,9 @@ from collections.abc import Mapping
 from pydantic import Field, JsonValue
 
 from src.models.responses import ChatCompletionResponse, Usage
+from src.models.errors import ProxyError
 from src.providers.base import invalid_provider_response_error, is_valid_provider_token_count
+from src.providers.token_receipt import ProviderTokenReceipt, token_receipt
 
 
 class CompatibleChatUsage(Usage):
@@ -18,6 +20,32 @@ class CompatibleChatResponse(ChatCompletionResponse):
 
 def normalize_chat_usage(value: object) -> dict[str, JsonValue]:
     """Map documented cache counters to the existing ledger vocabulary once."""
+    receipt = _parse_chat_usage(value)
+    return {
+        "prompt_tokens": receipt.input_tokens,
+        "completion_tokens": receipt.output_tokens,
+        "total_tokens": receipt.total_tokens,
+        "prompt_tokens_cached": receipt.cached_input_tokens or 0,
+    }
+
+
+def reported_chat_token_receipt(payload: object) -> ProviderTokenReceipt | None:
+    """Preserve unknown usage for durable selector billing, including cache aliases."""
+    if not isinstance(payload, Mapping):
+        return None
+    try:
+        receipt = _parse_chat_usage(payload.get("usage"))
+    except ProxyError:
+        return None
+    return token_receipt(
+        input_tokens=receipt.input_tokens,
+        output_tokens=receipt.output_tokens,
+        total_tokens=receipt.total_tokens,
+        cached_input_tokens=receipt.cached_input_tokens,
+    )
+
+
+def _parse_chat_usage(value: object) -> ProviderTokenReceipt:
     if not isinstance(value, Mapping):
         raise invalid_provider_response_error()
     totals = [value.get(key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")]
@@ -38,10 +66,5 @@ def normalize_chat_usage(value: object) -> dict[str, JsonValue]:
         raise invalid_provider_response_error()
     if len({int(count) for count in present}) > 1:
         raise invalid_provider_response_error()
-    cached = int(present[0]) if present else 0
-    return {
-        "prompt_tokens": prompt,
-        "completion_tokens": completion,
-        "total_tokens": total,
-        "prompt_tokens_cached": cached,
-    }
+    cached = int(present[0]) if present else None
+    return ProviderTokenReceipt(prompt, completion, total, cached)

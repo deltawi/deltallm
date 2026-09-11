@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, feature/org-tiers]
+    branches: [main, master, feature/org-tiers, feature/issue-304-model-router]
   pull_request:
-    branches: [main, master, feature/org-tiers]
+    branches: [main, master, feature/org-tiers, feature/issue-304-model-router]
 
 permissions:
   contents: read

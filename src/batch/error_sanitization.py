@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -11,6 +11,11 @@ from src.batch.retry import (
     BatchRetryTerminalReason,
 )
 from src.models.errors import ProxyError
+from src.batch.public_errors import (
+    BatchItemErrorBody,
+    batch_public_error_code,
+    exception_public_error_code,
+)
 
 _PUBLIC_MESSAGES = {
     BatchRetryCategory.AUTHENTICATION: "Provider authentication failed",
@@ -42,6 +47,9 @@ def stable_batch_error_message(category: BatchRetryCategory | str | None) -> str
 def persisted_batch_error_message(exc: Exception, decision: BatchRetryDecision) -> str:
     """Preserve application failures while sanitizing provider HTTP exceptions."""
 
+    public_code = exception_public_error_code(exc)
+    if public_code is not None:
+        return public_code.message
     if isinstance(exc, httpx.HTTPError):
         return stable_batch_error_message(decision.category)
     if isinstance(exc, ProxyError):
@@ -53,7 +61,7 @@ def sanitize_batch_artifact_error(
     error_body: Mapping[str, Any] | None,
     *,
     cancelled: bool,
-) -> dict[str, Any]:
+) -> BatchItemErrorBody:
     """Build an allowlisted public error from durable, potentially historical state."""
 
     if cancelled:
@@ -65,12 +73,15 @@ def sanitize_batch_artifact_error(
         "message": stable_batch_error_message(category),
         "type": "BatchItemError",
     }
+    public_code = batch_public_error_code(source.get("code"))
+    if public_code is not None:
+        sanitized.update(code=public_code, message=public_code.message)
     _copy_bool(source, sanitized, "retryable")
     _copy_enum(source, sanitized, "retry_category", BatchRetryCategory)
     _copy_enum(source, sanitized, "terminal_reason", BatchRetryTerminalReason)
     for key in ("attempt", "max_attempts", "retry_delay_seconds"):
         _copy_non_negative_int(source, sanitized, key)
-    return sanitized
+    return cast(BatchItemErrorBody, sanitized)
 
 
 def sanitize_batch_item_error_fields(item: Mapping[str, Any]) -> dict[str, Any]:
@@ -84,7 +95,9 @@ def sanitize_batch_item_error_fields(item: Mapping[str, Any]) -> dict[str, Any]:
     if retry_category is None and error_body is not None:
         retry_category = error_body.get("retry_category")
     safe_error = sanitize_batch_artifact_error(
-        {"retry_category": retry_category} if error_body is None else error_body,
+        {"retry_category": retry_category, "code": item.get("_error_code")}
+        if error_body is None
+        else error_body,
         cancelled=cancelled,
     )
 
@@ -95,6 +108,7 @@ def sanitize_batch_item_error_fields(item: Mapping[str, Any]) -> dict[str, Any]:
     if sanitized_item.get("last_error") is not None:
         sanitized_item["last_error"] = safe_error["message"]
     sanitized_item.pop("_error_retry_category", None)
+    sanitized_item.pop("_error_code", None)
     sanitized_item.pop("_has_error_body", None)
     return sanitized_item
 

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    from src.batch.selector_execution import BatchSelectorExecution
 
 from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.router.runtime_generation import RoutingRuntimeGenerationStore
+from src.router.router import Router
+from src.router.failover import FailoverManager
+from src.router.selection.reachability import selector_reachable_groups
 
 
 BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR = "artifact_validation_failed"
@@ -26,6 +32,7 @@ class BatchRoutingRuntime(Protocol):
     router: Any
     failover_manager: Any
     authorization_snapshot: CallableTargetGrantSnapshot | None
+    selector_reachable_groups: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +44,7 @@ class _LegacyBatchRoutingRuntime:
     router: Any
     failover_manager: Any
     authorization_snapshot: CallableTargetGrantSnapshot | None
+    selector_reachable_groups: frozenset[str] = frozenset()
 
 
 def capture_batch_routing_runtime(app_state: Any) -> BatchRoutingRuntime:
@@ -63,6 +71,18 @@ def capture_batch_routing_runtime(app_state: Any) -> BatchRoutingRuntime:
         router=router,
         failover_manager=failover_manager,
         authorization_snapshot=authorization_snapshot,
+        selector_reachable_groups=(
+            selector_reachable_groups(
+                [
+                    key
+                    for key, policy in router.config.route_group_policies.items()
+                    if policy.selector is not None
+                ],
+                failover_manager.config,
+            )
+            if isinstance(router, Router) and isinstance(failover_manager, FailoverManager)
+            else frozenset()
+        ),
     )
 
 
@@ -185,3 +205,4 @@ class _PreparedChatItem:
     policy_auth: Any | None = None
     policy_lease: Any | None = None
     policy_lease_refresher: Any | None = None
+    selector: BatchSelectorExecution | None = None

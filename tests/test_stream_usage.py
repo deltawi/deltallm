@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import pytest
 from src.chat.stream_usage import StreamUsageTracker
 from src.models.requests import ChatCompletionRequest
+
+
+@pytest.mark.parametrize("line", ["data: [DONE]", "data:[DONE]", "data:  [DONE]  "])
+def test_terminal_marker_is_explicit_without_changing_usage(line):
+    tracker = StreamUsageTracker()
+    assert tracker.add_line(line).is_terminal
+    assert not tracker.add_line('data: {"choices": []}').is_terminal
+    assert tracker.resolve(_payload()).source == "estimated"
 
 
 def _payload() -> ChatCompletionRequest:

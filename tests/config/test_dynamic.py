@@ -21,6 +21,7 @@ from src.config_runtime.models import ModelHotReloadManager
 from src.config_runtime.secrets import BaseSecretManager, SecretResolver
 from src.db.repositories import ModelDeploymentRecord
 from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.router.selection.policy import RouteSelectorActivationState
 from src.router import (
     CooldownManager,
     FailoverManager,
@@ -211,7 +212,14 @@ class FakeRouteGroupCache:
     async def get_snapshot(self, repository: Any) -> tuple[RouteGroupRuntimeSnapshot, str]:
         self.get_calls += 1
         if self.invalidate_calls == 0 and self.stale_groups is not None:
-            return RouteGroupRuntimeSnapshot(0, self.stale_groups), "l1_cache"
+            return (
+                RouteGroupRuntimeSnapshot(
+                    0,
+                    self.stale_groups,
+                    selector_activation_state=RouteSelectorActivationState.VALIDATED,
+                ),
+                "l1_cache",
+            )
         return await repository.load_runtime_snapshot(), "db"
 
 
@@ -226,7 +234,11 @@ class FakeRouteGroupRepository:
 
     async def load_runtime_snapshot(self) -> RouteGroupRuntimeSnapshot:
         self.calls += 1
-        return RouteGroupRuntimeSnapshot(self.revision, self.groups)
+        return RouteGroupRuntimeSnapshot(
+            self.revision,
+            self.groups,
+            selector_activation_state=RouteSelectorActivationState.VALIDATED,
+        )
 
 
 @pytest.mark.asyncio

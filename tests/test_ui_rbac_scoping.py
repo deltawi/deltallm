@@ -41,14 +41,16 @@ class FakeSpendDB:
             return [{"set_config": params[0]}]
         self.calls.append((query, params))
         if "COUNT(*) AS total_requests" in query:
-            return [{
-                "total_spend": 0,
-                "total_tokens": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_requests": 0,
-                "unique_models": 0,
-            }]
+            return [
+                {
+                    "total_spend": 0,
+                    "total_tokens": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_requests": 0,
+                    "unique_models": 0,
+                }
+            ]
         if "COUNT(*) AS total FROM" in query:
             return [{"total": 0}]
         if "GROUP BY" in query:
@@ -62,7 +64,9 @@ async def test_spend_feature_status_returns_cache_flag(client, test_app, enabled
     setattr(test_app.state.settings, "master_key", "mk-test")
     setattr(test_app.state.app_config.general_settings, "cache_enabled", enabled)
 
-    response = await client.get("/ui/api/spend/feature-status", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/spend/feature-status", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -263,7 +267,9 @@ async def test_mixed_role_usage_views_use_separate_predicates(client, test_app, 
     )
     monkeypatch.setattr(
         "src.api.admin.endpoints.spend.get_auth_scope",
-        lambda request, authorization=None, x_master_key=None, required_permission=None: mixed_scope,
+        lambda request, authorization=None, x_master_key=None, required_permission=None: (
+            mixed_scope
+        ),
     )
 
     organization = await client.get(
@@ -331,7 +337,9 @@ async def test_spend_summary_applies_org_scope_for_non_platform(client, test_app
         ),
     )
 
-    response = await client.get("/ui/api/spend/summary", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/spend/summary", headers={"Authorization": "Bearer mk-test"}
+    )
     assert response.status_code == 200
 
     query, params = fake_db.calls[0]
@@ -356,13 +364,17 @@ async def test_spend_summary_uses_event_scope(client, test_app, monkeypatch):
         ),
     )
 
-    response = await client.get("/ui/api/spend/summary", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/spend/summary", headers={"Authorization": "Bearer mk-test"}
+    )
     assert response.status_code == 200
 
     query, params = fake_db.calls[0]
     assert "FROM deltallm_spendlog_events" in query
     assert "organization_id IN" in query
-    assert "team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN" not in query
+    assert (
+        "team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN" not in query
+    )
     assert "org-1" in params
 
 
@@ -444,14 +456,12 @@ async def test_spend_logs_use_normalized_event_columns(client, test_app, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_spend_logs_use_one_statement_with_the_shared_deadline(
-    client, test_app, monkeypatch
-):
+async def test_spend_logs_use_one_statement_with_the_shared_deadline(client, test_app, monkeypatch):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
     ticks = iter([100.0, 110.0])
-    monkeypatch.setattr("src.api.admin.endpoints.spend.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("src.db.reporting.monotonic", lambda: next(ticks))
     monkeypatch.setattr(
         "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
@@ -533,11 +543,13 @@ async def test_spend_logs_keep_total_for_legacy_offset_clients(client, test_app,
         async def query_raw(self, query: str, *params):
             if "SELECT id, request_id" in query:
                 self.calls.append((query, params))
-                return [{
-                    "id": "log-1",
-                    "request_id": "req-1",
-                    "start_time": datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
-                }]
+                return [
+                    {
+                        "id": "log-1",
+                        "request_id": "req-1",
+                        "start_time": datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
+                    }
+                ]
             if "SELECT COUNT(*) AS total FROM" in query:
                 self.calls.append((query, params))
                 return [{"total": 7}]
@@ -615,7 +627,9 @@ async def test_spend_logs_share_reporting_capacity_with_other_uncached_log_reque
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
     setattr(test_app.state.app_config.general_settings, "spend_reporting_max_concurrency", 1)
-    setattr(test_app.state.app_config.general_settings, "spend_reporting_queue_timeout_seconds", 0.02)
+    setattr(
+        test_app.state.app_config.general_settings, "spend_reporting_queue_timeout_seconds", 0.02
+    )
     monkeypatch.setattr(
         "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
@@ -623,10 +637,12 @@ async def test_spend_logs_share_reporting_capacity_with_other_uncached_log_reque
         ),
     )
 
-    first = asyncio.create_task(client.get(
-        "/ui/api/logs?offset=0",
-        headers={"Authorization": "Bearer mk-test"},
-    ))
+    first = asyncio.create_task(
+        client.get(
+            "/ui/api/logs?offset=0",
+            headers={"Authorization": "Bearer mk-test"},
+        )
+    )
     await query_started.wait()
     second = await client.get(
         "/ui/api/logs?offset=25",
@@ -662,7 +678,9 @@ async def test_spend_report_not_scoped_for_platform_admin(client, test_app, monk
     assert response.status_code == 200
 
     query, _ = fake_db.calls[0]
-    assert "team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN" not in query
+    assert (
+        "team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN" not in query
+    )
 
 
 @pytest.mark.asyncio
@@ -717,7 +735,9 @@ async def test_daily_spend_report_rejects_unknown_time_interval(client, test_app
 
 
 @pytest.mark.asyncio
-async def test_grouped_spend_report_applies_org_scope_for_non_platform(client, test_app, monkeypatch):
+async def test_grouped_spend_report_applies_org_scope_for_non_platform(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -741,7 +761,9 @@ async def test_grouped_spend_report_applies_org_scope_for_non_platform(client, t
     query, params = fake_db.calls[0]
     assert "FROM deltallm_spendlog_events s" in query
     assert "s.organization_id IN" in query
-    assert "LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id" in query
+    assert (
+        "LEFT JOIN deltallm_organizationtable o ON o.organization_id = s.organization_id" in query
+    )
     assert "LEFT JOIN deltallm_teamtable t ON t.team_id = s.team_id" not in query
     assert "SELECT COUNT(*) AS total_count FROM grouped" in query
     assert "LEFT JOIN page ON TRUE" in query
@@ -755,16 +777,18 @@ async def test_grouped_spend_report_keeps_total_when_requested_page_is_empty(
     class EmptyGroupedPageDB(FakeSpendDB):
         async def query_raw(self, query: str, *params):
             if "LEFT JOIN page ON TRUE" in query:
-                return [{
-                    "group_key": None,
-                    "display_name": None,
-                    "total_spend": None,
-                    "request_count": None,
-                    "total_tokens": None,
-                    "prompt_tokens": None,
-                    "completion_tokens": None,
-                    "total_count": 7,
-                }]
+                return [
+                    {
+                        "group_key": None,
+                        "display_name": None,
+                        "total_spend": None,
+                        "request_count": None,
+                        "total_tokens": None,
+                        "prompt_tokens": None,
+                        "completion_tokens": None,
+                        "total_count": 7,
+                    }
+                ]
             return await super().query_raw(query, *params)
 
     fake_db = EmptyGroupedPageDB()
@@ -823,7 +847,9 @@ async def test_grouped_spend_report_supports_api_key_search(client, test_app, mo
 
 
 @pytest.mark.asyncio
-async def test_grouped_spend_report_for_model_does_not_group_by_null_constant(client, test_app, monkeypatch):
+async def test_grouped_spend_report_for_model_does_not_group_by_null_constant(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -856,7 +882,9 @@ async def test_grouped_spend_report_for_model_does_not_group_by_null_constant(cl
 
 
 @pytest.mark.asyncio
-async def test_grouped_spend_report_serializes_null_and_literal_keys_separately(client, test_app, monkeypatch):
+async def test_grouped_spend_report_serializes_null_and_literal_keys_separately(
+    client, test_app, monkeypatch
+):
     class GroupRowsDB(FakeSpendDB):
         async def query_raw(self, query: str, *params):
             if "WITH grouped AS" in query:
@@ -930,7 +958,9 @@ async def test_grouped_spend_report_serializes_null_and_literal_keys_separately(
 
 
 @pytest.mark.asyncio
-async def test_grouped_spend_report_supports_user_labels_and_token_breakdown(client, test_app, monkeypatch):
+async def test_grouped_spend_report_supports_user_labels_and_token_breakdown(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -993,7 +1023,9 @@ async def test_grouped_user_report_redacts_labels_without_user_read(client, test
 
 
 @pytest.mark.asyncio
-async def test_grouped_user_report_shows_labels_with_user_read_for_all_spend_orgs(client, test_app, monkeypatch):
+async def test_grouped_user_report_shows_labels_with_user_read_for_all_spend_orgs(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -1024,7 +1056,9 @@ async def test_grouped_user_report_shows_labels_with_user_read_for_all_spend_org
 
 
 @pytest.mark.asyncio
-async def test_grouped_user_report_redacts_labels_for_mixed_user_read_scope(client, test_app, monkeypatch):
+async def test_grouped_user_report_redacts_labels_for_mixed_user_read_scope(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -1182,8 +1216,12 @@ async def test_spend_reporting_cache_applies_live_safety_settings(client, test_a
     cache = test_app.state.spend_reporting_cache
 
     setattr(test_app.state.app_config.general_settings, "spend_reporting_max_concurrency", 1)
-    setattr(test_app.state.app_config.general_settings, "spend_reporting_queue_timeout_seconds", 0.25)
-    setattr(test_app.state.app_config.general_settings, "spend_reporting_execution_timeout_seconds", 0.5)
+    setattr(
+        test_app.state.app_config.general_settings, "spend_reporting_queue_timeout_seconds", 0.25
+    )
+    setattr(
+        test_app.state.app_config.general_settings, "spend_reporting_execution_timeout_seconds", 0.5
+    )
     second = await client.get(
         "/ui/api/spend/summary",
         headers={"Authorization": "Bearer mk-test"},
@@ -1197,7 +1235,9 @@ async def test_spend_reporting_cache_applies_live_safety_settings(client, test_a
 
 
 @pytest.mark.asyncio
-async def test_spend_reporting_timeout_is_retryable_and_does_not_poison_capacity(client, test_app, monkeypatch):
+async def test_spend_reporting_timeout_is_retryable_and_does_not_poison_capacity(
+    client, test_app, monkeypatch
+):
     query_started = asyncio.Event()
     query_cancelled = asyncio.Event()
 
@@ -1207,7 +1247,11 @@ async def test_spend_reporting_timeout_is_retryable_and_does_not_poison_capacity
             self.stall = True
 
         async def query_raw(self, query: str, *params):
-            if "pg_try_advisory_xact_lock" in query or "set_config('statement_timeout'" in query or not self.stall:
+            if (
+                "pg_try_advisory_xact_lock" in query
+                or "set_config('statement_timeout'" in query
+                or not self.stall
+            ):
                 return await super().query_raw(query, *params)
             query_started.set()
             try:
@@ -1219,7 +1263,11 @@ async def test_spend_reporting_timeout_is_retryable_and_does_not_poison_capacity
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
     setattr(test_app.state.app_config.general_settings, "spend_reporting_max_concurrency", 1)
-    setattr(test_app.state.app_config.general_settings, "spend_reporting_execution_timeout_seconds", 0.02)
+    setattr(
+        test_app.state.app_config.general_settings,
+        "spend_reporting_execution_timeout_seconds",
+        0.02,
+    )
     monkeypatch.setattr(
         "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
@@ -1279,7 +1327,9 @@ async def test_global_reporting_capacity_rejects_query_before_aggregation(
 
 
 @pytest.mark.asyncio
-async def test_postgres_statement_timeout_is_mapped_to_retryable_reporting_error(client, test_app, monkeypatch):
+async def test_postgres_statement_timeout_is_mapped_to_retryable_reporting_error(
+    client, test_app, monkeypatch
+):
     class StatementTimeoutSpendDB(FakeSpendDB):
         async def query_raw(self, query: str, *params):
             if "pg_try_advisory_xact_lock" in query or "set_config('statement_timeout'" in query:
@@ -1314,7 +1364,7 @@ async def test_reporting_query_does_not_start_after_connection_wait_exhausts_dea
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
     ticks = iter([100.0, 160.0])
-    monkeypatch.setattr("src.api.admin.endpoints.spend.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("src.db.reporting.monotonic", lambda: next(ticks))
     monkeypatch.setattr(
         "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
@@ -1335,7 +1385,9 @@ async def test_reporting_query_does_not_start_after_connection_wait_exhausts_dea
 
 
 @pytest.mark.asyncio
-async def test_time_series_cache_ignores_parameters_not_used_by_its_query(client, test_app, monkeypatch):
+async def test_time_series_cache_ignores_parameters_not_used_by_its_query(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -1362,7 +1414,9 @@ async def test_time_series_cache_ignores_parameters_not_used_by_its_query(client
 
 
 @pytest.mark.asyncio
-async def test_time_series_interval_remains_part_of_effective_cache_identity(client, test_app, monkeypatch):
+async def test_time_series_interval_remains_part_of_effective_cache_identity(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -1415,7 +1469,9 @@ async def test_grouped_report_cache_ignores_unused_interval(client, test_app, mo
 
 
 @pytest.mark.asyncio
-async def test_provider_report_cache_key_tracks_runtime_provider_overrides(client, test_app, monkeypatch):
+async def test_provider_report_cache_key_tracks_runtime_provider_overrides(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -1487,7 +1543,9 @@ async def test_concurrent_identical_reports_share_one_database_query(client, tes
 
 
 @pytest.mark.asyncio
-async def test_grouped_model_breakdown_narrows_existing_authorization_scope(client, test_app, monkeypatch):
+async def test_grouped_model_breakdown_narrows_existing_authorization_scope(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -1576,7 +1634,9 @@ async def test_grouped_spend_report_requires_complete_owner_scope(client, test_a
 
 
 @pytest.mark.asyncio
-async def test_grouped_spend_report_for_provider_uses_canonical_provider_grouping(client, test_app, monkeypatch):
+async def test_grouped_spend_report_for_provider_uses_canonical_provider_grouping(
+    client, test_app, monkeypatch
+):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
     setattr(test_app.state.settings, "master_key", "mk-test")

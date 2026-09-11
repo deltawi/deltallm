@@ -2,6 +2,13 @@
 
 Model deployments tell DeltaLLM how to reach a real provider-backed model.
 
+A concrete chat deployment can also classify requests for one or more Model Groups
+without being an answer member. There is no selector-only model type or extra activation
+switch. Configure its own capabilities, context, token prices and RPM/TPM limits, then
+choose it in the group's routing policy. Published references protect it against deletion
+or incompatible metadata changes; switch/remove those references first.
+See [model router administration](model-router-admin.md).
+
 In simple terms:
 
 - clients call a public model name such as `gpt-4o-mini`
@@ -84,6 +91,44 @@ incarnation and preserves it across ordinary updates. Existing hand-authored ent
 field use their deployment ID as a compatibility incarnation. If an operator manually deletes and
 later recreates an otherwise identical config-only deployment with the same ID, set a new opaque
 `routing_state_incarnation`; do not change it for metadata-only edits.
+
+## Model-router Capability and Price Metadata
+
+Selector-enabled Route Groups require explicit operator-qualified `model_info.chat_capabilities`
+on every enabled member. An empty object declares the plain text-chat floor. Optional features
+default to `false`; DeltaLLM does not guess capabilities from model names. Set only features the
+specific provider/deployment can honor. Unknown keys and non-boolean flags are rejected.
+
+```yaml
+model_info:
+  mode: chat
+  max_tokens: 32768             # Illustrative; use the deployment's actual context capacity.
+  chat_capabilities:
+    tools: true
+    json_object: true
+    json_schema: true
+    image: false
+    audio: false
+    file: false
+    streaming: true
+    multiple_choices: false
+  rpm_limit: 100                # Required positive limits for the classifier.
+  tpm_limit: 1000000
+  input_cost_per_token: 0.000001 # Illustrative provider prices, not customer tier prices.
+  output_cost_per_token: 0.000002
+```
+
+Context capacity must include a known positive `max_tokens` or `max_input_tokens`. The classifier
+supports input/output token prices, optional `input_cost_per_token_cache_hit`, and optional
+`cost_per_request`. Unsupported nonzero real-time billing dimensions fail qualification; separate
+Batch token rates do not affect this real-time call. Configure zero prices explicitly only when
+the provider call is truly free. Customers pay the frozen selector provider cost without markup.
+
+File configuration and the admin model API accept this metadata. Existing model-form saves preserve
+these fields; configure the flags through the API or file until guided editing is delivered.
+Changes affecting an active selector are revalidated, and updated
+capabilities participate in response-cache identity. See [model-router activation](router.md#model-router-policy-contract)
+for required outbox, context policy, capacity, data handling and soft-budget settings.
 
 ## Custom Upstream Auth Headers
 

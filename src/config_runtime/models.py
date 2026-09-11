@@ -9,7 +9,8 @@ from typing import Any, Generic, TypeVar
 from uuid import uuid4
 
 from src.cache import configure_cache_runtime
-from src.config import AppConfig, RouterSettings, resolve_salt_key
+from src.config import AppConfig, resolve_salt_key
+from src.route_group_config import RouterSettings
 from src.config_runtime.dynamic import DynamicConfigManager
 from src.router.runtime_generation import (
     RoutingRuntimeAppliedState,
@@ -36,7 +37,10 @@ from src.router import (
     build_route_group_policies,
 )
 from src.router.registry import DeploymentRegistryStore
-from src.router.route_group_validation import resolve_route_group_modes_for_registry
+from src.router.route_group_validation import (
+    deployment_modes_by_id,
+    resolve_route_group_modes_for_registry,
+)
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import load_model_registry
 from src.services.routing_authorization import RoutingAuthorizationReconciler
@@ -434,6 +438,9 @@ class ModelHotReloadManager:
             app_config,
             route_group_cache=self.route_group_cache,
             allow_config_fallback=self.route_group_repository is None,
+            deployment_modes=deployment_modes_by_id(
+                entry for deployments in model_registry.values() for entry in deployments
+            ),
         )
         snapshot = route_group_load.snapshot
         mode_resolution = resolve_route_group_modes_for_registry(

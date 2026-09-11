@@ -41,12 +41,13 @@ from src.telemetry.request_failures import enqueue_request_log_write, maybe_log_
 from src.telemetry.event_identity import get_or_create_billing_event_id
 
 from .backends.base import CacheBackend, CacheEntry
+from .execution_eligibility import ResponseCacheEligibility, ResponseCacheOutcome
 from .key_builder import CacheKeyBuilder
 from .metrics import CacheMetricsProtocol, NoopCacheMetrics
 from .pricing import has_cache_hit_only_pricing, provider_cache_miss_usage
 
 logger = logging.getLogger(__name__)
-_CACHE_SCHEMA_VERSION = "v3"
+_CACHE_SCHEMA_VERSION = "v5"
 
 
 class CacheControl(str, Enum):
@@ -125,6 +126,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
         }
 
     async def dispatch(self, request: Request, call_next):
+        request.state.response_cache_eligibility = ResponseCacheEligibility()
         backend: CacheBackend | None = getattr(request.app.state, "cache_backend", None)
         key_builder: CacheKeyBuilder | None = getattr(request.app.state, "cache_key_builder", None)
         metrics: CacheMetricsProtocol = getattr(
@@ -133,6 +135,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
         streaming_handler = getattr(request.app.state, "streaming_cache_handler", None)
 
         if backend is None or key_builder is None or not self._should_cache(request):
+            request.state.response_cache_eligibility = ResponseCacheEligibility(
+                ResponseCacheOutcome.BYPASS
+            )
             return await call_next(request)
 
         request_data = await self._read_request_data(request)
@@ -164,12 +169,21 @@ class CacheMiddleware(BaseHTTPMiddleware):
             endpoint = request.url.path
 
             if cache_options.control == CacheControl.BYPASS:
+                request.state.response_cache_eligibility = ResponseCacheEligibility(
+                    ResponseCacheOutcome.BYPASS
+                )
                 request.state.cache_hit = False
                 response = await call_next(request)
                 response.headers["x-deltallm-cache-hit"] = "false"
                 return response
 
-            cache_key = key_builder.build_key_from_payload(request_data, cache_options.custom_key)
+            routing_runtime = pin_routing_runtime_generation(request.app.state, request.state)
+            model_group = routing_runtime.router.resolve_model_group(model)
+            cache_key = key_builder.build_key_from_payload(
+                request_data,
+                cache_options.custom_key,
+                routing_fingerprint=routing_runtime.routing_fingerprints.get(model_group),
+            )
             response_mode = "stream" if bool(request_data.get("stream")) else "json"
             cache_key = (
                 f"schema:{_CACHE_SCHEMA_VERSION}:mode:{response_mode}:"
@@ -183,12 +197,18 @@ class CacheMiddleware(BaseHTTPMiddleware):
 
             if bool(request_data.get("stream")) and streaming_handler is not None:
                 if request.url.path != "/v1/chat/completions":
+                    request.state.response_cache_eligibility = ResponseCacheEligibility(
+                        ResponseCacheOutcome.BYPASS
+                    )
                     response = await call_next(request)
                     response.headers["x-deltallm-cache-hit"] = "false"
                     return response
                 if cache_options.control != CacheControl.NO_CACHE:
                     cached = await backend.get(cache_key)
                     if cached is not None and streaming_handler.can_replay(cached):
+                        request.state.response_cache_eligibility = ResponseCacheEligibility(
+                            ResponseCacheOutcome.HIT
+                        )
                         metrics.hit(endpoint=endpoint, model=model)
                         request.state.cache_context.hit = True
                         request.state.cache_hit = True
@@ -214,6 +234,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 )
                 request.state.cache_context.hit = False
                 request.state.cache_hit = False
+                request.state.response_cache_eligibility = ResponseCacheEligibility(
+                    ResponseCacheOutcome.MISS
+                )
                 response = await call_next(request)
                 response.headers["x-deltallm-cache-hit"] = "false"
                 return response
@@ -221,6 +244,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
             if cache_options.control != CacheControl.NO_CACHE:
                 cached_entry = await backend.get(cache_key)
                 if cached_entry is not None:
+                    request.state.response_cache_eligibility = ResponseCacheEligibility(
+                        ResponseCacheOutcome.HIT
+                    )
                     metrics.hit(endpoint=endpoint, model=model)
                     request.state.cache_context.hit = True
                     request.state.cache_hit = True
@@ -231,6 +257,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 metrics.miss(endpoint=endpoint, model=model)
                 request.state.cache_hit = False
 
+            request.state.response_cache_eligibility = ResponseCacheEligibility(
+                ResponseCacheOutcome.MISS
+            )
             response = await call_next(request)
             request.state.cache_hit = False
             response.headers["x-deltallm-cache-hit"] = "false"
