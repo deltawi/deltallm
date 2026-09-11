@@ -18,16 +18,30 @@
 
 # DeltaLLM
 
-DeltaLLM is a self-hosted LLM gateway. Point OpenAI-compatible clients at one endpoint, then manage model deployments, routing, scoped API keys, budgets, guardrails, MCP tools, and usage from one control plane.
+**Run an LLM service for your teams or customers.**
 
-For hosting consultants, managed service providers, and platform teams,
-[service tiers](docs/admin-ui/tiers.md) let you
-define a model package once and assign it to multiple customer organizations, with
-per-model limits, pricing, and shared capacity. The gateway and Admin UI are MIT licensed.
+Connect model providers, create plans with model access, pricing, and rate limits,
+and assign them to organizations. Apps use an OpenAI-compatible API. You manage
+access and usage through the Admin UI.
 
-[SSO](docs/features/authentication.md#single-sign-on),
-[audit logs](docs/features/audit-log.md), and scoped administration are included
-without a gateway license fee. You cover your infrastructure and upstream model usage.
+Self-hosted. MIT licensed.
+[SSO](docs/features/authentication.md#single-sign-on) and
+[audit logs](docs/features/audit-log.md) included.
+
+## Customer Plans
+
+Define a Growth plan with two models, set their prices and limits, and assign it
+to five customer organizations. When the plan changes, review and activate a new
+version without configuring each customer separately.
+
+[Service tiers](docs/admin-ui/tiers.md) manage these plans. Assign organizations to
+follow the active version so they receive plan updates together.
+
+## Admin UI
+
+Manage organizations, access, and usage in the browser.
+
+![DeltaLLM organizations with budget usage, rate limits, and members](./docs/admin-ui/images/organizations.png)
 
 ## One Endpoint For Your Apps
 
@@ -58,12 +72,6 @@ Your application keeps its OpenAI request format. DeltaLLM handles provider cred
 - **Spend and usage** - Attribute cost by key, team, organization, model, and provider.
 - **Admin UI** - Manage models, credentials, route groups, teams, users, usage, audit logs, and settings in the browser.
 - **Operations** - Export Prometheus metrics, request logs, audit events, cache behavior, and health checks.
-
-## Admin UI
-
-![DeltaLLM model deployments](./docs/admin-ui/images/models-list.png)
-
-The UI is the control plane for model deployments, route groups, API keys, access, usage, guardrails, audit logs, and runtime settings.
 
 ## Quick Start With Docker
 
