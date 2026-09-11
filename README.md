@@ -16,8 +16,6 @@
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/deltallm?utm_medium=integration&utm_source=template&utm_campaign=deltallm)
 
-# DeltaLLM
-
 **Run an LLM service for your teams or customers.**
 
 Connect model providers, create plans with model access, pricing, and rate limits,
