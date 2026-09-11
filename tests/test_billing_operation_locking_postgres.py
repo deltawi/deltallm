@@ -146,16 +146,40 @@ async def test_concurrent_conflicting_owner_cannot_reuse_operation(review_operat
     assert await fixtures.capacity(db) == before + 1
 
 
-async def test_full_capacity_rolls_back_new_operation_and_all_holds(review_operation_db):
+async def test_full_capacity_rolls_back_new_operation_and_all_holds(
+    review_operation_db, monkeypatch
+):
     db, first, charge = review_operation_db
+    # Exercise capacity rejection/rollback, not transaction-start speed on a
+    # shared runner. Production deadlines have separate timeout regressions.
+    monkeypatch.setattr(billing_operations, "DB_BUDGET_SECONDS", 2)
     repository = BillingOperationRepository(db)
     await repository.reserve(first, expires_at=deadline())
     used = await fixtures.capacity(db)
     second, _ = fixtures.another_operation(first, charge)
+    query_raw = type(db).query_raw
+    capacity_results = []
+
+    async def observe_capacity(tx, query, *args, **kwargs):
+        capacity_update = query.startswith("UPDATE deltallm_telemetry_ingestion_capacity ")
+        if capacity_update:
+            # Prove the transaction reached capacity admission with every new
+            # hold applied; an unrelated unavailable error must not pass this test.
+            assert (
+                await fixtures.reserved_totals(tx, second)
+                == [first.total_allowance + second.total_allowance] * 5
+            )
+        rows = await query_raw(tx, query, *args, **kwargs)
+        if capacity_update:
+            capacity_results.append(rows)
+        return rows
+
+    monkeypatch.setattr(type(db), "query_raw", observe_capacity)
     with pytest.raises(BillingOperationUnavailable):
         await BillingOperationRepository(db, max_pending_operations=used).reserve(
             second, expires_at=deadline()
         )
+    assert capacity_results == [[]]
     assert await hold(db, first) == first.total_allowance
     assert await fixtures.reserved_totals(db, first) == [first.total_allowance] * 5
     assert await fixtures.capacity(db) == used

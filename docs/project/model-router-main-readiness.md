@@ -474,3 +474,27 @@ Local commands use `UV_CACHE_DIR=/tmp/deltallm-readiness-uv uv run --no-sync`:
   Markdown pages are navigated; there are no missing H1s or images.
 - `ruff check .`, `ruff format --check tests/batch/test_selector_lifetime.py`,
   and `git diff --check`: passed.
+
+## PR #318 CI repair: capacity rollback regression (2026-09-11)
+
+[CI run 34531046325](https://github.com/deltawi/deltallm/actions/runs/34531046325)
+passed app/docs but failed entering the capacity test's first reservation transaction,
+before insertion or capacity rejection. The aggregate `test` correctly failed too.
+
+A diagnostic 300 ms startup delay reproduced this failure under the production 250 ms
+cap; the sanitized CI exception cannot establish its exact underlying cause. The
+functional test now uses a test-local two-second cap, as the idempotency test does.
+It verifies all five temporary holds inside the second transaction and an empty
+capacity-update result before checking rollback, excluding unrelated failures.
+The same delayed-start diagnostic passes; no injection code is committed.
+
+A new hermetic test expires the real startup timeout and verifies the unchanged
+250 ms application/pool/transaction budgets, cancellation, no retry and no writes.
+Runtime code, financial/tenant semantics, migrations and CI gates are unchanged.
+
+Verification uses the frozen-environment prefix above and isolated PostgreSQL 15:
+
+- `pytest -q -m postgres --durations=25 --durations-min=0.5`: 323 passed (four existing warnings).
+- `pytest -q -m hermetic --durations=25 --durations-min=0.5`: 3,613 passed; focused billing checks: 29 passed.
+- Classifier tests: 15 passed; full lane collection: 5,557 tests, exactly one lane each.
+- Ruff, touched-file formatting, documentation health/strict build/containment and diff checks passed.

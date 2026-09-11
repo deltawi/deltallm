@@ -85,3 +85,41 @@ async def test_reservation_interruption_leaves_transaction_and_never_retries(err
     assert tx.query_raw.await_count == 2
     assert context.__aexit__.call_args.args[0] is error
     tx.execute_raw.assert_not_awaited()
+
+
+async def test_transaction_start_timeout_keeps_production_cap_and_never_retries(monkeypatch):
+    tx, context = transaction_mock([])
+    db = MagicMock()
+    db.tx.return_value = context
+    timeout = asyncio.timeout
+    scopes: list[asyncio.Timeout] = []
+    entry_cancelled = asyncio.Event()
+
+    def capture_timeout(delay: float) -> asyncio.Timeout:
+        assert delay == 0.25
+        scope = timeout(delay)
+        scopes.append(scope)
+        return scope
+
+    async def blocked_start():
+        # Expire the real timeout at transaction startup without a wall-clock
+        # sleep or depending on how quickly the test host schedules this task.
+        scopes[0].reschedule(asyncio.get_running_loop().time())
+        try:
+            await asyncio.Event().wait()
+        finally:
+            entry_cancelled.set()
+
+    monkeypatch.setattr(asyncio, "timeout", capture_timeout)
+    context.__aenter__.side_effect = blocked_start
+    with pytest.raises(BillingOperationUnavailable):
+        await BillingOperationRepository(db).reserve(make_operation(), expires_at=deadline())
+    assert len(scopes) == 1 and scopes[0].expired()
+    assert entry_cancelled.is_set()
+    db.tx.assert_called_once()
+    assert db.tx.call_args.kwargs["max_wait"].total_seconds() == 0.25
+    assert db.tx.call_args.kwargs["timeout"].total_seconds() == 0.25
+    context.__aenter__.assert_awaited_once()
+    context.__aexit__.assert_not_awaited()
+    tx.query_raw.assert_not_awaited()
+    tx.execute_raw.assert_not_awaited()
