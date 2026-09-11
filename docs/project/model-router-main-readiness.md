@@ -483,13 +483,13 @@ before insertion or capacity rejection. The aggregate `test` correctly failed to
 
 A diagnostic 300 ms startup delay reproduced this failure under the production 250 ms
 cap; the sanitized CI exception cannot establish its exact underlying cause. The
-functional test now uses a test-local two-second cap, as the idempotency test does.
-It verifies all five temporary holds inside the second transaction and an empty
+SQL-invariant module now shares a test-local two-second cap; subsequent CI also
+timed out a waiting duplicate's row lock. The capacity test verifies all five holds and an empty
 capacity-update result before checking rollback, excluding unrelated failures.
 The same delayed-start diagnostic passes; no injection code is committed.
 
 A new hermetic test expires the real startup timeout and verifies the unchanged
-250 ms application/pool/transaction budgets, cancellation, no retry and no writes.
+250 ms application/pool/transaction budgets, cancellation, no retry and no writes; the real 30 ms caller-deadline test is unchanged.
 Runtime code, financial/tenant semantics, migrations and CI gates are unchanged.
 
 Verification uses the frozen-environment prefix above and isolated PostgreSQL 15:

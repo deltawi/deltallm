@@ -16,6 +16,15 @@ operation_db = fixtures.operation_db
 review_operation_db = fixtures.review_operation_db
 
 
+@pytest.fixture(autouse=True)
+def billing_invariant_transaction_budget(monkeypatch):
+    # This module verifies SQL invariants and lock ordering, not shared-runner
+    # throughput within the production 250-ms cap. Bound every functional
+    # transaction consistently; the explicit 30-ms caller-deadline test below
+    # still expires earlier. Hermetic repository tests assert the production cap.
+    monkeypatch.setattr(billing_operations, "DB_BUDGET_SECONDS", 2)
+
+
 async def test_waiting_reservation_does_not_block_same_key_settlement(
     review_operation_db, monkeypatch
 ):
@@ -94,12 +103,9 @@ async def test_duplicate_reservation_does_not_hold_capacity_while_waiting_for_op
 
 
 async def test_identical_concurrent_reservations_use_one_hold_and_capacity_slot(
-    review_operation_db, monkeypatch
+    review_operation_db,
 ):
     db, operation, _ = review_operation_db
-    # Check idempotency under contention, not shared CI host throughput inside
-    # the production 250-ms bound. Deadline behavior is covered separately.
-    monkeypatch.setattr(billing_operations, "DB_BUDGET_SECONDS", 2)
     before = await fixtures.capacity(db)
     repositories = [BillingOperationRepository(db), BillingOperationRepository(db)]
     results = await asyncio.gather(
@@ -150,9 +156,6 @@ async def test_full_capacity_rolls_back_new_operation_and_all_holds(
     review_operation_db, monkeypatch
 ):
     db, first, charge = review_operation_db
-    # Exercise capacity rejection/rollback, not transaction-start speed on a
-    # shared runner. Production deadlines have separate timeout regressions.
-    monkeypatch.setattr(billing_operations, "DB_BUDGET_SECONDS", 2)
     repository = BillingOperationRepository(db)
     await repository.reserve(first, expires_at=deadline())
     used = await fixtures.capacity(db)
