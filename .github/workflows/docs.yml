@@ -2,9 +2,9 @@ name: Documentation
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, feature/issue-320-concurrency]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, feature/issue-320-concurrency]
 
 permissions:
   contents: read
