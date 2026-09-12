@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 import json
 import math
 from pathlib import Path
 from time import perf_counter
-from typing import TextIO
+from typing import TextIO, TypeVar
 
 import httpx
 from prometheus_client.parser import text_string_to_metric_families
@@ -20,6 +21,7 @@ MAX_METRICS_BYTES = 2 * 1024 * 1024
 MAX_SAMPLES_PER_SCRAPE = 10000
 MAX_SNAPSHOTS = 3602
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
+T = TypeVar("T")
 HISTOGRAMS = (
     "deltallm_telemetry_acceptance_phase_seconds",
     "deltallm_telemetry_acceptance_events_per_commit",
@@ -107,26 +109,52 @@ class MetricsRecorder:
         self._file: TextIO | None = None
         self._client: httpx.AsyncClient | None = None
         self._task: asyncio.Task[None] | None = None
+        self._workload: asyncio.Task[object] | None = None
         self._stop = asyncio.Event()
 
     async def __aenter__(self) -> MetricsRecorder:
         self.output.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.output.open("x", encoding="utf-8")
-        self._client = httpx.AsyncClient(
-            timeout=1.0,
-            limits=httpx.Limits(max_connections=16, max_keepalive_connections=16),
-            follow_redirects=False,
-            trust_env=False,
-        )
-        self.started = perf_counter()
         try:
+            self._client = httpx.AsyncClient(
+                timeout=1.0,
+                limits=httpx.Limits(max_connections=16, max_keepalive_connections=16),
+                follow_redirects=False,
+                trust_env=False,
+            )
+            self.started = perf_counter()
             await self.snapshot(buckets=True)
             self._task = asyncio.create_task(self._run(), name="concurrency-metrics")
         except BaseException:
-            await self._client.aclose()
-            self._file.close()
+            await self._close()
             raise
         return self
+
+    async def run_workload(self, operation: Callable[[], Awaitable[T]]) -> T:
+        if (
+            self._task is None
+            or self._task.done()
+            or self._stop.is_set()
+            or self._workload is not None
+        ):
+            raise RuntimeError("One workload requires one running metrics recorder")
+
+        async def invoke() -> T:
+            return await operation()
+
+        task = asyncio.create_task(invoke(), name="concurrency-workload")
+        self._workload = task
+        try:
+            done, _ = await asyncio.wait((task, self._task), return_when=asyncio.FIRST_COMPLETED)
+            if self._task in done:
+                self._task.result()
+                raise RuntimeError("metrics collector stopped during workload")
+            return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self._workload = None
 
     async def _read(self, url: str, *, buckets: bool) -> list[MetricValue]:
         assert self._client is not None
@@ -180,7 +208,13 @@ class MetricsRecorder:
                 await self._task
             await self.snapshot(buckets=True)
         finally:
+            await self._close()
+
+    async def _close(self) -> None:
+        try:
             if self._client is not None:
-                await self._client.aclose()
+                async with asyncio.timeout(2):
+                    await self._client.aclose()
+        finally:
             if self._file is not None:
                 self._file.close()

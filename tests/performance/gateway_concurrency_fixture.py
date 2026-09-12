@@ -4,33 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from urllib.parse import urlparse
-
-from prisma import Prisma
 
 from src.db.repositories import KeyRepository
 from src.services.key_service import KeyService
+from tests.performance.gateway_concurrency_dependencies import local_database
 
 MODEL = "concurrency-fixture"
-LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def require_local_url(value: str, *, schemes: set[str]) -> str:
-    parsed = urlparse(value)
-    if parsed.scheme not in schemes or parsed.hostname not in LOOPBACK_HOSTS:
-        raise ValueError("The concurrency fixture requires explicit loopback dependencies")
-    if parsed.scheme == "http" and (
-        parsed.username or parsed.password or parsed.query or parsed.fragment
-    ):
-        raise ValueError("HTTP fixture URLs must not include credentials, queries, or fragments")
-    return value
-
-
-def fixture_database_url() -> str:
-    value = require_local_url(os.environ["DATABASE_URL"], schemes={"postgresql", "postgres"})
-    if urlparse(value).path != "/deltallm_concurrency":
-        raise ValueError("The fixture database must be named deltallm_concurrency")
-    return value
 
 
 def fixture_key() -> str:
@@ -46,9 +25,7 @@ async def seed() -> None:
     key = fixture_key()
     salt = os.environ["DELTALLM_SALT_KEY"]
     token = KeyService(KeyRepository(None), salt=salt).hash_key(key)
-    db = Prisma(datasource={"url": fixture_database_url()})
-    await db.connect()
-    try:
+    async with local_database() as db:
         if await db.deltallm_organizationtable.find_unique(
             where={"organization_id": "concurrency-org"}
         ):
@@ -90,8 +67,6 @@ async def seed() -> None:
                     "max_budget": 1000,
                 }
             )
-    finally:
-        await db.disconnect()
 
 
 if __name__ == "__main__":

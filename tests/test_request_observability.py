@@ -204,3 +204,64 @@ def test_sampler_measures_delay_and_cannot_rearm_after_shutdown() -> None:
     clock.timers[-1].callback()
     assert len(clock.timers) == 2
     assert value("deltallm_event_loop_samplers") == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination", ["receive", "send", "cancelled_send"])
+async def test_disconnect_finishes_http_before_application_cleanup(
+    termination: str,
+) -> None:
+    disconnected = asyncio.Event()
+    cleanup = asyncio.Event()
+    before_active = value("deltallm_http_requests_in_flight", route="chat_completions")
+    outcome = "cancelled" if termination == "cancelled_send" else "disconnected"
+    before_total = phase("response_total", outcome)
+    before_bytes = value("deltallm_http_response_body_bytes_total", route="chat_completions")
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        if termination != "receive":
+            error = asyncio.CancelledError if termination == "cancelled_send" else OSError
+            with pytest.raises(error):
+                await send({"type": "http.response.body", "body": b"unsent", "more_body": True})
+        else:
+            assert (await receive())["type"] == "http.disconnect"
+            await receive()  # Duplicate notifications must not double-release.
+            await send({"type": "http.response.body", "body": b"discarded", "more_body": False})
+        disconnected.set()
+        await cleanup.wait()
+
+    async def receive() -> Message:
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        if termination != "receive" and message["type"] == "http.response.body":
+            error = asyncio.CancelledError if termination == "cancelled_send" else OSError
+            raise error("closed")
+
+    task = asyncio.create_task(
+        RequestTimingMiddleware(app)(
+            {"type": "http", "path": "/v1/chat/completions"}, receive, send
+        )
+    )
+    try:
+        await asyncio.wait_for(disconnected.wait(), 1)
+        assert not task.done()
+        assert value("deltallm_http_requests_in_flight", route="chat_completions") == before_active
+        assert phase("response_total", outcome) == before_total + 1
+        assert (
+            value("deltallm_http_response_body_bytes_total", route="chat_completions")
+            == before_bytes
+        )
+        cleanup.set()
+        await task
+        assert phase("response_total", outcome) == before_total + 1
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

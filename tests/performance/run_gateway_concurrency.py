@@ -6,7 +6,6 @@ import argparse
 import asyncio
 from collections import Counter
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -27,10 +26,9 @@ from scripts.measure_gateway_load import (
 )
 from tests.performance.gateway_concurrency_fixture import (
     MODEL,
-    fixture_database_url,
     fixture_key,
-    require_local_url,
 )
+from tests.performance.gateway_concurrency_dependencies import local_dependencies, require_local_url
 from tests.performance.gateway_concurrency_metrics import MetricsRecorder
 from tests.performance.gateway_concurrency_manifest import read_manifest
 
@@ -114,20 +112,11 @@ async def measure(args: argparse.Namespace) -> dict[str, object]:
     urls = [require_local_url(url, schemes={"http"}) for url in args.metrics_url]
     if len(urls) != manifest.api_processes:
         raise ValueError("Provide one metrics endpoint for every declared API process")
-    redis_url = require_local_url(os.environ["REDIS_URL"], schemes={"redis", "rediss"})
     key = fixture_key()
-    db = Prisma(datasource={"url": fixture_database_url()})
-    redis = Redis.from_url(
-        redis_url,
-        decode_responses=True,
-        max_connections=2,
-        socket_connect_timeout=2,
-        socket_timeout=2,
-    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = args.output_dir / f"metrics-{uuid4().hex}.jsonl"
-    await db.connect()
-    try:
+    async with local_dependencies() as dependencies:
+        db, redis = dependencies.database, dependencies.redis
         async with httpx.AsyncClient(
             timeout=10,
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
@@ -173,16 +162,15 @@ async def measure(args: argparse.Namespace) -> dict[str, object]:
             before = await dependency_counts(db, redis)
             async with MetricsRecorder(urls, metrics_path) as recorder:
                 arrival_start = perf_counter() - recorder.started
-                run = await run_constant_arrival(
-                    rate=args.rate,
-                    duration_seconds=args.duration,
-                    max_in_flight=1000,
-                    request=request,
+                run = await recorder.run_workload(
+                    lambda: run_constant_arrival(
+                        rate=args.rate,
+                        duration_seconds=args.duration,
+                        max_in_flight=1000,
+                        request=request,
+                    )
                 )
             after = await dependency_counts(db, redis)
-    finally:
-        await redis.aclose()
-        await db.disconnect()
     report = summarize(run, target_rate=args.rate)
     report["success_count"] = sum(
         sample.status_code is not None and 200 <= sample.status_code < 300 and sample.error is None

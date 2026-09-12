@@ -49,37 +49,20 @@ def read_manifest(path: Path) -> ServerManifest:
 
 
 async def local_manifest(api_processes: int) -> ServerManifest:
-    from prisma import Prisma
-    from redis.asyncio import Redis
     import yaml
 
-    from tests.performance.gateway_concurrency_fixture import (
-        fixture_database_url,
-        require_local_url,
-    )
+    from tests.performance.gateway_concurrency_dependencies import local_dependencies
 
     profile_path = Path("tests/performance/gateway_concurrency_profile.yaml")
     profile = yaml.safe_load(profile_path.read_text())["general_settings"]
-    db = Prisma(datasource={"url": fixture_database_url()})
-    redis = Redis.from_url(
-        require_local_url(os.environ["REDIS_URL"], schemes={"redis", "rediss"}),
-        decode_responses=True,
-        max_connections=2,
-        socket_connect_timeout=2,
-        socket_timeout=2,
-    )
-    await db.connect()
-    try:
+    async with local_dependencies() as dependencies:
         async with asyncio.timeout(5):
-            rows = await db.query_raw("SHOW server_version")
-            redis_version = (await redis.info("server"))["redis_version"]
+            rows = await dependencies.database.query_raw("SHOW server_version")
+            redis_version = (await dependencies.redis.info("server"))["redis_version"]
         match = re.match(r"[0-9]+(?:\.[0-9]+){0,2}", rows[0]["server_version"])
         if match is None:
             raise ValueError("Cannot identify PostgreSQL version")
         postgres_version = match.group()
-    finally:
-        await redis.aclose()
-        await db.disconnect()
     digest = hashlib.sha256()
     for path in sorted(Path("src").rglob("*.py")) + [Path("uv.lock")]:
         digest.update(str(path).encode() + b"\0" + path.read_bytes())

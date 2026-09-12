@@ -123,6 +123,10 @@ are captured at the beginning and end; intermediate snapshots keep counts,
 sums, and gauges. Scrape failures are explicit and invalidate a complete evidence
 claim.
 
+An export failure stops the active load instead of continuing without samples.
+Dependency clients and output files are closed after startup failure, cancellation,
+or a failed close of another client.
+
 PostgreSQL and Redis call deltas include background workers. They are not isolated
 per-request query counts. The SQL snapshot excludes its own aggregation query;
 Redis command snapshots exclude `INFO`. Use the repository query-budget tests
@@ -188,8 +192,11 @@ Sum per-process counters and in-flight gauges across pods. Shared audit/spend
 backlog gauges describe one database queue and must not be summed per replica.
 Use current queue observations and inspect staleness when workers stop.
 `response_first_body` measures the first nonempty ASGI body, not token parsing.
-`after_response` includes all application work after the final frame, not only
-accounting. HTTP byte counters measure transferred bytes, not retained memory.
+An observed disconnect ends HTTP occupancy immediately, even while the application
+is still cleaning up. Later discarded body frames do not count as transferred bytes.
+`after_response` includes all application work after the final frame or observed
+disconnect, not only accounting. HTTP byte counters measure transferred bytes,
+not retained memory.
 
 Recompute the historical summary without any private source files:
 

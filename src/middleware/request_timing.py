@@ -14,6 +14,64 @@ from src.metrics.request_phases import (
 )
 
 
+class _HTTPObservation:
+    def __init__(self, route: str) -> None:
+        self.route = route
+        self.started = perf_counter()
+        self.status_code = 500
+        self.response_kind = "nonstream"
+        self.first_body = False
+        self.completed_at: float | None = None
+        self.active = request_in_flight.labels(route)
+        self.active.inc()
+
+    def observe(self, phase: str, outcome: str, duration: float) -> None:
+        observe_request_phase(
+            route=self.route,
+            phase=phase,
+            outcome=outcome,
+            response_kind=self.response_kind,
+            latency_seconds=duration,
+        )
+
+    def response_started(self, message: Message) -> None:
+        self.status_code = int(message.get("status") or 500)
+        if any(
+            key.lower() == b"content-type" and b"text/event-stream" in value.lower()
+            for key, value in message.get("headers", [])
+        ):
+            self.response_kind = "stream"
+
+    def body_sent(self, message: Message) -> None:
+        if self.completed_at is not None:
+            # Servers may silently discard sends after a disconnect.
+            return
+        size = len(message.get("body", b""))
+        response_bytes.labels(self.route).inc(size)
+        if size and not self.first_body:
+            self.first_body = True
+            self.observe(
+                "response_first_body", _outcome(self.status_code), perf_counter() - self.started
+            )
+        if not message.get("more_body", False):
+            self.finish(_outcome(self.status_code))
+
+    def finish(self, outcome: str) -> None:
+        if self.completed_at is not None:
+            return
+        self.completed_at = perf_counter()
+        self.active.dec()
+        self.observe("response_total", outcome, self.completed_at - self.started)
+
+    def application_finished(self, outcome: str) -> None:
+        finished = perf_counter()
+        if self.completed_at is None:
+            self.finish("cancelled_or_error")
+        else:
+            self.observe("after_response", outcome, finished - self.completed_at)
+        self.observe("application_total", outcome, finished - self.started)
+
+
 class RequestTimingMiddleware:
     """Observe the complete HTTP body lifecycle, including streaming responses."""
 
@@ -24,61 +82,29 @@ class RequestTimingMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-
-        started = perf_counter()
-        status_code = 500
-        response_kind = "nonstream"
-        observed = False
-        first_body = False
-        completed_at: float | None = None
-        route = _route_label(scope)
-        active = request_in_flight.labels(route)
-        active.inc()
+        observation = _HTTPObservation(_route_label(scope))
 
         async def receive_with_timing() -> Message:
             message = await receive()
             if message["type"] == "http.request":
-                request_bytes.labels(route).inc(len(message.get("body", b"")))
+                request_bytes.labels(observation.route).inc(len(message.get("body", b"")))
+            elif message["type"] == "http.disconnect":
+                observation.finish("disconnected")
             return message
 
         async def send_with_timing(message: Message) -> None:
-            nonlocal observed, response_kind, status_code, first_body, completed_at
             if message["type"] == "http.response.start":
-                status_code = int(message.get("status") or 500)
-                headers = message.get("headers") or []
-                if any(
-                    key.lower() == b"content-type" and b"text/event-stream" in value.lower()
-                    for key, value in headers
-                ):
-                    response_kind = "stream"
-            await send(message)
+                observation.response_started(message)
+            try:
+                await send(message)
+            except OSError:
+                observation.finish("disconnected")
+                raise
+            except asyncio.CancelledError:
+                observation.finish("cancelled")
+                raise
             if message["type"] == "http.response.body":
-                body_size = len(message.get("body", b""))
-                response_bytes.labels(route).inc(body_size)
-                if body_size and not first_body:
-                    first_body = True
-                    observe_request_phase(
-                        route=route,
-                        phase="response_first_body",
-                        outcome=_outcome(status_code),
-                        response_kind=response_kind,
-                        latency_seconds=perf_counter() - started,
-                    )
-            if (
-                not observed
-                and message["type"] == "http.response.body"
-                and not message.get("more_body", False)
-            ):
-                observed = True
-                completed_at = perf_counter()
-                active.dec()
-                observe_request_phase(
-                    route=route,
-                    phase="response_total",
-                    outcome=_outcome(status_code),
-                    response_kind=response_kind,
-                    latency_seconds=completed_at - started,
-                )
+                observation.body_sent(message)
 
         application_outcome = "success"
         try:
@@ -89,31 +115,7 @@ class RequestTimingMiddleware:
             )
             raise
         finally:
-            finished = perf_counter()
-            if not observed:
-                active.dec()
-                observe_request_phase(
-                    route=route,
-                    phase="response_total",
-                    outcome="cancelled_or_error",
-                    response_kind=response_kind,
-                    latency_seconds=finished - started,
-                )
-            if completed_at is not None:
-                observe_request_phase(
-                    route=route,
-                    phase="after_response",
-                    outcome=application_outcome,
-                    response_kind=response_kind,
-                    latency_seconds=finished - completed_at,
-                )
-            observe_request_phase(
-                route=route,
-                phase="application_total",
-                outcome=application_outcome,
-                response_kind=response_kind,
-                latency_seconds=finished - started,
-            )
+            observation.application_finished(application_outcome)
 
 
 def _route_label(scope: Scope) -> str:

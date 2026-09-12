@@ -53,6 +53,7 @@ OUTCOMES = frozenset(
         "error",
         "cancelled",
         "cancelled_or_error",
+        "disconnected",
         "rate_limited",
         "client_error",
         "server_error",

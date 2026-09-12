@@ -13,7 +13,8 @@ import yaml
 from src.config import GeneralSettings
 from tests.performance import gateway_concurrency_metrics as metrics
 from tests.performance import run_gateway_concurrency as workload
-from tests.performance.gateway_concurrency_fixture import fixture_database_url, fixture_key
+from tests.performance.gateway_concurrency_dependencies import fixture_database_url
+from tests.performance.gateway_concurrency_fixture import fixture_key
 from tests.performance.gateway_concurrency_manifest import ServerManifest
 from tests.performance.gateway_concurrency_mock import app
 from tests.performance.run_gateway_concurrency import error_code, valid_completion
