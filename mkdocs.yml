@@ -150,6 +150,7 @@ nav:
       - Telemetry Ingestion Rollout: deployment/telemetry-ingestion-rollout.md
       - Usage Reporting V2 Rollout: deployment/usage-reporting-v2.md
       - Upstream HTTP Tuning: deployment/upstream-http.md
+      - Concurrency Measurement: deployment/concurrency-measurement.md
   - Project:
       - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
       - Route-Group Model Router Design: project/model-router-design.md

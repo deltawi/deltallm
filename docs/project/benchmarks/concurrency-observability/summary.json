@@ -1,0 +1,102 @@
+{
+  "after_source_state": "uncommitted PR 1 instrumentation changes",
+  "before_revision": "0086cd6a35cd916eb24a9b3160a458121f75315d",
+  "capacity_certified": false,
+  "duration_per_case_seconds": 20,
+  "limitations": "One small paired sample; p99 is sensitive to scheduling noise. This is not the real PostgreSQL/Redis one-token workload.",
+  "offered_rps": 10,
+  "profile": "tests/performance/routing_cache_profile.py",
+  "results": [
+    {
+      "cache_calls": {
+        "get": 200,
+        "set": 200
+      },
+      "case": "miss",
+      "label": "before",
+      "p95_ms": 9.33262500075216,
+      "p99_ms": 10.720374999436899,
+      "provider_calls": {
+        "post": 200
+      },
+      "redis_calls": {
+        "eval": 1200,
+        "expire": 400,
+        "get": 200,
+        "hgetall": 200,
+        "incr": 200,
+        "incrby": 200,
+        "mget": 200,
+        "pexpire": 200,
+        "zadd": 400,
+        "zremrangebyscore": 200
+      },
+      "started": 200,
+      "success": 200,
+      "summary": "before/miss/gateway-load-17b41c86595e41d0b54a6e05e8ac559b-summary.json"
+    },
+    {
+      "cache_calls": {
+        "get": 200
+      },
+      "case": "hit",
+      "label": "before",
+      "p95_ms": 5.790041001091595,
+      "p99_ms": 6.481374999566469,
+      "provider_calls": {},
+      "redis_calls": {
+        "eval": 600,
+        "get": 200
+      },
+      "started": 200,
+      "success": 200,
+      "summary": "before/hit/gateway-load-239153fa32274d4eb996990a4761f4d4-summary.json"
+    },
+    {
+      "cache_calls": {
+        "get": 200,
+        "set": 200
+      },
+      "case": "miss",
+      "label": "after",
+      "p95_ms": 9.316499999840744,
+      "p99_ms": 11.951167000006535,
+      "provider_calls": {
+        "post": 200
+      },
+      "redis_calls": {
+        "eval": 1200,
+        "expire": 400,
+        "get": 200,
+        "hgetall": 200,
+        "incr": 200,
+        "incrby": 200,
+        "mget": 200,
+        "pexpire": 200,
+        "zadd": 400,
+        "zremrangebyscore": 200
+      },
+      "started": 200,
+      "success": 200,
+      "summary": "after/miss/gateway-load-c3a558a09a574fccb23e17b8f9347d6b-summary.json"
+    },
+    {
+      "cache_calls": {
+        "get": 200
+      },
+      "case": "hit",
+      "label": "after",
+      "p95_ms": 5.956875000265427,
+      "p99_ms": 7.158667000112473,
+      "provider_calls": {},
+      "redis_calls": {
+        "eval": 600,
+        "get": 200
+      },
+      "started": 200,
+      "success": 200,
+      "summary": "after/hit/gateway-load-c8f8c8f0dae34223b58ba6419aa21205-summary.json"
+    }
+  ],
+  "scope": "ASGI regression comparison; fake Redis/provider, no database; excludes outbox acceptance and lifespan sampling"
+}
