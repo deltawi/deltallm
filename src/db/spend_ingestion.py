@@ -7,6 +7,8 @@ import json
 from typing import Any
 
 from src.db.client import is_prisma_transaction_client
+from src.db.telemetry_acceptance import AcceptanceObservation, TelemetryDatabaseUnavailable
+from src.metrics.telemetry_acceptance import AcceptancePhase, TelemetryQueue
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,18 +45,30 @@ class SpendIngestionRepository:
         max_attempts: int,
         max_pending_events: int,
     ) -> SpendEnqueueResult:
-        if self.prisma is None:
-            raise RuntimeError("spend ingestion database is unavailable")
-        async with self._transaction() as tx:
-            transactional = self.with_db(tx)
-            await transactional._lock_enqueue_admission()
-            return await transactional._enqueue_under_lock(
-                event_id=event_id,
-                event_type=event_type,
-                payload=payload,
-                max_attempts=max_attempts,
-                max_pending_events=max_pending_events,
-            )
+        with AcceptanceObservation(
+            TelemetryQueue.SPEND,
+            owns_transaction=not is_prisma_transaction_client(self.prisma),
+            event_id=event_id,
+        ) as observation:
+            with observation.phase(AcceptancePhase.PREPARE):
+                if self.prisma is None:
+                    raise TelemetryDatabaseUnavailable("spend ingestion database is unavailable")
+                payload_json = json.dumps(payload, default=str)
+                observation.retain_serialized(payload_json)
+            async with observation.transaction(self._transaction()) as tx:
+                transactional = self.with_db(tx)
+                with observation.phase(AcceptancePhase.LOCK):
+                    await transactional._lock_enqueue_admission()
+                with observation.phase(AcceptancePhase.SQL):
+                    result = await transactional._enqueue_under_lock(
+                        event_id=event_id,
+                        event_type=event_type,
+                        payload_json=payload_json,
+                        max_attempts=max_attempts,
+                        max_pending_events=max_pending_events,
+                    )
+            observation.record_result([result.status])
+            return result
 
     async def _lock_enqueue_admission(self) -> None:
         if self.prisma is None:
@@ -72,7 +86,7 @@ class SpendIngestionRepository:
         *,
         event_id: str,
         event_type: str,
-        payload: dict[str, Any],
+        payload_json: str,
         max_attempts: int,
         max_pending_events: int,
     ) -> SpendEnqueueResult:
@@ -120,7 +134,7 @@ class SpendIngestionRepository:
             """,
             event_id,
             event_type,
-            json.dumps(payload, default=str),
+            payload_json,
             max(1, int(max_attempts)),
             max(1, int(max_pending_events)),
         )

@@ -43,6 +43,10 @@ general_settings:
 
 Metrics are exposed at `/metrics` in Prometheus format.
 
+Use the [concurrency measurement runbook](../deployment/concurrency-measurement.md)
+to diagnose request-side audit/spend acceptance, authentication, streaming lifetime,
+and event-loop delay, and to reproduce the fixed local-provider workload.
+
 Example scrape config:
 
 ```yaml
