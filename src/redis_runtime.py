@@ -8,7 +8,9 @@ from time import perf_counter
 from typing import Literal
 
 from prometheus_client import Counter, Gauge, Histogram
+from pydantic import SecretStr
 from redis.asyncio import ConnectionPool, Redis
+from redis.asyncio.client import PubSub
 from redis.asyncio.connection import parse_url
 from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -127,9 +129,31 @@ class AllocatedRedisPool(ConnectionPool):
         await super().aclose()
 
 
+class AllocatedPubSub(PubSub):
+    async def listen(self):
+        # Idle subscriptions are healthy. An explicit polling timeout returns
+        # None rather than turning the command socket deadline into an outage.
+        timeout = min(1.0, self.connection_pool.connection_kwargs["socket_timeout"])
+        while self.subscribed:
+            message = await self.get_message(timeout=timeout)
+            if message is not None:
+                yield message
+
+
 class AllocatedRedis(Redis):
+    def pubsub(self, **kwargs) -> PubSub:
+        return AllocatedPubSub(
+            self.connection_pool, event_dispatcher=self._event_dispatcher, **kwargs
+        )
+
     async def aclose(self, close_connection_pool=None) -> None:
-        self.connection_pool.closed = True
+        owns_pool = (
+            self.auto_close_connection_pool
+            if close_connection_pool is None
+            else close_connection_pool
+        )
+        if owns_pool:
+            self.connection_pool.closed = True
         await super().aclose(close_connection_pool=close_connection_pool)
 
 
@@ -144,7 +168,11 @@ def build_redis_client(
     endpoint = general if endpoint_settings is None else endpoint_settings
     url = getattr(settings, "redis_url", None) or getattr(endpoint, "redis_url", None)
     if allocation == "bulk":
-        url = startup_setting(general, settings, "redis_bulk_url", None) or url
+        bulk_url = startup_setting(general, settings, "redis_bulk_url", None)
+        if bulk_url is not None:
+            if not isinstance(bulk_url, SecretStr):
+                raise TypeError("Redis bulk endpoint must use the typed secret setting")
+            url = bulk_url.get_secret_value() or url
     options = (
         parse_url(url)
         if url

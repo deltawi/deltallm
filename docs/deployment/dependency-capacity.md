@@ -41,7 +41,10 @@ still share the critical allocation and require further allocation work. Long-li
 pub/sub connections count against critical capacity. No capacity waiters are allowed:
 excess work fails immediately. An admitted acquisition has a finite deadline that
 includes the driver lock, connection setup, and validation. Native connect/socket
-timeouts also apply, and this client layer adds no automatic retries.
+timeouts also apply, and this client layer adds no automatic retries. Idle pub/sub
+listeners use finite polling: silence is not treated as a failed command. This
+adds no Redis commands, and subscription acknowledgement, message delivery, and
+cancellation retain their existing behavior.
 
 The bound precedes the driver's connection lock: otherwise slow connection setup
 could retain arbitrarily many waiting callers even with a finite connection count.
@@ -63,7 +66,10 @@ authorization, quota, or durable accounting when a dependency fails.
 For production memory isolation, point `redis_bulk_url` to a separate response-cache
 Redis deployment. Supply credentials using the existing secret-reference mechanism,
 for example `redis_bulk_url: os.environ/DELTALLM_REDIS_BULK_URL` with a Secret-backed
-environment variable.
+environment variable. The bulk URL is secret-typed and returned as `**********`
+by the settings API. Missing, empty, or redacted values in a settings update
+preserve it; actual endpoint writes through the live API return `restart_required`.
+Set or remove the endpoint in startup configuration and restart.
 
 Separate client pools or Redis database numbers do not isolate server eviction.
 Critical coordination keys must not be evicted by response-cache traffic. Provision

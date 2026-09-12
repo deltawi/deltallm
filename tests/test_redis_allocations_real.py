@@ -13,15 +13,21 @@ from redis.exceptions import (
 from src.config import GeneralSettings, Settings
 from src.redis_runtime import build_redis_client
 
-pytestmark = [
-    pytest.mark.redis,
-    pytest.mark.asyncio,
-    pytest.mark.skipif(not os.getenv("DELTALLM_TEST_REDIS_URL"), reason="test Redis URL required"),
-]
+pytestmark = [pytest.mark.redis, pytest.mark.asyncio]
 
 
-async def test_real_bulk_exhaustion_and_timeout_preserve_critical_pool():
-    settings = Settings(redis_url=os.environ["DELTALLM_TEST_REDIS_URL"])
+@pytest.fixture
+def redis_settings():
+    url = os.getenv("DELTALLM_TEST_REDIS_URL")
+    if not url:
+        if os.getenv("CI"):
+            pytest.fail("CI must provide DELTALLM_TEST_REDIS_URL for Redis allocation tests")
+        pytest.skip("test Redis URL required")
+    return Settings(redis_url=url)
+
+
+async def test_real_bulk_exhaustion_and_timeout_preserve_critical_pool(redis_settings):
+    settings = redis_settings
     general = GeneralSettings(
         redis_critical_max_connections=1,
         redis_bulk_max_connections=1,
@@ -47,3 +53,31 @@ async def test_real_bulk_exhaustion_and_timeout_preserve_critical_pool():
         assert bulk.connection_pool.gate.active == 0
         assert await bulk.ping()
         assert await critical.ping()
+
+
+async def test_idle_pubsub_survives_multiple_socket_deadlines_and_receives_update(redis_settings):
+    import asyncio
+
+    settings = redis_settings
+    general = GeneralSettings(redis_socket_timeout_seconds=0.02)
+    async with AsyncExitStack() as stack:
+        client = build_redis_client(settings, general, allocation="critical")
+        stack.push_async_callback(client.aclose)
+        pubsub = client.pubsub(ignore_subscribe_messages=True)
+        stack.push_async_callback(pubsub.aclose)
+        channel = "allocation-idle:" + uuid4().hex
+        await pubsub.subscribe(channel)
+        stream = pubsub.listen()
+        task = asyncio.create_task(anext(stream))
+        try:
+            # Deliberately cross four native socket deadlines with no messages.
+            await asyncio.sleep(0.08)
+            assert not task.done()
+            await client.publish(channel, "updated")
+            async with asyncio.timeout(1):
+                message = await task
+            assert message["data"] == "updated"
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await stream.aclose()

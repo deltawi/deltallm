@@ -584,7 +584,7 @@ class GeneralSettings(BaseModel):
     redis_port: int = 6379
     redis_password: str | None = None
     redis_url: str | None = None
-    redis_bulk_url: str | None = None
+    redis_bulk_url: SecretStr | None = None
     redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
     redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
     redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
@@ -1159,7 +1159,7 @@ class Settings(BaseSettings):
     prompt_singleflight_max_keys: int = Field(default=256, ge=1, le=10_000)
     prompt_singleflight_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     redis_url: str | None = None
-    redis_bulk_url: str | None = None
+    redis_bulk_url: SecretStr | None = None
     redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
     redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
     redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)

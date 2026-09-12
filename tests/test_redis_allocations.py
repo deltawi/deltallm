@@ -20,6 +20,7 @@ class FakeConnection:
 
     def __init__(self, **kwargs):
         self.retry = kwargs.get("retry")
+        self.credential_provider = None
 
     async def connect(self):
         if self.release is not None:
@@ -181,5 +182,126 @@ async def test_existing_endpoint_selection_is_preserved_while_durable_limits_app
     try:
         assert client.connection_pool.connection_kwargs["host"] == "file-redis"
         assert client.connection_pool.max_connections == 7
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.parametrize("close_mode", ["borrowed", "keep_pool"])
+async def test_closing_non_owner_does_not_close_shared_pool(close_mode):
+    from src.redis_runtime import AllocatedRedis
+
+    pool = AllocatedRedisPool(
+        allocation="critical",
+        acquisition_timeout=1,
+        max_connections=1,
+        connection_class=FakeConnection,
+    )
+    owner = AllocatedRedis.from_pool(pool)
+    try:
+        if close_mode == "borrowed":
+            borrower = owner.client()
+            await borrower.initialize()
+            assert pool.gate.active == 1
+            await borrower.aclose()
+        else:
+            await owner.aclose(close_connection_pool=False)
+        assert not pool.closed
+        assert pool.gate.active == 0
+        connection = await pool.get_connection()
+        await pool.release(connection)
+    finally:
+        await owner.aclose()
+    assert pool.closed
+
+
+async def test_idle_pubsub_listen_preserves_delivery_and_owned_connection():
+    from redis.asyncio.connection import Connection
+    from src.redis_runtime import AllocatedRedis
+
+    responses = asyncio.Queue()
+    idle_polls = asyncio.Event()
+    commands = []
+
+    class Parser:
+        reads = 0
+
+        async def read_response(self, **kwargs):
+            self.reads += 1
+            if self.reads >= 4:
+                idle_polls.set()
+            return await responses.get()
+
+    class SocketlessConnection(Connection):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self._parser = Parser()
+
+        async def connect(self):
+            pass
+
+        async def can_read_destructive(self):
+            return False
+
+        async def send_command(self, *args, **kwargs):
+            commands.append(args)
+            if args[0] == "SUBSCRIBE":
+                await responses.put(["subscribe", args[1], 1])
+
+        async def disconnect(self, **kwargs):
+            pass
+
+        async def re_auth(self):
+            pass
+
+    pool = AllocatedRedisPool(
+        allocation="critical",
+        acquisition_timeout=1,
+        max_connections=1,
+        socket_timeout=0.01,
+        decode_responses=True,
+        connection_class=SocketlessConnection,
+    )
+    client = AllocatedRedis.from_pool(pool)
+    pubsub = client.pubsub(ignore_subscribe_messages=True)
+    listener = None
+    stream = pubsub.listen()
+    try:
+        await pubsub.subscribe("policy-fixture")
+        listener = asyncio.create_task(anext(stream))
+        async with asyncio.timeout(1):
+            await idle_polls.wait()
+        assert not listener.done()
+        assert pool.gate.active == 1
+        assert commands == [("SUBSCRIBE", "policy-fixture")]
+        await responses.put(["message", "policy-fixture", "updated"])
+        async with asyncio.timeout(1):
+            message = await listener
+        assert message["data"] == "updated"
+        listener = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        listener.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await listener
+    finally:
+        if listener is not None:
+            listener.cancel()
+            await asyncio.gather(listener, return_exceptions=True)
+        await stream.aclose()
+        await pubsub.aclose()
+        await client.aclose()
+    assert pool.gate.active == 0 and not pool._leases
+
+
+async def test_bulk_endpoint_is_masked_in_model_output_and_unwrapped_only_for_client():
+    url = "redis://fixture-user:private-fixture-secret@fixture-cache:6379/2"
+    general = GeneralSettings(redis_bulk_url=url)
+    settings = Settings(redis_bulk_url=url)
+    for model in (general, settings):
+        assert url not in repr(model)
+        assert "private-fixture-secret" not in model.model_dump_json()
+        assert model.redis_bulk_url.get_secret_value() == url
+    client = build_redis_client(settings, general, allocation="bulk")
+    try:
+        assert client.connection_pool.connection_kwargs["password"] == "private-fixture-secret"
     finally:
         await client.aclose()

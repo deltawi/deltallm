@@ -88,7 +88,7 @@ The generated schema is the field-coverage source of truth. The [General setting
 | `prompt_negative_l2_ttl_seconds` | integer | `30` | ≥ 1 | Ordinary |
 | `redis_acquisition_timeout_seconds` | number | `0.2` | ≤ 30; ≥ 0.001 | Ordinary |
 | `redis_bulk_max_connections` | integer | `16` | ≤ 10000; ≥ 1 | Ordinary |
-| `redis_bulk_url` | string or null | `null` | — | Ordinary |
+| `redis_bulk_url` | string or null | `null` | — | Secret |
 | `redis_connect_timeout_seconds` | number | `1.0` | ≤ 30; ≥ 0.001 | Ordinary |
 | `redis_critical_max_connections` | integer | `64` | ≤ 10000; ≥ 1 | Ordinary |
 | `redis_degraded_mode` | "fail_open" or "fail_closed" | `"fail_open"` | — | Ordinary |
