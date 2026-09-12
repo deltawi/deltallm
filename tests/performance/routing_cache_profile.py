@@ -69,8 +69,13 @@ def queue_slope(run, seconds):
     return {"in_flight_samples": points, "in_flight_slope_per_second": slope}
 
 
-async def measure_case(case, label, output_dir):
+async def measure_case(case, label, output_dir, *, ingress=False):
     app = await app_fixture.__wrapped__()
+    if ingress:
+        from src.config import GeneralSettings, Settings
+        from src.ingress import initialize_ingress
+
+        initialize_ingress(app, GeneralSettings(gateway_ingress_enabled=True), Settings())
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("src.services.key_service").setLevel(logging.WARNING)
     record = next(iter(app.state._test_repo.records.values()))
@@ -123,6 +128,7 @@ async def measure_case(case, label, output_dir):
         label=label,
         case=case,
         environment="ASGI with fake Redis, fixed provider mock, no database",
+        ingress_enabled=ingress,
         measured_key_builder=key_builder_module.__file__,
         redis_calls=dict(redis_counts),
         cache_calls=dict(cache_counts),
@@ -158,11 +164,14 @@ async def measure_case(case, label, output_dir):
 
 async def main(args):
     for case in ("miss", "hit"):
-        await measure_case(case, args.label, args.output_dir)
+        await measure_case(case, args.label, args.output_dir, ingress=args.ingress)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True, choices=("before", "after"))
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--ingress", action="store_true", help="Enable the per-process ingress gate"
+    )
     asyncio.run(main(parser.parse_args()))

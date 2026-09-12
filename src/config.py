@@ -537,6 +537,14 @@ class GeneralSettings(DatabaseAllocationSettings):
     budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
     budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
     budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_ingress_enabled: bool = False
+    gateway_ingress_max_active: int = Field(default=100, ge=1, le=100_000)
+    gateway_ingress_max_waiters: int = Field(default=0, ge=0, le=10_000)
+    gateway_ingress_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    gateway_ingress_max_body_bytes: int = Field(default=33_554_432, ge=1, le=1_073_741_824)
+    gateway_ingress_max_buffered_bytes: int = Field(default=67_108_864, ge=1, le=4_294_967_296)
+    gateway_ingress_body_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    gateway_ingress_health_max_active: int = Field(default=4, ge=1, le=100)
     gateway_preflight_capacity_enabled: bool = False
     gateway_preflight_global_max_parallel: int = Field(default=300, gt=0, le=100_000)
     gateway_preflight_org_max_parallel: int = Field(default=100, ge=0, le=100_000)
@@ -1116,6 +1124,14 @@ class Settings(BaseSettings, DatabaseAllocationSettings):
     budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
     budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
     budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_ingress_enabled: bool = False
+    gateway_ingress_max_active: int = Field(default=100, ge=1, le=100_000)
+    gateway_ingress_max_waiters: int = Field(default=0, ge=0, le=10_000)
+    gateway_ingress_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    gateway_ingress_max_body_bytes: int = Field(default=33_554_432, ge=1, le=1_073_741_824)
+    gateway_ingress_max_buffered_bytes: int = Field(default=67_108_864, ge=1, le=4_294_967_296)
+    gateway_ingress_body_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    gateway_ingress_health_max_active: int = Field(default=4, ge=1, le=100)
     gateway_preflight_capacity_enabled: bool = False
     gateway_preflight_global_max_parallel: int = Field(default=300, gt=0, le=100_000)
     gateway_preflight_org_max_parallel: int = Field(default=100, ge=0, le=100_000)

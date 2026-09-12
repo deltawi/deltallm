@@ -62,6 +62,14 @@ _STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
         "redis_acquisition_timeout_seconds",
         "redis_socket_timeout_seconds",
         "redis_connect_timeout_seconds",
+        "gateway_ingress_enabled",
+        "gateway_ingress_max_active",
+        "gateway_ingress_max_waiters",
+        "gateway_ingress_queue_timeout_ms",
+        "gateway_ingress_max_body_bytes",
+        "gateway_ingress_max_buffered_bytes",
+        "gateway_ingress_body_timeout_seconds",
+        "gateway_ingress_health_max_active",
         "provider_discovery_allow_http",
         "provider_discovery_allowed_ports",
         "provider_discovery_allowed_private_cidrs",
@@ -447,7 +455,10 @@ class DynamicConfigManager:
             for field_name in _STARTUP_ONLY_GENERAL_SETTINGS
             if getattr(current, field_name) != getattr(candidate, field_name)
             or (
-                (field_name.startswith("redis_") or field_name in DATABASE_ALLOCATION_FIELDS)
+                (
+                    field_name.startswith(("redis_", "gateway_ingress_"))
+                    or field_name in DATABASE_ALLOCATION_FIELDS
+                )
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)
             )
         )
