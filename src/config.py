@@ -537,6 +537,14 @@ class GeneralSettings(DatabaseAllocationSettings):
     budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
     budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
     budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_ingress_control_max_active: int = Field(default=16, ge=1, le=1000)
+    gateway_ingress_control_max_buffered_bytes: int = Field(default=67108864, ge=1, le=4294967296)
+    auth_fallback_max_active: int = Field(default=8, ge=1, le=1000)
+    auth_fallback_max_waiters: int = Field(default=32, ge=0, le=10000)
+    auth_fallback_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    auth_fallback_timeout_seconds: float = Field(default=0.5, ge=0.01, le=30)
+    auth_fallback_cache_timeout_seconds: float = Field(default=0.1, ge=0.001, le=1)
+    auth_fallback_cache_max_bytes: int = Field(default=131072, ge=1024, le=1048576)
     gateway_ingress_enabled: bool = False
     gateway_ingress_max_active: int = Field(default=100, ge=1, le=100_000)
     gateway_ingress_max_waiters: int = Field(default=0, ge=0, le=10_000)
@@ -1124,6 +1132,14 @@ class Settings(BaseSettings, DatabaseAllocationSettings):
     budget_enforcement_query_mode: Literal["legacy", "shadow", "combined"] = "legacy"
     budget_enforcement_shadow_sample_rate: float = Field(default=0.01, ge=0.0, le=1.0)
     budget_enforcement_query_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    gateway_ingress_control_max_active: int = Field(default=16, ge=1, le=1000)
+    gateway_ingress_control_max_buffered_bytes: int = Field(default=67108864, ge=1, le=4294967296)
+    auth_fallback_max_active: int = Field(default=8, ge=1, le=1000)
+    auth_fallback_max_waiters: int = Field(default=32, ge=0, le=10000)
+    auth_fallback_queue_timeout_ms: int = Field(default=10, ge=1, le=1000)
+    auth_fallback_timeout_seconds: float = Field(default=0.5, ge=0.01, le=30)
+    auth_fallback_cache_timeout_seconds: float = Field(default=0.1, ge=0.001, le=1)
+    auth_fallback_cache_max_bytes: int = Field(default=131072, ge=1024, le=1048576)
     gateway_ingress_enabled: bool = False
     gateway_ingress_max_active: int = Field(default=100, ge=1, le=100_000)
     gateway_ingress_max_waiters: int = Field(default=0, ge=0, le=10_000)

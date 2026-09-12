@@ -143,6 +143,14 @@ general_settings:
   # Reject overload before prompt, guardrail, and budget work. Enable after sizing
   # these limits below the measured safe database/upstream concurrency envelope.
   # Per-process ingress admission (restart required; enable after workload validation).
+  gateway_ingress_control_max_active: 16
+  gateway_ingress_control_max_buffered_bytes: 67108864
+  auth_fallback_max_active: 8
+  auth_fallback_max_waiters: 32
+  auth_fallback_queue_timeout_ms: 10
+  auth_fallback_timeout_seconds: 0.5
+  auth_fallback_cache_timeout_seconds: 0.1
+  auth_fallback_cache_max_bytes: 131072
   gateway_ingress_enabled: false
   gateway_ingress_max_active: 100
   gateway_ingress_max_waiters: 0

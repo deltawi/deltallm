@@ -140,6 +140,14 @@ class ServiceUnavailableError(ProxyError):
     message = "Service unavailable"
 
 
+class AuthenticationUnavailableError(ServiceUnavailableError):
+    message = "Authentication is temporarily unavailable"
+    retry_after = 1
+
+    def __init__(self) -> None:
+        super().__init__(code="auth_fallback_unavailable", affects_deployment_health=False)
+
+
 class GatewayCapacityError(ServiceUnavailableError):
     error_type = "gateway_capacity_error"
     message = "Gateway upstream connection pool exhausted"

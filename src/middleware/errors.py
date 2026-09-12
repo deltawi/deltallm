@@ -10,7 +10,13 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.guardrails.exceptions import GuardrailViolationError
-from src.models.errors import ApprovalRequiredError, InvalidRequestError, ProxyError, RateLimitError
+from src.models.errors import (
+    ApprovalRequiredError,
+    AuthenticationUnavailableError,
+    InvalidRequestError,
+    ProxyError,
+    RateLimitError,
+)
 from src.telemetry.request_failures import (
     maybe_log_proxy_error,
     maybe_log_request_validation_failure,
@@ -41,7 +47,10 @@ def proxy_error_response(exc: ProxyError) -> JSONResponse:
     """Build the canonical HTTP response for a gateway error."""
     headers = {}
     retry_after = getattr(exc, "retry_after", None)
-    if isinstance(exc, RateLimitError) and retry_after is not None:
+    if (
+        isinstance(exc, (RateLimitError, AuthenticationUnavailableError))
+        and retry_after is not None
+    ):
         headers["Retry-After"] = str(retry_after)
     return JSONResponse(status_code=exc.status_code, content=_serialize_error(exc), headers=headers)
 
@@ -101,7 +110,10 @@ def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:
 
     headers = {}
     retry_after = getattr(exc, "retry_after", None)
-    if isinstance(exc, RateLimitError) and retry_after is not None:
+    if (
+        isinstance(exc, (RateLimitError, AuthenticationUnavailableError))
+        and retry_after is not None
+    ):
         headers["Retry-After"] = str(retry_after)
     return anthropic_error_response(
         status_code=exc.status_code,

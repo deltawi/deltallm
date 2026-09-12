@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from starlette.types import Message, Scope
 
-from src.ingress import IngressLimits, IngressRuntime
+from src.ingress import IngressClass, IngressLimits, IngressRuntime, ingress_class
 from src.middleware.ingress import IngressMiddleware
 
 pytestmark = [pytest.mark.hermetic, pytest.mark.asyncio]
@@ -61,7 +61,9 @@ async def wait_until(predicate) -> None:
 )
 async def test_full_gate_rejects_without_body_or_downstream_work(path: str) -> None:
     rt = runtime()
-    await rt.requests.acquire(timeout_seconds=1)
+    gate = rt.gate(ingress_class(path, "POST"))
+    for _ in range(rt.limits.control_max_active if gate is rt.control else 1):
+        await gate.acquire(timeout_seconds=1)
     app, receive, send = AsyncMock(), AsyncMock(), AsyncMock()
     try:
         await IngressMiddleware(app)(scope(rt, path), receive, send)
@@ -70,11 +72,36 @@ async def test_full_gate_rejects_without_body_or_downstream_work(path: str) -> N
         start, body = [call.args[0] for call in send.await_args_list]
         assert start["status"] == 503
         assert (b"retry-after", b"1") in start["headers"]
-        assert json.loads(body["body"])["error"]["code"] == "gateway_ingress_full"
-        assert rt.requests.active == 1
+        payload = json.loads(body["body"])
+        if path in {"/messages", "/v1/messages"}:
+            assert payload["type"] == "error"
+            assert payload["error"]["type"] == "overloaded_error"
+        else:
+            assert payload["error"]["code"] == "gateway_ingress_full"
+        assert gate.active > 0
         assert rt.requests.waiters == rt.buffered_bytes == 0
     finally:
-        await rt.requests.release()
+        while gate.active:
+            await gate.release()
+
+
+async def test_control_capacity_and_bytes_cannot_exhaust_inference() -> None:
+    rt = runtime(control_max_active=1, control_max_buffered_bytes=4, max_buffered_bytes=4)
+    await rt.control.acquire(timeout_seconds=1)
+    rt.reserve_bytes(4, IngressClass.CONTROL)
+    app = AsyncMock()
+    try:
+        await IngressMiddleware(app)(
+            scope(rt),
+            AsyncMock(return_value={"type": "http.request", "body": b"1234"}),
+            AsyncMock(),
+        )
+        app.assert_awaited_once()
+        assert rt.requests.active == rt.buffered_bytes == 0
+        assert rt.control.active == 1
+    finally:
+        await rt.control.release()
+        rt.release_bytes(4, IngressClass.CONTROL)
 
 
 async def test_waiters_are_finite_cancelled_and_timeout_without_receiving_body() -> None:
@@ -86,12 +113,12 @@ async def test_waiters_are_finite_cancelled_and_timeout_without_receiving_body()
     waiters = [asyncio.create_task(middleware(scope(rt), receive, send)) for send in sends]
     try:
         await wait_until(lambda: rt.requests.waiters == 2)
-        flood_sends = [AsyncMock() for _ in range(50)]
-        await asyncio.gather(*(middleware(scope(rt), receive, send) for send in flood_sends))
-        assert all(send.await_args_list[0].args[0]["status"] == 503 for send in flood_sends)
         waiters[0].cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiters[0]
+        flood_sends = [AsyncMock() for _ in range(50)]
+        await asyncio.gather(*(middleware(scope(rt), receive, send) for send in flood_sends))
+        assert all(send.await_args_list[0].args[0]["status"] == 503 for send in flood_sends)
         await waiters[1]
         assert sends[1].await_args_list[0].args[0]["status"] == 503
         assert rt.requests.waiters == rt.buffered_bytes == 0

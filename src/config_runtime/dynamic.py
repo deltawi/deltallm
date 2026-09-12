@@ -62,6 +62,14 @@ _STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
         "redis_acquisition_timeout_seconds",
         "redis_socket_timeout_seconds",
         "redis_connect_timeout_seconds",
+        "gateway_ingress_control_max_active",
+        "gateway_ingress_control_max_buffered_bytes",
+        "auth_fallback_max_active",
+        "auth_fallback_max_waiters",
+        "auth_fallback_queue_timeout_ms",
+        "auth_fallback_timeout_seconds",
+        "auth_fallback_cache_timeout_seconds",
+        "auth_fallback_cache_max_bytes",
         "gateway_ingress_enabled",
         "gateway_ingress_max_active",
         "gateway_ingress_max_waiters",
@@ -456,7 +464,7 @@ class DynamicConfigManager:
             if getattr(current, field_name) != getattr(candidate, field_name)
             or (
                 (
-                    field_name.startswith(("redis_", "gateway_ingress_"))
+                    field_name.startswith(("redis_", "gateway_ingress_", "auth_fallback_"))
                     or field_name in DATABASE_ALLOCATION_FIELDS
                 )
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)

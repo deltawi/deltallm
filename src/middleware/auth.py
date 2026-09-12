@@ -45,6 +45,8 @@ async def _authenticate_request(
     raw_key = authorization.split(" ", 1)[1].strip()
     if not raw_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API key")
+    if len(raw_key) > 8192:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
     if _is_master_key(request, raw_key):
         auth = annotate_auth_metadata(

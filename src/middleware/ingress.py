@@ -3,22 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+from time import perf_counter
 
 from starlette._utils import get_route_path
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.concurrency import CapacityGateFull, CapacityGateTimedOut
-from src.ingress import IngressBodyLimit, IngressBufferFull, IngressRuntime
-
-# Exact paths only: deployment diagnostics and unknown /health/* paths use
-# ordinary capacity. Aliases and future routes cannot bypass ordinary admission.
-HEALTH_PATHS = frozenset({"/health", "/health/liveliness", "/health/readiness", "/metrics"})
+from src.ingress import (
+    IngressBodyLimit,
+    IngressBufferFull,
+    IngressClass,
+    IngressRuntime,
+    ingress_class,
+)
+from src.metrics.admission import (
+    ingress_active,
+    ingress_waiters,
+    ingress_queue_seconds,
+    ingress_rejections,
+)
+from src.middleware.errors import anthropic_error_response
 
 
 class _BufferedBody:
-    def __init__(self, runtime: IngressRuntime) -> None:
+    def __init__(self, runtime: IngressRuntime, allocation: IngressClass) -> None:
         self.runtime = runtime
+        self.allocation = allocation
         self.size = 0
         self.body: bytes | None = None
 
@@ -31,7 +42,7 @@ class _BufferedBody:
             chunk = message.get("body", b"")
             if self.size + len(chunk) > self.runtime.limits.max_body_bytes:
                 raise IngressBodyLimit
-            self.runtime.reserve_bytes(len(chunk))
+            self.runtime.reserve_bytes(len(chunk), self.allocation)
             self.size += len(chunk)
             buffer.extend(chunk)
             if not message.get("more_body", False):
@@ -49,7 +60,7 @@ class _BufferedBody:
 
     def close(self) -> None:
         self.body = None
-        self.runtime.release_bytes(self.size)
+        self.runtime.release_bytes(self.size, self.allocation)
         self.size = 0
 
 
@@ -65,24 +76,37 @@ class IngressMiddleware:
         if scope["type"] != "http" or runtime is None or not runtime.limits.enabled:
             await self.app(scope, receive, send)
             return
-        health = (
-            scope.get("method") in {"GET", "HEAD"}
-            and get_route_path(scope).rstrip("/") in HEALTH_PATHS
-        )
-        gate = runtime.health if health else runtime.requests
+        allocation = ingress_class(get_route_path(scope), scope.get("method", ""))
+        gate = runtime.gate(allocation)
+        started, outcome = perf_counter(), "admitted"
+        ingress_waiters.labels(allocation.value).inc()
         try:
             await gate.acquire(timeout_seconds=runtime.limits.queue_timeout_ms / 1000)
         except (CapacityGateFull, CapacityGateTimedOut):
+            outcome = "rejected"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            ingress_waiters.labels(allocation.value).dec()
+            ingress_queue_seconds.labels(allocation.value, outcome).observe(
+                perf_counter() - started
+            )
+        if outcome == "rejected":
             await _reject(scope, receive, send, 503, "gateway_ingress_full")
             return
-        body = _BufferedBody(runtime)
+        body = _BufferedBody(runtime, allocation)
+        ingress_active.labels(allocation.value).inc()
         try:
-            await self._admitted(scope, receive, send, runtime, body, health=health)
+            await self._admitted(
+                scope, receive, send, runtime, body, health=allocation == IngressClass.HEALTH
+            )
         finally:
             body.close()
             # BoundedCapacityGate never suspends while holding its condition
             # lock. This release cannot strand an untracked shield task.
             await gate.release()
+            ingress_active.labels(allocation.value).dec()
 
     async def _admitted(
         self,
@@ -138,6 +162,8 @@ def _content_length(scope: Scope) -> int | None:
 
 
 async def _reject(scope: Scope, receive: Receive, send: Send, status: int, code: str) -> None:
+    allocation = ingress_class(get_route_path(scope), scope.get("method", ""))
+    ingress_rejections.labels(allocation.value, code).inc()
     headers = {"Retry-After": "1"} if status == 503 else {}
     if scope.get("http_version", "1.1").startswith("1."):
         headers["Connection"] = "close"
@@ -152,4 +178,8 @@ async def _reject(scope: Scope, receive: Receive, send: Send, status: int, code:
         status_code=status,
         headers=headers,
     )
+    if get_route_path(scope).rstrip("/") in {"/v1/messages", "/messages"}:
+        response = anthropic_error_response(
+            status_code=status, message="Gateway request admission failed", headers=headers
+        )
     await response(scope, receive, send)

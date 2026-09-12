@@ -8,6 +8,8 @@ import yaml
 from src.config import GeneralSettings, Settings
 from src.config_runtime.dynamic import DynamicConfigManager, DynamicConfigRestartRequiredError
 from src.ingress import IngressLimits
+from src.services.auth_fallback import AuthFallbackLimits
+from src.config_startup import startup_field_values
 
 pytestmark = pytest.mark.hermetic
 
@@ -73,5 +75,51 @@ async def test_explicit_default_cannot_replace_environment_without_restart() -> 
     with pytest.raises(DynamicConfigRestartRequiredError, match="gateway_ingress_enabled"):
         await manager.update_config(
             {"general_settings": {"gateway_ingress_enabled": False}}, updated_by="test"
+        )
+    await manager.close()
+
+
+@pytest.mark.parametrize("name", list(AuthFallbackLimits.__dataclass_fields__))
+def test_auth_fallback_limits_are_typed_and_match_examples(name, monkeypatch) -> None:
+    field = "auth_fallback_" + name
+    default = getattr(AuthFallbackLimits(), name)
+    assert getattr(GeneralSettings(), field) == getattr(Settings(), field) == default
+    for path, prefix in [
+        ("config.example.yaml", ("general_settings",)),
+        ("deploy/kubernetes/helm/values.yaml", ("config", "general_settings")),
+    ]:
+        config = yaml.safe_load(Path(path).read_text())
+        for part in prefix:
+            config = config[part]
+        assert config[field] == default
+    for model in (Settings, GeneralSettings):
+        with pytest.raises(ValueError):
+            model.model_validate({field: -1})
+    monkeypatch.setenv(
+        "DELTALLM_" + field.upper(), str(default + 1 if "seconds" not in name else default / 2)
+    )
+    values = startup_field_values(
+        AuthFallbackLimits(), GeneralSettings(), Settings(), prefix="auth_fallback_"
+    )
+    assert values[name] != default
+    explicit = GeneralSettings.model_validate({field: default})
+    assert (
+        startup_field_values(AuthFallbackLimits(), explicit, Settings(), prefix="auth_fallback_")[
+            name
+        ]
+        == default
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", list(AuthFallbackLimits.__dataclass_fields__))
+async def test_auth_fallback_limits_require_restart(name) -> None:
+    manager = DynamicConfigManager(db_client=None, redis_client=None, file_config={})
+    await manager.initialize()
+    field = "auth_fallback_" + name
+    # Presence changes are relevant even when the typed default is unchanged.
+    with pytest.raises(DynamicConfigRestartRequiredError, match=field):
+        await manager.update_config(
+            {"general_settings": {field: getattr(AuthFallbackLimits(), name)}}, updated_by="test"
         )
     await manager.close()

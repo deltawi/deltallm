@@ -42,6 +42,8 @@ def render(*args: str) -> subprocess.CompletedProcess[str]:
         ("max_buffered_bytes", "0"),
         ("body_timeout_seconds", "0"),
         ("health_max_active", "0"),
+        ("control_max_active", "0"),
+        ("control_max_buffered_bytes", "0"),
     ],
 )
 def test_chart_rejects_invalid_ingress_budget(name: str, invalid: str) -> None:
@@ -70,3 +72,22 @@ def test_rendered_config_has_explicit_ingress_budgets(overlay: str | None) -> No
     assert general["gateway_ingress_max_active"] == 100
     assert general["gateway_ingress_max_waiters"] == 0
     assert general["gateway_ingress_max_buffered_bytes"] == 67108864
+    assert general["gateway_ingress_control_max_active"] == 16
+    assert general["auth_fallback_max_active"] == 8
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "max_active",
+        "max_waiters",
+        "queue_timeout_ms",
+        "timeout_seconds",
+        "cache_timeout_seconds",
+        "cache_max_bytes",
+    ],
+)
+def test_chart_rejects_invalid_auth_fallback_limits(field) -> None:
+    result = render("--set", f"config.general_settings.auth_fallback_{field}=-1")
+    assert result.returncode != 0
+    assert "auth_fallback_" + field in result.stderr

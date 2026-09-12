@@ -29,6 +29,8 @@ from src.services.cache_invalidation import (
 from src.services.email_token_service import EmailTokenService
 from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
+from src.services.auth_fallback import AuthFallbackLimits
+from src.config_startup import startup_field_values
 from src.services.limit_counter import LimitCounter
 from src.services.master_session_service import MasterSessionService
 from src.bootstrap.organization_deletion import (
@@ -48,6 +50,7 @@ _AUTH_BOOT_ID = uuid4().hex[:12]
 @dataclass
 class AuthRuntime:
     initialized: bool = True
+    key_service: KeyService | None = None
     organization_lifecycle_task: Task[None] | None = None
     cache_invalidation_worker: CacheInvalidationWorker | None = None
     cache_invalidation_task: Task[None] | None = None
@@ -150,7 +153,16 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         salt=app.state.salt_key,
         auth_cache_ttl_seconds=cfg.general_settings.api_key_auth_cache_ttl_seconds,
         lifecycle_authorizer=app.state.organization_lifecycle_authorizer,
+        fallback_limits=AuthFallbackLimits(
+            **startup_field_values(
+                AuthFallbackLimits(),
+                cfg.general_settings,
+                app.state.settings,
+                prefix="auth_fallback_",
+            )
+        ),
     )
+    runtime.key_service = app.state.key_service
     cache_invalidation_repository = getattr(
         app.state,
         "cache_invalidation_outbox_repository",
@@ -332,6 +344,8 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
 
 
 async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
+    if runtime.key_service is not None:
+        await runtime.key_service.close()
     lifecycle_task = getattr(runtime, "organization_lifecycle_task", None)
     if lifecycle_task is not None:
         lifecycle_task.cancel()
