@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
 
@@ -7,6 +8,7 @@ import httpx
 from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
+from src.redis_runtime import build_redis_client
 from src.batch import BatchRepository
 from src.config import (
     get_settings,
@@ -63,17 +65,8 @@ class InfrastructureRuntime:
     control_http_client: httpx.AsyncClient
     telemetry_database_connected: bool = False
     statuses: tuple[BootstrapStatus, ...] = ()
-
-
-def _build_redis_client(settings: Any, cfg: Any) -> Redis:
-    redis_url = settings.redis_url or cfg.general_settings.redis_url
-    if redis_url:
-        return Redis.from_url(redis_url, decode_responses=True)
-
-    host = cfg.general_settings.redis_host or settings.redis_host
-    port = cfg.general_settings.redis_port or settings.redis_port
-    password = cfg.general_settings.redis_password or settings.redis_password
-    return Redis(host=host, port=port, password=password, decode_responses=True)
+    bulk_redis_client: Redis | None = None
+    cleanup: AsyncExitStack | None = None
 
 
 def _startup_setting(general_settings: Any, settings: Any, field_name: str, default: Any) -> Any:
@@ -86,31 +79,56 @@ def _startup_setting(general_settings: Any, settings: Any, field_name: str, defa
 
 
 async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
+    async with AsyncExitStack() as cleanup:
+        resources = await cleanup.enter_async_context(AsyncExitStack())
+        runtime = await _init_infrastructure_runtime(app, cleanup, resources)
+        runtime.cleanup = cleanup.pop_all()
+        return runtime
+
+
+async def _init_infrastructure_runtime(
+    app: Any, cleanup: AsyncExitStack, resources: AsyncExitStack
+) -> InfrastructureRuntime:
     settings = get_settings()
     file_config = load_yaml_dict(settings.config_path)
     cfg = build_app_config(file_config, secret_resolver=SecretResolver())
 
     app.state.settings = settings
     app.state.app_config = cfg
-
-    redis_client = _build_redis_client(settings, cfg)
-    app.state.redis = redis_client
-    app.state.route_group_runtime_cache = RouteGroupRuntimeCache(
-        redis_client=redis_client,
-        keyspace=RouteGroupRuntimeRedisKeyspace(environment=str(settings.app_env)),
-    )
+    redis_endpoint_settings = cfg.general_settings
 
     database_settings = resolve_database_settings(cfg, settings)
+    resources.push_async_callback(prisma_manager.disconnect)
     await prisma_manager.connect(database_settings)
     app.state.prisma_manager = prisma_manager
 
     dynamic_config_manager = DynamicConfigManager(
         db_client=prisma_manager.client,
-        redis_client=redis_client,
+        redis_client=None,
         file_config=file_config,
     )
+    cleanup.push_async_callback(dynamic_config_manager.close)
     await dynamic_config_manager.initialize()
     cfg = dynamic_config_manager.get_app_config()
+
+    redis_client = build_redis_client(
+        settings,
+        cfg.general_settings,
+        allocation="critical",
+        endpoint_settings=redis_endpoint_settings,
+    )
+    resources.push_async_callback(redis_client.aclose)
+    bulk_redis_client = build_redis_client(
+        settings, cfg.general_settings, allocation="bulk", endpoint_settings=redis_endpoint_settings
+    )
+    resources.push_async_callback(bulk_redis_client.aclose)
+    app.state.redis = redis_client
+    app.state.bulk_redis = bulk_redis_client
+    dynamic_config_manager.attach_redis(redis_client)
+    app.state.route_group_runtime_cache = RouteGroupRuntimeCache(
+        redis_client=redis_client,
+        keyspace=RouteGroupRuntimeRedisKeyspace(environment=str(settings.app_env)),
+    )
 
     app.state.dynamic_config_manager = dynamic_config_manager
     app.state.app_config = cfg
@@ -131,6 +149,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         telemetry_database_settings = resolve_telemetry_database_settings(cfg, settings)
         if telemetry_database_settings is None:
             raise RuntimeError("durable telemetry ingestion requires an explicit database URL")
+        resources.push_async_callback(telemetry_prisma_manager.disconnect)
         await telemetry_prisma_manager.connect(telemetry_database_settings)
         if telemetry_prisma_manager.client is None:
             raise RuntimeError("durable telemetry ingestion requires the Prisma client")
@@ -142,8 +161,10 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.ui_branding_asset_service = ui_branding_asset_service
 
     http_client = build_upstream_http_client(cfg.general_settings)
+    resources.push_async_callback(http_client.aclose)
     control_transport = build_control_http_transport()
     control_http_client = build_control_http_client(transport=control_transport)
+    resources.push_async_callback(control_http_client.aclose)
     app.state.provider_discovery_runtime = ProviderDiscoveryRuntime(
         transport=control_transport,
         policy=OutboundNetworkPolicy(
@@ -205,6 +226,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
     return InfrastructureRuntime(
         redis_client=redis_client,
+        bulk_redis_client=bulk_redis_client,
         dynamic_config_manager=dynamic_config_manager,
         http_client=http_client,
         control_http_client=control_http_client,
@@ -223,11 +245,5 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
 
 async def shutdown_infrastructure_runtime(runtime: InfrastructureRuntime) -> None:
-    await runtime.dynamic_config_manager.close()
-    await runtime.http_client.aclose()
-    await runtime.control_http_client.aclose()
-    if runtime.redis_client is not None:
-        await runtime.redis_client.close()
-    if runtime.telemetry_database_connected:
-        await telemetry_prisma_manager.disconnect()
-    await prisma_manager.disconnect()
+    if runtime.cleanup is not None:
+        await runtime.cleanup.aclose()

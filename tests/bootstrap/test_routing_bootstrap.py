@@ -43,6 +43,7 @@ def _base_app_state() -> SimpleNamespace:
         model_deployment_repository=object(),
         route_group_repository=object(),
         route_group_runtime_cache=object(),
+        bulk_redis=object(),
         http_client=object(),
         settings=SimpleNamespace(
             openai_base_url="https://api.openai.com/v1",
@@ -141,7 +142,7 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
         app.state.route_group_runtime_cache,
         {"dep-1": "chat"},
     )
-    assert calls["cache"] == (app, cfg, "redis-client", "salt")
+    assert calls["cache"] == (app, cfg, app.state.bulk_redis, "salt")
     assert runtime.health_task is None
 
 

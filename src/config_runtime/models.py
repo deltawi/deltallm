@@ -362,7 +362,7 @@ class ModelHotReloadManager:
         configure_cache_runtime(
             app,
             app_config=app_config,
-            redis_client=getattr(app.state, "redis", None),
+            redis_client=getattr(app.state, "bulk_redis", None),
             salt_key=salt_key,
         )
 

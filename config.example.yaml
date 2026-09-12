@@ -121,6 +121,13 @@ general_settings:
   # In Docker Compose, DATABASE_URL and REDIS_URL are wired automatically.
   database_url: os.environ/DATABASE_URL
   redis_url: os.environ/REDIS_URL
+  # Finite Redis allocations (restart required). Separate bulk endpoint isolates server memory.
+  redis_bulk_url: null
+  redis_critical_max_connections: 64
+  redis_bulk_max_connections: 16
+  redis_acquisition_timeout_seconds: 0.2
+  redis_socket_timeout_seconds: 1.0
+  redis_connect_timeout_seconds: 1.0
   db_pool_size: 20
   db_pool_timeout: 30
   # Reject overload before prompt, guardrail, and budget work. Enable after sizing

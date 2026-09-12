@@ -584,6 +584,12 @@ class GeneralSettings(BaseModel):
     redis_port: int = 6379
     redis_password: str | None = None
     redis_url: str | None = None
+    redis_bulk_url: str | None = None
+    redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
+    redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
+    redis_connect_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
     redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     cache_enabled: bool = False
     cache_backend: Literal["memory", "redis", "s3"] = "memory"
@@ -1153,6 +1159,12 @@ class Settings(BaseSettings):
     prompt_singleflight_max_keys: int = Field(default=256, ge=1, le=10_000)
     prompt_singleflight_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     redis_url: str | None = None
+    redis_bulk_url: str | None = None
+    redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
+    redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
+    redis_connect_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str | None = None

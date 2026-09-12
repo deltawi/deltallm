@@ -143,6 +143,7 @@ nav:
       - Docker: deployment/docker.md
       - Governance Rollout: deployment/governance.md
       - Kubernetes: deployment/kubernetes.md
+      - Dependency Capacity: deployment/dependency-capacity.md
       - Organization Tiers Rollout: deployment/organization-tiers-rollout.md
       - Batch Scheduler Rollout: deployment/batch-scheduler-rollout.md
       - Batch Webhook Rollout: deployment/batch-webhook-rollout.md

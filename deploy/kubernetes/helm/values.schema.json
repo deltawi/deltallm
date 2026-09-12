@@ -260,6 +260,12 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
+            "redis_bulk_url": { "type": ["string", "null"] },
+            "redis_critical_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "redis_bulk_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "redis_acquisition_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30},
+            "redis_socket_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30},
+            "redis_connect_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 30},
             "provider_discovery_allow_http": { "type": "boolean" },
             "provider_discovery_allowed_ports": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
             "provider_discovery_allowed_private_cidrs": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 3 } },

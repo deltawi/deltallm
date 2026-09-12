@@ -222,6 +222,13 @@ config:
     callback_settings: {}
     turn_off_message_logging: false
   general_settings:
+    # Finite Redis allocations (restart required).
+    redis_bulk_url: null
+    redis_critical_max_connections: 64
+    redis_bulk_max_connections: 16
+    redis_acquisition_timeout_seconds: 0.2
+    redis_socket_timeout_seconds: 1.0
+    redis_connect_timeout_seconds: 1.0
     deltallm_key_header_name: Authorization
     # Startup-only provider discovery egress; independent of batch webhook policy.
     provider_discovery_allow_http: false

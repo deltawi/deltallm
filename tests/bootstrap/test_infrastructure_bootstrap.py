@@ -31,7 +31,10 @@ def test_telemetry_startup_mode_uses_env_only_when_config_is_implicit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("fail_startup", [False, True])
+async def test_init_and_shutdown_infrastructure_runtime(
+    monkeypatch: pytest.MonkeyPatch, fail_startup
+) -> None:
     created: dict[str, object] = {}
 
     class FakeDynamicConfigManager:
@@ -40,9 +43,14 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.redis_client = redis_client
             self.file_config = file_config
             self.closed = False
+            created["dynamic"] = self
             self.subscribers = []
 
+        def attach_redis(self, redis_client) -> None:
+            self.redis_client = redis_client
+
         async def initialize(self) -> None:
+            assert self.redis_client is None
             created["dynamic_initialized"] = True
 
         def get_app_config(self):  # noqa: ANN201
@@ -100,10 +108,10 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         @classmethod
         def from_url(cls, url: str, decode_responses: bool = True):  # noqa: FBT001, FBT002
             instance = cls(url=url, decode_responses=decode_responses)
-            created["redis"] = instance
+            created["critical_redis"] = instance
             return instance
 
-        async def close(self) -> None:
+        async def aclose(self) -> None:
             self.closed = True
 
     class FakePrismaManager:
@@ -127,6 +135,8 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
         async def initialize(self, cfg) -> None:  # noqa: ANN001
             self.initialized_with = cfg
+            if fail_startup:
+                raise RuntimeError("branding startup failed")
 
         async def on_config_change(self, cfg, changes) -> None:  # noqa: ANN001
             del cfg, changes
@@ -169,7 +179,13 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.UIBrandingAssetService", FakeUIBrandingAssetService
     )
-    monkeypatch.setattr("src.bootstrap.infrastructure.Redis", FakeRedis)
+
+    def build_redis(settings, general, *, allocation, endpoint_settings):
+        client = FakeRedis(allocation=allocation)
+        created[allocation + "_redis"] = client
+        return client
+
+    monkeypatch.setattr("src.bootstrap.infrastructure.build_redis_client", build_redis)
     monkeypatch.setattr("src.bootstrap.infrastructure.prisma_manager", FakePrismaManager())
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt"
@@ -216,13 +232,21 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
     app = SimpleNamespace(state=SimpleNamespace())
 
+    if fail_startup:
+        with pytest.raises(RuntimeError, match="branding startup failed"):
+            await init_infrastructure_runtime(app)
+        assert created["critical_redis"].closed
+        assert created["bulk_redis"].closed
+        assert created["dynamic"].closed
+        assert app.state.prisma_manager.disconnected
+        return
     runtime = await init_infrastructure_runtime(app)
 
     assert app.state.settings.config_path == "config.yaml"
-    assert app.state.redis is created["redis"]
+    assert app.state.redis is created["critical_redis"]
     route_cache, route_cache_redis, route_cache_keyspace = app.state.route_group_runtime_cache
     assert route_cache == "route-cache"
-    assert route_cache_redis is created["redis"]
+    assert route_cache_redis is created["critical_redis"]
     assert route_cache_keyspace.environment == "test"
     assert app.state.prisma_manager.client == "db-client"
     assert app.state.prisma_manager.database_settings is not None
@@ -270,4 +294,8 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert runtime.http_client.closed is True
     assert runtime.control_http_client.closed is True
     assert runtime.redis_client.closed is True
+    assert runtime.bulk_redis_client.closed is True
+    assert app.state.bulk_redis is runtime.bulk_redis_client
+    assert runtime.bulk_redis_client is not runtime.redis_client
+    assert runtime.dynamic_config_manager.redis_client is runtime.redis_client
     assert app.state.prisma_manager.disconnected is True
