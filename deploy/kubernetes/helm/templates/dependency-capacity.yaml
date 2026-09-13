@@ -1,0 +1,78 @@
+{{- define "deltallm.peakRoleProcesses" -}}
+{{- $replicas := int .replicas -}}
+{{- $surge := 0 -}}
+{{- if eq .strategy.type "RollingUpdate" -}}
+{{- $configured := toString .strategy.rollingUpdate.maxSurge -}}
+{{- if hasSuffix "%" $configured -}}
+{{- $surge = int (ceil (divf (mulf $replicas (trimSuffix "%" $configured | float64)) 100)) -}}
+{{- else -}}
+{{- $surge = int $configured -}}
+{{- end -}}
+{{- end -}}
+{{- mul (add $replicas $surge (mul $replicas .retiringGenerations)) .processes -}}
+{{- end -}}
+
+{{- $capacity := .Values.dependencyCapacity -}}
+{{- $api := (include "deltallm.apiConfigYaml" . | fromYaml).general_settings -}}
+{{- $worker := (include "deltallm.batchWorkerConfigYaml" . | fromYaml).general_settings -}}
+{{- $apiReplicas := ternary .Values.autoscaling.maxReplicas .Values.replicaCount .Values.autoscaling.enabled -}}
+{{- $workerReplicas := ternary .Values.batchWorker.autoscaling.maxReplicas .Values.batchWorker.replicaCount .Values.batchWorker.autoscaling.enabled -}}
+{{- $roles := list (dict "config" $api "replicas" $apiReplicas "processes" $capacity.apiProcessesPerPod) -}}
+{{- if .Values.batchWorker.enabled -}}
+{{- $roles = append $roles (dict "config" $worker "replicas" $workerReplicas "processes" $capacity.batchWorkerProcessesPerPod) -}}
+{{- end -}}
+{{- $dbTotal := int $capacity.postgresqlReservedConnections -}}
+{{- $criticalTotal := 0 -}}
+{{- $cacheTotal := 0 -}}
+{{- $processTotal := 0 -}}
+{{- range $role := $roles -}}
+{{- $processes := include "deltallm.peakRoleProcesses" (dict "replicas" $role.replicas "processes" $role.processes "strategy" $.Values.strategy "retiringGenerations" $capacity.retiringGenerations) | int -}}
+{{- $g := $role.config -}}
+{{- range $name := list "db_pool_size" "db_foreground_pool_size" "telemetry_db_pool_size" "telemetry_worker_db_pool_size" "redis_critical_max_connections" "redis_cache_max_connections" "redis_bulk_max_connections" -}}
+{{- if or (lt (int (get $g $name)) 1) (gt (int (get $g $name)) 10000) -}}
+{{- fail (printf "%s must be a finite connection count between 1 and 10000" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- $db := add $g.db_pool_size $g.db_foreground_pool_size -}}
+{{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") -}}
+{{- $db = add $db $g.telemetry_db_pool_size $g.telemetry_worker_db_pool_size -}}
+{{- end -}}
+{{- $processTotal = add $processTotal $processes -}}
+{{- $dbTotal = add $dbTotal (mul $processes $db) -}}
+{{- $criticalTotal = add $criticalTotal (mul $processes $g.redis_critical_max_connections) -}}
+{{- $cacheTotal = add $cacheTotal (mul $processes (add $g.redis_cache_max_connections $g.redis_bulk_max_connections)) -}}
+{{- range $prefix := list "db_" "db_background_" -}}
+{{- if or (gt (float64 (get $g (printf "%slock_timeout_seconds" $prefix))) (float64 (get $g (printf "%sstatement_timeout_seconds" $prefix)))) (gt (float64 (get $g (printf "%sstatement_timeout_seconds" $prefix))) (float64 (get $g (printf "%stransaction_timeout_seconds" $prefix)))) -}}
+{{- fail "Database deadlines require lock <= statement <= transaction" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $redisTotal := add $criticalTotal $cacheTotal $capacity.redisReservedClients -}}
+{{- if gt $dbTotal (int $capacity.postgresqlMaxConnections) -}}
+{{- fail (printf "Peak PostgreSQL connection budget %d exceeds declared maximum %d" $dbTotal (int $capacity.postgresqlMaxConnections)) -}}
+{{- end -}}
+{{- if gt $redisTotal (int $capacity.redisMaxClients) -}}
+{{- fail (printf "Peak Redis connection budget %d exceeds declared maximum %d" $redisTotal (int $capacity.redisMaxClients)) -}}
+{{- end -}}
+{{- range $env := concat .Values.env .Values.batchWorker.env -}}
+{{- if has $env.name (list "WEB_CONCURRENCY" "UVICORN_WORKERS" "DELTALLM_DB_POOL_SIZE" "DELTALLM_TELEMETRY_DB_POOL_SIZE") -}}
+{{- fail (printf "%s is owned by dependencyCapacity and rendered pool settings" $env.name) -}}
+{{- end -}}
+{{- end -}}
+{{- range $argument := concat .Values.command .Values.args .Values.batchWorker.command .Values.batchWorker.args -}}
+{{- if or (eq $argument "--workers") (eq $argument "-w") (hasPrefix "--workers=" $argument) -}}
+{{- fail "Worker count flags are owned by dependencyCapacity; set the declared process counts" -}}
+{{- end -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deltallm.fullname" . }}-dependency-capacity
+  labels:
+    {{- include "deltallm.labels" . | nindent 4 }}
+data:
+  peak-processes: {{ $processTotal | quote }}
+  postgresql-connections-including-reserve: {{ $dbTotal | quote }}
+  redis-critical-connections: {{ $criticalTotal | quote }}
+  redis-cache-connections: {{ $cacheTotal | quote }}
+  redis-connections-including-reserve: {{ $redisTotal | quote }}

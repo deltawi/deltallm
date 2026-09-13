@@ -105,9 +105,14 @@ class SpendIngestionService:
         db_client: Any | None,
         writer: SpendTrackingService,
         config: SpendIngestionConfig,
+        worker_db_client: Any | None = None,
         operation_recovery: BillingOperationRecovery | None = None,
     ) -> None:
         self.db = db_client
+        self.worker_db = worker_db_client if worker_db_client is not None else db_client
+        self._worker_repository = (
+            SpendIngestionRepository(worker_db_client) if worker_db_client is not None else None
+        )
         self.writer = writer
         self.config = config
         self.operation_recovery = operation_recovery
@@ -126,6 +131,10 @@ class SpendIngestionService:
             concurrency=config.fallback_max_concurrency,
             max_waiters=config.fallback_max_waiters,
         )
+
+    @property
+    def worker_repository(self):
+        return self._worker_repository if self._worker_repository is not None else self.repository
 
     @property
     def durable_ingestion_enabled(self) -> bool:
@@ -174,7 +183,7 @@ class SpendIngestionService:
             raise RuntimeError("spend outbox mode requires the telemetry database pool")
         try:
             await asyncio.wait_for(
-                self.repository.reconcile_capacity(),
+                self.worker_repository.reconcile_capacity(),
                 timeout=self.config.worker_startup_timeout_seconds,
             )
         except Exception as exc:
@@ -502,7 +511,7 @@ class SpendIngestionService:
                 # must not starve the canonical outbox that can settle those holds.
                 increment_spend_ingestion_failure("operation_recovery")
                 logger.warning("billing_operation_recovery_unavailable")
-        return await self.repository.claim_batch(
+        return await self.worker_repository.claim_batch(
             limit=self.config.batch_size,
             worker_id=self.config.worker_id,
             claim_token=str(uuid4()),
@@ -571,7 +580,7 @@ class SpendIngestionService:
             )
         )
         try:
-            async with self._transaction() as tx:
+            async with self._transaction(self.worker_db) as tx:
                 if self.operation_recovery is not None and operation_events:
                     await self.operation_recovery.lock_for_events(tx, operation_events)
                 batch_writer = self.writer.with_db(tx)
@@ -600,7 +609,7 @@ class SpendIngestionService:
         while True:
             await asyncio.sleep(interval)
             try:
-                renewed = await self.repository.renew_lease(
+                renewed = await self.worker_repository.renew_lease(
                     event_ids=event_ids,
                     worker_id=self.config.worker_id,
                     claim_token=claim_token,
@@ -633,7 +642,7 @@ class SpendIngestionService:
             )
 
     async def _mark_retry(self, record: _OutboxRecord, exc: Exception) -> None:
-        terminal = await self.repository.mark_retry(
+        terminal = await self.worker_repository.mark_retry(
             record=record,
             worker_id=self.config.worker_id,
             error=str(exc),
@@ -648,7 +657,7 @@ class SpendIngestionService:
         )
 
     async def _pending_count(self) -> int:
-        return await self.repository.drainable_count()
+        return await self.worker_repository.drainable_count()
 
     async def _pending_count_before_deadline(self, deadline: float) -> int | None:
         task = asyncio.create_task(self._pending_count())
@@ -664,7 +673,7 @@ class SpendIngestionService:
         return None
 
     async def _publish_backlog(self) -> None:
-        count, oldest_age = await self.repository.pending_stats()
+        count, oldest_age = await self.worker_repository.pending_stats()
         set_spend_ingestion_backlog(count)
         set_spend_ingestion_oldest_event_age(oldest_age)
         set_spend_ingestion_capacity_utilization(
@@ -686,7 +695,7 @@ class SpendIngestionService:
             if perf_counter() - started >= self.config.cleanup_time_budget_seconds:
                 break
             try:
-                deleted = await self.repository.cleanup_terminal(
+                deleted = await self.worker_repository.cleanup_terminal(
                     completed_retention_hours=self.config.completed_retention_hours,
                     limit=self.config.cleanup_batch_size,
                 )
@@ -701,18 +710,19 @@ class SpendIngestionService:
         return deleted_total
 
     @asynccontextmanager
-    async def _transaction(self):  # noqa: ANN202
-        if self.db is None:
+    async def _transaction(self, db_client=None):  # noqa: ANN202
+        target_db = db_client if db_client is not None else self.db
+        if target_db is None:
             raise RuntimeError("spend ingestion database is unavailable")
-        if is_prisma_transaction_client(self.db):
-            yield self.db
+        if is_prisma_transaction_client(target_db):
+            yield target_db
             return
-        tx_factory = getattr(self.db, "tx", None)
+        tx_factory = getattr(target_db, "tx", None)
         if callable(tx_factory):
             async with tx_factory() as tx:
                 yield tx
             return
-        yield self.db
+        yield target_db
 
 
 def _json_default(value: Any) -> str:

@@ -26,18 +26,22 @@ def redis_settings():
     return Settings(redis_url=url)
 
 
-async def test_real_bulk_exhaustion_and_timeout_preserve_critical_pool(redis_settings):
+@pytest.mark.parametrize("allocation", ["cache", "bulk"])
+async def test_real_optional_exhaustion_and_timeout_preserve_critical_pool(
+    redis_settings, allocation
+):
     settings = redis_settings
     general = GeneralSettings(
         redis_critical_max_connections=1,
         redis_bulk_max_connections=1,
+        redis_cache_max_connections=1,
         redis_socket_timeout_seconds=0.1,
         redis_acquisition_timeout_seconds=1,
     )
     async with AsyncExitStack() as stack:
         critical = build_redis_client(settings, general, allocation="critical")
         stack.push_async_callback(critical.aclose)
-        bulk = build_redis_client(settings, general, allocation="bulk")
+        bulk = build_redis_client(settings, general, allocation=allocation)
         stack.push_async_callback(bulk.aclose)
         held = await bulk.connection_pool.get_connection()
         try:

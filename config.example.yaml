@@ -129,6 +129,16 @@ general_settings:
   redis_socket_timeout_seconds: 1.0
   redis_connect_timeout_seconds: 1.0
   db_pool_size: 20
+  db_foreground_pool_size: 8
+  telemetry_worker_db_pool_size: 5
+  db_acquisition_timeout_seconds: 0.2
+  db_statement_timeout_seconds: 1.0
+  db_lock_timeout_seconds: 0.2
+  db_transaction_timeout_seconds: 2.0
+  db_background_statement_timeout_seconds: 5.0
+  db_background_lock_timeout_seconds: 1.0
+  db_background_transaction_timeout_seconds: 10.0
+  redis_cache_max_connections: 16
   db_pool_timeout: 30
   # Reject overload before prompt, guardrail, and budget work. Enable after sizing
   # these limits below the measured safe database/upstream concurrency envelope.

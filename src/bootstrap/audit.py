@@ -54,12 +54,22 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
     if ingestion_mode == "outbox" and telemetry_client is None:
         raise RuntimeError("audit outbox mode requires the dedicated telemetry database pool")
     audit_db_client = (
-        telemetry_client if ingestion_mode == "outbox" else app.state.prisma_manager.client
+        telemetry_client
+        if ingestion_mode == "outbox"
+        else app.state.foreground_prisma_manager.client
     )
+    worker_db_client = (
+        app.state.telemetry_worker_prisma_manager.client
+        if ingestion_mode == "outbox"
+        else app.state.prisma_manager.client
+    )
+    if worker_db_client is None:
+        raise RuntimeError("Audit workers require their database allocation")
     repository = AuditRepository(audit_db_client)
     service = AuditService(
         repository,
         db_client=audit_db_client,
+        worker_db_client=worker_db_client,
         prompt_repository=PromptRegistryRepository(audit_db_client),
         redis_client=getattr(app.state, "redis", None),
         policy_invalidation_channel=build_redis_channel(
@@ -159,7 +169,7 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
     )
     await service.start()
 
-    app.state.audit_repository = repository
+    app.state.audit_repository = AuditRepository(app.state.prisma_manager.client)
     app.state.audit_service = service
 
     if not cfg.general_settings.audit_retention_worker_enabled:
@@ -170,7 +180,7 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
         return runtime
 
     runtime.retention_worker = AuditRetentionWorker(
-        repository=repository,
+        repository=AuditRepository(worker_db_client),
         config=AuditRetentionConfig(
             interval_seconds=cfg.general_settings.audit_retention_interval_seconds,
             scan_limit=cfg.general_settings.audit_retention_scan_limit,

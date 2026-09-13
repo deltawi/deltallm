@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.database_settings import DATABASE_ALLOCATION_FIELDS
+
 import asyncio
 import json
 import logging
@@ -51,10 +53,11 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
         self.committed_app_config = committed_app_config.model_copy(deep=True)
 
 
-_STARTUP_ONLY_GENERAL_SETTINGS = frozenset(
+_STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
     {
         "redis_bulk_url",
         "redis_critical_max_connections",
+        "redis_cache_max_connections",
         "redis_bulk_max_connections",
         "redis_acquisition_timeout_seconds",
         "redis_socket_timeout_seconds",
@@ -444,7 +447,7 @@ class DynamicConfigManager:
             for field_name in _STARTUP_ONLY_GENERAL_SETTINGS
             if getattr(current, field_name) != getattr(candidate, field_name)
             or (
-                field_name.startswith("redis_")
+                (field_name.startswith("redis_") or field_name in DATABASE_ALLOCATION_FIELDS)
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)
             )
         )

@@ -22,6 +22,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
+from src.database_settings import DatabaseAllocationSettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
@@ -513,7 +514,7 @@ class UIBrandingUpdatePayload(BaseModel):
         return value.upper()
 
 
-class GeneralSettings(BaseModel):
+class GeneralSettings(DatabaseAllocationSettings):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
@@ -586,6 +587,7 @@ class GeneralSettings(BaseModel):
     redis_url: str | None = None
     redis_bulk_url: SecretStr | None = None
     redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_cache_max_connections: int = Field(default=16, ge=1, le=10000)
     redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
     redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
     redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
@@ -1094,7 +1096,7 @@ class AppConfig(BaseModel):
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
 
 
-class Settings(BaseSettings):
+class Settings(BaseSettings, DatabaseAllocationSettings):
     model_config = SettingsConfigDict(env_prefix="DELTALLM_", extra="ignore")
 
     app_name: str = "DeltaLLM Core API"
@@ -1161,6 +1163,7 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     redis_bulk_url: SecretStr | None = None
     redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_cache_max_connections: int = Field(default=16, ge=1, le=10000)
     redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
     redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
     redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)

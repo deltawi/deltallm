@@ -45,7 +45,7 @@ async def require_organization_deletion_readiness(
 def initialize_organization_lifecycle(app: Any, cfg: Any) -> OrganizationDeletionRepository:
     repository = OrganizationDeletionRepository(app.state.prisma_manager.client)
     app.state.organization_lifecycle_authorizer = OrganizationLifecycleAuthorizer(
-        repository,
+        OrganizationDeletionRepository(app.state.foreground_prisma_manager.client),
         max_staleness_seconds=float(
             getattr(
                 cfg.general_settings,

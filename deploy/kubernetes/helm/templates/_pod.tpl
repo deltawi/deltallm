@@ -82,6 +82,10 @@
 {{- define "deltallm.runtimeEnv" -}}
 {{- $root := .root -}}
 {{- $extraEnv := default (list) .extraEnv -}}
+{{- $worker := default false .worker -}}
+{{- $processes := ternary $root.Values.dependencyCapacity.batchWorkerProcessesPerPod $root.Values.dependencyCapacity.apiProcessesPerPod $worker -}}
+{{- $configTemplate := ternary "deltallm.batchWorkerConfigYaml" "deltallm.apiConfigYaml" $worker -}}
+{{- $general := (include $configTemplate $root | fromYaml).general_settings -}}
 {{- $databaseEnv := include "deltallm.databaseEnv" $root -}}
 {{- $redisEnv := include "deltallm.redisEnv" $root -}}
 {{- $deltallmRedisEnv := include "deltallm.deltallmRedisEnv" $root -}}
@@ -90,6 +94,14 @@
   value: "0.0.0.0"
 - name: PORT
   value: {{ $root.Values.service.port | quote }}
+- name: WEB_CONCURRENCY
+  value: {{ $processes | quote }}
+- name: UVICORN_WORKERS
+  value: {{ $processes | quote }}
+- name: DELTALLM_DB_POOL_SIZE
+  value: {{ $general.db_pool_size | quote }}
+- name: DELTALLM_TELEMETRY_DB_POOL_SIZE
+  value: {{ $general.telemetry_db_pool_size | quote }}
 - name: DELTALLM_CONFIG_PATH
   value: /app/config/config.yaml
 - name: DELTALLM_MASTER_KEY

@@ -25,7 +25,13 @@ from src.config_runtime import (
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
-from src.db.client import prisma_manager, telemetry_prisma_manager
+from src.db.client import (
+    prisma_manager,
+    telemetry_prisma_manager,
+    foreground_prisma_manager,
+    telemetry_worker_prisma_manager,
+)
+from src.db.allocation_config import DatabasePolicy, resolve_allocation_settings
 from src.db.email import EmailOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
@@ -66,6 +72,7 @@ class InfrastructureRuntime:
     telemetry_database_connected: bool = False
     statuses: tuple[BootstrapStatus, ...] = ()
     bulk_redis_client: Redis | None = None
+    cache_redis_client: Redis | None = None
     cleanup: AsyncExitStack | None = None
 
 
@@ -98,8 +105,18 @@ async def _init_infrastructure_runtime(
     redis_endpoint_settings = cfg.general_settings
 
     database_settings = resolve_database_settings(cfg, settings)
+    database_allocations = resolve_allocation_settings(cfg.general_settings, settings)
+    if database_settings is None:
+        raise RuntimeError("Database allocations require an explicit database URL")
     resources.push_async_callback(prisma_manager.disconnect)
-    await prisma_manager.connect(database_settings)
+    await prisma_manager.connect(
+        database_settings,
+        policy=DatabasePolicy.build(
+            database_allocations,
+            "control",
+            database_settings.pool_size,
+        ),
+    )
     app.state.prisma_manager = prisma_manager
 
     dynamic_config_manager = DynamicConfigManager(
@@ -110,6 +127,20 @@ async def _init_infrastructure_runtime(
     cleanup.push_async_callback(dynamic_config_manager.close)
     await dynamic_config_manager.initialize()
     cfg = dynamic_config_manager.get_app_config()
+    if resolve_allocation_settings(cfg.general_settings, settings) != database_allocations:
+        raise RuntimeError(
+            "Database allocation settings must match startup file/environment configuration"
+        )
+    resources.push_async_callback(foreground_prisma_manager.disconnect)
+    await foreground_prisma_manager.connect(
+        database_settings,
+        policy=DatabasePolicy.build(
+            database_allocations,
+            "foreground",
+            database_allocations.db_foreground_pool_size,
+        ),
+    )
+    app.state.foreground_prisma_manager = foreground_prisma_manager
 
     redis_client = build_redis_client(
         settings,
@@ -124,9 +155,17 @@ async def _init_infrastructure_runtime(
     resources.push_async_callback(bulk_redis_client.aclose)
     app.state.redis = redis_client
     app.state.bulk_redis = bulk_redis_client
+    cache_redis_client = build_redis_client(
+        settings,
+        cfg.general_settings,
+        allocation="cache",
+        endpoint_settings=redis_endpoint_settings,
+    )
+    resources.push_async_callback(cache_redis_client.aclose)
+    app.state.cache_redis = cache_redis_client
     dynamic_config_manager.attach_redis(redis_client)
     app.state.route_group_runtime_cache = RouteGroupRuntimeCache(
-        redis_client=redis_client,
+        redis_client=cache_redis_client,
         keyspace=RouteGroupRuntimeRedisKeyspace(environment=str(settings.app_env)),
     )
 
@@ -145,15 +184,34 @@ async def _init_infrastructure_runtime(
     durable_telemetry_enabled = spend_ingestion_mode == "outbox" or audit_ingestion_mode == "outbox"
     telemetry_database_connected = False
     app.state.telemetry_prisma_manager = telemetry_prisma_manager
+    app.state.telemetry_worker_prisma_manager = telemetry_worker_prisma_manager
     if durable_telemetry_enabled:
         telemetry_database_settings = resolve_telemetry_database_settings(cfg, settings)
         if telemetry_database_settings is None:
             raise RuntimeError("durable telemetry ingestion requires an explicit database URL")
         resources.push_async_callback(telemetry_prisma_manager.disconnect)
-        await telemetry_prisma_manager.connect(telemetry_database_settings)
+        await telemetry_prisma_manager.connect(
+            telemetry_database_settings,
+            policy=DatabasePolicy.build(
+                database_allocations,
+                "telemetry",
+                telemetry_database_settings.pool_size,
+            ),
+        )
         if telemetry_prisma_manager.client is None:
             raise RuntimeError("durable telemetry ingestion requires the Prisma client")
         telemetry_database_connected = True
+        resources.push_async_callback(telemetry_worker_prisma_manager.disconnect)
+        await telemetry_worker_prisma_manager.connect(
+            telemetry_database_settings,
+            policy=DatabasePolicy.build(
+                database_allocations,
+                "telemetry_worker",
+                database_allocations.telemetry_worker_db_pool_size,
+            ),
+        )
+        if telemetry_worker_prisma_manager.client is None:
+            raise RuntimeError("Durable telemetry requires its worker database allocation")
 
     ui_branding_asset_service = UIBrandingAssetService(prisma_manager.client)
     await ui_branding_asset_service.initialize(cfg)
@@ -227,6 +285,7 @@ async def _init_infrastructure_runtime(
     return InfrastructureRuntime(
         redis_client=redis_client,
         bulk_redis_client=bulk_redis_client,
+        cache_redis_client=cache_redis_client,
         dynamic_config_manager=dynamic_config_manager,
         http_client=http_client,
         control_http_client=control_http_client,

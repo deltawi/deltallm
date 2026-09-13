@@ -184,7 +184,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     prompt_registry_service = PromptRegistryService(
         repository=app.state.prompt_registry_repository,
         route_group_repository=app.state.route_group_repository,
-        redis_client=app.state.redis,
+        redis_client=app.state.cache_redis,
         render_log_sink=getattr(app.state, "audit_service", None),
         l1_ttl_seconds=_runtime_setting(
             general_settings, settings, "prompt_cache_l1_ttl_seconds", 30
@@ -232,7 +232,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     app.state.prompt_registry_service = prompt_registry_service
     app.state.mcp_registry_service = MCPRegistryService(
         repository=app.state.mcp_repository,
-        redis_client=app.state.redis,
+        redis_client=app.state.cache_redis,
     )
     app.state.mcp_governance_service = MCPGovernanceService(
         repository=app.state.mcp_repository,
@@ -289,7 +289,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     app.state.guardrail_registry = guardrail_registry
     app.state.guardrail_middleware = GuardrailMiddleware(
         registry=guardrail_registry,
-        cache_backend=app.state.redis,
+        cache_backend=app.state.cache_redis,
     )
 
     callback_manager = CallbackManager()
@@ -323,7 +323,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 
     notification_dispatcher = NotificationDispatcher(
         channels=channels,
-        redis_client=app.state.redis,
+        redis_client=app.state.cache_redis,
         audit_service=getattr(app.state, "audit_service", None),
         dedupe_ttl_seconds=budget_alert_ttl,
     )
@@ -352,8 +352,17 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     if spend_ingestion_mode == "outbox" and telemetry_db_client is None:
         raise RuntimeError("spend outbox mode requires the dedicated telemetry database pool")
     spend_db_client = (
-        telemetry_db_client if spend_ingestion_mode == "outbox" else app.state.prisma_manager.client
+        telemetry_db_client
+        if spend_ingestion_mode == "outbox"
+        else app.state.foreground_prisma_manager.client
     )
+    spend_worker_db_client = (
+        app.state.telemetry_worker_prisma_manager.client
+        if spend_ingestion_mode == "outbox"
+        else app.state.prisma_manager.client
+    )
+    if spend_worker_db_client is None:
+        raise RuntimeError("Spend workers require their database allocation")
     app.state.spend_ledger_service = SpendLedgerService(spend_db_client)
     spend_writer = SpendTrackingService(
         db_client=spend_db_client,
@@ -361,6 +370,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     )
     spend_ingestion_service = SpendIngestionService(
         db_client=spend_db_client,
+        worker_db_client=spend_worker_db_client,
         writer=spend_writer,
         config=SpendIngestionConfig(
             enabled=spend_ingestion_mode == "outbox",
@@ -479,7 +489,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     await spend_ingestion_service.start()
     app.state.spend_tracking_service = spend_ingestion_service
     app.state.budget_service = BudgetEnforcementService(
-        db_client=app.state.prisma_manager.client,
+        db_client=app.state.foreground_prisma_manager.client,
         alert_service=app.state.alert_service,
         query_mode=_runtime_setting(
             general_settings,

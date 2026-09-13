@@ -76,6 +76,16 @@ config:
     cache_backend: redis
     spend_ingestion_mode: outbox
     audit_ingestion_mode: outbox
+    db_foreground_pool_size: 8
+    telemetry_worker_db_pool_size: 5
+    db_acquisition_timeout_seconds: 0.2
+    db_statement_timeout_seconds: 1.0
+    db_lock_timeout_seconds: 0.2
+    db_transaction_timeout_seconds: 2.0
+    db_background_statement_timeout_seconds: 5.0
+    db_background_lock_timeout_seconds: 1.0
+    db_background_transaction_timeout_seconds: 10.0
+    redis_cache_max_connections: 16
     model_deployment_source: db_only
     model_deployment_bootstrap_from_config: false
     organization_lifecycle_auth_max_staleness_seconds: 3
@@ -127,3 +137,14 @@ config:
     tier_policy_refresh_retry_delay_seconds: 5
     tier_capacity_fair_share_enabled: false
     tier_capacity_fair_share_active_ttl_seconds: 10
+
+# Example declared ceilings: replace with available server allocations.
+# Includes full maximum-replica retiring overlap plus rollout surge.
+dependencyCapacity:
+  apiProcessesPerPod: 1
+  batchWorkerProcessesPerPod: 1
+  retiringGenerations: 1
+  postgresqlMaxConnections: 2000
+  postgresqlReservedConnections: 100
+  redisMaxClients: 5000
+  redisReservedClients: 128

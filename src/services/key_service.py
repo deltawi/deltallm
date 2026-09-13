@@ -27,8 +27,12 @@ class KeyService:
         salt: str = "",
         auth_cache_ttl_seconds: int = 300,
         lifecycle_authorizer: OrganizationLifecycleAuthorizer | None = None,
+        invalidation_repository: KeyRepository | None = None,
     ) -> None:
         self.repository = repository
+        self.invalidation_repository = (
+            invalidation_repository if invalidation_repository is not None else repository
+        )
         self.redis = redis_client
         self.salt = salt
         self.auth_cache_ttl_seconds = max(1, int(auth_cache_ttl_seconds))
@@ -127,12 +131,12 @@ class KeyService:
         normalized_scope_type = str(scope_type or "").strip().lower()
         if (
             normalized_scope_type in _SCOPES_REQUIRING_TOKEN_DISCOVERY
-            and getattr(self.repository, "prisma", None) is None
+            and getattr(self.invalidation_repository, "prisma", None) is None
         ):
             raise CacheInvalidationBackendUnavailable("database unavailable")
 
     async def _invalidate_keys_by_scope(self, scope_column: str, scope_value: str) -> int:
-        prisma = getattr(self.repository, "prisma", None)
+        prisma = getattr(self.invalidation_repository, "prisma", None)
         if self.redis is None or prisma is None:
             return 0
         if scope_column == "organization_id":

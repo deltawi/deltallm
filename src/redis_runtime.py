@@ -19,7 +19,7 @@ from redis.asyncio.retry import Retry
 from src.concurrency import BoundedCapacityGate, CapacityGateFull
 from src.metrics.prometheus import get_prometheus_registry
 
-Allocation = Literal["critical", "bulk"]
+Allocation = Literal["critical", "cache", "bulk"]
 _registry = get_prometheus_registry()
 _occupied = Gauge(
     "deltallm_redis_allocation_occupied",
@@ -51,6 +51,7 @@ def startup_setting(general: object, settings: object, field: str, default: obje
 @dataclass(frozen=True)
 class RedisLimits:
     critical_max_connections: int = 64
+    cache_max_connections: int = 16
     bulk_max_connections: int = 16
     acquisition_timeout_seconds: float = 0.2
     socket_timeout_seconds: float = 1.0
@@ -167,7 +168,7 @@ def build_redis_client(
     limits = RedisLimits.from_settings(general, settings)
     endpoint = general if endpoint_settings is None else endpoint_settings
     url = getattr(settings, "redis_url", None) or getattr(endpoint, "redis_url", None)
-    if allocation == "bulk":
+    if allocation in {"cache", "bulk"}:
         bulk_url = startup_setting(general, settings, "redis_bulk_url", None)
         if bulk_url is not None:
             if not isinstance(bulk_url, SecretStr):
