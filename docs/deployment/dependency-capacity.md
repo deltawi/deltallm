@@ -188,6 +188,12 @@ batch-worker pods adds five peak processes: 190 PostgreSQL and 480 Redis connect
 Both worker and API telemetry jobs share their process allocations. A batch-worker
 Deployment is not a distinct telemetry-only process role.
 
+The evaluation overlay pins its bundled PostgreSQL server to 100 connections. One
+steady, one surge and one retiring process use `3 × (20 + 8) = 84` connections,
+leaving 16 reserved. Enabling outboxes, batch workers or more replicas in that profile
+requires resizing the actual database and its declared budget; Helm rejects an
+unchanged 100-connection ceiling. Evaluation settings are not a production profile.
+
 `dependencyCapacity.apiProcessesPerPod` and `batchWorkerProcessesPerPod` set
 `WEB_CONCURRENCY` and `UVICORN_WORKERS`; rendered pool-size environment values prevent `envFrom` from
 silently raising the two legacy pool counts. Duplicate overrides through explicit

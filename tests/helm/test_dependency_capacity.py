@@ -119,3 +119,29 @@ def test_explicit_worker_arguments_cannot_bypass_process_budget(flag):
 def test_numeric_string_surge_remains_supported():
     docs = _render("--set-string", "strategy.rollingUpdate.maxSurge=2")
     assert int(capacity(docs)["peak-processes"]) == 2 * 2 + 2
+
+
+def test_evaluation_pool_budget_matches_the_bundled_postgres_server():
+    docs = _render("-f", str(HELM_CHART_DIR / "values-eval.yaml"))
+    assert int(capacity(docs)["postgresql-connections-including-reserve"]) == 100
+    assert int(capacity(docs)["peak-processes"]) == 3
+    configuration = next(
+        doc
+        for doc in docs
+        if doc.get("kind") == "ConfigMap" and "override.conf" in doc.get("data", {})
+    )
+    assert configuration["data"]["override.conf"].strip() == "max_connections = 100"
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "config.general_settings.audit_ingestion_mode=outbox",
+        "batchWorker.enabled=true",
+        "replicaCount=2",
+    ],
+)
+def test_evaluation_growth_requires_resizing_the_actual_dependency_budget(setting):
+    assert "Peak PostgreSQL" in _render_error(
+        "-f", str(HELM_CHART_DIR / "values-eval.yaml"), "--set", setting
+    )

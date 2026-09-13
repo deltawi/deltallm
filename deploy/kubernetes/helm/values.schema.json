@@ -3,6 +3,19 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "postgresql": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "primary": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "extendedConfiguration": { "type": "string" }
+          }
+        }
+      }
+    },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
     "dependencyCapacity": {
