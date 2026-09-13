@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+
+from starlette.datastructures import State
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -73,50 +76,7 @@ async def fallback_events(request: Request, limit: int = 50) -> FallbackEventsRe
 
 
 async def _readiness_payload(request: Request) -> dict[str, object]:
-    checks: dict[str, bool] = {}
-    details: dict[str, dict[str, str]] = {}
-
-    redis_client = getattr(request.app.state, "redis", None)
-    if redis_client is None:
-        checks["redis"] = True
-    else:
-        try:
-            checks["redis"] = bool(await redis_client.ping())
-        except Exception:
-            checks["redis"] = False
-
-    prisma_manager = getattr(request.app.state, "prisma_manager", None)
-    prisma_client = getattr(prisma_manager, "client", None)
-    if prisma_client is None:
-        checks["database"] = True
-    else:
-        try:
-            await prisma_client.query_raw("SELECT 1")
-            checks["database"] = True
-        except Exception:
-            checks["database"] = False
-
-    telemetry_modes = {
-        str(getattr(request.app.state, "spend_ingestion_mode", "legacy")),
-        str(getattr(request.app.state, "audit_ingestion_mode", "legacy")),
-    }
-    if "outbox" in telemetry_modes:
-        telemetry_manager = getattr(request.app.state, "telemetry_prisma_manager", None)
-        telemetry_client = getattr(telemetry_manager, "client", None)
-        if telemetry_client is None:
-            checks["telemetry_database"] = False
-            details["telemetry_database"] = {"state": "unavailable"}
-        else:
-            try:
-                await asyncio.wait_for(telemetry_client.query_raw("SELECT 1"), timeout=1.0)
-                checks["telemetry_database"] = True
-                details["telemetry_database"] = {"state": "ready"}
-            except TimeoutError:
-                checks["telemetry_database"] = False
-                details["telemetry_database"] = {"state": "timeout"}
-            except Exception:
-                checks["telemetry_database"] = False
-                details["telemetry_database"] = {"state": "unavailable"}
+    checks, details = await _dependency_readiness(request.app.state)
 
     if bool(getattr(request.app.state, "batch_webhook_worker_expected", False)):
         worker_task = getattr(request.app.state, "batch_webhook_outbox_task", None)
@@ -181,6 +141,51 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
 
     status = "ok" if all(checks.values()) else "degraded"
     return {"status": status, "checks": checks, "details": details}
+
+
+async def _dependency_readiness(state: State) -> tuple[dict[str, bool], dict[str, dict[str, str]]]:
+    redis_client = getattr(state, "redis", None)
+    probes = {"redis": _probe_dependency(redis_client.ping if redis_client is not None else None)}
+    databases = {
+        "database": "prisma_manager",
+        "foreground_database": "foreground_prisma_manager",
+    }
+    if "outbox" in {
+        getattr(state, "spend_ingestion_mode", "legacy"),
+        getattr(state, "audit_ingestion_mode", "legacy"),
+    }:
+        databases.update(
+            telemetry_database="telemetry_prisma_manager",
+            telemetry_worker_database="telemetry_worker_prisma_manager",
+        )
+    for name, manager_name in databases.items():
+        client = getattr(getattr(state, manager_name, None), "client", None)
+        probes[name] = _probe_dependency(
+            (lambda db=client: db.query_raw("SELECT 1")) if client is not None else None
+        )
+    # At most five owned probes, each with the same independent one-second bound.
+    # Probe cancellation propagates to the adapters; database owners retain any
+    # native work still draining without admitting work beyond their allocation.
+    results = await asyncio.gather(*probes.values())
+    return (
+        {name: result[0] for name, result in zip(probes, results)},
+        {name: {"state": result[1]} for name, result in zip(probes, results)},
+    )
+
+
+async def _probe_dependency(
+    operation: Callable[[], Awaitable[object]] | None,
+) -> tuple[bool, str]:
+    if operation is None:
+        return False, "unavailable"
+    try:
+        async with asyncio.timeout(1.0):
+            result = await operation()
+        return (False, "unavailable") if result is False else (True, "ready")
+    except TimeoutError:
+        return False, "timeout"
+    except Exception:
+        return False, "unavailable"
 
 
 def _worker_health_payload(health: object) -> dict[str, str]:

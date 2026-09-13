@@ -44,7 +44,14 @@ GET /health/readiness
 ```
 
 Returns `200` when all configured critical checks are ready and `503` when one is degraded.
-Depending on enabled features, checks can include PostgreSQL, Redis, telemetry storage, routing
+Database and critical Redis probes run concurrently, each with a one-second deadline.
+Missing required clients, capacity exhaustion, failures and timeouts return `503`.
+PostgreSQL checks include `database` for control capacity and `foreground_database` for
+API-key authentication and admission. Outbox mode also requires `telemetry_database`
+and `telemetry_worker_database`; legacy mode omits these disabled allocations.
+Optional cache Redis clients do not gate readiness.
+
+Depending on enabled features, checks can also include routing
 reconciliation, spend/audit/email workers, batch webhook delivery, and organization lifecycle
 services.
 
@@ -53,9 +60,14 @@ services.
   "status": "ok",
   "checks": {
     "redis": true,
-    "database": true
+    "database": true,
+    "foreground_database": true
   },
-  "details": {}
+  "details": {
+    "redis": {"state": "ready"},
+    "database": {"state": "ready"},
+    "foreground_database": {"state": "ready"}
+  }
 }
 ```
 

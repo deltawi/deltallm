@@ -8,6 +8,7 @@ import httpx
 from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
+from src.bootstrap.dependency_capacity import DependencyAllocationSnapshot
 from src.redis_runtime import build_redis_client
 from src.batch import BatchRepository
 from src.config import (
@@ -31,7 +32,7 @@ from src.db.client import (
     foreground_prisma_manager,
     telemetry_worker_prisma_manager,
 )
-from src.db.allocation_config import DatabasePolicy, resolve_allocation_settings
+from src.db.allocation_config import DatabasePolicy
 from src.db.email import EmailOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
@@ -105,7 +106,8 @@ async def _init_infrastructure_runtime(
     redis_endpoint_settings = cfg.general_settings
 
     database_settings = resolve_database_settings(cfg, settings)
-    database_allocations = resolve_allocation_settings(cfg.general_settings, settings)
+    startup_allocations = DependencyAllocationSnapshot.build(cfg, settings)
+    database_allocations = startup_allocations.database
     if database_settings is None:
         raise RuntimeError("Database allocations require an explicit database URL")
     resources.push_async_callback(prisma_manager.disconnect)
@@ -127,10 +129,7 @@ async def _init_infrastructure_runtime(
     cleanup.push_async_callback(dynamic_config_manager.close)
     await dynamic_config_manager.initialize()
     cfg = dynamic_config_manager.get_app_config()
-    if resolve_allocation_settings(cfg.general_settings, settings) != database_allocations:
-        raise RuntimeError(
-            "Database allocation settings must match startup file/environment configuration"
-        )
+    startup_allocations.validate_effective(cfg, settings)
     resources.push_async_callback(foreground_prisma_manager.disconnect)
     await foreground_prisma_manager.connect(
         database_settings,

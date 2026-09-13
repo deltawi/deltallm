@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -10,6 +11,7 @@ from src.bootstrap.infrastructure import (
     shutdown_infrastructure_runtime,
 )
 from src.config import GeneralSettings, Settings
+from src.config_runtime.loader import build_app_config
 from src.providers.error_body import bound_provider_error_response_body
 
 
@@ -165,6 +167,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
         "src.bootstrap.infrastructure.build_app_config",
         lambda file_config, secret_resolver: SimpleNamespace(  # noqa: ARG005
             general_settings=GeneralSettings(
+                audit_ingestion_mode="outbox" if durable else "legacy",
                 database_url="postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db?schema=public",
                 db_pool_size=20,
                 db_pool_timeout=30,
@@ -325,3 +328,56 @@ async def test_init_and_shutdown_infrastructure_runtime(
     assert runtime.bulk_redis_client is not runtime.redis_client
     assert runtime.dynamic_config_manager.redis_client is runtime.redis_client
     assert app.state.prisma_manager.disconnected is True
+
+
+@pytest.mark.parametrize(
+    "durable_override",
+    [
+        {"redis_critical_max_connections": 10000},
+        {"redis_cache_max_connections": 10000},
+        {"redis_bulk_max_connections": 10000},
+        {"redis_acquisition_timeout_seconds": 30},
+        {"redis_socket_timeout_seconds": 30},
+        {"redis_connect_timeout_seconds": 30},
+        {"audit_ingestion_mode": "outbox"},
+        {"spend_ingestion_mode": "outbox"},
+        {"telemetry_db_pool_size": 100},
+    ],
+)
+async def test_durable_config_cannot_expand_startup_dependency_budget(
+    monkeypatch, durable_override
+):
+    from src.bootstrap import infrastructure
+
+    settings = Settings(database_url="postgresql://fixture:fixture@fixture/db")
+    initial = {"general_settings": {"audit_ingestion_mode": "legacy"}}
+    if "telemetry_db_pool_size" in durable_override:
+        initial["general_settings"]["audit_ingestion_mode"] = "outbox"
+    effective = build_app_config(initial, {"general_settings": durable_override})
+    dynamic = SimpleNamespace(
+        initialize=AsyncMock(), get_app_config=lambda: effective, close=AsyncMock()
+    )
+    managers = {}
+    for name in (
+        "prisma_manager",
+        "foreground_prisma_manager",
+        "telemetry_prisma_manager",
+        "telemetry_worker_prisma_manager",
+    ):
+        managers[name] = SimpleNamespace(
+            client=object(), connect=AsyncMock(), disconnect=AsyncMock()
+        )
+        monkeypatch.setattr(infrastructure, name, managers[name])
+    monkeypatch.setattr(infrastructure, "get_settings", lambda: settings)
+    monkeypatch.setattr(infrastructure, "load_yaml_dict", lambda _: initial)
+    monkeypatch.setattr(infrastructure, "DynamicConfigManager", lambda **_: dynamic)
+    build_redis = Mock(side_effect=AssertionError("Redis built before capacity validation"))
+    monkeypatch.setattr(infrastructure, "build_redis_client", build_redis)
+
+    with pytest.raises(RuntimeError, match="must match startup"):
+        await init_infrastructure_runtime(SimpleNamespace(state=SimpleNamespace()))
+
+    managers["prisma_manager"].disconnect.assert_awaited_once()
+    managers["foreground_prisma_manager"].connect.assert_not_awaited()
+    dynamic.close.assert_awaited_once()
+    build_redis.assert_not_called()

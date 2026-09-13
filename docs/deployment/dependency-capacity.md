@@ -136,8 +136,13 @@ Redis commands. Borrowed clients return their lease without closing the owner's 
 Pool saturation preserves each consumer's existing failure policy: optional caches
 miss/skip, and required controls must not authorize or accept durable work by failure.
 
-These fields use explicit effective YAML/durable values before environment defaults
-and reject live changes. The existing critical endpoint still comes from the startup
+These fields use explicit YAML values before environment defaults and reject live
+changes. The effective durable limits must match that startup allocation snapshot;
+startup fails before opening additional clients when they differ. The check also
+covers PostgreSQL pool counts and whether either outbox enables the telemetry pools.
+This prevents persisted settings from exceeding the connection counts validated by
+Helm. Before rollout, align persisted allocation values and ingestion modes with the
+rendered startup configuration. The existing critical endpoint still comes from the startup
 file/environment so an older durable endpoint value cannot redirect coordination.
 Capacity/deadline/retry options override conflicting URL query parameters.
 
@@ -229,6 +234,14 @@ Observe `deltallm_database_allocation_occupied`,
 `deltallm_redis_allocation_acquisition_seconds`. Labels contain fixed allocation and
 operation/outcome classes. Correlate them with server connection/lock/eviction metrics,
 required acceptance failures, consumer backlog age and request latency.
+
+Readiness probes the critical Redis client and each enabled PostgreSQL allocation,
+including foreground and telemetry-worker clients. Missing clients, saturation,
+failures and probe timeouts make readiness fail. These checks run concurrently with
+one second per dependency: one Redis `PING` and two SQL `SELECT 1` calls in legacy
+mode, or four SQL calls with an outbox enabled, per probe. They use the existing
+bounded allocations and add no inference-path calls. Optional cache clients do not
+gate readiness. Liveness remains independent of all dependencies.
 
 Required validation includes real PostgreSQL reporting/consumer saturation, lock and
 statement deadlines, transaction expiry, cancellation/recovery, and real Redis cache
