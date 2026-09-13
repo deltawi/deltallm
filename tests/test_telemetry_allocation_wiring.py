@@ -120,3 +120,21 @@ async def test_auth_invalidation_discovery_cannot_consume_lookup_database():
     control.query_raw.assert_awaited_once()
     foreground.query_raw.assert_not_awaited()
     redis.delete.assert_awaited_once()
+
+
+async def test_admin_policy_invalidation_does_not_consume_audit_acceptance_capacity():
+    foreground, background = object(), object()
+    service = AuditService(
+        AuditRepository(foreground), db_client=foreground, worker_db_client=background
+    )
+    service.ingestion_repository.get_content_policy = AsyncMock(return_value=(False, 0))
+    service.worker_ingestion_repository.get_content_policy = AsyncMock(return_value=(True, 7))
+    service.policy_invalidation.publish = AsyncMock()
+
+    await service.invalidate_content_storage_policy_distributed("org-1")
+
+    service.ingestion_repository.get_content_policy.assert_not_awaited()
+    service.worker_ingestion_repository.get_content_policy.assert_awaited_once_with("org-1")
+    service.policy_invalidation.publish.assert_awaited_once_with(
+        organization_id="org-1", enabled=True, version=7
+    )

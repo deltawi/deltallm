@@ -1186,7 +1186,7 @@ class AuditService:
         enabled = False
         version = 0
         try:
-            enabled, version = await self.ingestion_repository.get_content_policy(normalized)
+            enabled, version = await self.worker_ingestion_repository.get_content_policy(normalized)
         except Exception:
             logger.exception(
                 "failed reading audit content policy for invalidation",
