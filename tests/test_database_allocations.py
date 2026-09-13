@@ -333,3 +333,16 @@ async def test_manual_transaction_expiry_releases_slot_and_disables_old_client(m
         await transaction.commit()
     assert await allocation.query(AsyncMock(return_value="recovered")) == "recovered"
     await allocation.close()
+
+
+@pytest.mark.parametrize("settings_type", [GeneralSettings, Settings])
+def test_deadline_validation_does_not_expose_unrelated_credentials(settings_type):
+    with pytest.raises(ValidationError) as failure:
+        settings_type(
+            db_lock_timeout_seconds=3,
+            redis_bulk_url="redis://user:PR3CANARY@x",
+        )
+    message = str(failure.value)
+    assert "PR3CANARY" not in message
+    assert "redis://" not in message
+    assert "lock <= statement <= transaction" in message

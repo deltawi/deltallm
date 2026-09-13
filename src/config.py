@@ -1097,7 +1097,9 @@ class AppConfig(BaseModel):
 
 
 class Settings(BaseSettings, DatabaseAllocationSettings):
-    model_config = SettingsConfigDict(env_prefix="DELTALLM_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="DELTALLM_", extra="ignore", hide_input_in_errors=True
+    )
 
     app_name: str = "DeltaLLM Core API"
     app_env: str = "dev"
