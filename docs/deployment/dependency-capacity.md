@@ -20,6 +20,12 @@ telemetry enabled. The split batch-worker Deployment runs the same infrastructur
 bootstrap and opens the same enabled allocations; its background tasks are not extra
 pools. Disabling durable ingestion removes both telemetry allocations.
 
+Separate native clients reserve actual connections. A semaphore or priority queue
+around one shared native pool cannot reclaim a connection already occupied by a
+report or consumer. Each allocation therefore has its own client and a bounded
+admission owner. This adds fixed client/engine overhead, which must fit the pod's
+memory and the deployment connection budget; it adds no request SQL round trips.
+
 | Allocation | Consumers | Default connections |
 | --- | --- | ---: |
 | `control` | Configuration, admin/reporting, ordinary repositories, key-invalidation discovery and background control work | `db_pool_size`: 20 |
@@ -97,6 +103,11 @@ selection is preserved. The older `db_pool_timeout` and
 allocated clients override those URL waits using `db_acquisition_timeout_seconds`.
 TLS, credentials, schema and unrelated URL options are preserved. A proxy must pass
 through the required startup options; a proxy that strips them fails validation.
+The legacy timeout fields can be removed in a breaking configuration release after
+deployment profiles migrate to the allocation deadlines. Direct audit/spend service
+constructors retain an optional worker-client argument for compatibility; production
+bootstrap always supplies the isolated worker client. Remove that constructor fallback
+only after its external callers migrate.
 
 ## Redis ownership and configuration
 
