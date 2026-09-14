@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import os
 
+from prisma.errors import RawQueryError
 import pytest
 
 from scripts.benchmarks.ingestion_database import (
@@ -94,13 +95,21 @@ async def bounded_writers(db, queue, events, *, maximum=8, organizations=1):
     async def submit(index, event_id):
         actor = index % 2
         async with gates[actor]:
-            return await enqueue(
-                clients[actor],
-                queue,
-                event_id,
-                maximum=maximum,
-                organization=f"org-{index % organizations}",
-            )
+            try:
+                return await enqueue(
+                    clients[actor],
+                    queue,
+                    event_id,
+                    maximum=maximum,
+                    organization=f"org-{index % organizations}",
+                )
+            except DatabaseUnavailableError as exc:
+                # A bounded lock timeout is a valid fail-closed outcome on a
+                # busy host. Only that confirmed rollback is recoverable here;
+                # connection failures and ambiguous commits still fail the test.
+                assert isinstance(exc.__cause__, RawQueryError)
+                assert exc.__cause__.meta["code"] == "55P03"
+                return "lock_timeout"
 
     # On an assertion/SQL failure, cancel and join siblings before fixture
     # teardown; gather's default exception path leaves submissions running.
@@ -135,12 +144,28 @@ async def test_concurrent_near_full_admission_never_exceeds_global_bound(
 ):
     for i in range(5):
         assert await enqueue(queues.acceptance, queue, f"seed-{i}") == "accepted"
+    events = [f"new-{i}" for i in range(32)]
     outcomes = await bounded_writers(
         queues,
         queue,
-        [f"new-{i}" for i in range(32)],
+        events,
         organizations=organizations,
     )
+    # Check the concurrent wave before recovery, so a later retry cannot hide
+    # over-admission or a leaked debit from a rolled-back lock waiter.
+    assert set(outcomes) <= {"accepted", "full", "lock_timeout"}
+    assert outcomes.count("accepted") <= 3
+    assert int((await capacity(queues.observer, queue))["pending_count"]) == (
+        5 + outcomes.count("accepted")
+    )
+    for index, outcome in enumerate(outcomes):
+        if outcome == "lock_timeout":
+            outcomes[index] = await enqueue(
+                queues.acceptance,
+                queue,
+                events[index],
+                organization=f"org-{index % organizations}",
+            )
     assert outcomes.count("accepted") == 3
     assert outcomes.count("full") == 29
     assert int((await capacity(queues.observer, queue))["pending_count"]) == 8
@@ -149,6 +174,13 @@ async def test_concurrent_near_full_admission_never_exceeds_global_bound(
 @pytest.mark.parametrize("queue", ["audit", "spend"])
 async def test_concurrent_duplicate_retries_have_one_durable_effect(queues, queue):
     outcomes = await bounded_writers(queues, queue, ["same-event"] * 32)
+    assert set(outcomes) <= {"accepted", "duplicate", "lock_timeout"}
+    assert int((await capacity(queues.observer, queue))["pending_count"]) == (
+        outcomes.count("accepted")
+    )
+    for index, outcome in enumerate(outcomes):
+        if outcome == "lock_timeout":
+            outcomes[index] = await enqueue(queues.acceptance, queue, "same-event")
     assert outcomes.count("accepted") == 1
     assert outcomes.count("duplicate") == 31
     assert int((await capacity(queues.observer, queue))["pending_count"]) == 1
