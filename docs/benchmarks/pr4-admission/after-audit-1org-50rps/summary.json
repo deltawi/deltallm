@@ -1,0 +1,124 @@
+{
+  "boundary": "allocated PostgreSQL admission; excludes HTTP, auth, Redis and provider",
+  "revision": "4ca6abdd",
+  "server": "PostgreSQL 15.19 (Homebrew) on aarch64-apple-darwin25.6.0, compiled by Apple clang version 21.0.0 (clang-2100.1.1.101), 64-bit",
+  "database_settings": {
+    "version": "PostgreSQL 15.19 (Homebrew) on aarch64-apple-darwin25.6.0, compiled by Apple clang version 21.0.0 (clang-2100.1.1.101), 64-bit",
+    "timezone": "UTC",
+    "max_connections": "100",
+    "shared_buffers": "128MB",
+    "fsync": "on",
+    "synchronous_commit": "on"
+  },
+  "allocation": {
+    "allocation": "telemetry",
+    "connections": 5,
+    "acquisition_seconds": 0.2,
+    "statement_seconds": 1,
+    "lock_seconds": 0.2,
+    "transaction_seconds": 2
+  },
+  "source_sha256": {
+    "audit_ingestion.py": "90337c6fa6d26ef77e2e6baad7aa2ab61a1a0f94464cd58b720b704fad5094b8",
+    "spend_ingestion.py": "fcdff8569e199f5f138c88aaecfc134d4b6026692b262b71a25955469d4911e1",
+    "allocated_client.py": "7c1b81ce4c057a4167949480c5ca035b1947dab144e4365543f3a54fc7b00e3b"
+  },
+  "probe_sha256": "760163ddc608dbf0abea5a65b40a5244734e6a331114f04ac80cdd1639322fc4",
+  "python": "3.13.12",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "profile": {
+    "queue": "audit",
+    "organizations": 1,
+    "rate": 50,
+    "seconds": 10,
+    "connections": 5,
+    "batch_size": 1,
+    "revision": "4ca6abdd",
+    "output": "docs/benchmarks/pr4-admission/after-audit-1org-50rps"
+  },
+  "offered": 500,
+  "accepted_calls": 500,
+  "accepted_events": 500,
+  "offered_rps": 50,
+  "completed_rps_in_window": 50.0,
+  "completed_rps_including_drain": 50.06258344581792,
+  "errors": {},
+  "latency_seconds_all": {
+    "mean": 0.009130803256026412,
+    "p50": 0.008526624998921761,
+    "p95": 0.011161250000441214,
+    "p99": 0.026068832998134894
+  },
+  "latency_seconds_accepted": {
+    "mean": 0.009130803256026412,
+    "p50": 0.008526624998921761,
+    "p95": 0.011161250000441214,
+    "p99": 0.026068832998134894
+  },
+  "scheduler_lag_seconds": {
+    "mean": 0.0011081323331745805,
+    "p50": 0.0011466250015654822,
+    "p95": 0.0012502500011760675,
+    "p99": 0.0012975829999781752
+  },
+  "events_per_commit": 1.0,
+  "sql_calls_per_accepted": {
+    "mean": 2.0,
+    "p50": 2,
+    "p95": 2,
+    "p99": 2
+  },
+  "inflight_first_quarter_mean": 0.112,
+  "inflight_last_quarter_mean": 0.0,
+  "phases_seconds": {
+    "acquisition": {
+      "mean": 0.0025062260819395305,
+      "p50": 0.0023550419973616954,
+      "p95": 0.0037284999998519197,
+      "p99": 0.004216708999592811
+    },
+    "queue_wait": {
+      "mean": 0.00028271799999999995,
+      "p50": 5e-06,
+      "p95": 8e-06,
+      "p99": 0.000502
+    },
+    "policy_wait": {
+      "mean": 4.748e-06,
+      "p50": 5e-06,
+      "p95": 6e-06,
+      "p99": 1e-05
+    },
+    "lock_rpc": {
+      "mean": 0.002382727654039627,
+      "p50": 0.0020696659994428046,
+      "p95": 0.003164708999975119,
+      "p99": 0.003973041999415727
+    },
+    "sql": {
+      "mean": 0.002468423147998692,
+      "p50": 0.0022178750004968606,
+      "p95": 0.0031338340013462584,
+      "p99": 0.004619915998773649
+    },
+    "commit": {
+      "mean": 0.001675256067988812,
+      "p50": 0.0015730829982203431,
+      "p95": 0.002134959002432879,
+      "p99": 0.0031801670011191163
+    },
+    "lock_occupancy_estimate": {
+      "mean": 0.004160852065011568,
+      "p50": 0.0038184160039236303,
+      "p95": 0.005152833000465762,
+      "p99": 0.007154999999329448
+    }
+  },
+  "coalescing_opportunity": {
+    "window_seconds": 0.002,
+    "maximum_events": 32,
+    "optimistic_events_per_commit": 1.0,
+    "commits_saved": 0
+  },
+  "consumer_note": "Consumers disabled intentionally; durable backlog grows by accepted events. Inflight measures admission work, not durable backlog."
+}

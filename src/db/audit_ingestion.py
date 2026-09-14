@@ -277,6 +277,7 @@ class AuditIngestionRepository:
                 SET pending_count = pending_count + (SELECT COUNT(*) FROM inserted),
                     updated_at = NOW()
                 WHERE queue_name = 'audit'
+                  AND EXISTS (SELECT 1 FROM inserted)
                 RETURNING pending_count
             )
             SELECT
@@ -357,6 +358,9 @@ class AuditIngestionRepository:
                     ),
                     updated_at = NOW()
                 WHERE queue_name = 'audit'
+                  AND EXISTS (
+                      SELECT 1 FROM expired WHERE delivery_class = 'best_effort'
+                  )
                 RETURNING pending_count
             ), candidates AS (
                 SELECT event_id
