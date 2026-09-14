@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -122,6 +123,9 @@ async def test_replay_fails_closed_on_changed_or_uncertain_checkpoint(selected_b
     item = h.item()
     await h.worker._process_item(h.job, item)
     assert len(h.repository.completed_calls) == 1
+    calls_before = deepcopy(h.calls)
+    billing_before = list(h.billing.mock_calls)
+    checkpoint_writes_before = len(h.checkpoints.writes)
     if change == "input":
         item.request_body["messages"][0]["content"] = "different"
     elif change == "policy":
@@ -140,7 +144,40 @@ async def test_replay_fails_closed_on_changed_or_uncertain_checkpoint(selected_b
         item.selector_checkpoint["decision"] = None
     with pytest.raises(BatchSelectorUnavailable):
         await h.worker._prepare_item_for_execution(h.job, item)
-    assert len(h.calls) == 2
+    # A valid initial decision may use the safe default before classifier
+    # dispatch. Rejected replay must add no provider or economic effects for
+    # either kind of checkpoint, regardless of the initial call count.
+    assert h.calls == calls_before
+    assert h.billing.mock_calls == billing_before
+    assert len(h.checkpoints.writes) == checkpoint_writes_before
+
+
+async def test_changed_input_cannot_replay_a_default_decision_without_classifier_dispatch(
+    selected_batch, monkeypatch
+):
+    from src.router.selection.contracts import SelectorCause
+
+    h = selected_batch
+    monkeypatch.setattr(
+        "src.router.selection.service.project_selector_request",
+        lambda *_args, **_kwargs: SelectorCause.INPUT_UNAVAILABLE,
+    )
+    item = h.item()
+    await h.worker._process_item(h.job, item)
+    assert len(h.repository.completed_calls) == 1
+    assert not selection_calls(h)
+    assert len(answer_calls(h)) == 1
+    assert item.selector_checkpoint["decision"]["cause"] == "input_unavailable"
+    calls_before = deepcopy(h.calls)
+    billing_before = list(h.billing.mock_calls)
+    checkpoint_writes_before = len(h.checkpoints.writes)
+
+    item.request_body["messages"][0]["content"] = "changed after default decision"
+    with pytest.raises(BatchSelectorUnavailable):
+        await h.worker._prepare_item_for_execution(h.job, item)
+    assert h.calls == calls_before
+    assert h.billing.mock_calls == billing_before
+    assert len(h.checkpoints.writes) == checkpoint_writes_before
 
 
 async def test_receipt_checkpoint_crash_window_never_reissues_paid_selector(selected_batch):
