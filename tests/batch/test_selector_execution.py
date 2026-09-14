@@ -123,6 +123,7 @@ async def test_replay_fails_closed_on_changed_or_uncertain_checkpoint(selected_b
     item = h.item()
     await h.worker._process_item(h.job, item)
     assert len(h.repository.completed_calls) == 1
+    assert len(answer_calls(h)) == 1
     calls_before = deepcopy(h.calls)
     billing_before = list(h.billing.mock_calls)
     checkpoint_writes_before = len(h.checkpoints.writes)
