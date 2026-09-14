@@ -33,6 +33,13 @@ from tests.performance.gateway_concurrency_metrics import MetricsRecorder
 from tests.performance.gateway_concurrency_manifest import read_manifest
 
 ERROR_CODES = {
+    "gateway_ingress_full",
+    "gateway_ingress_buffer_full",
+    "gateway_request_body_too_large",
+    "gateway_request_body_timeout",
+    "invalid_content_length",
+    "auth_fallback_unavailable",
+    "database_unavailable",
     "audit_persistence_unavailable",
     "gateway_preflight_global_parallel_exceeded",
     "gateway_preflight_org_parallel_exceeded",
@@ -159,6 +166,11 @@ async def measure(args: argparse.Namespace) -> dict[str, object]:
                             response.status_code, error=error, bytes_received=len(body)
                         )
 
+            warmup = await request(-1, uuid4().hex)
+            if warmup.status_code != 200 or warmup.error is not None:
+                raise ValueError(
+                    f"Workload precheck failed: HTTP {warmup.status_code}, {warmup.error}"
+                )
             before = await dependency_counts(db, redis)
             async with MetricsRecorder(urls, metrics_path) as recorder:
                 arrival_start = perf_counter() - recorder.started

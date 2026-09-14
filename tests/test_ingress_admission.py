@@ -11,6 +11,8 @@ from starlette.types import Message, Scope
 
 from src.ingress import IngressClass, IngressLimits, IngressRuntime, ingress_class
 from src.middleware.ingress import IngressMiddleware
+from src.middleware.request_timing import RequestTimingMiddleware
+from src.metrics.request_phases import request_in_flight, request_route
 
 pytestmark = [pytest.mark.hermetic, pytest.mark.asyncio]
 
@@ -341,6 +343,60 @@ async def test_repeated_cancellation_during_cleanup_does_not_leak_permit() -> No
             await task
         assert rt.requests.active == rt.buffered_bytes == 0
     finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("completion", ["final_body", "disconnect", "cancel"])
+async def test_request_timing_completion_preserves_ingress_cleanup_ownership(completion):
+    rt = runtime(max_buffered_bytes=4)
+    started, cleanup, release = [asyncio.Event() for _ in range(3)]
+    gauge = request_in_flight.labels(request_route("/v1/chat/completions"))
+    before = gauge._value.get()
+
+    async def app(scope, receive, send):
+        assert (await receive())["body"] == b"1234"
+        started.set()
+        try:
+            await send({"type": "http.response.start", "status": 200})
+            if completion == "final_body":
+                await send({"type": "http.response.body", "body": b"done"})
+            elif completion == "disconnect":
+                assert (await receive())["type"] == "http.disconnect"
+            else:
+                await asyncio.Event().wait()
+        finally:
+            cleanup.set()
+            await release.wait()
+
+    receive = AsyncMock(
+        side_effect=[{"type": "http.request", "body": b"1234"}, {"type": "http.disconnect"}]
+    )
+    task = asyncio.create_task(
+        RequestTimingMiddleware(IngressMiddleware(app))(scope(rt), receive, AsyncMock())
+    )
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        if completion == "cancel":
+            task.cancel()
+        await asyncio.wait_for(cleanup.wait(), 1)
+        assert rt.requests.active == 1
+        assert rt.buffered_bytes == 4
+        assert gauge._value.get() == before + (completion == "cancel")
+        rejected_receive, rejected_send = AsyncMock(), AsyncMock()
+        await RequestTimingMiddleware(IngressMiddleware(app))(
+            scope(rt), rejected_receive, rejected_send
+        )
+        rejected_receive.assert_not_called()
+        assert rejected_send.await_args_list[0].args[0]["status"] == 503
+        release.set()
+        results = await asyncio.gather(task, return_exceptions=True)
+        if completion == "cancel":
+            assert isinstance(results[0], asyncio.CancelledError)
+        assert rt.requests.active == rt.requests.waiters == rt.buffered_bytes == 0
+        assert gauge._value.get() == before
+    finally:
+        release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 

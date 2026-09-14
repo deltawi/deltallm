@@ -27,6 +27,9 @@ HISTOGRAMS = (
     "deltallm_telemetry_acceptance_events_per_commit",
     "deltallm_request_phase_latency_seconds",
     "deltallm_event_loop_lag_seconds",
+    "deltallm_ingress_queue_seconds",
+    "deltallm_auth_fallback_seconds",
+    "deltallm_database_allocation_seconds",
 )
 ALLOWED_NAMES = {
     "deltallm_telemetry_acceptance_in_flight",
@@ -44,15 +47,60 @@ ALLOWED_NAMES = {
     "deltallm_spend_ingestion_oldest_event_age_seconds",
     "deltallm_spend_ingestion_fallback_active",
     "deltallm_spend_ingestion_fallback_waiters",
+    "deltallm_ingress_active",
+    "deltallm_ingress_waiters",
+    "deltallm_ingress_buffered_bytes",
+    "deltallm_ingress_rejections_total",
+    "deltallm_auth_fallback_tasks",
+    "deltallm_auth_fallback_callers",
+    "deltallm_auth_fallback_events_total",
+    "deltallm_database_allocation_occupied",
+    "deltallm_database_allocation_events_total",
 } | {name + suffix for name in HISTOGRAMS for suffix in ("_bucket", "_count", "_sum")}
 LABEL_VALUES = {
     "queue": {"audit", "spend"},
-    "phase": PHASES | {phase.value for phase in AcceptancePhase},
-    "outcome": OUTCOMES | {"accepted", "duplicate", "full", "mixed", "empty"},
+    "phase": PHASES
+    | {phase.value for phase in AcceptancePhase}
+    | {"cache_read", "cache_write", "lookup", "admission", "caller", "execution"},
+    "outcome": OUTCOMES
+    | {
+        "accepted",
+        "duplicate",
+        "full",
+        "mixed",
+        "empty",
+        "closed",
+        "overloaded",
+        "deadline",
+        "queue_full",
+        "coalesced",
+        "completed",
+        "failed",
+        "miss",
+        "hit",
+        "unavailable_or_invalid",
+        "unavailable",
+        "oversized",
+        "stored",
+        "admitted",
+        "rejected",
+        "caller_deadline",
+        "caller_cancelled",
+        "rollback_error",
+    },
     "transaction_scope": {"owned", "external"},
     "route": ROUTES,
     "response_kind": RESPONSE_KINDS,
-    "reason": {reason.value for reason in AcceptanceFailure},
+    "reason": {reason.value for reason in AcceptanceFailure}
+    | {
+        "gateway_ingress_full",
+        "gateway_ingress_buffer_full",
+        "gateway_request_body_too_large",
+        "gateway_request_body_timeout",
+        "invalid_content_length",
+    },
+    "allocation": {"inference", "control", "health", "foreground", "telemetry", "telemetry_worker"},
+    "operation": {"query", "finish"},
 }
 
 

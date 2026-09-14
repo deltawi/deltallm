@@ -1,0 +1,60 @@
+{
+  "database_policy": {
+    "allocation": "foreground",
+    "connections": 8,
+    "acquisition_seconds": 0.2,
+    "statement_seconds": 1,
+    "lock_seconds": 0.2,
+    "transaction_seconds": 2
+  },
+  "auth_limits": {
+    "max_active": 8,
+    "max_waiters": 32,
+    "queue_timeout_ms": 10,
+    "timeout_seconds": 0.5,
+    "cache_timeout_seconds": 0.1,
+    "cache_max_bytes": 131072
+  },
+  "cases": [
+    {
+      "case": "warm",
+      "requests": 100,
+      "cache_read_attempts": 100,
+      "cache_write_attempts": 0,
+      "key_queries": 0,
+      "successes": 100,
+      "auth_tasks_after": 0,
+      "database_slots_after": 0
+    },
+    {
+      "case": "cold",
+      "requests": 100,
+      "cache_read_attempts": 100,
+      "cache_write_attempts": 100,
+      "key_queries": 100,
+      "successes": 100,
+      "auth_tasks_after": 0,
+      "database_slots_after": 0
+    },
+    {
+      "case": "cold_concurrent",
+      "requests": 20,
+      "cache_read_attempts": 20,
+      "cache_write_attempts": 1,
+      "key_queries": 1,
+      "successes": 20,
+      "auth_tasks_after": 0,
+      "database_slots_after": 0
+    },
+    {
+      "case": "cache_outage",
+      "requests": 100,
+      "cache_read_attempts": 100,
+      "cache_write_attempts": 100,
+      "key_queries": 100,
+      "successes": 100,
+      "auth_tasks_after": 0,
+      "database_slots_after": 0
+    }
+  ]
+}

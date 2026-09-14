@@ -161,9 +161,12 @@ lookup keeps its execution slot until the underlying work finishes; its result
 cannot authorize or fill the cache. This prevents repeated client timeouts from
 creating unlimited SQL. Shutdown closes lookup admission, invalidates pending
 results, and cancels/observes owned tasks before centrally owned clients close.
-Native pool, statement, and lock deadlines remain a separate dependency-capacity
-requirement. Until those are configured, a database stall can keep all fallback
-slots occupied; the service rejects additional misses instead of increasing work.
+The foreground database allocation separately owns native queries and enforces
+pool, statement, and lock deadlines. During shutdown its slot can outlive the
+cancelled auth task, and stays occupied until native work finishes. Database
+exhaustion becomes the same local auth 503; additional misses cannot bypass the
+foreground allocation. Cache invalidation continues to use the separate control
+database allocation. Configure both budgets before increasing pod counts.
 
 Existing Redis `key:v4` TTL and cross-replica invalidation delivery remain in use.
 Local invalidation also fences pending lookup results. This does not establish a
