@@ -1244,6 +1244,40 @@ model DeltaLLM_TelemetryIngestionCapacity {
   @@map("deltallm_telemetry_ingestion_capacity")
 }
 
+// Inactive partition preparation. SQL constraints enforce fixed quota formulas,
+// prepared state and zero occupancy until a separately validated writer cutover.
+model DeltaLLM_TelemetryCapacityLayout {
+  queue_name       String   @id
+  epoch            BigInt
+  protocol_version Int      @default(2)
+  state            String   @default("prepared")
+  capacity         BigInt
+  required_reserve BigInt
+  partition_count  Int
+  created_at       DateTime @default(now())
+  partitions       DeltaLLM_TelemetryCapacityPartition[]
+
+  @@unique([queue_name, epoch, capacity, required_reserve, partition_count], map: "telemetry_layout_definition")
+  @@map("deltallm_telemetry_capacity_layout")
+}
+
+model DeltaLLM_TelemetryCapacityPartition {
+  queue_name         String
+  epoch              BigInt
+  partition_id       Int
+  capacity           BigInt
+  required_reserve   BigInt
+  partition_count    Int
+  quota              BigInt
+  best_effort_ceiling BigInt
+  pending_count      BigInt   @default(0)
+  updated_at         DateTime @default(now())
+  layout             DeltaLLM_TelemetryCapacityLayout @relation(fields: [queue_name, epoch, capacity, required_reserve, partition_count], references: [queue_name, epoch, capacity, required_reserve, partition_count], onDelete: Restrict, onUpdate: Restrict, map: "telemetry_partition_layout")
+
+  @@id([queue_name, partition_id], map: "telemetry_partition_pk")
+  @@map("deltallm_telemetry_capacity_partition")
+}
+
 model DeltaLLM_AuditIngestionOutbox {
   event_id              String   @id
   record_type           String
