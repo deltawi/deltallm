@@ -123,6 +123,8 @@ async def test_replay_fails_closed_on_changed_or_uncertain_checkpoint(selected_b
     item = h.item()
     await h.worker._process_item(h.job, item)
     assert len(h.repository.completed_calls) == 1
+    assert item.selector_checkpoint["decision"]["cause"] == "classified"
+    assert len(selection_calls(h)) == 1
     assert len(answer_calls(h)) == 1
     calls_before = deepcopy(h.calls)
     billing_before = list(h.billing.mock_calls)
@@ -145,9 +147,7 @@ async def test_replay_fails_closed_on_changed_or_uncertain_checkpoint(selected_b
         item.selector_checkpoint["decision"] = None
     with pytest.raises(BatchSelectorUnavailable):
         await h.worker._prepare_item_for_execution(h.job, item)
-    # A valid initial decision may use the safe default before classifier
-    # dispatch. Rejected replay must add no provider or economic effects for
-    # either kind of checkpoint, regardless of the initial call count.
+    # Rejected replay must add no provider, economic or checkpoint effects.
     assert h.calls == calls_before
     assert h.billing.mock_calls == billing_before
     assert len(h.checkpoints.writes) == checkpoint_writes_before
