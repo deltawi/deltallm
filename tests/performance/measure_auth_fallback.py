@@ -51,6 +51,45 @@ class CountedCache:
         return await self.client.setex(key, ttl, value)
 
 
+async def key_query_plan(db, token_hash):
+    class Capture:
+        async def query_raw(self, query, *values):
+            self.query, self.values = query, values
+            return []
+
+    captured = Capture()
+    await KeyRepository(captured).get_by_token(token_hash)
+    rows = await db.query_raw(
+        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + captured.query, *captured.values
+    )
+    report = rows[0]["QUERY PLAN"][0]
+
+    def redact(node):
+        # Conditions and output expressions can contain the hashed credential.
+        safe = {
+            name: node[name]
+            for name in (
+                "Node Type",
+                "Relation Name",
+                "Index Name",
+                "Actual Rows",
+                "Actual Loops",
+                "Shared Hit Blocks",
+                "Shared Read Blocks",
+            )
+            if name in node
+        }
+        if "Plans" in node:
+            safe["Plans"] = [redact(child) for child in node["Plans"]]
+        return safe
+
+    return {
+        "plan": redact(report["Plan"]),
+        "planning_ms": report["Planning Time"],
+        "execution_ms": report["Execution Time"],
+    }
+
+
 async def measure() -> dict:
     policy = DatabasePolicy("foreground", 8, 0.2, 1, 0.2, 2)
     limits = AuthFallbackLimits()
@@ -109,7 +148,12 @@ async def measure() -> dict:
                     "database_slots_after": owner.gate.active,
                 }
             )
-        return {"database_policy": asdict(policy), "auth_limits": asdict(limits), "cases": rows}
+        return {
+            "database_policy": asdict(policy),
+            "auth_limits": asdict(limits),
+            "cases": rows,
+            "key_query_plan": await key_query_plan(db, service.hash_key(key)),
+        }
 
 
 if __name__ == "__main__":

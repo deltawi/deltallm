@@ -40,8 +40,8 @@
       "case": "cold_concurrent",
       "requests": 20,
       "cache_read_attempts": 20,
-      "cache_write_attempts": 1,
-      "key_queries": 1,
+      "cache_write_attempts": 2,
+      "key_queries": 2,
       "successes": 20,
       "auth_tasks_after": 0,
       "database_slots_after": 0
@@ -56,5 +56,112 @@
       "auth_tasks_after": 0,
       "database_slots_after": 0
     }
-  ]
+  ],
+  "key_query_plan": {
+    "plan": {
+      "Node Type": "Limit",
+      "Actual Rows": 1,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 6,
+      "Shared Read Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "deltallm_organizationlifecyclegeneration",
+          "Index Name": "deltallm_organizationlifecyclegeneration_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 2,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Nested Loop",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 6,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Nested Loop",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 2,
+                  "Shared Read Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Hash Join",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 1,
+                      "Shared Read Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Seq Scan",
+                          "Relation Name": "deltallm_serviceaccount",
+                          "Actual Rows": 0,
+                          "Actual Loops": 1,
+                          "Shared Hit Blocks": 0,
+                          "Shared Read Blocks": 0
+                        },
+                        {
+                          "Node Type": "Hash",
+                          "Actual Rows": 1,
+                          "Actual Loops": 1,
+                          "Shared Hit Blocks": 1,
+                          "Shared Read Blocks": 0,
+                          "Plans": [
+                            {
+                              "Node Type": "Seq Scan",
+                              "Relation Name": "deltallm_verificationtoken",
+                              "Actual Rows": 1,
+                              "Actual Loops": 1,
+                              "Shared Hit Blocks": 1,
+                              "Shared Read Blocks": 0
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Node Type": "Seq Scan",
+                      "Relation Name": "deltallm_usertable",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 1,
+                      "Shared Read Blocks": 0
+                    }
+                  ]
+                },
+                {
+                  "Node Type": "Seq Scan",
+                  "Relation Name": "deltallm_teamtable",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 1,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            },
+            {
+              "Node Type": "Seq Scan",
+              "Relation Name": "deltallm_organizationtable",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 1,
+              "Shared Read Blocks": 0
+            }
+          ]
+        }
+      ]
+    },
+    "planning_ms": 0.219,
+    "execution_ms": 0.034
+  }
 }

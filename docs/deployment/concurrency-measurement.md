@@ -12,6 +12,13 @@ required audit, and durable spend enabled. The provider returns a fixed one-toke
 response. The runner bypasses the response cache while retaining normal policy
 preflight. It uses the existing constant-arrival generator.
 
+The runner requires a successful one-token warmup before recording load; warmup
+is excluded from request and dependency deltas. The fixture includes the explicit
+organization model grant required by enforced callable-target policy. The
+manifest reads `DELTALLM_CONFIG_PATH` and includes effective ingress, auth fallback,
+and all four database allocation budgets. See the
+[ingress comparison](ingress-measurement.md) for the PR2 results and reproduction.
+
 This is a local baseline, not a supported production capacity profile. The saved
 [September 11 summary](../project/benchmarks/concurrency-2026-09-11/summary.json)
 is historical mixed-provider, closed-loop evidence. Its

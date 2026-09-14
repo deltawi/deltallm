@@ -175,6 +175,10 @@ retain the existing cross-replica race and TTL/invalidation contract.
 
 ## Observe and qualify the allocations
 
+The [local ingress/authentication measurement](ingress-measurement.md) records
+the controlled overload comparison, dependency counts, raw samples, and limits
+of that evidence.
+
 Use `deltallm_ingress_active`, `deltallm_ingress_waiters`, and
 `deltallm_ingress_buffered_bytes` by the fixed `allocation` label (`inference`,
 `control`, `health`). `deltallm_ingress_queue_seconds` and
