@@ -8,6 +8,9 @@ podDisruptionBudget:
 
 postgresql:
   enabled: true
+  primary:
+    extendedConfiguration: |
+      max_connections = 100
   auth:
     username: deltallm
     password: deltallm
@@ -17,6 +20,11 @@ redis:
   enabled: true
   auth:
     enabled: false
+
+dependencyCapacity:
+  postgresqlMaxConnections: 100
+  # One steady + one surge + one retiring process: 3 * 28 + 16 = 100.
+  postgresqlReservedConnections: 16
 
 config:
   general_settings:

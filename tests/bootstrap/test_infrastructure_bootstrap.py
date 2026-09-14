@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -10,6 +11,7 @@ from src.bootstrap.infrastructure import (
     shutdown_infrastructure_runtime,
 )
 from src.config import GeneralSettings, Settings
+from src.config_runtime.loader import build_app_config
 from src.providers.error_body import bound_provider_error_response_body
 
 
@@ -31,7 +33,11 @@ def test_telemetry_startup_mode_uses_env_only_when_config_is_implicit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("fail_startup", [False, True])
+@pytest.mark.parametrize("durable", [False, True])
+async def test_init_and_shutdown_infrastructure_runtime(
+    monkeypatch: pytest.MonkeyPatch, fail_startup, durable
+) -> None:
     created: dict[str, object] = {}
 
     class FakeDynamicConfigManager:
@@ -40,14 +46,20 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.redis_client = redis_client
             self.file_config = file_config
             self.closed = False
+            created["dynamic"] = self
             self.subscribers = []
 
+        def attach_redis(self, redis_client) -> None:
+            self.redis_client = redis_client
+
         async def initialize(self) -> None:
+            assert self.redis_client is None
             created["dynamic_initialized"] = True
 
         def get_app_config(self):  # noqa: ANN201
             return SimpleNamespace(
-                general_settings=SimpleNamespace(
+                general_settings=GeneralSettings(
+                    audit_ingestion_mode="outbox" if durable else "legacy",
                     provider_discovery_allow_http=False,
                     provider_discovery_allowed_ports=[443],
                     provider_discovery_allowed_private_cidrs=[],
@@ -100,10 +112,10 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         @classmethod
         def from_url(cls, url: str, decode_responses: bool = True):  # noqa: FBT001, FBT002
             instance = cls(url=url, decode_responses=decode_responses)
-            created["redis"] = instance
+            created["critical_redis"] = instance
             return instance
 
-        async def close(self) -> None:
+        async def aclose(self) -> None:
             self.closed = True
 
     class FakePrismaManager:
@@ -113,9 +125,10 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.disconnected = False
             self.database_settings = None
 
-        async def connect(self, database_settings=None) -> None:  # noqa: ANN001
+        async def connect(self, database_settings=None, *, policy=None) -> None:  # noqa: ANN001
             self.connected = True
             self.database_settings = database_settings
+            self.policy = policy
 
         async def disconnect(self) -> None:
             self.disconnected = True
@@ -127,13 +140,15 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
         async def initialize(self, cfg) -> None:  # noqa: ANN001
             self.initialized_with = cfg
+            if fail_startup:
+                raise RuntimeError("branding startup failed")
 
         async def on_config_change(self, cfg, changes) -> None:  # noqa: ANN001
             del cfg, changes
 
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.get_settings",
-        lambda: SimpleNamespace(
+        lambda: Settings(
             app_env="test",
             config_path="config.yaml",
             database_url="postgresql://env-user:env-pass@env-host:5432/env-db",
@@ -151,7 +166,8 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.build_app_config",
         lambda file_config, secret_resolver: SimpleNamespace(  # noqa: ARG005
-            general_settings=SimpleNamespace(
+            general_settings=GeneralSettings(
+                audit_ingestion_mode="outbox" if durable else "legacy",
                 database_url="postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db?schema=public",
                 db_pool_size=20,
                 db_pool_timeout=30,
@@ -169,8 +185,19 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.UIBrandingAssetService", FakeUIBrandingAssetService
     )
-    monkeypatch.setattr("src.bootstrap.infrastructure.Redis", FakeRedis)
+
+    def build_redis(settings, general, *, allocation, endpoint_settings):
+        client = FakeRedis(allocation=allocation)
+        created[allocation + "_redis"] = client
+        return client
+
+    monkeypatch.setattr("src.bootstrap.infrastructure.build_redis_client", build_redis)
     monkeypatch.setattr("src.bootstrap.infrastructure.prisma_manager", FakePrismaManager())
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.foreground_prisma_manager", FakePrismaManager()
+    )
+    for name in ("telemetry_prisma_manager", "telemetry_worker_prisma_manager"):
+        monkeypatch.setattr("src.bootstrap.infrastructure." + name, FakePrismaManager())
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt"
     )  # noqa: ARG005
@@ -216,13 +243,25 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
     app = SimpleNamespace(state=SimpleNamespace())
 
+    if fail_startup:
+        with pytest.raises(RuntimeError, match="branding startup failed"):
+            await init_infrastructure_runtime(app)
+        assert created["critical_redis"].closed
+        assert created["cache_redis"].closed
+        assert app.state.foreground_prisma_manager.disconnected
+        assert app.state.telemetry_prisma_manager.disconnected is durable
+        assert app.state.telemetry_worker_prisma_manager.disconnected is durable
+        assert created["bulk_redis"].closed
+        assert created["dynamic"].closed
+        assert app.state.prisma_manager.disconnected
+        return
     runtime = await init_infrastructure_runtime(app)
 
     assert app.state.settings.config_path == "config.yaml"
-    assert app.state.redis is created["redis"]
+    assert app.state.redis is created["critical_redis"]
     route_cache, route_cache_redis, route_cache_keyspace = app.state.route_group_runtime_cache
     assert route_cache == "route-cache"
-    assert route_cache_redis is created["redis"]
+    assert route_cache_redis is created["cache_redis"]
     assert route_cache_keyspace.environment == "test"
     assert app.state.prisma_manager.client == "db-client"
     assert app.state.prisma_manager.database_settings is not None
@@ -270,4 +309,75 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert runtime.http_client.closed is True
     assert runtime.control_http_client.closed is True
     assert runtime.redis_client.closed is True
+    assert runtime.cache_redis_client.closed is True
+    assert app.state.foreground_prisma_manager.disconnected
+    assert app.state.foreground_prisma_manager.policy.allocation == "foreground"
+    assert app.state.foreground_prisma_manager.policy.connections == 8
+    for name, allocation in (
+        ("telemetry_prisma_manager", "telemetry"),
+        ("telemetry_worker_prisma_manager", "telemetry_worker"),
+    ):
+        manager = getattr(app.state, name)
+        assert manager.connected is durable
+        assert manager.disconnected is durable
+        if durable:
+            assert manager.policy.allocation == allocation
+            assert manager.policy.connections == 5
+    assert runtime.bulk_redis_client.closed is True
+    assert app.state.bulk_redis is runtime.bulk_redis_client
+    assert runtime.bulk_redis_client is not runtime.redis_client
+    assert runtime.dynamic_config_manager.redis_client is runtime.redis_client
     assert app.state.prisma_manager.disconnected is True
+
+
+@pytest.mark.parametrize(
+    "durable_override",
+    [
+        {"redis_critical_max_connections": 10000},
+        {"redis_cache_max_connections": 10000},
+        {"redis_bulk_max_connections": 10000},
+        {"redis_acquisition_timeout_seconds": 30},
+        {"redis_socket_timeout_seconds": 30},
+        {"redis_connect_timeout_seconds": 30},
+        {"audit_ingestion_mode": "outbox"},
+        {"spend_ingestion_mode": "outbox"},
+        {"telemetry_db_pool_size": 100},
+    ],
+)
+async def test_durable_config_cannot_expand_startup_dependency_budget(
+    monkeypatch, durable_override
+):
+    from src.bootstrap import infrastructure
+
+    settings = Settings(database_url="postgresql://fixture:fixture@fixture/db")
+    initial = {"general_settings": {"audit_ingestion_mode": "legacy"}}
+    if "telemetry_db_pool_size" in durable_override:
+        initial["general_settings"]["audit_ingestion_mode"] = "outbox"
+    effective = build_app_config(initial, {"general_settings": durable_override})
+    dynamic = SimpleNamespace(
+        initialize=AsyncMock(), get_app_config=lambda: effective, close=AsyncMock()
+    )
+    managers = {}
+    for name in (
+        "prisma_manager",
+        "foreground_prisma_manager",
+        "telemetry_prisma_manager",
+        "telemetry_worker_prisma_manager",
+    ):
+        managers[name] = SimpleNamespace(
+            client=object(), connect=AsyncMock(), disconnect=AsyncMock()
+        )
+        monkeypatch.setattr(infrastructure, name, managers[name])
+    monkeypatch.setattr(infrastructure, "get_settings", lambda: settings)
+    monkeypatch.setattr(infrastructure, "load_yaml_dict", lambda _: initial)
+    monkeypatch.setattr(infrastructure, "DynamicConfigManager", lambda **_: dynamic)
+    build_redis = Mock(side_effect=AssertionError("Redis built before capacity validation"))
+    monkeypatch.setattr(infrastructure, "build_redis_client", build_redis)
+
+    with pytest.raises(RuntimeError, match="must match startup"):
+        await init_infrastructure_runtime(SimpleNamespace(state=SimpleNamespace()))
+
+    managers["prisma_manager"].disconnect.assert_awaited_once()
+    managers["foreground_prisma_manager"].connect.assert_not_awaited()
+    dynamic.close.assert_awaited_once()
+    build_redis.assert_not_called()

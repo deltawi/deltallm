@@ -13,6 +13,7 @@ from src.router.runtime_generation import RoutingRuntimeGenerationStore
 def test_selector_composition_reuses_spend_owner_and_tracks_worker_health():
     spend = SimpleNamespace(
         db=object(),
+        worker_db=object(),
         config=SimpleNamespace(
             enabled=True, worker_enabled=True, max_pending_events=100, max_attempts=10
         ),

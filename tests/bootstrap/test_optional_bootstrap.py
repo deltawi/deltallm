@@ -321,7 +321,12 @@ async def test_init_and_shutdown_audit_runtime_enabled(monkeypatch: pytest.Monke
     monkeypatch.setattr("src.bootstrap.audit.AuditService", FakeAuditService)
     monkeypatch.setattr("src.bootstrap.audit.AuditRetentionWorker", FakeAuditWorker)
 
-    app = SimpleNamespace(state=SimpleNamespace(prisma_manager=SimpleNamespace(client="db-client")))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
+        )
+    )
 
     runtime = await init_audit_runtime(app, _audit_config(enabled=True, retention_enabled=True))
 

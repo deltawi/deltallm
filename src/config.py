@@ -22,6 +22,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
+from src.database_settings import DatabaseAllocationSettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
@@ -513,7 +514,7 @@ class UIBrandingUpdatePayload(BaseModel):
         return value.upper()
 
 
-class GeneralSettings(BaseModel):
+class GeneralSettings(DatabaseAllocationSettings):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
@@ -584,6 +585,13 @@ class GeneralSettings(BaseModel):
     redis_port: int = 6379
     redis_password: str | None = None
     redis_url: str | None = None
+    redis_bulk_url: SecretStr | None = None
+    redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_cache_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
+    redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
+    redis_connect_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
     redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     cache_enabled: bool = False
     cache_backend: Literal["memory", "redis", "s3"] = "memory"
@@ -1088,8 +1096,10 @@ class AppConfig(BaseModel):
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="DELTALLM_", extra="ignore")
+class Settings(BaseSettings, DatabaseAllocationSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="DELTALLM_", extra="ignore", hide_input_in_errors=True
+    )
 
     app_name: str = "DeltaLLM Core API"
     app_env: str = "dev"
@@ -1153,6 +1163,13 @@ class Settings(BaseSettings):
     prompt_singleflight_max_keys: int = Field(default=256, ge=1, le=10_000)
     prompt_singleflight_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     redis_url: str | None = None
+    redis_bulk_url: SecretStr | None = None
+    redis_critical_max_connections: int = Field(default=64, ge=1, le=10000)
+    redis_cache_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_bulk_max_connections: int = Field(default=16, ge=1, le=10000)
+    redis_acquisition_timeout_seconds: float = Field(default=0.2, ge=0.001, le=30)
+    redis_socket_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
+    redis_connect_timeout_seconds: float = Field(default=1.0, ge=0.001, le=30)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str | None = None

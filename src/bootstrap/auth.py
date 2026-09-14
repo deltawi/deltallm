@@ -144,7 +144,8 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         ),
     )
     app.state.key_service = KeyService(
-        repository=KeyRepository(app.state.prisma_manager.client),
+        repository=KeyRepository(app.state.foreground_prisma_manager.client),
+        invalidation_repository=KeyRepository(app.state.prisma_manager.client),
         redis_client=app.state.redis,
         salt=app.state.salt_key,
         auth_cache_ttl_seconds=cfg.general_settings.api_key_auth_cache_ttl_seconds,

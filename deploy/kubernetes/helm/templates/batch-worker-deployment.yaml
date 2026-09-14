@@ -86,7 +86,7 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
-{{ include "deltallm.runtimeEnv" (dict "root" . "extraEnv" .Values.batchWorker.env) | indent 12 }}
+{{ include "deltallm.runtimeEnv" (dict "root" . "extraEnv" .Values.batchWorker.env "worker" true) | indent 12 }}
           {{- $envFrom := include "deltallm.envFrom" (dict "root" . "extraEnvFrom" .Values.batchWorker.envFrom) }}
           {{- if $envFrom -}}
 {{ $envFrom | nindent 10 }}

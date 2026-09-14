@@ -142,6 +142,30 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
+      redis-critical-memory:
+        image: redis:7
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6380:6379
+      redis-cache-memory:
+        image: redis:7
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6381:6379
     steps:
       - uses: actions/checkout@v4
 
@@ -163,6 +187,8 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379/0
           DELTALLM_TEST_REDIS_URL: redis://localhost:6379/0
+          DELTALLM_TEST_REDIS_CRITICAL_MEMORY_URL: redis://localhost:6380/0
+          DELTALLM_TEST_REDIS_CACHE_MEMORY_URL: redis://localhost:6381/0
         run: >-
           uv run pytest -q -m redis -rs
           --durations=25 --durations-min=0.5

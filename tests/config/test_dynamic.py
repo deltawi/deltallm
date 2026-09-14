@@ -1172,6 +1172,8 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
         state=SimpleNamespace(
             settings=settings,
             app_config=None,
+            redis=object(),
+            bulk_redis=object(),
             model_registry=initial_model_registry,
             router=router,
             failover_manager=failover_manager,
@@ -1209,6 +1211,8 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
             "general_settings": {
                 **dynamic.get_app_config().general_settings.model_dump(mode="python"),
                 "instance_name": "Acme AI",
+                "cache_enabled": True,
+                "cache_backend": "redis",
             },
         }
     )
@@ -1222,6 +1226,8 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
         },
     )
 
+    assert app.state.cache_backend.redis is app.state.bulk_redis
+    assert app.state.cache_backend.redis is not app.state.redis
     assert "gpt-4.1-mini" in app.state.model_registry
     assert app.state.router.strategy == RoutingStrategy.WEIGHTED
     assert app.state.failover_manager.config.num_retries == 2
