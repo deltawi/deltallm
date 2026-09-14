@@ -8,6 +8,8 @@ from prisma import Prisma
 from prisma.errors import RawQueryError
 
 from src.db.audit_ingestion import AuditIngestionRepository
+from src.db.allocated_client import AllocatedPrisma, DatabaseOwner, DatabaseUnavailableError
+from src.db.allocation_config import DatabasePolicy
 
 pytestmark = pytest.mark.postgres
 
@@ -15,8 +17,8 @@ OUTBOX = "deltallm_audit_ingestion_outbox"
 CAPACITY = "deltallm_telemetry_ingestion_capacity"
 
 
-@pytest.fixture
-async def isolated_audit_queue():
+@pytest.fixture(params=["native", "allocated"])
+async def isolated_audit_queue(request):
     url = os.getenv("DATABASE_URL")
     if not url:
         if os.getenv("CI"):
@@ -27,11 +29,19 @@ async def isolated_audit_queue():
     # shared queue data. Identifiers below are generated here, never user input.
     schema = "audit_claim_" + uuid4().hex
     async with AsyncExitStack() as stack:
-        db = Prisma(datasource={"url": url})
+        owner = None
+        if request.param == "allocated":
+            policy = DatabasePolicy("telemetry_worker", 1, 0.2, 2, 0.3, 10)
+            owner = DatabaseOwner(policy)
+            db = AllocatedPrisma(datasource={"url": policy.connection_url(url)}, allocation=owner)
+        else:
+            db = Prisma(datasource={"url": url})
         lock_db = Prisma(datasource={"url": url})
         for client in (db, lock_db):
             stack.push_async_callback(client.disconnect)
             await client.connect()
+        if owner is not None:
+            stack.push_async_callback(owner.close)
         await db.execute_raw(f'CREATE SCHEMA "{schema}"')
         try:
             for table in (OUTBOX, CAPACITY):
@@ -61,10 +71,10 @@ async def seed(tx, event_id, delivery_class, state):
         INSERT INTO {OUTBOX} (
             event_id, record_type, delivery_class, payload_json,
             redacted_payload_json, policy_version, status, attempt_count,
-            max_attempts, lease_expires_at, locked_by, claim_token
+            max_attempts, lease_expires_at, locked_by, claim_token, next_attempt_at
         ) VALUES (
             $1, 'audit_event', $2, '{{}}'::jsonb, '{{}}'::jsonb, 7,
-            $3, $4, 1, NOW() - INTERVAL '1 minute', 'old-worker', 'old-claim'
+            $3, $4, 1, NOW() - INTERVAL '1 minute', 'old-worker', 'old-claim', NOW() - INTERVAL '1 minute'
         )
         """,
         event_id,
@@ -172,9 +182,13 @@ async def test_actual_capacity_release_rolls_back_exhaustion_on_lock_timeout(iso
 
     async with queue_transaction(lock_db, schema) as holder:
         await holder.query_raw(f"SELECT * FROM {CAPACITY} WHERE queue_name = 'audit' FOR UPDATE")
-        with pytest.raises(RawQueryError, match="lock timeout"):
+        error_type = DatabaseUnavailableError if isinstance(db, AllocatedPrisma) else RawQueryError
+        with pytest.raises(error_type) as failure:
             async with queue_transaction(db, schema) as tx:
                 await claim(tx)
+        native_error = failure.value.__cause__ if isinstance(db, AllocatedPrisma) else failure.value
+        assert isinstance(native_error, RawQueryError)
+        assert "lock timeout" in str(native_error)
 
     async with queue_transaction(db, schema) as tx:
         assert await capacity(tx) == before

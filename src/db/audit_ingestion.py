@@ -277,6 +277,7 @@ class AuditIngestionRepository:
                 SET pending_count = pending_count + (SELECT COUNT(*) FROM inserted),
                     updated_at = NOW()
                 WHERE queue_name = 'audit'
+                  AND EXISTS (SELECT 1 FROM inserted)
                 RETURNING pending_count
             )
             SELECT
