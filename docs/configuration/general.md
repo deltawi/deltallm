@@ -2,6 +2,10 @@
 
 The `general_settings` section configures authentication, database connections, email delivery, SSO, governance notifications, caching, and platform-level options.
 
+For the optional startup-only `gateway_ingress_*` HTTP work and body limits, see
+[Gateway ingress admission](../deployment/ingress-admission.md). These limits apply
+per API process and require workload validation before production activation.
+
 ## Recommended Starter Shape
 
 The docs use `config.example.yaml` as the starter config. The intended pattern is:

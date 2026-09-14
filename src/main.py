@@ -33,6 +33,8 @@ from src.cache import (
 from src.api.admin import admin_router
 from src.middleware.rate_limit_headers import RateLimitHeaderMiddleware
 from src.middleware.rate_limit_lifecycle import RateLimitLeaseLifecycleMiddleware
+from src.middleware.ingress import IngressMiddleware
+from src.ingress import initialize_ingress
 from src.middleware.request_timing import RequestTimingMiddleware
 from src.api.v1.router import v1_router
 from src.middleware.errors import register_exception_handlers
@@ -56,6 +58,7 @@ async def lifespan(app: FastAPI):
         exit_stack.push_async_callback(shutdown_infrastructure_runtime, infrastructure_runtime)
 
         cfg = app.state.app_config
+        initialize_ingress(app, cfg.general_settings, app.state.settings)
         audit_runtime = await init_audit_runtime(app, cfg)
         exit_stack.push_async_callback(shutdown_audit_runtime, app, audit_runtime)
 
@@ -112,6 +115,7 @@ def create_app() -> FastAPI:
     # This must wrap cache and route middleware so streaming rate-limit leases
     # remain owned until the final response body frame or a disconnect.
     app.add_middleware(RateLimitLeaseLifecycleMiddleware)
+    app.add_middleware(IngressMiddleware)
     app.add_middleware(RequestTimingMiddleware)
 
     app.include_router(v1_router)

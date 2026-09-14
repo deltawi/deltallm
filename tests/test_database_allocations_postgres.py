@@ -10,7 +10,7 @@ from prisma.errors import RawQueryError
 from src.db.allocated_client import AllocatedPrisma, DatabaseOwner, DatabaseUnavailableError
 from src.db.allocation_config import DatabasePolicy
 from src.db.repositories import KeyRepository
-from src.models.errors import AuthenticationError
+from src.models.errors import AuthenticationError, AuthenticationUnavailableError
 from src.services.key_service import KeyService
 
 pytestmark = pytest.mark.postgres
@@ -100,7 +100,7 @@ async def test_real_native_lock_deadline_rolls_back_and_does_not_authorize_on_ex
         assert auth.allocation.gate.active == 0
     async with auth.tx() as transaction:
         await transaction.query_raw("SELECT 1 FROM pg_advisory_xact_lock($1)", key)
-        with pytest.raises(DatabaseUnavailableError):
+        with pytest.raises(AuthenticationUnavailableError):
             await KeyService(KeyRepository(auth)).validate_key(uuid4().hex)
     assert await auth.query_raw("SELECT 1 AS alive") == [{"alive": 1}]
 

@@ -5,7 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 from src.bootstrap import BootstrapStatus
+from src.config import GeneralSettings, Settings
 from src.main import lifespan
+
+
+class BootstrapConfig:
+    general_settings = GeneralSettings(gateway_ingress_enabled=True, gateway_ingress_max_active=13)
+
+    def __str__(self) -> str:
+        return "cfg"
 
 
 @pytest.mark.asyncio
@@ -16,8 +24,8 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     calls: list[str] = []
 
     async def _init_infrastructure(app):  # noqa: ANN001, ANN202
-        app.state.app_config = "cfg"
-        app.state.settings = "settings"
+        app.state.app_config = BootstrapConfig()
+        app.state.settings = Settings()
         app.state.dynamic_config_manager = "dynamic-config"
         app.state.redis = "redis"
         app.state.salt_key = "salt"
@@ -109,6 +117,8 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     app = SimpleNamespace(state=SimpleNamespace())
 
     async with lifespan(app):
+        assert app.state.ingress_runtime.limits.enabled
+        assert app.state.ingress_runtime.limits.max_active == 13
         calls.append("yield")
 
     assert (
@@ -139,8 +149,8 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
     calls: list[str] = []
 
     async def _init_infrastructure(app):  # noqa: ANN001, ANN202
-        app.state.app_config = "cfg"
-        app.state.settings = "settings"
+        app.state.app_config = BootstrapConfig()
+        app.state.settings = Settings()
         app.state.dynamic_config_manager = "dynamic-config"
         app.state.redis = "redis"
         app.state.salt_key = "salt"

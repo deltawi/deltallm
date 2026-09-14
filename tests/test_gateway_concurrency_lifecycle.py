@@ -1,14 +1,64 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from tests.performance import gateway_concurrency_dependencies as dependencies
 from tests.performance import gateway_concurrency_metrics as metrics
+from tests.performance import run_gateway_concurrency as workload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,payload", [(403, {"error": {"message": "private"}}), (200, {"invalid": True})]
+)
+async def test_invalid_workload_precheck_closes_clients_without_recording_load(
+    tmp_path, monkeypatch, status, payload
+):
+    closed = asyncio.Event()
+    database, redis = SimpleNamespace(query_raw=AsyncMock()), SimpleNamespace(info=AsyncMock())
+
+    @asynccontextmanager
+    async def local_dependencies():
+        try:
+            yield SimpleNamespace(database=database, redis=redis)
+        finally:
+            closed.set()
+
+    real_client = httpx.AsyncClient
+    client = real_client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json=payload))
+    )
+    generator = AsyncMock()
+    monkeypatch.setattr(workload, "local_dependencies", local_dependencies)
+    monkeypatch.setattr(workload, "read_manifest", lambda path: SimpleNamespace(api_processes=1))
+    monkeypatch.setattr(workload, "fixture_key", lambda: "sk-concurrency-private-test")
+    monkeypatch.setattr(workload.httpx, "AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr(workload, "run_constant_arrival", generator)
+    with pytest.raises(ValueError, match="Workload precheck failed") as error:
+        await workload.measure(
+            SimpleNamespace(
+                rate=100,
+                duration=10,
+                server_manifest=tmp_path / "manifest.json",
+                url="http://127.0.0.1/v1/chat/completions",
+                metrics_url=["http://127.0.0.1/metrics"],
+                output_dir=tmp_path / "results",
+            )
+        )
+    assert "private" not in str(error.value)
+    assert closed.is_set() and client.is_closed
+    generator.assert_not_called()
+    database.query_raw.assert_not_called()
+    redis.info.assert_not_called()
+    assert not list((tmp_path / "results").iterdir())
 
 
 class Database:

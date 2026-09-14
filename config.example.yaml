@@ -142,6 +142,23 @@ general_settings:
   db_pool_timeout: 30
   # Reject overload before prompt, guardrail, and budget work. Enable after sizing
   # these limits below the measured safe database/upstream concurrency envelope.
+  # Per-process ingress admission (restart required; enable after workload validation).
+  gateway_ingress_control_max_active: 16
+  gateway_ingress_control_max_buffered_bytes: 67108864
+  auth_fallback_max_active: 8
+  auth_fallback_max_waiters: 32
+  auth_fallback_queue_timeout_ms: 10
+  auth_fallback_timeout_seconds: 0.5
+  auth_fallback_cache_timeout_seconds: 0.1
+  auth_fallback_cache_max_bytes: 131072
+  gateway_ingress_enabled: false
+  gateway_ingress_max_active: 100
+  gateway_ingress_max_waiters: 0
+  gateway_ingress_queue_timeout_ms: 10
+  gateway_ingress_max_body_bytes: 33554432
+  gateway_ingress_max_buffered_bytes: 67108864
+  gateway_ingress_body_timeout_seconds: 10.0
+  gateway_ingress_health_max_active: 4
   gateway_preflight_capacity_enabled: false
   gateway_preflight_global_max_parallel: 300
   gateway_preflight_org_max_parallel: 100
