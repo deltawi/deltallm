@@ -1,0 +1,386 @@
+[
+  {
+    "name": "after-audit-13org-200rps",
+    "offered": 2000,
+    "accepted": 1978,
+    "errors": {
+      "DatabaseUnavailableError": 22
+    },
+    "failed_before_sql": 22,
+    "accepted_p95_ms": 24.017624997213716,
+    "queue_wait_p95_ms": 14.343,
+    "occupancy_estimate_mean_ms": 4.688318443685639,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "after-audit-13org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 12.717375000647735,
+    "queue_wait_p95_ms": 0.01,
+    "occupancy_estimate_mean_ms": 3.891385152754083,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "after-audit-1org-200rps",
+    "offered": 2000,
+    "accepted": 1963,
+    "errors": {
+      "DatabaseUnavailableError": 37
+    },
+    "failed_before_sql": 37,
+    "accepted_p95_ms": 25.46954099670984,
+    "queue_wait_p95_ms": 15.333,
+    "occupancy_estimate_mean_ms": 4.7238714430935085,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "after-audit-1org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 11.161250000441214,
+    "queue_wait_p95_ms": 0.008,
+    "occupancy_estimate_mean_ms": 4.160852065011568,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "after-spend-13org-200rps",
+    "offered": 2000,
+    "accepted": 1987,
+    "errors": {
+      "DatabaseUnavailableError": 13
+    },
+    "failed_before_sql": 13,
+    "accepted_p95_ms": 10.166124997340376,
+    "queue_wait_p95_ms": 0.363,
+    "occupancy_estimate_mean_ms": 3.2028236089247306,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "after-spend-13org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 12.964666999323526,
+    "queue_wait_p95_ms": 0.01,
+    "occupancy_estimate_mean_ms": 3.6631829308826127,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "after-spend-1org-200rps",
+    "offered": 2000,
+    "accepted": 1989,
+    "errors": {
+      "DatabaseUnavailableError": 11
+    },
+    "failed_before_sql": 11,
+    "accepted_p95_ms": 11.431457998696715,
+    "queue_wait_p95_ms": 1.684,
+    "occupancy_estimate_mean_ms": 3.5124963051266955,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "after-spend-1org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 12.623999999050284,
+    "queue_wait_p95_ms": 0.01,
+    "occupancy_estimate_mean_ms": 3.6690204389451537,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-audit-13org-200rps",
+    "offered": 2000,
+    "accepted": 1968,
+    "errors": {
+      "DatabaseUnavailableError": 32
+    },
+    "failed_before_sql": 32,
+    "accepted_p95_ms": 24.72499999930733,
+    "queue_wait_p95_ms": 14.934,
+    "occupancy_estimate_mean_ms": 4.457211826349995,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-audit-13org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 11.81991599878529,
+    "queue_wait_p95_ms": 0.011,
+    "occupancy_estimate_mean_ms": 3.970282482645416,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-audit-1org-200rps",
+    "offered": 2000,
+    "accepted": 1982,
+    "errors": {
+      "DatabaseUnavailableError": 18
+    },
+    "failed_before_sql": 18,
+    "accepted_p95_ms": 22.539749999850756,
+    "queue_wait_p95_ms": 12.377,
+    "occupancy_estimate_mean_ms": 4.280918612134373,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-audit-1org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 11.422208001022227,
+    "queue_wait_p95_ms": 0.01,
+    "occupancy_estimate_mean_ms": 4.138895356874855,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-spend-13org-200rps",
+    "offered": 2000,
+    "accepted": 1971,
+    "errors": {
+      "DatabaseUnavailableError": 29
+    },
+    "failed_before_sql": 29,
+    "accepted_p95_ms": 21.97008299845038,
+    "queue_wait_p95_ms": 11.417,
+    "occupancy_estimate_mean_ms": 4.410427048859993,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-spend-13org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 11.87604100050521,
+    "queue_wait_p95_ms": 0.01,
+    "occupancy_estimate_mean_ms": 3.91565951694065,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-spend-1org-200rps",
+    "offered": 2000,
+    "accepted": 1975,
+    "errors": {
+      "DatabaseUnavailableError": 25
+    },
+    "failed_before_sql": 25,
+    "accepted_p95_ms": 23.20054199662991,
+    "queue_wait_p95_ms": 12.562,
+    "occupancy_estimate_mean_ms": 4.2727628315278015,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  },
+  {
+    "name": "before-spend-1org-50rps",
+    "offered": 500,
+    "accepted": 500,
+    "errors": {},
+    "failed_before_sql": 0,
+    "accepted_p95_ms": 12.207125000713859,
+    "queue_wait_p95_ms": 0.007,
+    "occupancy_estimate_mean_ms": 3.7934905886795605,
+    "events_per_commit": 1.0,
+    "offered_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    },
+    "observed_coalescing": {
+      "window_seconds": 0.002,
+      "maximum_events": 32,
+      "optimistic_events_per_commit": 1.0,
+      "commits_saved": 0
+    }
+  }
+]
