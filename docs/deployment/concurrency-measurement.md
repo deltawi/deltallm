@@ -181,7 +181,11 @@ and [PostgreSQL SQLSTATE](https://www.postgresql.org/docs/15/errcodes-appendix.h
 `P2024` identifies database pool timeout; `P2028` remains a transaction error
 unless the client provides a more specific typed exception. `57014` is
 `statement_cancelled`, since it cannot distinguish statement timeout from
-explicit cancellation by code alone. Unknown exceptions remain `unknown`.
+explicit cancellation by code alone. The database allocation adapter preserves
+these classifications through its typed availability wrapper. Missing, unknown,
+cyclic, or more than eight nested wrapper causes produce `database_unavailable`;
+unrelated exceptions remain `unknown`. Classification follows only the adapter's
+explicit cause and never parses exception messages or implicit exception context.
 Diagnostic records include queue, phase, reason, and a bounded event fingerprint
 without raw exception text or payloads. The fingerprint is the first 16 hex
 characters of SHA-256 of the event ID, or the first event ID in an audit bundle;

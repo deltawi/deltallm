@@ -22,6 +22,7 @@ from prisma.errors import (
     TransactionExpiredError,
 )
 
+from src.db.allocated_client import DatabaseUnavailableError
 from src.metrics import telemetry_acceptance as metrics
 from src.metrics.telemetry_acceptance import AcceptancePhase, TelemetryQueue
 
@@ -50,6 +51,25 @@ class AcceptanceFailure(StrEnum):
 
 def classify_acceptance_failure(exc: BaseException) -> AcceptanceFailure:
     """Use structured codes/types only; never parse or publish database error text."""
+    if not isinstance(exc, DatabaseUnavailableError):
+        return _classify_direct_failure(exc)
+    # Only the allocation adapter's explicit cause is trusted. Availability can
+    # also lack a native cause (local saturation, closed owner, caller deadline).
+    seen: set[int] = set()
+    for _ in range(8):
+        if id(exc) in seen or exc.__cause__ is None:
+            break
+        seen.add(id(exc))
+        exc = exc.__cause__
+        if not isinstance(exc, DatabaseUnavailableError):
+            reason = _classify_direct_failure(exc)
+            if reason != AcceptanceFailure.UNKNOWN:
+                return reason
+            break
+    return AcceptanceFailure.DATABASE_UNAVAILABLE
+
+
+def _classify_direct_failure(exc: BaseException) -> AcceptanceFailure:
     if isinstance(exc, asyncio.CancelledError):
         return AcceptanceFailure.CANCELLED
     if isinstance(exc, TelemetryDatabaseUnavailable):
