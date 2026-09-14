@@ -8,6 +8,8 @@ from typing import Any, Literal, Sequence, cast
 
 from src.audit.delivery import AuditDeliveryClass, parse_audit_delivery_class
 from src.db.client import is_prisma_transaction_client
+from src.db.telemetry_acceptance import AcceptanceObservation, TelemetryDatabaseUnavailable
+from src.metrics.telemetry_acceptance import AcceptancePhase, TelemetryQueue
 
 
 AuditEnqueueStatus = Literal["accepted", "duplicate", "full"]
@@ -122,41 +124,53 @@ class AuditIngestionRepository:
     ) -> AuditBundleEnqueueResult:
         """Accept a small same-tenant bundle with one policy and capacity decision."""
 
-        if self.prisma is None:
-            raise RuntimeError("audit ingestion database is unavailable")
-        if not envelopes:
-            return AuditBundleEnqueueResult(statuses={}, pending_count=0)
-        organization_ids = {item.organization_id for item in envelopes}
-        if len(organization_ids) != 1:
-            raise ValueError("audit enqueue bundles must belong to one organization")
-        event_ids = [item.event_id for item in envelopes]
-        if len(set(event_ids)) != len(event_ids):
-            raise ValueError("audit enqueue bundle event IDs must be unique")
-        organization_id = next(iter(organization_ids))
-        serialized_envelopes = json.dumps(
-            [
-                {
-                    "event_id": item.event_id,
-                    "record_type": item.record_type,
-                    "organization_id": item.organization_id,
-                    "delivery_class": item.delivery_class.value,
-                    "payload": item.payload,
-                    "redacted_payload": item.redacted_payload,
-                    "max_attempts": max(1, int(item.max_attempts)),
-                }
-                for item in envelopes
-            ],
-            default=str,
-        )
-        async with self._transaction() as tx:
-            transactional = self.with_db(tx)
-            await transactional._lock_bundle_admission(organization_id)
-            return await transactional._enqueue_bundle_under_lock(
-                serialized_envelopes=serialized_envelopes,
-                organization_id=organization_id,
-                max_pending_events=max(1, int(max_pending_events)),
-                required_reserve=max(0, int(required_reserve)),
-            )
+        with AcceptanceObservation(
+            TelemetryQueue.AUDIT,
+            owns_transaction=not is_prisma_transaction_client(self.prisma),
+            event_id=envelopes[0].event_id if envelopes else None,
+        ) as observation:
+            with observation.phase(AcceptancePhase.PREPARE):
+                if self.prisma is None:
+                    raise TelemetryDatabaseUnavailable("audit ingestion database is unavailable")
+                if not envelopes:
+                    observation.record_result([])
+                    return AuditBundleEnqueueResult(statuses={}, pending_count=0)
+                organization_ids = {item.organization_id for item in envelopes}
+                if len(organization_ids) != 1:
+                    raise ValueError("audit enqueue bundles must belong to one organization")
+                event_ids = [item.event_id for item in envelopes]
+                if len(set(event_ids)) != len(event_ids):
+                    raise ValueError("audit enqueue bundle event IDs must be unique")
+                organization_id = next(iter(organization_ids))
+                serialized_envelopes = json.dumps(
+                    [
+                        {
+                            "event_id": item.event_id,
+                            "record_type": item.record_type,
+                            "organization_id": item.organization_id,
+                            "delivery_class": item.delivery_class.value,
+                            "payload": item.payload,
+                            "redacted_payload": item.redacted_payload,
+                            "max_attempts": max(1, int(item.max_attempts)),
+                        }
+                        for item in envelopes
+                    ],
+                    default=str,
+                )
+                observation.retain_serialized(serialized_envelopes)
+            async with observation.transaction(self._transaction()) as tx:
+                transactional = self.with_db(tx)
+                with observation.phase(AcceptancePhase.LOCK):
+                    await transactional._lock_bundle_admission(organization_id)
+                with observation.phase(AcceptancePhase.SQL):
+                    result = await transactional._enqueue_bundle_under_lock(
+                        serialized_envelopes=serialized_envelopes,
+                        organization_id=organization_id,
+                        max_pending_events=max(1, int(max_pending_events)),
+                        required_reserve=max(0, int(required_reserve)),
+                    )
+            observation.record_result(list(result.statuses.values()))
+            return result
 
     async def _lock_bundle_admission(self, organization_id: str | None) -> None:
         if self.prisma is None:

@@ -26,6 +26,7 @@ from src.bootstrap import (
     shutdown_runtime_services,
     shutdown_routing_runtime,
 )
+from src.bootstrap.metrics import start_runtime_metrics
 from src.cache import (
     CacheMiddleware,
 )
@@ -79,6 +80,9 @@ async def lifespan(app: FastAPI):
 
         batch_runtime = await init_batch_runtime(app, cfg, app.state.batch_repository)
         exit_stack.push_async_callback(shutdown_batch_runtime, batch_runtime)
+
+        runtime_metrics = start_runtime_metrics()
+        exit_stack.callback(runtime_metrics.close)
 
         startup_statuses = _collect_startup_statuses(
             infrastructure_runtime.statuses,

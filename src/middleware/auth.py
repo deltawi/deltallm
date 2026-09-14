@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from src.models.errors import AuthenticationError
+from src.metrics.request_phases import measure_request_phase, request_route
 from src.models.responses import UserAPIKeyAuth
 from src.services.key_service import KeyService
 from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
@@ -17,6 +18,19 @@ from src.telemetry.event_identity import get_or_create_billing_event_id
 async def authenticate_request(
     request: Request,
     authorization: str | None = None,
+) -> UserAPIKeyAuth:
+    phase = (
+        "authentication_recheck"
+        if isinstance(getattr(request.state, "user_api_key", None), UserAPIKeyAuth)
+        else "authentication"
+    )
+    with measure_request_phase(route=request_route(request.url.path), phase=phase):
+        return await _authenticate_request(request, authorization)
+
+
+async def _authenticate_request(
+    request: Request,
+    authorization: str | None,
 ) -> UserAPIKeyAuth:
     existing = getattr(request.state, "user_api_key", None)
     if isinstance(existing, UserAPIKeyAuth):
