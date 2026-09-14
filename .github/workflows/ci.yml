@@ -42,7 +42,9 @@ jobs:
   python-tests:
     name: Python tests (${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The complete app suite took 19m30s on a hosted runner; include install,
+    # client generation, and cleanup without changing any test deadlines.
+    timeout-minutes: ${{ matrix.lane == 'app' && 30 || 20 }}
     strategy:
       fail-fast: false
       matrix:
