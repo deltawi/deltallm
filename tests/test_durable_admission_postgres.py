@@ -75,6 +75,22 @@ async def bounded_writers(db, queue, events, *, maximum=8, organizations=1):
     gates = (asyncio.Semaphore(4), asyncio.Semaphore(4))
     clients = (db.acceptance, db.worker)
 
+    # Establish every concurrent connection before testing the admission race.
+    # connect() starts Prisma's engine but opens database connections lazily;
+    # Separate cold connection setup from the bounded lock-contention race.
+    # Startup/rejection behavior is measured separately by the arrival probe.
+    ready = asyncio.Barrier(8)
+
+    async def warm(client):
+        async with client.tx() as tx:
+            await tx.query_raw("SELECT 1")
+            await ready.wait()
+
+    async with asyncio.TaskGroup() as group:
+        for client in clients:
+            for _ in range(4):
+                group.create_task(warm(client))
+
     async def submit(index, event_id):
         actor = index % 2
         async with gates[actor]:
@@ -86,7 +102,11 @@ async def bounded_writers(db, queue, events, *, maximum=8, organizations=1):
                 organization=f"org-{index % organizations}",
             )
 
-    return await asyncio.gather(*(submit(i, event) for i, event in enumerate(events)))
+    # On an assertion/SQL failure, cancel and join siblings before fixture
+    # teardown; gather's default exception path leaves submissions running.
+    async with asyncio.TaskGroup() as group:
+        tasks = [group.create_task(submit(i, event)) for i, event in enumerate(events)]
+    return [task.result() for task in tasks]
 
 
 @pytest.mark.parametrize("queue", ["audit", "spend"])
