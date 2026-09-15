@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+MAX_GUARDRAILS = 32
+
 
 class RequestWorkSettings(BaseModel):
     callback_max_pending: int = Field(default=128, ge=1, le=4096)

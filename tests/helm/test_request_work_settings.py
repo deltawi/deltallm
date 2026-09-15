@@ -1,10 +1,17 @@
 import pytest
 import yaml
+import json
 
 from src.request_work_settings import RequestWorkSettings
 from tests.helm.test_ingress_settings import CHART, render
 
 pytestmark = pytest.mark.helm
+
+
+def test_chart_rejects_unbounded_guardrail_registration():
+    result = render("--set-json", "config.deltallm_settings.guardrails=" + json.dumps([{}] * 33))
+    assert result.returncode != 0
+    assert "guardrails" in result.stderr
 
 
 @pytest.mark.parametrize("field", RequestWorkSettings.model_fields)

@@ -422,7 +422,12 @@
       "properties": {
         "model_list": { "type": "array" },
         "router_settings": { "type": "object" },
-        "deltallm_settings": { "type": "object" },
+        "deltallm_settings": {
+          "type": "object",
+          "properties": {
+            "guardrails": { "type": "array", "maxItems": 32 }
+          }
+        },
         "general_settings": {
           "type": "object",
           "additionalProperties": true,

@@ -74,7 +74,7 @@ throughput, autoscaling and pod-loss certification remain in PR9/PR10.
 Review found and fixed request finalization escaping through the legacy background
 write helper, request contexts retained by offloaded callbacks, missing SDK
 retirement on reload, keyword-only callback compatibility, hidden Pydantic payload
-state, and repeated suffix scans in the fallback email regex. Cancellation and
+state, obsolete guardrail engines retained by reload, and repeated suffix scans in the fallback email regex. Cancellation and
 real-HTTP regressions verify these fixes; subsequent code review found no remaining
 actionable implementation items in this slice.
 

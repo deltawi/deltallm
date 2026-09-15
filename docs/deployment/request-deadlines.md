@@ -84,7 +84,10 @@ extension before restarting. Process termination/drain coordination remains PR8 
 
 Presidio inspection and anonymization run in a bootstrap-owned executor shared by
 registered Presidio guardrails, including replacements loaded by configuration.
-Each instance serializes access to its optional NLP engine. Synchronous callback
+At most 32 guardrails may be registered. Reload replaces configured entries,
+including removal through an empty list, and keeps manually registered handlers.
+A failed reload preserves the previous complete guardrail policy. Each instance
+serializes access to its optional NLP engine. Synchronous callback
 adapters have their own allocation and cannot consume guardrail execution slots.
 
 | Startup setting | Default | Meaning |

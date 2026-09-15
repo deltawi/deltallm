@@ -24,7 +24,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from src.auth.roles import TeamRole, validate_team_role
 from src.database_settings import DatabaseAllocationSettings
 from src.spend_operation_settings import SpendOperationSettings
-from src.request_work_settings import RequestWorkSettings
+from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
@@ -239,7 +239,7 @@ class DeltaLLMSettings(BaseModel):
     fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
     context_window_fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
     content_policy_fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
-    guardrails: list[GuardrailConfig] = Field(default_factory=list)
+    guardrails: list[GuardrailConfig] = Field(default_factory=list, max_length=MAX_GUARDRAILS)
     success_callback: list[str] = Field(default_factory=list)
     failure_callback: list[str] = Field(default_factory=list)
     callbacks: list[str] = Field(default_factory=list)

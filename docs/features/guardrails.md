@@ -294,3 +294,6 @@ In simple terms:
 - [Authentication & SSO](authentication.md)
 
 Presidio inspection uses the shared [bounded guardrail executor](../deployment/request-deadlines.md#cpu-guardrails). Overload fails closed, and cancelled inspections retain capacity until their worker finishes.
+
+A process accepts at most 32 registered guardrails. Configuration reloads replace
+removed entries and preserve the previous policy if construction fails.
