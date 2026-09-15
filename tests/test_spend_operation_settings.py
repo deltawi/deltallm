@@ -53,3 +53,10 @@ def test_environment_cutover_is_validated_but_explicit_file_setting_wins(monkeyp
     assert not SpendOperationAllocation.resolve(
         GeneralSettings(spend_operation_intents_enabled=False), settings, telemetry_connections=5
     ).enabled
+
+
+def test_cutover_validates_after_resolving_file_and_environment_sources():
+    general = GeneralSettings(spend_operation_intents_enabled=True)
+    environment = Settings(spend_ingestion_mode="outbox", spend_settlement_db_pool_size=2)
+    resolved = SpendOperationAllocation.resolve(general, environment, telemetry_connections=5)
+    assert resolved.enabled and resolved.settlement_connections == 2

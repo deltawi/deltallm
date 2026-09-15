@@ -516,18 +516,6 @@ class UIBrandingUpdatePayload(BaseModel):
 
 
 class GeneralSettings(DatabaseAllocationSettings, SpendOperationSettings):
-    @model_validator(mode="after")
-    def validate_spend_operation_cutover(self):
-        if self.spend_operation_intents_enabled and (
-            self.spend_ingestion_mode != "outbox"
-            or not self.spend_ingestion_worker_enabled
-            or self.spend_settlement_db_pool_size >= self.telemetry_db_pool_size
-        ):
-            raise ValueError(
-                "Spend operation intents require outbox, its worker, and a reserved settlement share"
-            )
-        return self
-
     model_config = ConfigDict(hide_input_in_errors=True)
 
     instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src.database_settings import DATABASE_ALLOCATION_FIELDS
+from src.spend_operation_settings import SpendOperationSettings
 
 import asyncio
 import json
@@ -55,6 +56,7 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
 
 _STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
     {
+        "spend_ingestion_worker_enabled",
         "spend_operation_intents_enabled",
         "spend_settlement_db_pool_size",
         "budget_notifications_enabled",
@@ -470,6 +472,8 @@ class DynamicConfigManager:
                 (
                     field_name.startswith(("redis_", "gateway_ingress_", "auth_fallback_"))
                     or field_name in DATABASE_ALLOCATION_FIELDS
+                    or field_name in SpendOperationSettings.model_fields
+                    or field_name == "spend_ingestion_worker_enabled"
                 )
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)
             )

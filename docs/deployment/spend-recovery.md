@@ -38,7 +38,8 @@ not emit a successful terminal marker. The durable intent remains recoverable.
 
 ## Configuration and capacity
 
-Both settings are startup-only; change them with a rolling restart:
+Both operation settings and `spend_ingestion_worker_enabled` are startup-only;
+change them with a rolling restart:
 
 ```yaml
 general_settings:
@@ -70,8 +71,9 @@ Local/file defaults leave operation intents disabled for the coordinated cutover
 The production overlay explicitly enables them and rejects a disabled spend worker,
 legacy spend mode, or a settlement share that leaves no admission connection. A split
 batch-worker Deployment does not replace API spend workers. Do not disable every
-API spend worker. Dynamic configuration cannot disable the worker while operation
-recovery is enabled.
+API spend worker. Dynamic configuration rejects worker changes before persistence. Cross-field
+cutover validation uses the resolved file/environment values at startup; adding an
+explicit default cannot silently change environment precedence during reload.
 
 The protocol adds a short pre-provider transaction per attempted deployment. Its
 whole-operation deadline is 250 ms, further bounded by the existing routing attempt

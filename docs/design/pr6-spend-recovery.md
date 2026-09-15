@@ -126,3 +126,8 @@ SQL counts. Admission batches its guarded mutations after a separate lock-only
 statement, preserving fresh snapshots while removing unnecessary round trips.
 Catalog fallback pricing is now frozen with deployment/tier inputs before dispatch;
 HTTP tests mutate both sources during provider I/O and verify the original charge.
+
+Final configuration review moved cross-field cutover validation to resolved startup
+settings, preserving file/environment precedence. Worker changes now require restart,
+and adding an explicit default to any bound spend setting is rejected before dynamic
+config persistence. This avoids committing a config that the live worker cannot apply.
