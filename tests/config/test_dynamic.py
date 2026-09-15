@@ -900,6 +900,8 @@ async def test_dynamic_config_rejects_startup_only_ingestion_mode_change() -> No
         ("provider_discovery_allowed_private_cidrs", ["10.0.0.0/8"]),
         ("email_worker_delivery_lease_seconds", 90),
         ("email_worker_enabled", False),
+        ("budget_notifications_enabled", True),
+        ("budget_alert_ttl_seconds", 120),
     ),
 )
 async def test_dynamic_config_rejects_startup_owned_worker_changes(

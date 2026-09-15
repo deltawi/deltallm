@@ -558,7 +558,7 @@ Governance notifications are opt-in and disabled by default.
 | `governance_notifications_enabled` | `false` | Master switch for governance emails |
 | `budget_notifications_enabled` | `false` | Enable soft-budget threshold emails |
 | `key_lifecycle_notifications_enabled` | `false` | Enable key create/regenerate/revoke/delete emails |
-| `budget_alert_ttl_seconds` | `3600` | Deduplication window for budget alerts (shared across all channels) |
+| `budget_alert_ttl_seconds` | `3600` | Durable deduplication window, 60–2147483647 seconds; restart required |
 | `slack_alerting_enabled` | `false` | Send governance alerts to a Slack incoming webhook in addition to email |
 | `slack_webhook_url` | `null` | Slack incoming webhook URL (secret); required when `slack_alerting_enabled` is true |
 | `slack_alert_kinds` | `[]` | Alert types routed to Slack, e.g. `["budget_threshold"]`; empty routes nothing |
@@ -667,3 +667,5 @@ These settings apply to new compatible-chat provider discovery and health checks
 independently of batch webhook allowances. Changes require an API restart.
 Metadata addresses are always denied. See [provider discovery policy](../providers/compatible-chat.md#discovery-authorization-and-outbound-policy)
 for authorization, proxy requirements, limits, rollout, and migration boundaries.
+
+Budget notification worker activation (`budget_notifications_enabled`) requires a restart. See [budget and prompt dependency budgets](../deployment/budget-prompt-performance.md) for delivery, repair, and overload behavior.

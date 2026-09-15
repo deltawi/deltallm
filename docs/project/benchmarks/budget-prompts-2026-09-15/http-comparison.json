@@ -1,0 +1,164 @@
+{
+  "http-after-25rps": {
+    "summary": "http-after-25rps/gateway-load-d03778b631454a69a45f164985c595d7-summary.json",
+    "success_count": 247,
+    "status_counts": {
+      "200": 247,
+      "503": 3
+    },
+    "p95_ms": 36.71845799544826,
+    "metrics": {
+      "deltallm_ingress_active": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.007615,
+        "max": 0.008716,
+        "last": 0.008688
+      },
+      "deltallm_audit_queue_depth": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      }
+    }
+  },
+  "http-after-5rps": {
+    "summary": "http-after-5rps/gateway-load-5f00905fc5724354a1a4299b831ba56d-summary.json",
+    "success_count": 50,
+    "status_counts": {
+      "200": 50
+    },
+    "p95_ms": 33.57470899936743,
+    "metrics": {
+      "deltallm_ingress_active": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.007118,
+        "max": 0.007118,
+        "last": 0.0
+      },
+      "deltallm_audit_queue_depth": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 0.0
+      }
+    }
+  },
+  "http-before-25rps": {
+    "summary": "http-before-25rps/gateway-load-eb244bfc880142e6872cb945083d847f-summary.json",
+    "success_count": 199,
+    "status_counts": {
+      "200": 199,
+      "503": 51
+    },
+    "p95_ms": 44.465083003160544,
+    "metrics": {
+      "deltallm_ingress_active": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.006683,
+        "max": 0.007683,
+        "last": 0.007147
+      },
+      "deltallm_audit_queue_depth": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      }
+    }
+  },
+  "http-before-5rps": {
+    "summary": "http-before-5rps/gateway-load-5f368b6577714a10bf9fde319690b603-summary.json",
+    "success_count": 50,
+    "status_counts": {
+      "200": 50
+    },
+    "p95_ms": 43.72266599966679,
+    "metrics": {
+      "deltallm_ingress_active": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.009805,
+        "last": 0.0
+      },
+      "deltallm_audit_queue_depth": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "arrival_window_completion_rps": 50.0,
+  "arrival_window_seconds": 10,
+  "client_started_count": 500,
+  "client_started_rps": 50.0,
+  "completion_count": 500,
+  "drain_window_seconds": 0.0004826250078622252,
+  "generator_dropped_count": 0,
+  "latency_seconds": {
+    "max": 0.10941904199717101,
+    "mean": 0.008604949416534509,
+    "p50": 0.008385875000385568,
+    "p95": 0.013090833992464468,
+    "p99": 0.015352249989518896
+  },
+  "max_in_flight_observed": 2,
+  "run_id": "97a8890b619042b89594250b106ebd79",
+  "scheduling_lag_seconds": {
+    "max": 0.007813832999090664,
+    "mean": 0.0011931155731726903,
+    "p50": 0.0010933750018011779,
+    "p95": 0.0019657909870147705,
+    "p99": 0.003374749983777292
+  },
+  "started_at": "2026-09-15T06:02:47.717093+00:00",
+  "status_counts": {
+    "200": 500
+  },
+  "success_count": 500,
+  "target_count": 500,
+  "target_rate_rps": 50,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  }
+}

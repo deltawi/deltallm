@@ -1,6 +1,6 @@
 # Budgets & Spend Tracking
 
-DeltaLLM records usage cost for proxied requests and can stop traffic when a budget is exhausted.
+DeltaLLM records usage cost for proxied requests and can stop new traffic when recorded spend reaches a budget threshold. These preflight checks are not atomic spending reservations: concurrent requests and unsettled accounting can overshoot a threshold.
 
 ## Quick Path
 
@@ -79,13 +79,13 @@ The legacy master-key spend endpoints also exist under `/global/spend`, `/global
 
 ## Soft Budgets and Resets
 
-DeltaLLM also supports soft-budget alerting for keys, users, teams, and organizations. A soft budget does not block traffic; it triggers an alert through the configured notification flow.
+DeltaLLM also supports admission-triggered soft-budget alerting for organizations. A soft budget does not block traffic; it triggers an alert through the configured notification flow.
 
 Soft-budget notifications are:
 
 - opt-in
 - disabled by default
-- email-based
+- delivered through configured email and/or Slack channels
 - deduplicated within the configured TTL window
 
 To enable them:
@@ -98,7 +98,9 @@ general_settings:
   budget_alert_ttl_seconds: 3600
 ```
 
-Budget notifications require email delivery to be configured first.
+Configure the desired delivery channel first. Budget notifications are accepted durably after the budget decision and delivered outside admission. Changing `budget_notifications_enabled` or `budget_alert_ttl_seconds` requires a restart.
+
+See [Budget and prompt dependency budgets](../deployment/budget-prompt-performance.md) for combined-query rollout, missing-counter HTTP 503 handling, explicit counter repair, notification capacity and delivery recovery.
 
 If an entity has both `budget_duration` and `budget_reset_at`, the runtime can reset tracked spend automatically when the reset window is reached. Durations use a positive integer up to `10000` followed by `h`, `d`, or `mo`, for example `1h`, `7d`, `30d`, and `1mo`.
 

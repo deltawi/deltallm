@@ -74,10 +74,30 @@ model DeltaLLM_TeamModelSpendCounter {
   spend_exact Decimal? @db.Decimal(38, 18)
   reserved_spend_exact Decimal @default(0) @db.Decimal(38, 18)
   updated_at  DateTime @updatedAt
+  reconciled_at DateTime?
 
   @@id([team_id, model])
   @@index([team_id], map: "deltallm_teammodelspend_team_idx")
   @@map("deltallm_teammodelspend")
+}
+
+model DeltaLLM_BudgetNotification {
+  organization DeltaLLM_OrganizationTable @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  organization_id String @id
+  notification_id String @unique
+  spend Decimal @db.Decimal(38, 18)
+  soft_budget Decimal @db.Decimal(38, 18)
+  hard_budget Decimal? @db.Decimal(38, 18)
+  status String @default("pending")
+  attempt_count Int @default(0)
+  available_at DateTime @default(now()) @db.Timestamptz(6)
+  dedupe_until DateTime @db.Timestamptz(6)
+  claim_token String?
+  lease_expires_at DateTime? @db.Timestamptz(6)
+  outcome String?
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("deltallm_budgetnotification")
 }
 
 model DeltaLLM_VerificationToken {
@@ -240,6 +260,7 @@ model DeltaLLM_OrganizationTable {
   updated_at        DateTime @updatedAt
 
   tier_assignments DeltaLLM_OrganizationTierAssignment[]
+  budget_notification DeltaLLM_BudgetNotification?
 
   @@index([lifecycle_state, updated_at], map: "deltallm_organizationtable_lifecycle_state_idx")
   @@map("deltallm_organizationtable")

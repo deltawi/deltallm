@@ -699,7 +699,7 @@ class GeneralSettings(DatabaseAllocationSettings):
     governance_notifications_enabled: bool = False
     budget_notifications_enabled: bool = False
     key_lifecycle_notifications_enabled: bool = False
-    budget_alert_ttl_seconds: int = Field(default=3600, ge=60)
+    budget_alert_ttl_seconds: int = Field(default=3600, ge=60, le=2147483647)
     slack_alerting_enabled: bool = False
     slack_webhook_url: SecretStr | None = None
     slack_alert_kinds: list[str] = Field(default_factory=list)

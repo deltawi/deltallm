@@ -401,3 +401,67 @@ async def test_init_runtime_services_prefers_explicit_config_over_settings_fallb
     assert _status_map(runtime)["tier_policy"] == "disabled"
 
     await shutdown_runtime_services(runtime)
+
+
+@pytest.mark.asyncio
+async def test_budget_worker_start_failure_closes_initialized_runtime(monkeypatch):
+    created = {}
+    _install_runtime_service_fakes(monkeypatch, created)
+    cfg = _runtime_config()
+    cfg.general_settings.budget_notifications_enabled = True
+
+    class FailingWorker:
+        def __init__(self, *args):
+            self.stopped = False
+            created["budget_worker"] = self
+
+        async def start(self):
+            raise RuntimeError("notification table unavailable")
+
+        async def shutdown(self):
+            self.stopped = True
+
+    monkeypatch.setattr("src.bootstrap.runtime_services.BudgetNotificationWorker", FailingWorker)
+    with pytest.raises(RuntimeError, match="notification table unavailable"):
+        await init_runtime_services(_runtime_app(), cfg)
+    assert created["budget_worker"].stopped
+    assert created["governance_invalidation_service"].closed
+    assert created["tier_policy_service"].closed
+    assert created["callback_manager"].shutdown_called
+
+
+@pytest.mark.asyncio
+async def test_notification_and_spend_drains_overlap_before_dependencies_close(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from src.bootstrap.runtime_services import RuntimeServicesRuntime
+
+    notification_entered, spend_entered = asyncio.Event(), asyncio.Event()
+    finished = []
+
+    async def notification_drain():
+        notification_entered.set()
+        await spend_entered.wait()
+        finished.append("notification")
+
+    async def spend_drain():
+        spend_entered.set()
+        await notification_entered.wait()
+        finished.append("spend")
+
+    async def dependency_close():
+        assert set(finished) == {"notification", "spend"}
+
+    runtime = RuntimeServicesRuntime(
+        callback_manager=SimpleNamespace(shutdown=AsyncMock(side_effect=dependency_close)),
+        governance_invalidation_service=SimpleNamespace(
+            close=AsyncMock(side_effect=dependency_close)
+        ),
+        tier_policy_service=None,
+        budget_notification_worker=SimpleNamespace(shutdown=notification_drain),
+        spend_ingestion_service=SimpleNamespace(shutdown=spend_drain),
+        statuses=(),
+    )
+    monkeypatch.setattr("src.bootstrap.runtime_services.close_shared_client", AsyncMock())
+    await asyncio.wait_for(shutdown_runtime_services(runtime), timeout=1)

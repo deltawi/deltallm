@@ -154,6 +154,7 @@ nav:
       - Concurrency Measurement: deployment/concurrency-measurement.md
       - Gateway Ingress Admission: deployment/ingress-admission.md
       - Ingress Measurement: deployment/ingress-measurement.md
+      - Budget and Prompt Performance: deployment/budget-prompt-performance.md
   - Project:
       - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
       - Route-Group Model Router Design: project/model-router-design.md
@@ -165,6 +166,8 @@ nav:
       - Durable Admission Design: design/pr4-durable-admission.md
       - Capacity Partition Protocol: design/pr4-capacity-partitions.md
       - Durable Admission Measurements: benchmarks/pr4-admission/README.md
+      - Budget and Prompt Design: design/pr5-budget-prompts.md
+      - Budget and Prompt Measurements: project/benchmarks/budget-prompts-2026-09-15/README.md
       - Documentation Governance: project/documentation-governance.md
       - Context-capacity Routing Decision: project/context-routing-design.md
       - Route-group Admin Addressing: project/route-group-addressing.md

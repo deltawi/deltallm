@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.billing.alerts import AlertConfig, AlertService
+from src.billing.alerts import AlertService
+from src.billing.budget_notifications import BudgetNotificationWorker
+from tests.test_budget_notification_worker import dependencies, record
 from src.notifications.channels.email import EmailChannel
 from src.notifications.dispatcher import NotificationDispatcher
 
@@ -113,171 +115,71 @@ def _build_service(
         dedupe_ttl_seconds=60,
     )
     return AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
         dispatcher=dispatcher,
         recipient_resolver=resolver or _FakeRecipientResolver(recipients),
         config_getter=lambda: _config(enabled=enabled),
     )
 
 
+async def _process(service):
+    repo, _ = dependencies()
+    await BudgetNotificationWorker(repo, service).process(record())
+    return repo
+
+
 @pytest.mark.asyncio
 async def test_budget_alert_notifications_are_opt_in() -> None:
     outbox = _FakeOutboxService()
     service = _build_service(enabled=False, redis=_FakeRedis(), outbox=outbox)
-
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=12.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-
+    repo = await _process(service)
     assert outbox.calls == []
+    repo.finish.assert_awaited_once_with(record(), delivered=True, outcome="disabled")
 
 
 @pytest.mark.asyncio
-async def test_budget_alert_enqueues_once_per_ttl_window() -> None:
-    redis = _FakeRedis()
-    outbox = _FakeOutboxService()
-    audit = _FakeAuditService()
+async def test_budget_alert_dispatches_email_and_records_audit_without_redis_claim() -> None:
+    redis, outbox, audit = _FakeRedis(), _FakeOutboxService(), _FakeAuditService()
     service = _build_service(enabled=True, redis=redis, outbox=outbox, audit=audit)
-
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=12.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=13.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-
+    repo = await _process(service)
     assert len(outbox.calls) == 1
     assert outbox.calls[0]["template_key"] == "budget_threshold"
     assert outbox.calls[0]["to_addresses"] == ("owner@example.com",)
     assert audit.events[0].status == "success"
-    assert redis.set_calls[0] == ("alert:budget:team:team-1", "1", 60, True)
+    assert redis.set_calls == []
+    repo.finish.assert_awaited_once_with(record(), delivered=True, outcome="delivered")
 
 
 @pytest.mark.asyncio
-async def test_budget_alert_releases_slot_when_enqueue_fails() -> None:
-    redis = _FakeRedis()
-    service = _build_service(
-        enabled=True,
-        redis=redis,
-        outbox=_FakeOutboxService(fail=True),
-        audit=_FakeAuditService(),
-    )
-
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=12.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-
-    assert "alert:budget:team:team-1" in redis.deleted
+@pytest.mark.parametrize("options", [{"fail": True}, {"status": "cancelled"}])
+async def test_budget_alert_preserves_unknown_outcome_when_email_is_not_confirmed(options) -> None:
+    outbox = _FakeOutboxService(**options)
+    repo = await _process(_build_service(enabled=True, outbox=outbox, audit=_FakeAuditService()))
+    repo.finish.assert_awaited_once_with(record(), delivered=False, outcome="delivery_unknown")
+    repo.retry_preparation.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_budget_alert_releases_slot_when_outbox_cancels_email() -> None:
-    redis = _FakeRedis()
+async def test_budget_alert_no_recipients_has_observable_terminal_outcome() -> None:
     audit = _FakeAuditService()
-    service = _build_service(
-        enabled=True,
-        redis=redis,
-        outbox=_FakeOutboxService(status="cancelled"),
-        audit=audit,
-    )
-
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=12.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-
-    assert "alert:budget:team:team-1" in redis.deleted
+    repo = await _process(_build_service(enabled=True, recipients=(), audit=audit))
+    repo.finish.assert_awaited_once_with(record(), delivered=False, outcome="delivery_unknown")
     assert audit.events[0].status == "skipped"
-    assert audit.events[0].metadata["reason"] == "undeliverable"
+    assert audit.events[0].metadata["reason"] == "no_recipients"
 
 
 @pytest.mark.asyncio
-async def test_budget_alert_releases_slot_when_no_recipients() -> None:
-    redis = _FakeRedis()
-    service = _build_service(
-        enabled=True,
-        redis=redis,
-        recipients=(),
-        audit=_FakeAuditService(),
-    )
-
-    await service.send_budget_alert(
-        entity_type="org",
-        entity_id="org-1",
-        current_spend=22.0,
-        soft_budget=20.0,
-        hard_budget=40.0,
-    )
-
-    assert "alert:budget:org:org-1" in redis.deleted
-
-
-@pytest.mark.asyncio
-async def test_budget_alert_swallows_recipient_resolution_errors() -> None:
-    redis = _FakeRedis()
-    audit = _FakeAuditService()
+async def test_budget_alert_recipient_failure_retries_only_preparation() -> None:
     outbox = _FakeOutboxService()
-    service = _build_service(
-        enabled=True,
-        redis=redis,
-        outbox=outbox,
-        audit=audit,
-        resolver=_FakeRecipientResolver((), raise_on_resolve=True),
-    )
-
-    # Must not raise into the caller (the inference request that triggered the
-    # budget check).
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=12.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-
-    assert outbox.calls == []
-    assert "alert:budget:team:team-1" in redis.deleted
-    assert len(audit.events) == 1
-    assert audit.events[0].status == "error"
-    assert audit.events[0].metadata["reason"] == "exception"
-
-
-@pytest.mark.asyncio
-async def test_budget_alert_skips_recipient_query_when_throttled() -> None:
-    redis = _FakeRedis()
-    resolver = _FakeRecipientResolver(("owner@example.com",))
-    service = _build_service(enabled=True, redis=redis, resolver=resolver, audit=_FakeAuditService())
-
-    for _ in range(2):
-        await service.send_budget_alert(
-            entity_type="team",
-            entity_id="team-1",
-            current_spend=12.0,
-            soft_budget=10.0,
-            hard_budget=20.0,
+    repo = await _process(
+        _build_service(
+            enabled=True,
+            outbox=outbox,
+            resolver=_FakeRecipientResolver((), raise_on_resolve=True),
         )
-
-    # The second alert is throttled before any recipient DB query.
-    assert resolver.calls == 1
+    )
+    assert outbox.calls == []
+    repo.retry_preparation.assert_awaited_once()
+    repo.begin_dispatch.assert_not_awaited()
 
 
 class _DeliveringChannel:
@@ -289,7 +191,7 @@ class _DeliveringChannel:
     def supports(self, alert_type: str) -> bool:
         return True
 
-    async def send(self, *, message, recipients):  # noqa: ANN001, ANN201
+    async def send(self, *, message, recipients):
         from src.notifications.types import ChannelResult
 
         self.calls += 1
@@ -297,63 +199,28 @@ class _DeliveringChannel:
 
 
 @pytest.mark.asyncio
-async def test_budget_alert_keeps_slot_when_only_slack_delivers() -> None:
-    redis = _FakeRedis()
+async def test_budget_alert_completes_when_only_slack_delivers() -> None:
     slack = _DeliveringChannel()
-    service = _build_service(
-        enabled=True,
-        redis=redis,
-        recipients=(),  # no email recipients
-        extra_channels=[slack],
-        audit=_FakeAuditService(),
+    repo = await _process(
+        _build_service(
+            enabled=True,
+            recipients=(),
+            extra_channels=[slack],
+            audit=_FakeAuditService(),
+        )
     )
-
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=12.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-
-    # The slot was claimed and Slack actually delivered, so the shared silence
-    # window is retained (not released).
     assert slack.calls == 1
-    assert "alert:budget:team:team-1" in redis.values
-    assert "alert:budget:team:team-1" not in redis.deleted
+    repo.finish.assert_awaited_once_with(record(), delivered=True, outcome="delivered")
 
 
 class _ClaimRaisingRedis(_FakeRedis):
-    async def set(self, key: str, value: str, *, ex: int | None = None, nx: bool | None = None):  # noqa: ANN201
-        self.set_calls.append((key, value, ex, nx))
-        raise ConnectionError("redis down")
+    async def set(self, *args, **kwargs):
+        raise AssertionError("durable budget delivery must not require Redis")
 
 
 @pytest.mark.asyncio
-async def test_budget_alert_skips_when_redis_claim_fails() -> None:
-    redis = _ClaimRaisingRedis()
-    resolver = _FakeRecipientResolver(("owner@example.com",))
+async def test_budget_alert_delivery_survives_redis_outage() -> None:
     outbox = _FakeOutboxService()
-    service = _build_service(
-        enabled=True,
-        redis=redis,
-        outbox=outbox,
-        resolver=resolver,
-        audit=_FakeAuditService(),
-    )
-
-    # Redis being down must not raise into the inference request that triggered
-    # the budget check; the alert is simply skipped (fail-closed).
-    await service.send_budget_alert(
-        entity_type="team",
-        entity_id="team-1",
-        current_spend=12.0,
-        soft_budget=10.0,
-        hard_budget=20.0,
-    )
-
-    # The claim was actually attempted (so the skip happened at the claim step,
-    # not an earlier short-circuit) and nothing downstream ran.
-    assert len(redis.set_calls) == 1
-    assert resolver.calls == 0
-    assert outbox.calls == []
+    repo = await _process(_build_service(enabled=True, redis=_ClaimRaisingRedis(), outbox=outbox))
+    assert len(outbox.calls) == 1
+    repo.finish.assert_awaited_once_with(record(), delivered=True, outcome="delivered")

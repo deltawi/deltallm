@@ -29,6 +29,12 @@ from src.services.asset_scopes import (
 )
 from src.services.prompt_rendering import render_template_body, validate_variables_schema
 from src.services.prompt_singleflight import PromptSingleflight
+from src.services.prompt_binding_cache import (
+    MAX_BINDING_CACHE_BYTES,
+    MAX_BINDING_SCOPES,
+    binding_payload_valid,
+    binding_payload_fits,
+)
 from src.services.runtime_scopes import RuntimeScopeContext
 from src.telemetry.prompt_render import PromptRenderEvent, PromptRenderSink
 
@@ -630,6 +636,8 @@ class PromptRegistryService:
     ) -> list[PromptBindingRecord | None]:
         if not precedence:
             return []
+        if len(precedence) > MAX_BINDING_SCOPES:
+            raise ValueError("prompt binding chain exceeds server scope bound")
         cached = self._read_binding_chain_l1(precedence)
         if cached is not None:
             return cached
@@ -680,7 +688,11 @@ class PromptRegistryService:
             still_missing: list[str] = []
             for cache_key in missing_keys:
                 payload = l2_payloads.get(cache_key)
-                if payload is None:
+                if (
+                    payload is None
+                    or not binding_payload_valid(payload, scope_by_key[cache_key])
+                    or not binding_payload_fits(cache_key, payload)
+                ):
                     still_missing.append(cache_key)
                     continue
                 payloads[cache_key] = payload
@@ -694,6 +706,7 @@ class PromptRegistryService:
                     (normalize_scope_type(binding.scope_type), binding.scope_id): binding
                     for binding in bindings
                 }
+                fills: dict[str, dict[str, Any]] = {}
                 for cache_key in still_missing:
                     scope = scope_by_key[cache_key]
                     binding = bindings_by_scope.get(scope)
@@ -705,13 +718,16 @@ class PromptRegistryService:
                     payloads[cache_key] = payload
                     if generation != self._cache_generation:
                         continue
-                    if binding is not None or self.negative_cache_enabled:
+                    if (
+                        binding is not None or self.negative_cache_enabled
+                    ) and binding_payload_fits(cache_key, payload):
                         self._write_l1(self._binding_l1, cache_key, payload)
-                        await self._write_l2(cache_key, payload)
+                        fills[cache_key] = payload
+                await self._write_binding_fills(fills)
 
         resolved: list[PromptBindingRecord | None] = []
-        for scope_type, scope_id in precedence:
-            payload = payloads[self._binding_cache_key(scope_type, scope_id)]
+        for cache_key in scope_by_key:
+            payload = payloads[cache_key]
             if _is_negative_cache_payload(payload):
                 increment_prompt_cache_lookup(entity="binding", tier="db_miss")
                 resolved.append(None)
@@ -883,7 +899,7 @@ class PromptRegistryService:
         key: str,
         factory: Callable[[], Awaitable[_SingleFlightResult]],
     ) -> _SingleFlightResult:
-        return await self._singleflight.run(key, factory)
+        return await self._singleflight.run(f"g{self._cache_generation}:{key}", factory)
 
     def _read_l1(self, cache: _BoundedTTLCache, key: str) -> dict[str, Any] | None:
         entry = cache.get(key)
@@ -933,11 +949,16 @@ class PromptRegistryService:
             return {}
         resolved: dict[str, dict[str, Any]] = {}
         for key, raw in zip(keys, raw_values, strict=False):
-            if not raw:
+            if (
+                not isinstance(raw, (str, bytes))
+                or not raw
+                or len(raw.encode("utf-8") if isinstance(raw, str) else raw)
+                > MAX_BINDING_CACHE_BYTES
+            ):
                 continue
             try:
                 payload = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+            except (ValueError, UnicodeDecodeError, AttributeError, RecursionError):
                 continue
             if isinstance(payload, dict):
                 resolved[key] = payload
@@ -955,6 +976,25 @@ class PromptRegistryService:
             await self.redis.setex(key, ttl, json.dumps(payload))
         except Exception as exc:
             logger.debug("failed to write prompt cache key=%s: %s", key, exc)
+
+    async def _write_binding_fills(self, fills: dict[str, dict[str, Any]]) -> None:
+        """Flush the bounded, server-derived binding chain in one cache round trip."""
+        if self.redis is None or not fills:
+            return
+        try:
+            async with self.redis.pipeline(transaction=False) as pipeline:
+                for key, payload in fills.items():
+                    ttl = (
+                        self.negative_l2_ttl_seconds
+                        if _is_negative_cache_payload(payload)
+                        else self.l2_ttl_seconds
+                    )
+                    pipeline.setex(key, ttl, json.dumps(payload))
+                await pipeline.execute()
+        except Exception:
+            # Cache failures do not discard the authoritative result or retry SQL.
+            increment_prompt_cache_lookup(entity="binding", tier="write_error")
+            logger.debug("failed to fill prompt binding cache")
 
     async def _delete_l2_keys(self, keys: list[str]) -> None:
         if self.redis is None:
@@ -1044,7 +1084,7 @@ def _negative_cache_payload() -> dict[str, Any]:
 def _is_negative_cache_payload(payload: dict[str, Any]) -> bool:
     return (
         payload.get(_CACHE_STATE_KEY) == _NEGATIVE_CACHE_STATE
-        and int(payload.get("version") or 0) == _CACHE_FORMAT_VERSION
+        and payload.get("version") == _CACHE_FORMAT_VERSION
     )
 
 
@@ -1086,8 +1126,9 @@ def _prompt_from_cache(data: dict[str, Any]) -> PromptResolvedRecord:
 
 def _binding_to_cache(binding: PromptBindingRecord) -> dict[str, Any]:
     return {
+        "cache_version": _CACHE_FORMAT_VERSION,
         "prompt_binding_id": binding.prompt_binding_id,
-        "scope_type": binding.scope_type,
+        "scope_type": normalize_scope_type(binding.scope_type),
         "scope_id": binding.scope_id,
         "prompt_template_id": binding.prompt_template_id,
         "template_key": binding.template_key,
