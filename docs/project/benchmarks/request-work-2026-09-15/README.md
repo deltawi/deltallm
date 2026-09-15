@@ -29,6 +29,11 @@ guardrail registry reload/length-validation fixes change neither the measured
 request execution nor the standalone probe scheduling. Both use the same frozen
 Python environment and profile hash. No tests ran during measurement.
 
+A later CI fix broadens unique-index conflict arbitration for combined selector
+billing reservations while preserving ownership checks and SQL call counts. That
+race is covered by PostgreSQL concurrency tests, not by these ordinary-inference
+HTTP samples, which do not execute combined selector reservations.
+
 Each API receives 100 successful warmup requests paced at 5 RPS, followed by the
 runner's excluded one-request precheck. Each recorded stage lasts ten seconds.
 [Comparison JSON](http-comparison.json) links every raw request, summary and sampled

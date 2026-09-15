@@ -171,6 +171,7 @@ nav:
       - Budget and Prompt Design: design/pr5-budget-prompts.md
       - Spend Recovery Design: design/pr6-spend-recovery.md
       - Request Deadline Design: design/pr7-deadlines-bounded-work.md
+      - Request Work Measurements: project/benchmarks/request-work-2026-09-15/README.md
       - Spend Recovery Measurements: project/benchmarks/spend-recovery-2026-09-15/README.md
       - Budget and Prompt Measurements: project/benchmarks/budget-prompts-2026-09-15/README.md
       - Documentation Governance: project/documentation-governance.md

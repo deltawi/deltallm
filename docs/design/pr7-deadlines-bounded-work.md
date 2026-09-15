@@ -68,6 +68,7 @@ throughput, autoscaling and pod-loss certification remain in PR9/PR10.
 - [Python cancellation and deadlines](https://docs.python.org/3.11/library/asyncio-task.html)
 - [Executor cancellation and shutdown](https://docs.python.org/3.11/library/concurrent.futures.html)
 - [HTTPX timeout dimensions](https://www.python-httpx.org/advanced/timeouts/)
+- [PostgreSQL conflict arbitration](https://www.postgresql.org/docs/15/sql-insert.html#SQL-ON-CONFLICT)
 
 ## Review and validation disposition
 
@@ -77,6 +78,14 @@ retirement on reload, keyword-only callback compatibility, hidden Pydantic paylo
 state, obsolete guardrail engines retained by reload, and repeated suffix scans in the fallback email regex. Cancellation and
 real-HTTP regressions verify these fixes; subsequent code review found no remaining
 actionable implementation items in this slice.
+
+CI then exposed an existing billing reservation race: concurrent identical inserts
+could violate the selector-event unique index because only operation-ID conflicts
+were handled. Insertion now arbitrates both unique indexes, then retains the
+locked operation-ID lookup and frozen ownership/snapshot check. Concurrent replay
+and injected selector-event collision tests verify one hold/capacity slot and
+rejection of a different operation. The transaction deadline, lock order and SQL
+call count remain unchanged; no retries or global locks were added.
 
 [Measurements](../project/benchmarks/request-work-2026-09-15/README.md) retain raw
 HTTP, callback, CPU, dependency and shutdown evidence. Callback retention is bounded

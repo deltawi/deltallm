@@ -102,18 +102,50 @@ async def test_duplicate_reservation_does_not_hold_capacity_while_waiting_for_op
     assert await fixtures.capacity(db) == before
 
 
+@pytest.mark.parametrize("concurrency", [2, 8, 16])
 async def test_identical_concurrent_reservations_use_one_hold_and_capacity_slot(
     review_operation_db,
+    concurrency,
 ):
     db, operation, _ = review_operation_db
     before = await fixtures.capacity(db)
     repositories = [BillingOperationRepository(db), BillingOperationRepository(db)]
     results = await asyncio.gather(
-        *(repositories[index % 2].reserve(operation, expires_at=deadline()) for index in range(8))
+        *(
+            repositories[index % 2].reserve(operation, expires_at=deadline())
+            for index in range(concurrency)
+        ),
+        return_exceptions=True,
     )
+    # Drain every transaction before asserting, including when a contender fails.
+    assert not [result for result in results if isinstance(result, BaseException)]
     assert all(result.selector_state is ComponentState.RESERVED for result in results)
     assert await hold(db, operation) == operation.total_allowance
     assert await fixtures.capacity(db) == before + 1
+
+
+async def test_selector_event_collision_cannot_reuse_another_operation(
+    review_operation_db,
+    monkeypatch,
+):
+    db, first, charge = review_operation_db
+    repository = BillingOperationRepository(db)
+    await repository.reserve(first, expires_at=deadline())
+    before = await fixtures.capacity(db)
+    second, _ = fixtures.another_operation(first, charge)
+    event_id = first.attribution.component_event_id
+    # Inject a UUID collision without weakening either real unique constraint.
+    monkeypatch.setattr(
+        type(second.attribution), "component_event_id", property(lambda _: event_id)
+    )
+    with pytest.raises(BillingOperationUnavailable):
+        await repository.reserve(second, expires_at=deadline())
+    assert not await db.query_raw(
+        "SELECT operation_id FROM deltallm_billing_operations WHERE operation_id=$1",
+        str(second.attribution.operation_id),
+    )
+    assert await fixtures.reserved_totals(db, first) == [first.total_allowance] * 5
+    assert await fixtures.capacity(db) == before
 
 
 async def test_contended_duplicate_timeout_keeps_one_hold_and_capacity_slot(review_operation_db):

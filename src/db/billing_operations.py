@@ -76,6 +76,8 @@ class BillingOperationRepository:
         async with self._transaction(expires_at) as tx:
             # Match settlement: operation -> canonical account rows -> capacity.
             # Unique insertion serializes duplicate IDs without a global lock.
+            # Both operation_id and selector_event_id can race; a conflict is
+            # reusable only after reading and validating this operation's snapshot.
             if not await self._insert(tx, operation):
                 rows = await tx.query_raw(
                     "SELECT * FROM deltallm_billing_operations WHERE operation_id=$1 FOR UPDATE",
@@ -118,7 +120,7 @@ class BillingOperationRepository:
             "(operation_id,owner_token,api_key,user_id,team_id,organization_id,model,snapshot,"
             "selector_event_id,selector_allowance,answer_allowance,expires_at,answer_state) "
             "VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::numeric,$11::numeric,$12::timestamptz,$13) "
-            "ON CONFLICT (operation_id) DO NOTHING RETURNING operation_id",
+            "ON CONFLICT DO NOTHING RETURNING operation_id",
             str(owner.operation_id),
             str(operation.owner_token),
             owner.api_key,
