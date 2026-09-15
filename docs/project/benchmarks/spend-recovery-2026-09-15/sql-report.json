@@ -1,5 +1,5 @@
 {
-  "commit": "19fd00237810fd1a147049df0e5ff960764e75f3",
+  "commit": "43ae523051fe260e8d1cf366107dbbf2a59cb6e7",
   "python": "3.11.13",
   "history_rows": 100000,
   "retained_outbox_rows": 10000,
@@ -174,8 +174,8 @@
         }
       ]
     },
-    "planning_ms": 0.568,
-    "execution_ms": 0.192
+    "planning_ms": 0.549,
+    "execution_ms": 0.196
   },
   "receipt_plan": {
     "plan": {
@@ -198,8 +198,8 @@
         }
       ]
     },
-    "planning_ms": 0.102,
-    "execution_ms": 0.088
+    "planning_ms": 0.076,
+    "execution_ms": 0.072
   },
   "recovery_plan": {
     "plan": {
@@ -255,8 +255,8 @@
         }
       ]
     },
-    "planning_ms": 3.299,
-    "execution_ms": 0.967
+    "planning_ms": 3.308,
+    "execution_ms": 1.023
   },
-  "repository_sha256": "b39d9cf2299ad33ebdbbe731a0ead54bf94af21803e621f7eafdee8434374148"
+  "repository_sha256": "e0eac8334899bbcc985b8ce5c0713d8cbd2636f772012310abefca797c7f9fd6"
 }
