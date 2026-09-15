@@ -84,3 +84,5 @@ prisma_manager = PrismaClientManager()
 telemetry_prisma_manager = PrismaClientManager()
 foreground_prisma_manager = PrismaClientManager()
 telemetry_worker_prisma_manager = PrismaClientManager()
+
+telemetry_settlement_prisma_manager = PrismaClientManager()

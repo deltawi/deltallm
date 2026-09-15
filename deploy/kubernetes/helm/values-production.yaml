@@ -79,6 +79,8 @@ config:
     provider_discovery_allowed_private_cidrs: []
     cache_backend: redis
     spend_ingestion_mode: outbox
+    spend_operation_intents_enabled: true
+    spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
     audit_ingestion_mode: outbox
     db_foreground_pool_size: 8
     telemetry_worker_db_pool_size: 5

@@ -166,6 +166,8 @@ general_settings:
   # The outbox mode durably accepts one small event on the request path and
   # applies idempotent spend/ledger updates in a bounded background worker.
   spend_ingestion_mode: legacy # Use outbox before activating a model-router selector.
+  spend_operation_intents_enabled: false
+  spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
   spend_ingestion_batch_size: 100
   spend_ingestion_flush_interval_ms: 100
   spend_ingestion_lease_seconds: 30

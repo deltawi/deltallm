@@ -1,6 +1,6 @@
 # PR 6: durable spend intent and settlement recovery
 
-Status: implementation plan. Base: `b2dd49d3` on `feature/issue-320-concurrency`.
+Status: implemented; final HTTP evidence and application CI in progress. Base: `b2dd49d3` on `feature/issue-320-concurrency`.
 Tracking: [issue 320](https://github.com/deltawi/deltallm/issues/320).
 
 ## Problem and ownership
@@ -19,23 +19,23 @@ second ledger writer. Batch retains its existing completion-outbox owner.
 
 ## Implementation checklist
 
-- [ ] Add an inactive, separately reviewable schema child: bounded operation intent,
+- [x] Add an inactive, separately reviewable schema child: bounded operation intent,
   owner fence, expiry and reconciliation state on the existing spend outbox.
-- [ ] Reserve one durable outbox slot before ordinary external inference. Record
+- [x] Reserve one durable outbox slot before ordinary external inference. Record
   verified attribution and frozen deployment/tier pricing for each bounded attempt;
   preserve the existing server-owned event identity across finalization and replay.
-- [ ] Atomically replace the intent with its frozen receipt in the reserved slot.
+- [x] Atomically replace the intent with its frozen receipt in the reserved slot.
   Duplicate acceptance compares identity and payload. No provider retry repairs
   accounting. Cache hits retain their existing single durable acceptance.
-- [ ] Carve a settlement allocation out of the existing telemetry connection budget;
+- [x] Carve a settlement allocation out of the existing telemetry connection budget;
   admission/reporting/consumers cannot use its slots. Reject new work before external
   execution when durable capacity or admission persistence is unavailable.
-- [ ] Recover expired unacknowledged intents as explicit unknown outcomes; never
+- [x] Recover expired unacknowledged intents as explicit unknown outcomes; never
   infer zero cost or repeat external execution. Preserve late valid receipts and
   provide an investigated, idempotent operator reconciliation procedure.
-- [ ] Keep selector worker/readiness requirements and one owned spend worker; no
+- [x] Keep selector worker/readiness requirements and one owned spend worker; no
   assumption that split batch workers drain API telemetry.
-- [ ] Convert secondary required-persistence failures to safe local `503` responses,
+- [x] Convert secondary required-persistence failures to safe local `503` responses,
   preserve cancellation, and avoid provider health/cooldown consequences.
 - [ ] Test real PostgreSQL admission races, duplicate/ambiguous commits, process loss,
   worker fencing, cancellation/disconnect, terminal stream markers, outages and
@@ -108,3 +108,21 @@ at deployment cardinality before release. If it cannot fit that window, do not r
 the timeout: ship a separate concurrently built-index migration with its own invalid
 index recovery procedure. Keep existing accepted/blocked records; never truncate to
 make the migration fit. The feature stays disabled until this migration succeeds.
+
+## Review and remediation log
+
+First implementation review found that selector receipt writes should also use the
+reserved settlement allocation, and that ordinary dispatch must consult the durable
+spend-event identity after outbox retention. The application slice routes selector
+receipt acceptance to settlement and rejects redispatch of a settled event using one
+indexed post-lock lookup. It also adds explicit unknown-transition metrics and
+strengthens terminal-frame/disconnect coverage before qualification.
+
+A second review measured retained-history plans and caught a full target-table scan
+in bounded expiry recovery. Recovery now locks at most 100 candidates through the
+partial expiry index and updates their transaction-local tuple locations directly.
+A populated PostgreSQL regression requires that plan and enforces admission/receipt
+SQL counts. Admission batches its guarded mutations after a separate lock-only
+statement, preserving fresh snapshots while removing unnecessary round trips.
+Catalog fallback pricing is now frozen with deployment/tier inputs before dispatch;
+HTTP tests mutate both sources during provider I/O and verify the original charge.

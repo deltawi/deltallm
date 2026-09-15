@@ -10,7 +10,6 @@ from fastapi import Request
 
 from src.billing.tier_pricing import (
     attach_pricing_metadata,
-    resolve_deployment_tier_pricing,
     resolve_token_billing_result,
 )
 from src.callbacks import build_standard_logging_payload
@@ -26,7 +25,7 @@ from src.metrics import (
 from src.providers.resolution import resolve_provider
 from src.router.health_policy import exception_status_code
 from src.telemetry.request_failures import enqueue_request_log_write
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.spend_operation import billing_write_context, operation_pricing
 from src.routers.routing_decision import attach_route_decision, resolve_failure_target
 
 
@@ -64,12 +63,11 @@ def _resolve_completion_pricing_costs(
     cache_hit: bool,
 ):
     usage_data = dict(usage or {})
-    pricing = resolve_deployment_tier_pricing(
+    pricing = operation_pricing(
+        request,
         auth=auth,
         model=model,
         deployment=served_deployment,
-        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-        mode="sync",
     )
     customer_billing = resolve_token_billing_result(
         pricing,
@@ -159,12 +157,13 @@ async def emit_stream_success(
     await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_spend(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
             team_id=auth.team_id,
             organization_id=getattr(auth, "organization_id", None),
+            owner_account_id=getattr(auth, "owner_account_id", None),
             end_user_id=None,
             model=payload.model,
             call_type="completion",
@@ -282,7 +281,7 @@ async def emit_stream_failure(
     await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_request_failure(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -437,7 +436,7 @@ async def emit_nonstream_success(
     await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_spend(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,
@@ -570,7 +569,7 @@ async def emit_precommit_failure(
     await enqueue_request_log_write(
         request,
         request.app.state.spend_tracking_service.log_request_failure(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request_id or "",
             api_key=auth.api_key,
             user_id=auth.user_id,

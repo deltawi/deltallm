@@ -30,7 +30,8 @@ memory and the deployment connection budget; it adds no request SQL round trips.
 | --- | --- | ---: |
 | `control` | Configuration, admin/reporting, ordinary repositories, key-invalidation discovery and background control work | `db_pool_size`: 20 |
 | `foreground` | Gateway API-key lookup, organization lifecycle authorization/freshness, budget admission and required legacy audit/spend | `db_foreground_pool_size`: 8 |
-| `telemetry` | Required audit/prompt-render acceptance, spend acceptance, bounded synchronous spend fallback and selector operation acceptance | `telemetry_db_pool_size`: 5 |
+| `telemetry` | Required audit/prompt-render acceptance, spend admission, bounded synchronous fallback and selector operation acceptance | `telemetry_db_pool_size` minus the enabled settlement share |
+| `telemetry_settlement` | Owner-fenced receipts for already-admitted ordinary operations | `spend_settlement_db_pool_size`: 1, included in the telemetry total of 5 |
 | `telemetry_worker` | Audit/spend consumers, lease refresh, reconciliation, cleanup, optional audit enqueue, audit retention and selector recovery | `telemetry_worker_db_pool_size`: 5 |
 
 Audit administration reads use the control allocation. Outbox replay administration

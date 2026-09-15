@@ -37,6 +37,7 @@ from src.routers.text_adapters import (
     completions_to_chat_request,
     responses_to_chat_request,
 )
+from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import enqueue_request_log_write, maybe_log_proxy_error
 from src.telemetry.event_identity import get_or_create_billing_event_id
 
@@ -156,7 +157,10 @@ class CacheMiddleware(BaseHTTPMiddleware):
             # Let FastAPI preserve its endpoint-specific 422 response contract.
             return await call_next(request)
         except ProxyError as exc:
-            await maybe_log_proxy_error(request, exc)
+            try:
+                await maybe_log_proxy_error(request, exc)
+            except SpendPersistenceUnavailable as persistence_error:
+                return proxy_error_response(persistence_error)
             return proxy_error_response(exc)
 
         if prepared_data is None:

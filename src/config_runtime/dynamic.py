@@ -55,6 +55,8 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
 
 _STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
     {
+        "spend_operation_intents_enabled",
+        "spend_settlement_db_pool_size",
         "budget_notifications_enabled",
         "budget_alert_ttl_seconds",
         "redis_bulk_url",

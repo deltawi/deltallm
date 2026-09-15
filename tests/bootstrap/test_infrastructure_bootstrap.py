@@ -34,9 +34,9 @@ def test_telemetry_startup_mode_uses_env_only_when_config_is_implicit() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_startup", [False, True])
-@pytest.mark.parametrize("durable", [False, True])
+@pytest.mark.parametrize("durable,operations", [(False, False), (True, False), (True, True)])
 async def test_init_and_shutdown_infrastructure_runtime(
-    monkeypatch: pytest.MonkeyPatch, fail_startup, durable
+    monkeypatch: pytest.MonkeyPatch, fail_startup, durable, operations
 ) -> None:
     created: dict[str, object] = {}
 
@@ -60,6 +60,8 @@ async def test_init_and_shutdown_infrastructure_runtime(
             return SimpleNamespace(
                 general_settings=GeneralSettings(
                     audit_ingestion_mode="outbox" if durable else "legacy",
+                    spend_ingestion_mode="outbox" if operations else "legacy",
+                    spend_operation_intents_enabled=operations,
                     provider_discovery_allow_http=False,
                     provider_discovery_allowed_ports=[443],
                     provider_discovery_allowed_private_cidrs=[],
@@ -168,6 +170,8 @@ async def test_init_and_shutdown_infrastructure_runtime(
         lambda file_config, secret_resolver: SimpleNamespace(  # noqa: ARG005
             general_settings=GeneralSettings(
                 audit_ingestion_mode="outbox" if durable else "legacy",
+                spend_ingestion_mode="outbox" if operations else "legacy",
+                spend_operation_intents_enabled=operations,
                 database_url="postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db?schema=public",
                 db_pool_size=20,
                 db_pool_timeout=30,
@@ -196,7 +200,11 @@ async def test_init_and_shutdown_infrastructure_runtime(
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.foreground_prisma_manager", FakePrismaManager()
     )
-    for name in ("telemetry_prisma_manager", "telemetry_worker_prisma_manager"):
+    for name in (
+        "telemetry_prisma_manager",
+        "telemetry_worker_prisma_manager",
+        "telemetry_settlement_prisma_manager",
+    ):
         monkeypatch.setattr("src.bootstrap.infrastructure." + name, FakePrismaManager())
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt"
@@ -251,6 +259,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
         assert app.state.foreground_prisma_manager.disconnected
         assert app.state.telemetry_prisma_manager.disconnected is durable
         assert app.state.telemetry_worker_prisma_manager.disconnected is durable
+        assert app.state.telemetry_settlement_prisma_manager.disconnected is operations
         assert created["bulk_redis"].closed
         assert created["dynamic"].closed
         assert app.state.prisma_manager.disconnected
@@ -322,7 +331,13 @@ async def test_init_and_shutdown_infrastructure_runtime(
         assert manager.disconnected is durable
         if durable:
             assert manager.policy.allocation == allocation
-            assert manager.policy.connections == 5
+            assert manager.policy.connections == (
+                4 if operations and allocation == "telemetry" else 5
+            )
+    assert app.state.telemetry_settlement_prisma_manager.connected is operations
+    assert app.state.telemetry_settlement_prisma_manager.disconnected is operations
+    if operations:
+        assert app.state.telemetry_settlement_prisma_manager.policy.connections == 1
     assert runtime.bulk_redis_client.closed is True
     assert app.state.bulk_redis is runtime.bulk_redis_client
     assert runtime.bulk_redis_client is not runtime.redis_client

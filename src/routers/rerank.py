@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 
 from src.billing.tier_pricing import (
     attach_pricing_metadata,
-    resolve_deployment_tier_pricing,
     resolve_token_billing_result,
 )
 from src.callbacks import CallbackManager, build_standard_logging_payload
@@ -44,7 +43,11 @@ from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.spend_operation import (
+    billing_write_context,
+    durable_provider_call,
+    operation_pricing,
+)
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
     attach_route_decision,
@@ -231,7 +234,13 @@ async def rerank(request: Request, payload: RerankRequest):
         data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
-            execute=lambda dep: _execute_rerank(request, payload, dep),
+            execute=lambda dep: durable_provider_call(
+                request,
+                model=payload.model,
+                call_type="rerank",
+                deployment=dep,
+                execute=lambda: _execute_rerank(request, payload, dep),
+            ),
             return_deployment=True,
             on_attempt=track_attempt,
             routing_context=request_context,
@@ -258,12 +267,11 @@ async def rerank(request: Request, payload: RerankRequest):
             mode="rerank",
             usage={"rerank_units": doc_count},
         )
-        pricing = resolve_deployment_tier_pricing(
+        pricing = operation_pricing(
+            request,
             auth=auth,
             model=payload.model,
             deployment=served_deployment,
-            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-            mode="sync",
         )
         customer_billing = resolve_token_billing_result(
             pricing,
@@ -301,7 +309,7 @@ async def rerank(request: Request, payload: RerankRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_spend(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -416,7 +424,7 @@ async def rerank(request: Request, payload: RerankRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -479,7 +487,7 @@ async def rerank(request: Request, payload: RerankRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,

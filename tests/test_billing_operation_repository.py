@@ -123,3 +123,17 @@ async def test_transaction_start_timeout_keeps_production_cap_and_never_retries(
     context.__aexit__.assert_not_awaited()
     tx.query_raw.assert_not_awaited()
     tx.execute_raw.assert_not_awaited()
+
+
+async def test_selector_receipt_uses_settlement_allocation_without_admission_capacity():
+    operation = make_operation()
+    tx, context = transaction_mock([[], [{"operation_id": "accepted"}]])
+    admission, settlement = MagicMock(), MagicMock()
+    settlement.tx.return_value = context
+    repository = BillingOperationRepository(admission, settlement_db=settlement)
+    await repository._accept_receipt(
+        operation, component="selector", payload={}, expires_at=deadline()
+    )
+    admission.tx.assert_not_called()
+    settlement.tx.assert_called_once()
+    assert tx.query_raw.await_count == 2

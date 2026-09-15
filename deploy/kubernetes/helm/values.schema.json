@@ -491,6 +491,8 @@
             "telemetry_db_pool_timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 60 },
             "telemetry_worker_startup_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 60 },
             "telemetry_shutdown_drain_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 300 },
+            "spend_operation_intents_enabled": { "type": "boolean", "default": false },
+            "spend_settlement_db_pool_size": { "type": "integer", "minimum": 1, "maximum": 99, "default": 1 },
             "spend_ingestion_mode": { "type": "string", "enum": ["legacy", "outbox"] },
             "spend_ingestion_batch_size": { "type": "integer", "minimum": 1, "maximum": 500 },
             "spend_ingestion_flush_interval_ms": { "type": "integer", "minimum": 10, "maximum": 10000 },

@@ -14,7 +14,7 @@ from src.audio.elevenlabs_stt import execute_elevenlabs_stt
 from src.audio.transcription_formats import render_srt, render_vtt
 from src.billing.audio_usage import normalize_transcription_usage
 from src.billing.cost import compute_billing_result
-from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
+from src.billing.tier_pricing import attach_pricing_metadata
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
@@ -45,7 +45,11 @@ from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.spend_operation import (
+    billing_write_context,
+    durable_provider_call,
+    operation_pricing,
+)
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
     attach_route_decision,
@@ -294,17 +298,23 @@ async def audio_transcriptions(
         data, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
-            execute=lambda dep: _execute_stt(
+            execute=lambda dep: durable_provider_call(
                 request,
-                file_content,
-                filename,
-                content_type_str,
-                model,
-                language,
-                prompt,
-                response_format,
-                temperature,
-                dep,
+                model=model,
+                call_type="audio_transcription",
+                deployment=dep,
+                execute=lambda: _execute_stt(
+                    request,
+                    file_content,
+                    filename,
+                    content_type_str,
+                    model,
+                    language,
+                    prompt,
+                    response_format,
+                    temperature,
+                    dep,
+                ),
             ),
             return_deployment=True,
             on_attempt=track_attempt,
@@ -335,12 +345,11 @@ async def audio_transcriptions(
             mode="audio_transcription",
             usage=usage,
         )
-        pricing = resolve_deployment_tier_pricing(
+        pricing = operation_pricing(
+            request,
             auth=auth,
             model=model,
             deployment=served_deployment,
-            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-            mode="sync",
         )
         billing = compute_billing_result(
             mode="audio_transcription",
@@ -385,7 +394,7 @@ async def audio_transcriptions(
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_spend(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -484,7 +493,7 @@ async def audio_transcriptions(
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -547,7 +556,7 @@ async def audio_transcriptions(
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
