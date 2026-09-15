@@ -1,6 +1,6 @@
 # PR 6: durable spend intent and settlement recovery
 
-Status: implemented; final HTTP evidence and application CI in progress. Base: `b2dd49d3` on `feature/issue-320-concurrency`.
+Status: implemented and reviewed. Current CI is tracked in [PR 329](https://github.com/deltawi/deltallm/pull/329). Base: `b2dd49d3` on `feature/issue-320-concurrency`.
 Tracking: [issue 320](https://github.com/deltawi/deltallm/issues/320).
 
 ## Problem and ownership
@@ -37,11 +37,11 @@ second ledger writer. Batch retains its existing completion-outbox owner.
   assumption that split batch workers drain API telemetry.
 - [x] Convert secondary required-persistence failures to safe local `503` responses,
   preserve cancellation, and avoid provider health/cooldown consequences.
-- [ ] Test real PostgreSQL admission races, duplicate/ambiguous commits, process loss,
+- [x] Test real PostgreSQL admission races, duplicate/ambiguous commits, process loss,
   worker fencing, cancellation/disconnect, terminal stream markers, outages and
   reconciliation. Run all affected application and dependency lanes and migration
-  paths, review/fix until no actionable findings, and run CI.
-- [ ] Publish before/after dependency counts, representative plans and controlled
+  paths and review/fix until no actionable findings. Final CI is tracked in the PR.
+- [x] Publish before/after dependency counts, representative plans and controlled
   constant-arrival samples; synchronize settings, Helm, rollout and rollback docs.
 
 ## Durable protocol
@@ -131,3 +131,9 @@ Final configuration review moved cross-field cutover validation to resolved star
 settings, preserving file/environment precedence. Worker changes now require restart,
 and adding an explicit default to any bound spend setting is rejected before dynamic
 config persistence. This avoids committing a config that the live worker cannot apply.
+
+The final review found no remaining actionable items after these fixes. The
+[checked-in measurements](../project/benchmarks/spend-recovery-2026-09-15/README.md)
+record the additional dependency cost, all HTTP responses, bounded query plans and
+complete post-shutdown drain. The one-active-slot profile sheds more requests at
+25 offered RPS; no production throughput improvement or capacity certificate is claimed.

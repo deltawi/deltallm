@@ -1,0 +1,7 @@
+{
+  "before_successful_paced_warmup": 200,
+  "before_shutdown_complete": true,
+  "after_successful_paced_warmup": 200,
+  "after_shutdown_complete": true,
+  "provider_shutdown_complete": true
+}

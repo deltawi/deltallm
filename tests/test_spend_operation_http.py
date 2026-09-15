@@ -265,3 +265,53 @@ async def test_disconnect_before_terminal_keeps_intent_and_closes_provider(test_
             await test_app.state.router_state_backend.get_active_requests(deployment.deployment_id)
             == 0
         )
+
+
+@pytest.mark.parametrize(
+    "path,call_type,body",
+    [
+        ("/v1/images/generations", "image_generation", {"prompt": "cat"}),
+        ("/v1/audio/speech", "audio_speech", {"input": "hello", "voice": "alloy"}),
+        ("/v1/audio/transcriptions", "audio_transcription", {"response_format": "json"}),
+        ("/v1/rerank", "rerank", {"query": "q", "documents": ["a", "b"]}),
+    ],
+)
+async def test_media_modalities_reserve_before_provider_and_accept_same_slot(
+    client, test_app, path, call_type, body
+):
+    import httpx
+
+    operations = install(test_app)
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info.update(mode=call_type, cost_per_request=0.1)
+    if call_type == "rerank":
+        deployment.deltallm_params["provider"] = "vllm"
+
+    async def post(url, **kwargs):
+        operations.begin.assert_awaited_once()
+        operations.accept.assert_not_awaited()
+        request = httpx.Request("POST", url)
+        if call_type == "audio_speech":
+            return httpx.Response(200, content=b"audio-bytes", request=request)
+        payload = {
+            "image_generation": {"created": 1, "data": [{"url": "https://example.com/image.png"}]},
+            "audio_transcription": {"text": "hello", "duration": 1.0},
+            "rerank": {"results": [{"index": 0, "relevance_score": 0.9}]},
+        }[call_type]
+        return httpx.Response(200, json=payload, request=request)
+
+    test_app.state.http_client.post = post
+    payload = {"model": "gpt-4o-mini", **body}
+    options = (
+        {"data": payload, "files": {"file": ("sample.wav", b"RIFFDATA", "audio/wav")}}
+        if call_type == "audio_transcription"
+        else {"json": payload}
+    )
+    response = await client.post(path, headers=headers(test_app), **options)
+    assert response.status_code == 200, response.text
+    operations.accept.assert_awaited_once()
+    handle, receipt = operations.accept.call_args.args
+    assert handle == operations.begin.call_args.args[0]
+    assert receipt["call_type"] == handle.intent.call_type == call_type
+    assert receipt["organization_id"] == handle.intent.principal.organization_id
+    operations.unknown.assert_not_awaited()

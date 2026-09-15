@@ -1,0 +1,262 @@
+{
+  "commit": "19fd00237810fd1a147049df0e5ff960764e75f3",
+  "python": "3.11.13",
+  "history_rows": 100000,
+  "retained_outbox_rows": 10000,
+  "expired_operations": 1000,
+  "before": {
+    "transactions": 1,
+    "statements": 2
+  },
+  "after_admission": {
+    "transactions": 1,
+    "statements": 3
+  },
+  "after_receipt": {
+    "transactions": 1,
+    "statements": 2
+  },
+  "admission_plan": {
+    "plan": {
+      "Node Type": "Result",
+      "Actual Rows": 1,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 31,
+      "Shared Read Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Index Only Scan",
+          "Relation Name": "deltallm_spend_ingestion_outbox",
+          "Index Name": "deltallm_spend_ingestion_outbox_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 2,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Only Scan",
+          "Relation Name": "deltallm_spendlog_events",
+          "Index Name": "deltallm_spendlog_events_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 3,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "deltallm_telemetry_ingestion_capacity",
+          "Index Name": "deltallm_telemetry_ingestion_capacity_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 2,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "ModifyTable",
+          "Relation Name": "deltallm_spend_ingestion_outbox",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 24,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "CTE Scan",
+              "Actual Rows": 0,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 2,
+              "Shared Read Blocks": 0
+            },
+            {
+              "Node Type": "CTE Scan",
+              "Actual Rows": 0,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 0
+            },
+            {
+              "Node Type": "Result",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 7,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Rows Removed by Filter": 0,
+                  "Shared Hit Blocks": 2,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Node Type": "ModifyTable",
+          "Relation Name": "deltallm_spend_ingestion_outbox",
+          "Actual Rows": 0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Result",
+              "Actual Rows": 0,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 0,
+              "Shared Read Blocks": 0
+            }
+          ]
+        },
+        {
+          "Node Type": "ModifyTable",
+          "Relation Name": "deltallm_telemetry_ingestion_capacity",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 7,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "CTE Scan",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 0,
+              "Shared Read Blocks": 0
+            },
+            {
+              "Node Type": "Result",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 2,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_telemetry_ingestion_capacity",
+                  "Index Name": "deltallm_telemetry_ingestion_capacity_pkey",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 2,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 24,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 7,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    "planning_ms": 0.568,
+    "execution_ms": 0.192
+  },
+  "receipt_plan": {
+    "plan": {
+      "Node Type": "ModifyTable",
+      "Relation Name": "deltallm_spend_ingestion_outbox",
+      "Actual Rows": 1,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 18,
+      "Shared Read Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "deltallm_spend_ingestion_outbox",
+          "Index Name": "deltallm_spend_ingestion_outbox_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 5,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    "planning_ms": 0.102,
+    "execution_ms": 0.088
+  },
+  "recovery_plan": {
+    "plan": {
+      "Node Type": "ModifyTable",
+      "Relation Name": "deltallm_spend_ingestion_outbox",
+      "Actual Rows": 100,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 1665,
+      "Shared Read Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Limit",
+          "Actual Rows": 100,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 156,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "LockRows",
+              "Actual Rows": 100,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 156,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_spend_ingestion_outbox",
+                  "Index Name": "deltallm_spend_ingestion_outb_operation_expires_at_event_id_idx",
+                  "Actual Rows": 100,
+                  "Actual Loops": 1,
+                  "Rows Removed by Filter": 0,
+                  "Shared Hit Blocks": 56,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 100,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 156,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Tid Scan",
+          "Relation Name": "deltallm_spend_ingestion_outbox",
+          "Actual Rows": 100,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 256,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    "planning_ms": 3.299,
+    "execution_ms": 0.967
+  },
+  "repository_sha256": "b39d9cf2299ad33ebdbbe731a0ead54bf94af21803e621f7eafdee8434374148"
+}

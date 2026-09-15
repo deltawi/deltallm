@@ -82,6 +82,10 @@ allocation. Final receipt acceptance also has a 250 ms bound and skips the globa
 admission/capacity lock. The additional call/latency cost must be included in local
 comparisons and production qualification; this change does not certify a pod RPS.
 
+The [local comparison](../project/benchmarks/spend-recovery-2026-09-15/README.md)
+records the added transaction/latency cost and controlled overload behavior. It is
+acceptance evidence for this change, not a production capacity certificate.
+
 ## Rollout and rollback
 
 1. Keep operation intents disabled. Pause telemetry producers/workers during the

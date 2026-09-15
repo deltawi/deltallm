@@ -1,0 +1,620 @@
+{
+  "http-after-25rps": {
+    "summary": "http-after-25rps/gateway-load-60294d39ff6149879f446474fa708e43-summary.json",
+    "offered_rps": 25.0,
+    "successful_rps": 19.4,
+    "success_count": 194,
+    "status_counts": {
+      "200": 194,
+      "503": 56
+    },
+    "errors": {
+      "gateway_ingress_full": 56
+    },
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "all_response_latency_ms": {
+      "max": 66.84158400457818,
+      "mean": 29.00406748749083,
+      "p50": 35.658082997542806,
+      "p95": 44.04270800296217,
+      "p99": 46.73249999177642
+    },
+    "max_client_in_flight": 2,
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.007714,
+        "last": 0.007404
+      },
+      "deltallm_database_allocation_occupied:foreground": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry_settlement": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry_worker": {
+        "first": 2.0,
+        "max": 2.0,
+        "last": 2.0
+      },
+      "deltallm_ingress_active:inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.012246,
+        "last": 0.0
+      },
+      "deltallm_spend_operation_unknown": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      }
+    },
+    "sampled_phase_deltas": {
+      "authentication:success": {
+        "count": 194.0,
+        "mean_ms": 0.8500904383704296
+      },
+      "capacity_admission:success": {
+        "count": 194.0,
+        "mean_ms": 0.5697457110971337
+      },
+      "prompt:success": {
+        "count": 194.0,
+        "mean_ms": 2.704162160222678
+      },
+      "hooks_guardrails:success": {
+        "count": 194.0,
+        "mean_ms": 0.0264626075111608
+      },
+      "authorization:success": {
+        "count": 194.0,
+        "mean_ms": 0.03134536082237076
+      },
+      "final_parallel_admission:success": {
+        "count": 194.0,
+        "mean_ms": 0.037794690891217016
+      },
+      "budget:success": {
+        "count": 194.0,
+        "mean_ms": 1.9214821387725622
+      },
+      "rate_admission:success": {
+        "count": 194.0,
+        "mean_ms": 0.48373948391730964
+      },
+      "authentication_recheck:success": {
+        "count": 194.0,
+        "mean_ms": 0.015347963724088538
+      },
+      "upstream_transform:success": {
+        "count": 388.0,
+        "mean_ms": 0.03627127635181094
+      },
+      "upstream_http:success": {
+        "count": 194.0,
+        "mean_ms": 1.181471489337465
+      },
+      "router_usage:success": {
+        "count": 194.0,
+        "mean_ms": 0.520391499842085
+      },
+      "response_first_body:success": {
+        "count": 194.0,
+        "mean_ms": 35.442169463608806
+      },
+      "response_total:success": {
+        "count": 194.0,
+        "mean_ms": 35.71051290707624
+      },
+      "after_response:success": {
+        "count": 250.0,
+        "mean_ms": 0.3805480047594756
+      },
+      "application_total:success": {
+        "count": 250.0,
+        "mean_ms": 28.10409634024836
+      },
+      "response_first_body:server_error": {
+        "count": 56.0,
+        "mean_ms": 0.04898432078854447
+      },
+      "response_total:server_error": {
+        "count": 56.0,
+        "mean_ms": 0.054421069632683484
+      }
+    },
+    "sampled_operation_transitions": {
+      "dispatched": 194.0,
+      "accepted": 194.0
+    },
+    "all_postgres_calls": 10289
+  },
+  "http-after-5rps": {
+    "summary": "http-after-5rps/gateway-load-f764c70d5080496794d7f8fed381c9de-summary.json",
+    "offered_rps": 5.0,
+    "successful_rps": 5.0,
+    "success_count": 50,
+    "status_counts": {
+      "200": 50
+    },
+    "errors": {},
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "all_response_latency_ms": {
+      "max": 51.081625002552755,
+      "mean": 30.108330079820007,
+      "p50": 29.130333990906365,
+      "p95": 37.55724999064114,
+      "p99": 51.081625002552755
+    },
+    "max_client_in_flight": 1,
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:foreground": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry_settlement": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry_worker": {
+        "first": 2.0,
+        "max": 2.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_active:inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_spend_operation_unknown": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      }
+    },
+    "sampled_phase_deltas": {
+      "authentication:success": {
+        "count": 50.0,
+        "mean_ms": 0.671854961256031
+      },
+      "capacity_admission:success": {
+        "count": 50.0,
+        "mean_ms": 0.34658746008062735
+      },
+      "prompt:success": {
+        "count": 50.0,
+        "mean_ms": 1.8669657988357358
+      },
+      "hooks_guardrails:success": {
+        "count": 50.0,
+        "mean_ms": 0.02869826043024659
+      },
+      "authorization:success": {
+        "count": 50.0,
+        "mean_ms": 0.03157825965899974
+      },
+      "final_parallel_admission:success": {
+        "count": 50.0,
+        "mean_ms": 0.03927669953554869
+      },
+      "budget:success": {
+        "count": 50.0,
+        "mean_ms": 1.3198642403585836
+      },
+      "rate_admission:success": {
+        "count": 50.0,
+        "mean_ms": 0.3559966801549308
+      },
+      "authentication_recheck:success": {
+        "count": 50.0,
+        "mean_ms": 0.014002500684000552
+      },
+      "upstream_transform:success": {
+        "count": 100.0,
+        "mean_ms": 0.03593288885895163
+      },
+      "upstream_http:success": {
+        "count": 50.0,
+        "mean_ms": 0.9813050401862711
+      },
+      "router_usage:success": {
+        "count": 50.0,
+        "mean_ms": 0.3825192802469246
+      },
+      "response_first_body:success": {
+        "count": 50.0,
+        "mean_ms": 28.63592420006171
+      },
+      "response_total:success": {
+        "count": 50.0,
+        "mean_ms": 28.892398279858753
+      },
+      "after_response:success": {
+        "count": 50.0,
+        "mean_ms": 0.4301083186874166
+      },
+      "application_total:success": {
+        "count": 50.0,
+        "mean_ms": 29.32250659854617
+      }
+    },
+    "sampled_operation_transitions": {
+      "dispatched": 50.0,
+      "accepted": 50.0
+    },
+    "all_postgres_calls": 3494
+  },
+  "http-before-25rps": {
+    "summary": "http-before-25rps/gateway-load-fb2542ee62f549809fa606d302f057ee-summary.json",
+    "offered_rps": 25.0,
+    "successful_rps": 24.6,
+    "success_count": 246,
+    "status_counts": {
+      "200": 246,
+      "503": 4
+    },
+    "errors": {
+      "gateway_ingress_full": 4
+    },
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "all_response_latency_ms": {
+      "max": 58.261832993594,
+      "mean": 30.157402699114755,
+      "p50": 30.24291699694004,
+      "p95": 36.646207998273894,
+      "p99": 48.87145799875725
+    },
+    "max_client_in_flight": 2,
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.00723,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:foreground": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry_worker": {
+        "first": 1.0,
+        "max": 2.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_active:inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_spend_operation_unknown": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      }
+    },
+    "sampled_phase_deltas": {
+      "authentication:success": {
+        "count": 246.0,
+        "mean_ms": 0.9342178288748776
+      },
+      "capacity_admission:success": {
+        "count": 246.0,
+        "mean_ms": 0.6329815166200723
+      },
+      "prompt:success": {
+        "count": 246.0,
+        "mean_ms": 2.9282056058901818
+      },
+      "hooks_guardrails:success": {
+        "count": 246.0,
+        "mean_ms": 0.02659756107713906
+      },
+      "authorization:success": {
+        "count": 246.0,
+        "mean_ms": 0.032940195346671364
+      },
+      "final_parallel_admission:success": {
+        "count": 246.0,
+        "mean_ms": 0.03966377184175455
+      },
+      "budget:success": {
+        "count": 246.0,
+        "mean_ms": 2.1498380647688284
+      },
+      "rate_admission:success": {
+        "count": 246.0,
+        "mean_ms": 0.5639310325429646
+      },
+      "authentication_recheck:success": {
+        "count": 246.0,
+        "mean_ms": 0.015092829142496504
+      },
+      "upstream_transform:success": {
+        "count": 492.0,
+        "mean_ms": 0.03457135137911636
+      },
+      "upstream_http:success": {
+        "count": 246.0,
+        "mean_ms": 1.3032273293687675
+      },
+      "router_usage:success": {
+        "count": 246.0,
+        "mean_ms": 0.4923109884886828
+      },
+      "response_first_body:success": {
+        "count": 246.0,
+        "mean_ms": 29.147991894131973
+      },
+      "response_total:success": {
+        "count": 246.0,
+        "mean_ms": 29.413225459445048
+      },
+      "after_response:success": {
+        "count": 250.0,
+        "mean_ms": 0.531574311607983
+      },
+      "application_total:success": {
+        "count": 250.0,
+        "mean_ms": 29.475330995686818
+      },
+      "response_first_body:server_error": {
+        "count": 4.0,
+        "mean_ms": 0.06174999725772068
+      },
+      "response_total:server_error": {
+        "count": 4.0,
+        "mean_ms": 0.07142699905671179
+      }
+    },
+    "sampled_operation_transitions": {},
+    "all_postgres_calls": 11030
+  },
+  "http-before-5rps": {
+    "summary": "http-before-5rps/gateway-load-e9f901aa5e354078b44c6a81d86d8721-summary.json",
+    "offered_rps": 5.0,
+    "successful_rps": 5.0,
+    "success_count": 50,
+    "status_counts": {
+      "200": 50
+    },
+    "errors": {},
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "all_response_latency_ms": {
+      "max": 39.48916700028349,
+      "mean": 27.17684016097337,
+      "p50": 26.38275000208523,
+      "p95": 35.309374987264164,
+      "p99": 39.48916700028349
+    },
+    "max_client_in_flight": 1,
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.007353,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:foreground": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:telemetry_worker": {
+        "first": 1.0,
+        "max": 2.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_active:inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_spend_operation_unknown": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      }
+    },
+    "sampled_phase_deltas": {
+      "authentication:success": {
+        "count": 50.0,
+        "mean_ms": 1.0117375606205314
+      },
+      "capacity_admission:success": {
+        "count": 50.0,
+        "mean_ms": 0.544879159424454
+      },
+      "prompt:success": {
+        "count": 50.0,
+        "mean_ms": 2.666248381428886
+      },
+      "hooks_guardrails:success": {
+        "count": 50.0,
+        "mean_ms": 0.036814979976043105
+      },
+      "authorization:success": {
+        "count": 50.0,
+        "mean_ms": 0.042485898884478956
+      },
+      "final_parallel_admission:success": {
+        "count": 50.0,
+        "mean_ms": 0.05272415990475565
+      },
+      "budget:success": {
+        "count": 50.0,
+        "mean_ms": 1.704467419476714
+      },
+      "rate_admission:success": {
+        "count": 50.0,
+        "mean_ms": 0.40595672093331814
+      },
+      "authentication_recheck:success": {
+        "count": 50.0,
+        "mean_ms": 0.01600507937837392
+      },
+      "upstream_transform:success": {
+        "count": 100.0,
+        "mean_ms": 0.03485947061562911
+      },
+      "upstream_http:success": {
+        "count": 50.0,
+        "mean_ms": 1.0905766405630857
+      },
+      "router_usage:success": {
+        "count": 50.0,
+        "mean_ms": 0.35546504106605425
+      },
+      "response_first_body:success": {
+        "count": 50.0,
+        "mean_ms": 25.59305743983714
+      },
+      "response_total:success": {
+        "count": 50.0,
+        "mean_ms": 25.912594920082483
+      },
+      "after_response:success": {
+        "count": 50.0,
+        "mean_ms": 0.4896159187774174
+      },
+      "application_total:success": {
+        "count": 50.0,
+        "mean_ms": 26.4022108388599
+      }
+    },
+    "sampled_operation_transitions": {},
+    "all_postgres_calls": 3088
+  }
+}
