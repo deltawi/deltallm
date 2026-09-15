@@ -167,6 +167,7 @@ nav:
       - Capacity Partition Protocol: design/pr4-capacity-partitions.md
       - Durable Admission Measurements: benchmarks/pr4-admission/README.md
       - Budget and Prompt Design: design/pr5-budget-prompts.md
+      - Spend Recovery Design: design/pr6-spend-recovery.md
       - Budget and Prompt Measurements: project/benchmarks/budget-prompts-2026-09-15/README.md
       - Documentation Governance: project/documentation-governance.md
       - Context-capacity Routing Decision: project/context-routing-design.md

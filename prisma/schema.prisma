@@ -642,6 +642,12 @@ model DeltaLLM_SpendIngestionOutbox {
   last_replayed_at DateTime?
   last_replayed_by String?
 
+  operation_owner      String?
+  operation_intent     Json?
+  operation_state      String?
+  operation_expires_at DateTime? @db.Timestamptz
+  operation_resolution Json?
+
   @@index([status, next_attempt_at], map: "deltallm_spendingestionoutbox_status_due_idx")
   @@index([lease_expires_at], map: "deltallm_spendingestionoutbox_lease_idx")
   @@index([created_at], map: "deltallm_spendingestionoutbox_created_idx")
