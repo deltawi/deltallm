@@ -137,3 +137,8 @@ The final review found no remaining actionable items after these fixes. The
 record the additional dependency cost, all HTTP responses, bounded query plans and
 complete post-shutdown drain. The one-active-slot profile sheds more requests at
 25 offered RPS; no production throughput improvement or capacity certificate is claimed.
+
+A final duplicate-receipt regression reproduced loss of a blocked worker's error and
+blocked timestamp. Identical receipt acceptance now preserves those diagnostics and
+worker state. Only the first intent-to-receipt transition clears the intent markers;
+replay cannot erase the information needed to investigate a blocked settlement.

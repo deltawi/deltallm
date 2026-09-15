@@ -126,7 +126,17 @@ async def test_duplicate_dispatch_never_reexecutes_and_receipt_replay_is_immutab
     with pytest.raises(BillingOperationUnavailable):
         await begin(repo, operation)
     await accept(repo, operation)
+    await dbs.observer.execute_raw(
+        "UPDATE deltallm_spend_ingestion_outbox SET status='blocked',blocked_at=NOW(),"
+        "last_error='worker_validation_failed' WHERE event_id=$1",
+        str(operation.event_id),
+    )
+    blocked = await row(dbs.observer, operation)
     await accept(repo, operation)
+    replayed = await row(dbs.observer, operation)
+    assert replayed["status"] == "blocked"
+    assert replayed["blocked_at"] == blocked["blocked_at"]
+    assert replayed["last_error"] == "worker_validation_failed"
     for invalid in (
         {**payload(operation), "cost_exact": "2"},
         {**payload(operation), "organization_id": "other"},

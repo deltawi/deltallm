@@ -16,7 +16,10 @@ and effective settings; resource limits remain unknown, not inferred.
 
 Both servers ran commit `19fd00237810fd1a147049df0e5ff960764e75f3`. Before disables
 operation intents; after enables them. This isolates protocol activation on the same
-source rather than comparing different feature-branch revisions. The checked-in
+source rather than comparing different feature-branch revisions. A subsequent
+review fix preserves blocked-worker diagnostics on identical receipt replay; the
+measured first-acceptance path and SQL call budget are unchanged. The final SQL
+report and PostgreSQL regression cover that fix. The checked-in
 [before](http-before.yaml) and [after](http-after.yaml) profiles retain combined
 budgets, required audit/spend outboxes and workers, response-cache bypass, identical
 20/8/5/5 control/foreground/telemetry/worker connection totals and one active inference
