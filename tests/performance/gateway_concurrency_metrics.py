@@ -44,6 +44,9 @@ ALLOWED_NAMES = {
     "deltallm_audit_queue_depth",
     "deltallm_audit_oldest_event_age_seconds",
     "deltallm_spend_ingestion_backlog",
+    "deltallm_spend_operation_unknown",
+    "deltallm_spend_operation_observed_timestamp_seconds",
+    "deltallm_spend_operation_transitions_total",
     "deltallm_spend_ingestion_oldest_event_age_seconds",
     "deltallm_spend_ingestion_fallback_active",
     "deltallm_spend_ingestion_fallback_waiters",
@@ -99,8 +102,17 @@ LABEL_VALUES = {
         "gateway_request_body_timeout",
         "invalid_content_length",
     },
-    "allocation": {"inference", "control", "health", "foreground", "telemetry", "telemetry_worker"},
+    "allocation": {
+        "inference",
+        "control",
+        "health",
+        "foreground",
+        "telemetry",
+        "telemetry_settlement",
+        "telemetry_worker",
+    },
     "operation": {"query", "finish"},
+    "state": {"dispatched", "accepted", "unknown"},
 }
 
 

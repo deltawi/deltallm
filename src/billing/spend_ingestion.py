@@ -17,6 +17,8 @@ from src.billing.fallback_gate import (
     FallbackGateTimedOut,
 )
 from src.billing.money import money_string
+from src.billing.spend_operation_service import SpendOperationService
+from src.billing.spend_operations import OperationHandle, SpendPersistenceUnavailable
 from src.billing.operation_reservation import BillingOperationUnavailable
 from src.billing.selector_charge import AcceptedSelectorCharge
 from src.billing.spend import PreparedSpendEvent, SpendTrackingService, _failure_metadata
@@ -107,6 +109,7 @@ class SpendIngestionService:
         config: SpendIngestionConfig,
         worker_db_client: Any | None = None,
         operation_recovery: BillingOperationRecovery | None = None,
+        operations: SpendOperationService | None = None,
     ) -> None:
         self.db = db_client
         self.worker_db = worker_db_client if worker_db_client is not None else db_client
@@ -116,6 +119,7 @@ class SpendIngestionService:
         self.writer = writer
         self.config = config
         self.operation_recovery = operation_recovery
+        self.operations = operations
         self.repository = SpendIngestionRepository(db_client)
         self._running = False
         self._wake = asyncio.Event()
@@ -192,6 +196,8 @@ class SpendIngestionService:
             increment_spend_ingestion_failure("capacity_reconcile")
             logger.exception("failed to reconcile spend ingestion capacity")
             raise
+        if self.operations is not None:
+            await self.operations.initialize()
         if not self.config.worker_enabled:
             self._worker_state = WorkerState.DISABLED
             self._worker_detail = None
@@ -287,6 +293,8 @@ class SpendIngestionService:
         self._worker_detail = None
 
     async def reconfigure(self, config: SpendIngestionConfig) -> None:
+        if self.operations is not None and not config.worker_enabled:
+            raise RuntimeError("Spend operation recovery requires its worker")
         if config.enabled != self.config.enabled:
             raise RuntimeError("changing spend ingestion mode requires a restart")
         previous = self.config
@@ -314,6 +322,24 @@ class SpendIngestionService:
 
     async def log_spend(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
+        operation = kwargs.pop("operation", None)
+        if operation is not None:
+            if (
+                not isinstance(operation, OperationHandle)
+                or self.operations is None
+                or event_id != str(operation.event_id)
+            ):
+                raise SpendPersistenceUnavailable()
+            await self.operations.accept(
+                operation,
+                {
+                    **kwargs,
+                    "cost_exact": money_string(kwargs.get("cost_exact", kwargs.get("cost"))),
+                    "spend_event_version": 2,
+                },
+            )
+            self._wake.set()
+            return
         if not self.config.enabled:
             await self.writer.log_spend(**kwargs)
             return
@@ -321,6 +347,16 @@ class SpendIngestionService:
 
     async def log_request_failure(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
+        operation = kwargs.pop("operation", None)
+        if operation is not None:
+            if (
+                not isinstance(operation, OperationHandle)
+                or self.operations is None
+                or event_id != str(operation.event_id)
+            ):
+                raise SpendPersistenceUnavailable()
+            await self.operations.unknown(operation)
+            return
         if not self.config.enabled:
             await self.writer.log_request_failure(**kwargs)
             return
@@ -503,6 +539,8 @@ class SpendIngestionService:
             logger.debug("failed to publish spend ingestion backlog", exc_info=True)
 
     async def _claim_batch(self) -> list[_OutboxRecord]:
+        if self.operations is not None:
+            await self.operations.recover()
         if self.operation_recovery is not None:
             try:
                 await self.operation_recovery.recover()

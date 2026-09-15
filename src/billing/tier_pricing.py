@@ -63,6 +63,8 @@ class PricingResolution:
     tier_pricing_applied: bool = False
     tier_pricing_policy_mode: str | None = None
     tier_pricing_fields: tuple[str, ...] = field(default_factory=tuple)
+    catalog_pricing_frozen: bool = False
+    catalog_token_pricing: ModelPricing | None = None
 
     def spend_metadata(
         self,
@@ -247,8 +249,16 @@ def resolve_token_quote_pricing(
             request_only=True,
         )
 
-    catalog_pricing = get_model_pricing(resolution.provider_model or model)
-    if catalog_pricing is None and resolution.provider_model != model:
+    catalog_pricing = (
+        resolution.catalog_token_pricing
+        if resolution.catalog_pricing_frozen
+        else get_model_pricing(resolution.provider_model or model)
+    )
+    if (
+        not resolution.catalog_pricing_frozen
+        and catalog_pricing is None
+        and resolution.provider_model != model
+    ):
         # Azure/custom deployment identifiers are often not catalog model
         # names. Preserve the public-name fallback only when the served model
         # itself cannot be priced.

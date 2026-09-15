@@ -17,6 +17,7 @@ from src.models.errors import (
     ProxyError,
     RateLimitError,
 )
+from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import (
     maybe_log_proxy_error,
     maybe_log_request_validation_failure,
@@ -145,14 +146,20 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProxyError)
     async def proxy_error_handler(request: Request, exc: ProxyError) -> JSONResponse:
-        await maybe_log_proxy_error(request, exc)
+        try:
+            await maybe_log_proxy_error(request, exc)
+        except SpendPersistenceUnavailable as persistence_error:
+            return _proxy_error_response_for_request(request, persistence_error)
         return _proxy_error_response_for_request(request, exc)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        await maybe_log_request_validation_failure(request, exc)
+        try:
+            await maybe_log_request_validation_failure(request, exc)
+        except SpendPersistenceUnavailable as persistence_error:
+            return _proxy_error_response_for_request(request, persistence_error)
         if _uses_anthropic_error_dialect(request):
             return anthropic_proxy_error_response(InvalidRequestError(message="Invalid request"))
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})

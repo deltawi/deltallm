@@ -35,21 +35,31 @@ class BillingOperationRepository:
     transaction. Soft selector operations use this journal without spending holds.
     """
 
-    def __init__(self, db: Prisma, *, max_pending_operations: int = 100_000) -> None:
+    def __init__(
+        self,
+        db: Prisma,
+        *,
+        max_pending_operations: int = 100_000,
+        settlement_db: Prisma | None = None,
+    ) -> None:
         if not 1 <= max_pending_operations <= 100_000:
             raise ValueError("invalid billing operation capacity")
         self.db = db
+        self.settlement_db = settlement_db if settlement_db is not None else db
         self.max_pending_operations = max_pending_operations
 
     @asynccontextmanager
-    async def _transaction(self, expires_at: float) -> AsyncIterator[Prisma]:
+    async def _transaction(
+        self, expires_at: float, *, settlement: bool = False
+    ) -> AsyncIterator[Prisma]:
         now = asyncio.get_running_loop().time()
         if not math.isfinite(expires_at) or expires_at <= now:
             raise BillingOperationUnavailable()
         remaining = min(expires_at - now, DB_BUDGET_SECONDS)
         try:
             async with asyncio.timeout(remaining):
-                async with self.db.tx(
+                database = self.settlement_db if settlement else self.db
+                async with database.tx(
                     max_wait=timedelta(seconds=remaining), timeout=timedelta(seconds=remaining)
                 ) as tx:
                     await tx.query_raw(
@@ -235,7 +245,7 @@ class BillingOperationRepository:
     ) -> None:
         state, receipt = _column(component, "state"), _column(component, "receipt")
         encoded = json.dumps(payload, default=str, sort_keys=True)
-        async with self._transaction(expires_at) as tx:
+        async with self._transaction(expires_at, settlement=True) as tx:
             rows = await tx.query_raw(
                 f"UPDATE deltallm_billing_operations SET {state}=CASE WHEN {state}='settled' THEN 'settled' ELSE 'accepted' END,{receipt}=$3::jsonb,updated_at=NOW() "
                 f"WHERE operation_id=$1 AND owner_token=$2 AND snapshot=$4::jsonb AND ({state} IN ('dispatched','pending') "

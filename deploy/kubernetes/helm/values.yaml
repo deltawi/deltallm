@@ -279,6 +279,8 @@ config:
     gateway_preflight_org_max_parallel: 100
     gateway_preflight_lease_ttl_seconds: 30
     spend_ingestion_mode: legacy
+    spend_operation_intents_enabled: false
+    spend_settlement_db_pool_size: 1 # Reserved within telemetry_db_pool_size.
     spend_ingestion_batch_size: 100
     spend_ingestion_flush_interval_ms: 100
     spend_ingestion_lease_seconds: 30

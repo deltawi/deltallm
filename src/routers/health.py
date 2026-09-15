@@ -164,12 +164,14 @@ async def _dependency_readiness(state: State) -> tuple[dict[str, bool], dict[str
             telemetry_database="telemetry_prisma_manager",
             telemetry_worker_database="telemetry_worker_prisma_manager",
         )
+    if getattr(state, "spend_operation_intents_enabled", False):
+        databases["telemetry_settlement_database"] = "telemetry_settlement_prisma_manager"
     for name, manager_name in databases.items():
         client = getattr(getattr(state, manager_name, None), "client", None)
         probes[name] = _probe_dependency(
             (lambda db=client: db.query_raw("SELECT 1")) if client is not None else None
         )
-    # At most five owned probes, each with the same independent one-second bound.
+    # At most six owned probes, each with the same independent one-second bound.
     # Probe cancellation propagates to the adapters; database owners retain any
     # native work still draining without admitting work beyond their allocation.
     results = await asyncio.gather(*probes.values())

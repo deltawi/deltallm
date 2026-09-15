@@ -26,11 +26,13 @@ from src.config_runtime import (
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
+from src.spend_operation_settings import SpendOperationAllocation
 from src.db.client import (
     prisma_manager,
     telemetry_prisma_manager,
     foreground_prisma_manager,
     telemetry_worker_prisma_manager,
+    telemetry_settlement_prisma_manager,
 )
 from src.db.allocation_config import DatabasePolicy
 from src.db.email import EmailOutboxRepository
@@ -184,17 +186,37 @@ async def _init_infrastructure_runtime(
     telemetry_database_connected = False
     app.state.telemetry_prisma_manager = telemetry_prisma_manager
     app.state.telemetry_worker_prisma_manager = telemetry_worker_prisma_manager
+    app.state.telemetry_settlement_prisma_manager = telemetry_settlement_prisma_manager
+    app.state.spend_operation_intents_enabled = False
     if durable_telemetry_enabled:
         telemetry_database_settings = resolve_telemetry_database_settings(cfg, settings)
         if telemetry_database_settings is None:
             raise RuntimeError("durable telemetry ingestion requires an explicit database URL")
+        operation_allocation = SpendOperationAllocation.resolve(
+            cfg.general_settings,
+            settings,
+            telemetry_connections=telemetry_database_settings.pool_size,
+        )
+        app.state.spend_operation_intents_enabled = operation_allocation.enabled
+        if operation_allocation.enabled:
+            resources.push_async_callback(telemetry_settlement_prisma_manager.disconnect)
+            await telemetry_settlement_prisma_manager.connect(
+                telemetry_database_settings,
+                policy=DatabasePolicy.build(
+                    database_allocations,
+                    "telemetry_settlement",
+                    operation_allocation.settlement_connections,
+                ),
+            )
+            if telemetry_settlement_prisma_manager.client is None:
+                raise RuntimeError("Spend recovery requires its settlement allocation")
         resources.push_async_callback(telemetry_prisma_manager.disconnect)
         await telemetry_prisma_manager.connect(
             telemetry_database_settings,
             policy=DatabasePolicy.build(
                 database_allocations,
                 "telemetry",
-                telemetry_database_settings.pool_size,
+                telemetry_database_settings.pool_size - operation_allocation.settlement_connections,
             ),
         )
         if telemetry_prisma_manager.client is None:

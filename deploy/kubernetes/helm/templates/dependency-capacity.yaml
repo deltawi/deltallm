@@ -33,6 +33,11 @@
 {{- fail (printf "%s must be a finite connection count between 1 and 10000" $name) -}}
 {{- end -}}
 {{- end -}}
+{{- if $g.spend_operation_intents_enabled -}}
+{{- if or (ne $g.spend_ingestion_mode "outbox") (not $g.spend_ingestion_worker_enabled) (ge (int $g.spend_settlement_db_pool_size) (int $g.telemetry_db_pool_size)) -}}
+{{- fail "Spend operation intents require outbox, its worker, and telemetry slots for admission and settlement" -}}
+{{- end -}}
+{{- end -}}
 {{- $db := add $g.db_pool_size $g.db_foreground_pool_size -}}
 {{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") -}}
 {{- $db = add $db $g.telemetry_db_pool_size $g.telemetry_worker_db_pool_size -}}

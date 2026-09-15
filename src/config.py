@@ -23,6 +23,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
 from src.database_settings import DatabaseAllocationSettings
+from src.spend_operation_settings import SpendOperationSettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
@@ -514,7 +515,7 @@ class UIBrandingUpdatePayload(BaseModel):
         return value.upper()
 
 
-class GeneralSettings(DatabaseAllocationSettings):
+class GeneralSettings(DatabaseAllocationSettings, SpendOperationSettings):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
@@ -1112,7 +1113,7 @@ class AppConfig(BaseModel):
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
 
 
-class Settings(BaseSettings, DatabaseAllocationSettings):
+class Settings(BaseSettings, DatabaseAllocationSettings, SpendOperationSettings):
     model_config = SettingsConfigDict(
         env_prefix="DELTALLM_", extra="ignore", hide_input_in_errors=True
     )

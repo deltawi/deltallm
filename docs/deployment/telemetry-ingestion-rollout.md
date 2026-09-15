@@ -40,6 +40,10 @@ specific supported release floor must be verified deliberately.
 
 ## Spend rollout
 
+For ordinary operation intents and reserved settlement capacity, follow the
+[spend recovery runbook](spend-recovery.md) after this outbox rollout. It preserves
+unknown outcomes across process loss and does not provide hard monetary budgets.
+
 After the P0 migration, lock-snapshot concurrency tests, and fixed-binary rollout are complete:
 
 1. Start with `spend_ingestion_overload_policy: sync_fallback`, a conservative `spend_ingestion_batch_size`, and `spend_ingestion_max_pending_events` sized for the tolerated outage window.

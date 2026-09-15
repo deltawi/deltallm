@@ -7,7 +7,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from src.database_settings import DatabaseAllocationSettings
 
-DatabaseAllocation = Literal["control", "foreground", "telemetry", "telemetry_worker"]
+DatabaseAllocation = Literal[
+    "control", "foreground", "telemetry", "telemetry_worker", "telemetry_settlement"
+]
 
 
 @dataclass(frozen=True)

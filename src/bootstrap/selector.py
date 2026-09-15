@@ -18,7 +18,9 @@ def configure_selector_execution(state: State, spend: SpendIngestionService) -> 
         if require_routing_runtime_generation(state).selectors:
             raise RuntimeError("selector activation requires durable spend outbox and its worker")
         return
-    operations = BillingOperationRepository(spend.db)
+    operations = BillingOperationRepository(
+        spend.db, settlement_db=spend.operations.settlement.db if spend.operations else None
+    )
     spend.operation_recovery = BillingOperationRecovery(
         BillingOperationRepository(spend.worker_db),
         max_pending_events=spend.config.max_pending_events,

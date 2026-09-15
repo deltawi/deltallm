@@ -45,6 +45,7 @@ ERROR_CODES = {
     "gateway_preflight_org_parallel_exceeded",
     "prompt_resolution_timeout",
     "spend_ingestion_unavailable",
+    "spend_persistence_unavailable",
     "rate_limit_exceeded",
 }
 MAX_RESPONSE_BYTES = 65536

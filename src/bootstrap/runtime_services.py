@@ -8,6 +8,7 @@ import os
 import socket
 from typing import Any
 
+from src.bootstrap.spend_operations import build_spend_operations
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.selector import configure_selector_execution
 from src.billing import (
@@ -372,6 +373,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         ledger=app.state.spend_ledger_service,
     )
     spend_ingestion_service = SpendIngestionService(
+        operations=build_spend_operations(app.state),
         db_client=spend_db_client,
         worker_db_client=spend_worker_db_client,
         writer=spend_writer,

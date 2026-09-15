@@ -2072,3 +2072,24 @@ async def test_model_hot_reload_manager_adds_deployment_to_existing_model_group(
     ] == ["old-dep", "new-dep"]
 
     await dynamic.close()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("spend_ingestion_worker_enabled", False),
+        ("spend_ingestion_worker_enabled", True),
+        ("spend_operation_intents_enabled", False),
+        ("spend_settlement_db_pool_size", 1),
+    ],
+)
+async def test_spend_startup_fields_reject_value_and_precedence_changes_before_commit(field, value):
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    try:
+        with pytest.raises(DynamicConfigRestartRequiredError, match=field):
+            await manager.update_config({"general_settings": {field: value}}, updated_by="test")
+        assert db.config_value == {}
+    finally:
+        await manager.close()
