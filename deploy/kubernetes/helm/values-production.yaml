@@ -70,6 +70,10 @@ batchWorker:
 
 config:
   general_settings:
+    # PR5 qualifies scope/reset parity; this is not an atomic monetary reservation.
+    budget_enforcement_query_mode: combined
+    budget_enforcement_query_timeout_seconds: 2
+    budget_enforcement_shadow_sample_rate: 0.01
     provider_discovery_allow_http: false
     provider_discovery_allowed_ports: [443]
     provider_discovery_allowed_private_cidrs: []

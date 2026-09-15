@@ -1,0 +1,573 @@
+{
+  "source": {
+    "commit": "9445da6c4ffe1a23c875289e269f088afd598769",
+    "source_sha256": "1115acb907ea41866a01bdb0a5914a7a70da9e3cf029b87527adf9ad6d733176",
+    "python": "3.11.13",
+    "harness_sha256": {
+      "tests/performance/measure_budget_dependencies.py": "8d708384ea6ea55d65a14fea7033a0d1085d4173b2723506acf2fc7cb7defc49",
+      "tests/performance/measure_prompt_fills.py": "f805ee3edbdfef24cd0e6d314f15fc917c41d329872c7087a3abbc9cd4e8e9ad"
+    }
+  },
+  "scope_rows_per_table": 5000,
+  "historical_rows_added": 100000,
+  "additional_models_for_hot_team": 10000,
+  "scope": "Budget service only, real PostgreSQL; no provider, Redis, HTTP or pod qualification",
+  "before_history_plan": {
+    "plan": {
+      "Node Type": "Sort",
+      "Actual Rows": 5,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 22,
+      "Shared Read Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Result",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Append",
+          "Actual Rows": 5,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 19,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_verificationtoken",
+                  "Index Name": "deltallm_verificationtoken_token_key",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 3,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_usertable",
+                  "Index Name": "deltallm_usertable_pkey",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 3,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_teamtable",
+                  "Index Name": "deltallm_teamtable_pkey",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 3,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_organizationtable",
+                  "Index Name": "deltallm_organizationtable_organization_id_key",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 3,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 7,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Nested Loop",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 3,
+                  "Shared Read Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "CTE Scan",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 0,
+                      "Shared Read Blocks": 0,
+                      "Rows Removed by Filter": 0
+                    },
+                    {
+                      "Node Type": "Index Scan",
+                      "Relation Name": "deltallm_teamtable",
+                      "Index Name": "deltallm_teamtable_pkey",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 3,
+                      "Shared Read Blocks": 0,
+                      "Rows Removed by Filter": 0
+                    }
+                  ]
+                },
+                {
+                  "Node Type": "Limit",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 4,
+                  "Shared Read Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Index Scan",
+                      "Relation Name": "deltallm_teammodelspend",
+                      "Index Name": "deltallm_teammodelspend_pkey",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 4,
+                      "Shared Read Blocks": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "planning_ms": 10.925,
+    "execution_ms": 0.165
+  },
+  "before_history": {
+    "legacy": {
+      "summary": {
+        "run_id": "71c2282717a54f7092315ee86279ff7b",
+        "started_at": "2026-09-15T06:54:15.482736+00:00",
+        "target_rate_rps": 50.0,
+        "target_count": 500,
+        "client_started_count": 500,
+        "generator_dropped_count": 0,
+        "completion_count": 500,
+        "success_count": 500,
+        "status_counts": {
+          "200": 500
+        },
+        "arrival_window_seconds": 10.0,
+        "drain_window_seconds": 0.0020084999996470287,
+        "client_started_rps": 50.0,
+        "arrival_window_completion_rps": 50.0,
+        "max_in_flight_observed": 1,
+        "latency_seconds": {
+          "mean": 0.008511962078191573,
+          "p50": 0.008792292006546631,
+          "p95": 0.011950625004828908,
+          "p99": 0.012843958000303246,
+          "max": 0.016408082999987528
+        },
+        "scheduling_lag_seconds": {
+          "mean": 0.0011236669018981048,
+          "p50": 0.0011209169897483662,
+          "p95": 0.0012582079943967983,
+          "p99": 0.0020509579917415977,
+          "max": 0.008883041999069974
+        },
+        "ttft_seconds": {
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "sql_calls": 3000,
+      "calls_per_request": 6.0,
+      "raw": "before-history-legacy/gateway-load-71c2282717a54f7092315ee86279ff7b.jsonl",
+      "summary_file": "before-history-legacy/gateway-load-71c2282717a54f7092315ee86279ff7b-summary.json"
+    },
+    "combined": {
+      "summary": {
+        "run_id": "ce6430257da5487da3cce3627ebbd980",
+        "started_at": "2026-09-15T06:54:25.529407+00:00",
+        "target_rate_rps": 50.0,
+        "target_count": 500,
+        "client_started_count": 500,
+        "generator_dropped_count": 0,
+        "completion_count": 500,
+        "success_count": 500,
+        "status_counts": {
+          "200": 500
+        },
+        "arrival_window_seconds": 10.0,
+        "drain_window_seconds": 0.0017478750087320805,
+        "client_started_rps": 50.0,
+        "arrival_window_completion_rps": 50.0,
+        "max_in_flight_observed": 1,
+        "latency_seconds": {
+          "mean": 0.004296476747782435,
+          "p50": 0.004350832998170517,
+          "p95": 0.005557958007557318,
+          "p99": 0.006091167000704445,
+          "max": 0.010613459002343006
+        },
+        "scheduling_lag_seconds": {
+          "mean": 0.0009920132645929699,
+          "p50": 0.0011592500086408108,
+          "p95": 0.0012792500056093559,
+          "p99": 0.0025005409988807514,
+          "max": 0.007304125014343299
+        },
+        "ttft_seconds": {
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "sql_calls": 500,
+      "calls_per_request": 1.0,
+      "raw": "before-history-combined/gateway-load-ce6430257da5487da3cce3627ebbd980.jsonl",
+      "summary_file": "before-history-combined/gateway-load-ce6430257da5487da3cce3627ebbd980-summary.json"
+    }
+  },
+  "after_history_plan": {
+    "plan": {
+      "Node Type": "Sort",
+      "Actual Rows": 5,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 8,
+      "Shared Read Blocks": 11,
+      "Plans": [
+        {
+          "Node Type": "Result",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Append",
+          "Actual Rows": 5,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 8,
+          "Shared Read Blocks": 11,
+          "Plans": [
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_verificationtoken",
+                  "Index Name": "deltallm_verificationtoken_token_key",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 3,
+                  "Shared Read Blocks": 0
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 1,
+              "Shared Read Blocks": 2,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_usertable",
+                  "Index Name": "deltallm_usertable_pkey",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 1,
+                  "Shared Read Blocks": 2
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 0,
+              "Shared Read Blocks": 3,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_teamtable",
+                  "Index Name": "deltallm_teamtable_pkey",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 3
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 1,
+              "Shared Read Blocks": 2,
+              "Plans": [
+                {
+                  "Node Type": "CTE Scan",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Rows Removed by Filter": 0
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Relation Name": "deltallm_organizationtable",
+                  "Index Name": "deltallm_organizationtable_organization_id_key",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 1,
+                  "Shared Read Blocks": 2
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 3,
+              "Shared Read Blocks": 4,
+              "Plans": [
+                {
+                  "Node Type": "Nested Loop",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 3,
+                  "Shared Read Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "CTE Scan",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 0,
+                      "Shared Read Blocks": 0,
+                      "Rows Removed by Filter": 0
+                    },
+                    {
+                      "Node Type": "Index Scan",
+                      "Relation Name": "deltallm_teamtable",
+                      "Index Name": "deltallm_teamtable_pkey",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 3,
+                      "Shared Read Blocks": 0,
+                      "Rows Removed by Filter": 0
+                    }
+                  ]
+                },
+                {
+                  "Node Type": "Limit",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 4,
+                  "Plans": [
+                    {
+                      "Node Type": "Index Scan",
+                      "Relation Name": "deltallm_teammodelspend",
+                      "Index Name": "deltallm_teammodelspend_pkey",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 0,
+                      "Shared Read Blocks": 4
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "planning_ms": 0.521,
+    "execution_ms": 0.098
+  },
+  "after_history": {
+    "legacy": {
+      "summary": {
+        "run_id": "4a8c93cd94a74cc2af9ea04832e56f64",
+        "started_at": "2026-09-15T06:54:38.425639+00:00",
+        "target_rate_rps": 50.0,
+        "target_count": 500,
+        "client_started_count": 500,
+        "generator_dropped_count": 0,
+        "completion_count": 500,
+        "success_count": 500,
+        "status_counts": {
+          "200": 500
+        },
+        "arrival_window_seconds": 10.0,
+        "drain_window_seconds": 0.001537707998068072,
+        "client_started_rps": 50.0,
+        "arrival_window_completion_rps": 50.0,
+        "max_in_flight_observed": 2,
+        "latency_seconds": {
+          "mean": 0.008402278318419122,
+          "p50": 0.008663667002110742,
+          "p95": 0.012181832993519492,
+          "p99": 0.013462208007695153,
+          "max": 0.019994707996374927
+        },
+        "scheduling_lag_seconds": {
+          "mean": 0.0010819772523536812,
+          "p50": 0.0010954159952234477,
+          "p95": 0.0012275829940335825,
+          "p99": 0.0012727499852189794,
+          "max": 0.0015894159878371283
+        },
+        "ttft_seconds": {
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "sql_calls": 3000,
+      "calls_per_request": 6.0,
+      "raw": "after-history-legacy/gateway-load-4a8c93cd94a74cc2af9ea04832e56f64.jsonl",
+      "summary_file": "after-history-legacy/gateway-load-4a8c93cd94a74cc2af9ea04832e56f64-summary.json"
+    },
+    "combined": {
+      "summary": {
+        "run_id": "d41953bc575f4dbda2e80b7590c90e3f",
+        "started_at": "2026-09-15T06:54:48.468309+00:00",
+        "target_rate_rps": 50.0,
+        "target_count": 500,
+        "client_started_count": 500,
+        "generator_dropped_count": 0,
+        "completion_count": 500,
+        "success_count": 500,
+        "status_counts": {
+          "200": 500
+        },
+        "arrival_window_seconds": 10.0,
+        "drain_window_seconds": 0.00245800000266172,
+        "client_started_rps": 50.0,
+        "arrival_window_completion_rps": 50.0,
+        "max_in_flight_observed": 1,
+        "latency_seconds": {
+          "mean": 0.004589836246013874,
+          "p50": 0.00452604099700693,
+          "p95": 0.00659583299420774,
+          "p99": 0.009360249998280779,
+          "max": 0.016348375007510185
+        },
+        "scheduling_lag_seconds": {
+          "mean": 0.0011293293363414704,
+          "p50": 0.0011757500033127144,
+          "p95": 0.0013271250063553452,
+          "p99": 0.002126250008586794,
+          "max": 0.007574625007691793
+        },
+        "ttft_seconds": {
+          "mean": null,
+          "p50": null,
+          "p95": null,
+          "p99": null,
+          "max": null
+        }
+      },
+      "sql_calls": 500,
+      "calls_per_request": 1.0,
+      "raw": "after-history-combined/gateway-load-d41953bc575f4dbda2e80b7590c90e3f.jsonl",
+      "summary_file": "after-history-combined/gateway-load-d41953bc575f4dbda2e80b7590c90e3f-summary.json"
+    }
+  }
+}

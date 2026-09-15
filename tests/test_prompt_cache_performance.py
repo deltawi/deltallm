@@ -25,6 +25,34 @@ class _Redis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.mget_calls = 0
+        self.pipeline_calls = 0
+        self.pipeline_commands: list[tuple[str, int, str]] = []
+
+    def pipeline(self, *, transaction: bool):
+        assert transaction is False
+        owner = self
+
+        class Pipeline:
+            def __init__(self):
+                self.commands = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            def setex(self, key, ttl, value):
+                self.commands.append((key, ttl, value))
+
+            async def execute(self):
+                owner.pipeline_calls += 1
+                owner.pipeline_commands.extend(self.commands)
+                for key, _ttl, value in self.commands:
+                    owner.store[key] = value
+                return [True] * len(self.commands)
+
+        return Pipeline()
 
     async def get(self, key: str) -> str | None:
         return self.store.get(key)

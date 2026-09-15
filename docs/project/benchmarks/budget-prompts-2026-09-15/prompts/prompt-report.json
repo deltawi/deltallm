@@ -1,0 +1,206 @@
+{
+  "hot_scope_plan": {
+    "plan": {
+      "Node Type": "Sort",
+      "Actual Rows": 1,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 18,
+      "Shared Read Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 15,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "WindowAgg",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 15,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Sort",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 15,
+                  "Shared Read Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Nested Loop",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 9,
+                      "Shared Read Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Nested Loop",
+                          "Actual Rows": 1,
+                          "Actual Loops": 1,
+                          "Shared Hit Blocks": 7,
+                          "Shared Read Blocks": 0,
+                          "Plans": [
+                            {
+                              "Node Type": "Values Scan",
+                              "Actual Rows": 2,
+                              "Actual Loops": 1,
+                              "Shared Hit Blocks": 0,
+                              "Shared Read Blocks": 0
+                            },
+                            {
+                              "Node Type": "Limit",
+                              "Actual Rows": 0,
+                              "Actual Loops": 2,
+                              "Shared Hit Blocks": 7,
+                              "Shared Read Blocks": 0,
+                              "Plans": [
+                                {
+                                  "Node Type": "Index Scan",
+                                  "Relation Name": "deltallm_promptbinding",
+                                  "Index Name": "deltallm_promptbinding_enabled_top_idx",
+                                  "Actual Rows": 0,
+                                  "Actual Loops": 2,
+                                  "Shared Hit Blocks": 7,
+                                  "Shared Read Blocks": 0
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Node Type": "Memoize",
+                          "Actual Rows": 1,
+                          "Actual Loops": 1,
+                          "Shared Hit Blocks": 2,
+                          "Shared Read Blocks": 0,
+                          "Plans": [
+                            {
+                              "Node Type": "Index Scan",
+                              "Relation Name": "deltallm_prompttemplate",
+                              "Index Name": "deltallm_prompttemplate_pkey",
+                              "Actual Rows": 1,
+                              "Actual Loops": 1,
+                              "Shared Hit Blocks": 2,
+                              "Shared Read Blocks": 0
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "planning_ms": 14.807,
+    "execution_ms": 0.105
+  },
+  "hot_scope_binding_rows": 10000,
+  "profile": "One Python process; simulated independent L1 owners; shared bounded PostgreSQL/Redis pools of 32; no pod qualification",
+  "serial": {
+    "summary": {
+      "run_id": "236c2c07a02647218248a2186127dd7c",
+      "started_at": "2026-09-15T06:17:51.261284+00:00",
+      "target_rate_rps": 10,
+      "target_count": 50,
+      "client_started_count": 50,
+      "generator_dropped_count": 0,
+      "completion_count": 50,
+      "success_count": 50,
+      "status_counts": {
+        "200": 50
+      },
+      "arrival_window_seconds": 5,
+      "drain_window_seconds": 0.0004196250083623454,
+      "client_started_rps": 10.0,
+      "arrival_window_completion_rps": 10.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.009275041639339178,
+        "p50": 0.010302707989467308,
+        "p95": 0.0122649170079967,
+        "p99": 0.013796833009109832,
+        "max": 0.013796833009109832
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.0011123149748891593,
+        "p50": 0.001189582995721139,
+        "p95": 0.0013404170022113249,
+        "p99": 0.001901875002658926,
+        "max": 0.001901875002658926
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "sql": 50,
+    "mget": 50,
+    "setex_round_trips": 250,
+    "pipelines": 0,
+    "raw": "serial/gateway-load-236c2c07a02647218248a2186127dd7c.jsonl",
+    "warm_100_extra_sql_or_redis": 0
+  },
+  "pipeline": {
+    "summary": {
+      "run_id": "4e2034faad8d44f1a4c72791b70efa04",
+      "started_at": "2026-09-15T06:17:56.281555+00:00",
+      "target_rate_rps": 10,
+      "target_count": 50,
+      "client_started_count": 50,
+      "generator_dropped_count": 0,
+      "completion_count": 50,
+      "success_count": 50,
+      "status_counts": {
+        "200": 50
+      },
+      "arrival_window_seconds": 5,
+      "drain_window_seconds": 0.00023812500876374543,
+      "client_started_rps": 10.0,
+      "arrival_window_completion_rps": 10.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.006762067459640093,
+        "p50": 0.00698554101109039,
+        "p95": 0.009444582989090122,
+        "p99": 0.011564333995920606,
+        "max": 0.011564333995920606
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.00105855136673199,
+        "p50": 0.0011843750107800588,
+        "p95": 0.0013619160163216293,
+        "p99": 0.001518458011560142,
+        "max": 0.001518458011560142
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "sql": 50,
+    "mget": 50,
+    "setex_round_trips": 0,
+    "pipelines": 50,
+    "raw": "pipeline/gateway-load-4e2034faad8d44f1a4c72791b70efa04.jsonl",
+    "warm_100_extra_sql_or_redis": 0
+  },
+  "cold_wave": {
+    "independent_l1_owners": 25,
+    "sql": 25,
+    "successful": 25
+  },
+  "new_owner_after_fill_extra_sql": 0
+}

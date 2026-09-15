@@ -109,6 +109,12 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
         # authoritative privacy decision on every content-bearing write.
         details["audit_policy_listener"] = _worker_health_payload(policy_listener_health)
 
+    budget_notification_worker = getattr(request.app.state, "budget_notification_worker", None)
+    if budget_notification_worker is not None:
+        # Optional alerts expose degradation without withdrawing inference capacity.
+        details["budget_notification_worker"] = _worker_health_payload(
+            budget_notification_worker.worker_health
+        )
     email_worker = getattr(request.app.state, "email_outbox_worker", None)
     email_worker_health = getattr(email_worker, "worker_health", None)
     if email_worker_health is not None:

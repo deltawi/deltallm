@@ -130,7 +130,7 @@ The generated schema is the field-coverage source of truth. The [General setting
 
 | Setting | Type | Default | Constraints | Handling |
 | --- | --- | --- | --- | --- |
-| `budget_alert_ttl_seconds` | integer | `3600` | ≥ 60 | Ordinary |
+| `budget_alert_ttl_seconds` | integer | `3600` | ≤ 2147483647; ≥ 60 | Ordinary |
 | `budget_enforcement_query_mode` | "legacy" or "shadow" or "combined" | `"legacy"` | — | Ordinary |
 | `budget_enforcement_query_timeout_seconds` | number | `2.0` | > 0.0; ≤ 30.0 | Ordinary |
 | `budget_enforcement_shadow_sample_rate` | number | `0.01` | ≤ 1.0; ≥ 0.0 | Ordinary |

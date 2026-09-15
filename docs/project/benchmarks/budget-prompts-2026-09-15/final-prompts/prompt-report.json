@@ -1,0 +1,215 @@
+{
+  "source": {
+    "commit": "9445da6c4ffe1a23c875289e269f088afd598769",
+    "source_sha256": "7d7137dfc7d3100a7a6772dac5f0c56d0c6164367e699fca21c33647de8bee10",
+    "python": "3.11.13",
+    "harness_sha256": {
+      "tests/performance/measure_budget_dependencies.py": "3e9aefe7d202cb8b7e5d40a9958c1f7a22bf9a1d523359baf88bb63c768be865",
+      "tests/performance/measure_prompt_fills.py": "f805ee3edbdfef24cd0e6d314f15fc917c41d329872c7087a3abbc9cd4e8e9ad"
+    }
+  },
+  "hot_scope_plan": {
+    "plan": {
+      "Node Type": "Sort",
+      "Actual Rows": 1,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 18,
+      "Shared Read Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 15,
+          "Shared Read Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "WindowAgg",
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 15,
+              "Shared Read Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Sort",
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Shared Hit Blocks": 15,
+                  "Shared Read Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Nested Loop",
+                      "Actual Rows": 1,
+                      "Actual Loops": 1,
+                      "Shared Hit Blocks": 9,
+                      "Shared Read Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Nested Loop",
+                          "Actual Rows": 1,
+                          "Actual Loops": 1,
+                          "Shared Hit Blocks": 7,
+                          "Shared Read Blocks": 0,
+                          "Plans": [
+                            {
+                              "Node Type": "Values Scan",
+                              "Actual Rows": 2,
+                              "Actual Loops": 1,
+                              "Shared Hit Blocks": 0,
+                              "Shared Read Blocks": 0
+                            },
+                            {
+                              "Node Type": "Limit",
+                              "Actual Rows": 0,
+                              "Actual Loops": 2,
+                              "Shared Hit Blocks": 7,
+                              "Shared Read Blocks": 0,
+                              "Plans": [
+                                {
+                                  "Node Type": "Index Scan",
+                                  "Relation Name": "deltallm_promptbinding",
+                                  "Index Name": "deltallm_promptbinding_enabled_top_idx",
+                                  "Actual Rows": 0,
+                                  "Actual Loops": 2,
+                                  "Shared Hit Blocks": 7,
+                                  "Shared Read Blocks": 0
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Node Type": "Memoize",
+                          "Actual Rows": 1,
+                          "Actual Loops": 1,
+                          "Shared Hit Blocks": 2,
+                          "Shared Read Blocks": 0,
+                          "Plans": [
+                            {
+                              "Node Type": "Index Scan",
+                              "Relation Name": "deltallm_prompttemplate",
+                              "Index Name": "deltallm_prompttemplate_pkey",
+                              "Actual Rows": 1,
+                              "Actual Loops": 1,
+                              "Shared Hit Blocks": 2,
+                              "Shared Read Blocks": 0
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "planning_ms": 10.361,
+    "execution_ms": 0.093
+  },
+  "hot_scope_binding_rows": 10000,
+  "profile": "One Python process; simulated independent L1 owners; shared bounded PostgreSQL/Redis pools of 32; no pod qualification",
+  "serial": {
+    "summary": {
+      "run_id": "1f959940d04949dba5641d3514131016",
+      "started_at": "2026-09-15T06:41:29.491611+00:00",
+      "target_rate_rps": 10,
+      "target_count": 50,
+      "client_started_count": 50,
+      "generator_dropped_count": 0,
+      "completion_count": 50,
+      "success_count": 50,
+      "status_counts": {
+        "200": 50
+      },
+      "arrival_window_seconds": 5,
+      "drain_window_seconds": 0.00022266700398176908,
+      "client_started_rps": 10.0,
+      "arrival_window_completion_rps": 10.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.010124425041140058,
+        "p50": 0.010871332997339778,
+        "p95": 0.01368962500419002,
+        "p99": 0.021391208996647038,
+        "max": 0.021391208996647038
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.0011276412656297907,
+        "p50": 0.001193916003103368,
+        "p95": 0.0013055000017629936,
+        "p99": 0.002359916004934348,
+        "max": 0.002359916004934348
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "sql": 50,
+    "mget": 50,
+    "setex_round_trips": 250,
+    "pipelines": 0,
+    "raw": "serial/gateway-load-1f959940d04949dba5641d3514131016.jsonl",
+    "warm_100_extra_sql_or_redis": 0
+  },
+  "pipeline": {
+    "summary": {
+      "run_id": "a4d3d5294bf342fea390a412e491a64c",
+      "started_at": "2026-09-15T06:41:34.499723+00:00",
+      "target_rate_rps": 10,
+      "target_count": 50,
+      "client_started_count": 50,
+      "generator_dropped_count": 0,
+      "completion_count": 50,
+      "success_count": 50,
+      "status_counts": {
+        "200": 50
+      },
+      "arrival_window_seconds": 5,
+      "drain_window_seconds": 0.0003857910051010549,
+      "client_started_rps": 10.0,
+      "arrival_window_completion_rps": 10.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.007191129159764387,
+        "p50": 0.007371332991169766,
+        "p95": 0.009358792012790218,
+        "p99": 0.011415665998356417,
+        "max": 0.011415665998356417
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.001154269513208419,
+        "p50": 0.0012011249928036705,
+        "p95": 0.0013230419863248244,
+        "p99": 0.0037981670029694214,
+        "max": 0.0037981670029694214
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      }
+    },
+    "sql": 50,
+    "mget": 50,
+    "setex_round_trips": 0,
+    "pipelines": 50,
+    "raw": "pipeline/gateway-load-a4d3d5294bf342fea390a412e491a64c.jsonl",
+    "warm_100_extra_sql_or_redis": 0
+  },
+  "cold_wave": {
+    "independent_l1_owners": 25,
+    "sql": 25,
+    "successful": 25
+  },
+  "new_owner_after_fill_extra_sql": 0
+}

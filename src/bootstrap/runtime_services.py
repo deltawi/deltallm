@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 import logging
 import os
@@ -9,7 +11,6 @@ from typing import Any
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.selector import configure_selector_execution
 from src.billing import (
-    AlertConfig,
     AlertService,
     BudgetEnforcementService,
     SpendLedgerService,
@@ -17,6 +18,8 @@ from src.billing import (
     SpendIngestionService,
     SpendTrackingService,
 )
+from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
+from src.db.budget_notifications import BudgetNotificationRepository
 from src.callbacks import CallbackManager
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
@@ -56,6 +59,7 @@ class RuntimeServicesRuntime:
     tier_policy_service: Any | None = None
     spend_ingestion_service: SpendIngestionService | None = None
     prompt_registry_service: PromptRegistryService | None = None
+    budget_notification_worker: BudgetNotificationWorker | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -337,7 +341,6 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         dispatcher=notification_dispatcher,
         recipient_resolver=app.state.notification_recipient_resolver,
         config_getter=lambda: getattr(app.state, "app_config", cfg),
-        config=AlertConfig(budget_alert_ttl=budget_alert_ttl),
     )
     spend_ingestion_mode = str(
         getattr(app.state, "spend_ingestion_mode", None)
@@ -488,9 +491,25 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     configure_selector_execution(app.state, spend_ingestion_service)
     await spend_ingestion_service.start()
     app.state.spend_tracking_service = spend_ingestion_service
+    budget_notification_repository = BudgetNotificationRepository(app.state.prisma_manager.client)
+    budget_notification_worker = None
+    notifications_enabled = bool(getattr(general_settings, "budget_notifications_enabled", False))
+    if notifications_enabled:
+        budget_notification_worker = BudgetNotificationWorker(
+            budget_notification_repository,
+            app.state.alert_service,
+        )
+        app.state.budget_notification_worker = budget_notification_worker
+    budget_notification_producer = BudgetNotificationProducer(
+        budget_notification_repository,
+        enabled=lambda: (
+            notifications_enabled and app.state.alert_service.budget_notifications_enabled()
+        ),
+        ttl_seconds=budget_alert_ttl,
+    )
     app.state.budget_service = BudgetEnforcementService(
         db_client=app.state.foreground_prisma_manager.client,
-        alert_service=app.state.alert_service,
+        alert_service=budget_notification_producer,
         query_mode=_runtime_setting(
             general_settings,
             settings,
@@ -516,12 +535,13 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         if callable(start_tier_policy_service):
             await start_tier_policy_service()
 
-    return RuntimeServicesRuntime(
+    runtime = RuntimeServicesRuntime(
         callback_manager=callback_manager,
         governance_invalidation_service=app.state.governance_invalidation_service,
         tier_policy_service=app.state.tier_policy_service,
         spend_ingestion_service=spend_ingestion_service,
         prompt_registry_service=prompt_registry_service,
+        budget_notification_worker=budget_notification_worker,
         statuses=(
             BootstrapStatus("callable_target_grants", "ready"),
             BootstrapStatus("tier_policy", tier_policy_status),
@@ -533,16 +553,40 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         ),
     )
 
+    try:
+        if budget_notification_worker is not None:
+            await budget_notification_worker.start()
+    except BaseException:
+        # init has not returned to the application's AsyncExitStack yet.
+        await shutdown_runtime_services(runtime)
+        raise
+    return runtime
+
 
 async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
-    if runtime.spend_ingestion_service is not None:
-        await runtime.spend_ingestion_service.shutdown()
-    prompt_shutdown = getattr(runtime.prompt_registry_service, "shutdown", None)
-    if callable(prompt_shutdown):
-        await prompt_shutdown()
-    tier_policy_service = runtime.tier_policy_service
-    if tier_policy_service is not None and callable(getattr(tier_policy_service, "close", None)):
-        await tier_policy_service.close()
-    await runtime.governance_invalidation_service.close()
-    await runtime.callback_manager.shutdown()
-    await close_shared_client()
+    async with AsyncExitStack() as cleanup:
+        cleanup.push_async_callback(close_shared_client)
+        cleanup.push_async_callback(runtime.callback_manager.shutdown)
+        cleanup.push_async_callback(runtime.governance_invalidation_service.close)
+        tier_policy_service = runtime.tier_policy_service
+        if tier_policy_service is not None and callable(
+            getattr(tier_policy_service, "close", None)
+        ):
+            cleanup.push_async_callback(tier_policy_service.close)
+        prompt_shutdown = getattr(runtime.prompt_registry_service, "shutdown", None)
+        if callable(prompt_shutdown):
+            cleanup.push_async_callback(prompt_shutdown)
+        # Independent bounded drains overlap, before dependencies close. Adding
+        # optional alerts must not add eleven seconds to the spend drain budget.
+        drains = [
+            service.shutdown()
+            for service in (
+                runtime.budget_notification_worker,
+                runtime.spend_ingestion_service,
+            )
+            if service is not None
+        ]
+        results = await asyncio.gather(*drains, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result

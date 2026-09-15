@@ -1,0 +1,186 @@
+{
+  "arrival_window_completion_rps": 25.0,
+  "arrival_window_seconds": 10.0,
+  "client_in_flight": [
+    {
+      "client_in_flight": 0.0,
+      "offset_seconds": 0.0
+    },
+    {
+      "client_in_flight": 1.0,
+      "offset_seconds": 1.0
+    },
+    {
+      "client_in_flight": 1.0,
+      "offset_seconds": 2.0
+    },
+    {
+      "client_in_flight": 0.0,
+      "offset_seconds": 3.0
+    },
+    {
+      "client_in_flight": 0.0,
+      "offset_seconds": 4.0
+    },
+    {
+      "client_in_flight": 1.0,
+      "offset_seconds": 5.0
+    },
+    {
+      "client_in_flight": 1.0,
+      "offset_seconds": 6.0
+    },
+    {
+      "client_in_flight": 0.0,
+      "offset_seconds": 7.0
+    },
+    {
+      "client_in_flight": 0.0,
+      "offset_seconds": 8.0
+    },
+    {
+      "client_in_flight": 1.0,
+      "offset_seconds": 9.0
+    },
+    {
+      "client_in_flight": 0.0,
+      "offset_seconds": 10.0
+    }
+  ],
+  "client_started_count": 250,
+  "client_started_rps": 25.0,
+  "completion_count": 250,
+  "dependency_call_deltas_including_background": {
+    "cmdstat_client|setinfo": 0,
+    "cmdstat_del": 1393,
+    "cmdstat_eval": 995,
+    "cmdstat_exec": 597,
+    "cmdstat_exists": 796,
+    "cmdstat_expire": 995,
+    "cmdstat_get": 995,
+    "cmdstat_hdel": 398,
+    "cmdstat_hget": 796,
+    "cmdstat_hgetall": 199,
+    "cmdstat_hset": 199,
+    "cmdstat_incrby": 398,
+    "cmdstat_mget": 398,
+    "cmdstat_multi": 597,
+    "cmdstat_pexpire": 199,
+    "cmdstat_pexpireat": 398,
+    "cmdstat_pttl": 199,
+    "cmdstat_set": 199,
+    "cmdstat_setex": 0,
+    "cmdstat_subscribe": 0,
+    "cmdstat_time": 199,
+    "cmdstat_ttl": 0,
+    "cmdstat_unsubscribe": 0,
+    "cmdstat_zadd": 796,
+    "cmdstat_zcard": 1194,
+    "cmdstat_zrem": 597,
+    "cmdstat_zremrangebyscore": 796,
+    "cmdstat_zrevrange": 199,
+    "postgres_calls_including_background": 10028
+  },
+  "drain_window_seconds": 0.0003376669919816777,
+  "error_counts": {
+    "gateway_ingress_full": 51
+  },
+  "generator_commit": "9445da6c4ffe1a23c875289e269f088afd598769",
+  "generator_dropped_count": 0,
+  "generator_python": "3.11.13",
+  "label": "before",
+  "latency_seconds": {
+    "max": 0.06986979200155474,
+    "mean": 0.03009340616769623,
+    "p50": 0.03655833299853839,
+    "p95": 0.044465083003160544,
+    "p99": 0.06474862500908785
+  },
+  "max_in_flight_observed": 2,
+  "metrics_arrival_start_offset_seconds": 0.037710749995312653,
+  "metrics_file": "metrics-8a972be8f24446f094ddd7aaee66692f.jsonl",
+  "metrics_scrape_errors": 0,
+  "qualification": "baseline_only",
+  "response_cache_bypass": true,
+  "run_id": "eb244bfc880142e6872cb945083d847f",
+  "scheduling_lag_seconds": {
+    "max": 0.019633624993730336,
+    "mean": 0.0008581851484486833,
+    "p50": 0.000621499988483265,
+    "p95": 0.0011207909847144037,
+    "p99": 0.013978707997011952
+  },
+  "server_manifest": {
+    "api_processes": 1,
+    "audit_ingestion_mode": "outbox",
+    "auth_fallback": {
+      "cache_max_bytes": 131072,
+      "cache_timeout_seconds": 0.1,
+      "max_active": 8,
+      "max_waiters": 32,
+      "queue_timeout_ms": 10,
+      "timeout_seconds": 0.5
+    },
+    "budget_query_mode": "legacy",
+    "cpu_limit_cores": null,
+    "database_allocations": {
+      "db_acquisition_timeout_seconds": 0.2,
+      "db_background_lock_timeout_seconds": 1.0,
+      "db_background_statement_timeout_seconds": 5.0,
+      "db_background_transaction_timeout_seconds": 10.0,
+      "db_foreground_pool_size": 8,
+      "db_lock_timeout_seconds": 0.2,
+      "db_statement_timeout_seconds": 1.0,
+      "db_transaction_timeout_seconds": 2.0,
+      "telemetry_worker_db_pool_size": 5
+    },
+    "host_cpu_count": 14,
+    "image_digest": null,
+    "ingress": {
+      "body_timeout_seconds": 10.0,
+      "control_max_active": 16,
+      "control_max_buffered_bytes": 67108864,
+      "enabled": true,
+      "health_max_active": 4,
+      "max_active": 1,
+      "max_body_bytes": 33554432,
+      "max_buffered_bytes": 67108864,
+      "max_waiters": 0,
+      "queue_timeout_ms": 10
+    },
+    "main_db_pool_size": 20,
+    "memory_limit_mib": null,
+    "postgres_cpu_limit_cores": null,
+    "postgres_memory_limit_mib": null,
+    "postgres_version": "15.19",
+    "preflight_global": 100,
+    "preflight_org": 50,
+    "profile_sha256": "a4a8742e828c83b815e855e0169fb33a9fe0962a2c56471cc2464cc4e520b27f",
+    "redis_cpu_limit_cores": null,
+    "redis_degraded_mode": "fail_closed",
+    "redis_memory_limit_mib": null,
+    "redis_version": "7.2.5",
+    "server_commit": "9445da6c4ffe1a23c875289e269f088afd598769",
+    "server_python": "3.11.13",
+    "server_source_sha256": "0e531ca1e98a8423bfd15b6fab6c7e40ffaf672c0cc28e4a19f70c6b976cb545",
+    "spend_ingestion_mode": "outbox",
+    "telemetry_db_pool_size": 5
+  },
+  "server_manifest_source": "operator_declared",
+  "started_at": "2026-09-15T06:36:44.136019+00:00",
+  "status_counts": {
+    "200": 199,
+    "503": 51
+  },
+  "success_count": 199,
+  "target_count": 250,
+  "target_rate_rps": 25.0,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  },
+  "workload": "fixed-one-token-nonstream-v1"
+}
