@@ -71,7 +71,7 @@ probes. The comparison above contains only the final applicable samples.
 
 ## Slow callbacks and CPU work
 
-Run the same [component probe](../../../../tests/performance/measure_request_work.py)
+Run the same [component probe](https://github.com/deltawi/deltallm/blob/59d72ec441b06e0faa6b2cae96caa90fb086c4bf/tests/performance/measure_request_work.py)
 against both checkouts using `PYTHONPATH`. It records raw samples and exact source
 hashes in [before](component-before.json) and [after](component-after.json).
 Its producer and sampler share the component event loop; arrival lateness is
