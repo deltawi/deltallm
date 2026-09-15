@@ -27,7 +27,7 @@ Tip: check the effective `allowed_fails` value in the config your deployment act
 | `routing_strategy` | `simple-shuffle` | Global default strategy for choosing a deployment |
 | `num_retries` | `0` | Extra retry attempts after the first failure |
 | `retry_after` | `0` | Base backoff delay in seconds |
-| `timeout` | `600` | Request timeout in seconds |
+| `timeout` | `600` | Total inference deadline from ingress through response delivery and finalization; see [request deadlines](../deployment/request-deadlines.md) |
 | `cooldown_time` | `60` | Seconds a failing deployment stays out of rotation |
 | `allowed_fails` | `0` | Failures allowed before cooldown starts |
 | `enable_pre_call_checks` | `false` | Skip deployments already over configured RPM or TPM metadata |

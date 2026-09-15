@@ -34,6 +34,7 @@ from src.api.admin import admin_router
 from src.middleware.rate_limit_headers import RateLimitHeaderMiddleware
 from src.middleware.rate_limit_lifecycle import RateLimitLeaseLifecycleMiddleware
 from src.middleware.ingress import IngressMiddleware
+from src.middleware.request_deadline import RequestDeadlineMiddleware
 from src.ingress import initialize_ingress
 from src.middleware.request_timing import RequestTimingMiddleware
 from src.api.v1.router import v1_router
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     # remain owned until the final response body frame or a disconnect.
     app.add_middleware(RateLimitLeaseLifecycleMiddleware)
     app.add_middleware(IngressMiddleware)
+    app.add_middleware(RequestDeadlineMiddleware)
     app.add_middleware(RequestTimingMiddleware)
 
     app.include_router(v1_router)

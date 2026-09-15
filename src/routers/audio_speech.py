@@ -227,9 +227,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         await release_preflight_capacity(request)
         raise
 
-    callback_manager: CallbackManager = getattr(
-        request.app.state, "callback_manager", CallbackManager()
-    )
+    callback_manager: CallbackManager = request.app.state.callback_manager
     try:
         await check_and_acquire_rate_limits_for_payload(
             request,

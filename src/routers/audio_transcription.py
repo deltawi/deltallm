@@ -222,9 +222,7 @@ async def audio_transcriptions(
         tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
-    callback_manager: CallbackManager = getattr(
-        request.app.state, "callback_manager", CallbackManager()
-    )
+    callback_manager: CallbackManager = request.app.state.callback_manager
     request_data = {
         "model": model,
         "language": language,

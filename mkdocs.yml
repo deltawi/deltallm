@@ -156,6 +156,7 @@ nav:
       - Ingress Measurement: deployment/ingress-measurement.md
       - Budget and Prompt Performance: deployment/budget-prompt-performance.md
       - Spend Recovery: deployment/spend-recovery.md
+      - Request Deadlines and Work Limits: deployment/request-deadlines.md
   - Project:
       - Versions, Compatibility & Deprecation: project/versioning-and-compatibility.md
       - Route-Group Model Router Design: project/model-router-design.md
@@ -169,6 +170,7 @@ nav:
       - Durable Admission Measurements: benchmarks/pr4-admission/README.md
       - Budget and Prompt Design: design/pr5-budget-prompts.md
       - Spend Recovery Design: design/pr6-spend-recovery.md
+      - Request Deadline Design: design/pr7-deadlines-bounded-work.md
       - Spend Recovery Measurements: project/benchmarks/spend-recovery-2026-09-15/README.md
       - Budget and Prompt Measurements: project/benchmarks/budget-prompts-2026-09-15/README.md
       - Documentation Governance: project/documentation-governance.md

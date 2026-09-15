@@ -30,8 +30,14 @@ HISTOGRAMS = (
     "deltallm_ingress_queue_seconds",
     "deltallm_auth_fallback_seconds",
     "deltallm_database_allocation_seconds",
+    "deltallm_bounded_work_seconds",
 )
 ALLOWED_NAMES = {
+    "deltallm_request_deadline_expirations_total",
+    "deltallm_bounded_work_rejections_total",
+    "deltallm_bounded_work_in_flight",
+    "deltallm_bounded_work_bytes",
+    "deltallm_callback_outcomes_total",
     "deltallm_telemetry_acceptance_in_flight",
     "deltallm_telemetry_acceptance_operations_total",
     "deltallm_telemetry_acceptance_failures_total",
@@ -90,6 +96,9 @@ LABEL_VALUES = {
         "caller_deadline",
         "caller_cancelled",
         "rollback_error",
+        "cancelled",
+        "timeout",
+        "hook_failed",
     },
     "transaction_scope": {"owned", "external"},
     "route": ROUTES,
@@ -101,6 +110,11 @@ LABEL_VALUES = {
         "gateway_request_body_too_large",
         "gateway_request_body_timeout",
         "invalid_content_length",
+        "closed",
+        "full",
+        "bytes",
+        "payload",
+        "close_failed",
     },
     "allocation": {
         "inference",
@@ -110,9 +124,15 @@ LABEL_VALUES = {
         "telemetry",
         "telemetry_settlement",
         "telemetry_worker",
+        "callback",
+        "callback_sync",
+        "callback_resources",
+        "guardrail",
     },
     "operation": {"query", "finish"},
     "state": {"dispatched", "accepted", "unknown"},
+    "response": {"started", "not_started"},
+    "integration": {"prometheus", "langfuse", "opentelemetry", "s3", "custom"},
 }
 
 

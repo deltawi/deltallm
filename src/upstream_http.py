@@ -5,6 +5,8 @@ from typing import Any
 import httpx
 from httpx._utils import get_environment_proxies
 
+from src.request_deadline import current_request_deadline
+
 from src.providers.error_body import bound_provider_error_response_body
 
 
@@ -185,7 +187,7 @@ def build_upstream_request_timeout(
             DEFAULT_UPSTREAM_HTTP_READ_TIMEOUT_SECONDS,
         )
     )
-    return httpx.Timeout(
+    timeout = httpx.Timeout(
         connect=float(
             _setting(
                 general_settings,
@@ -211,6 +213,16 @@ def build_upstream_request_timeout(
             )
         ),
     )
+    deadline = current_request_deadline()
+    if deadline is not None:
+        remaining = deadline.require_remaining()
+        return httpx.Timeout(
+            **{
+                phase: min(limit, remaining) if limit is not None else remaining
+                for phase, limit in timeout.as_dict().items()
+            }
+        )
+    return timeout
 
 
 def build_health_check_request_timeout(

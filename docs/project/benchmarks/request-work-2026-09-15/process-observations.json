@@ -1,0 +1,17 @@
+[
+  {
+    "process": "before",
+    "exit_code": -15,
+    "application_shutdown_complete": true
+  },
+  {
+    "process": "after",
+    "exit_code": -15,
+    "application_shutdown_complete": true
+  },
+  {
+    "process": "provider",
+    "exit_code": -15,
+    "application_shutdown_complete": true
+  }
+]

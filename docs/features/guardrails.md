@@ -292,3 +292,5 @@ In simple terms:
 - [Admin UI: Guardrails](../admin-ui/guardrails.md)
 - [Admin Endpoints](../api/admin.md)
 - [Authentication & SSO](authentication.md)
+
+Presidio inspection uses the shared [bounded guardrail executor](../deployment/request-deadlines.md#cpu-guardrails). Overload fails closed, and cancelled inspections retain capacity until their worker finishes.

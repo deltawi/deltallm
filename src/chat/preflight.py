@@ -71,9 +71,7 @@ async def run_text_preflight(
         response_kind=_response_kind(payload),
     )
     guardrail_middleware = request.app.state.guardrail_middleware
-    callback_manager: CallbackManager = getattr(
-        request.app.state, "callback_manager", CallbackManager()
-    )
+    callback_manager: CallbackManager = request.app.state.callback_manager
     data = dict(request_data) if request_data is not None else dump_request_for_preflight(payload)
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
     explicit_prompt_ref = (
