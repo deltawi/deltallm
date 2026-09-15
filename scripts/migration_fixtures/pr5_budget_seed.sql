@@ -1,6 +1,8 @@
 INSERT INTO deltallm_organizationtable (id,organization_id) VALUES ('pr5-upgrade','pr5-upgrade');
 INSERT INTO deltallm_teamtable (team_id,organization_id,models) VALUES ('pr5-upgrade','pr5-upgrade',ARRAY[]::text[]);
 INSERT INTO deltallm_teammodelspend (team_id,model,spend,updated_at) VALUES ('pr5-upgrade','model',12,NOW());
+INSERT INTO deltallm_teammodelspend (team_id,model,spend,spend_exact,updated_at)
+VALUES ('pr5-upgrade','exact-model',12,12.000000000000000001,NOW());
 
 DO $seed$
 BEGIN
