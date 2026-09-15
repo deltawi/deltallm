@@ -24,7 +24,8 @@ were retained throughout the experiment.
 Before is feature-branch commit `4d75b560`; after is the PR7 source. Both manifests
 record the base Git HEAD because after was measured before committing. Their
 different source SHA-256 values identify the exact implementations; the after
-hash was checked against the final application source. Both use the same frozen
+hash was checked against the application source committed in `59d72ec4`. A later
+Python 3.11 lock-type annotation correction changes no executed path. Both use the same frozen
 Python environment and profile hash. No tests ran during measurement.
 
 Each API receives 100 successful warmup requests paced at 5 RPS, followed by the

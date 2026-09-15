@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC
+from _thread import LockType
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
-from threading import Lock
 from typing import Any, TypeVar
 
 from src.blocking_work import BlockingWorkExecutor, WorkUnavailableError
@@ -17,7 +17,7 @@ class CustomLogger(ABC):
     """Base class for callback handlers."""
 
     blocking_executor: BlockingWorkExecutor | None = None
-    blocking_lock: Lock | None = None
+    blocking_lock: LockType | None = None
     retired: bool = False
 
     def close(self) -> None:
