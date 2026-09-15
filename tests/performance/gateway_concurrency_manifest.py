@@ -20,6 +20,7 @@ from src.database_settings import DatabaseAllocationSettings
 from src.spend_operation_settings import SpendOperationAllocation, SpendOperationSettings
 from src.ingress import IngressLimits
 from src.services.auth_fallback import AuthFallbackLimits
+from src.request_work_settings import RequestWorkSettings, resolve_request_work_settings
 
 
 class ServerManifest(BaseModel):
@@ -45,6 +46,7 @@ class ServerManifest(BaseModel):
     spend_operations: SpendOperationAllocation | None = None
     ingress: IngressLimits | None = None
     auth_fallback: AuthFallbackLimits | None = None
+    request_work: RequestWorkSettings | None = None
     image_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     cpu_limit_cores: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     memory_limit_mib: int | None = Field(default=None, gt=0)
@@ -74,6 +76,7 @@ async def local_manifest(api_processes: int) -> ServerManifest:
     # application config would unnecessarily resolve provider/master credentials.
     budget_fields = (
         set(DatabaseAllocationSettings.model_fields)
+        | set(RequestWorkSettings.model_fields)
         | set(SpendOperationSettings.model_fields)
         | {"spend_ingestion_mode", "spend_ingestion_worker_enabled", "telemetry_db_pool_size"}
     ) | {
@@ -128,6 +131,7 @@ async def local_manifest(api_processes: int) -> ServerManifest:
                 AuthFallbackLimits(), general, environment, prefix="auth_fallback_"
             )
         ),
+        request_work=resolve_request_work_settings(general, environment),
     )
 
 

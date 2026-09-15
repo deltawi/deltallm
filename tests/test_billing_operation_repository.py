@@ -32,7 +32,7 @@ async def test_reservation_locks_operation_then_accounts_then_capacity_with_four
     assert len(statements) == 4
     assert "set_config('statement_timeout'" in statements[0]
     assert "INSERT INTO deltallm_billing_operations" in statements[1]
-    assert "ON CONFLICT (operation_id) DO NOTHING RETURNING" in statements[1]
+    assert "ON CONFLICT DO NOTHING RETURNING" in statements[1]
     assert "deltallm_adjust_operation_hold" in statements[2]
     assert "pending_count=pending_count+1" in statements[3]
     assert result.selector_state is ComponentState.RESERVED

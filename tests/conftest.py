@@ -16,6 +16,8 @@ from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
 )
 from src.guardrails.middleware import GuardrailMiddleware
+from src.callbacks import CallbackManager
+from src.blocking_work import BlockingWorkExecutor
 from src.guardrails.registry import GuardrailRegistry
 from src.main import create_app
 from src.providers.bedrock import BedrockAdapter
@@ -1505,7 +1507,16 @@ async def test_app() -> FastAPI:
         deployment_registry=deployment_registry,
         state_backend=state_backend,
     )
-    app.state.guardrail_registry = GuardrailRegistry()
+    guardrail_executor = BlockingWorkExecutor(
+        allocation="guardrail",
+        workers=2,
+        max_pending=8,
+        max_bytes=33554432,
+        timeout_seconds=5,
+        shutdown_seconds=1,
+    )
+    app.state.callback_manager = CallbackManager()
+    app.state.guardrail_registry = GuardrailRegistry(executor=guardrail_executor)
     app.state.guardrail_middleware = GuardrailMiddleware(
         registry=app.state.guardrail_registry, cache_backend=redis
     )
@@ -1515,6 +1526,29 @@ async def test_app() -> FastAPI:
     app.state._test_key = raw_key
     app.state._test_repo = repo
     return app
+
+
+@pytest.fixture(autouse=True)
+def shutdown_test_request_work(request):
+    # Performance harnesses also await test_app.__wrapped__ directly. Keep its
+    # constructor contract while giving pytest-created runtimes an owned drain.
+    if "test_app" not in request.fixturenames:
+        yield
+        return
+    app = request.getfixturevalue("test_app")
+    loop = request.getfixturevalue("event_loop")
+    manager = app.state.callback_manager
+    executor = app.state.guardrail_registry.executor
+    yield
+
+    async def close():
+        active_manager = app.state.callback_manager
+        if isinstance(active_manager, CallbackManager) and active_manager is not manager:
+            await active_manager.shutdown()
+        await manager.shutdown()
+        await executor.shutdown()
+
+    loop.run_until_complete(close())
 
 
 @pytest.fixture

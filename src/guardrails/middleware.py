@@ -3,6 +3,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.blocking_work import WorkUnavailableError
+from src.models.errors import TimeoutError as RequestTimeoutError
+
 from src.guardrails.base import GuardrailAction, GuardrailMode
 from src.guardrails.exceptions import GuardrailViolationError
 from src.guardrails.registry import GuardrailRegistry
@@ -22,7 +25,9 @@ class GuardrailMiddleware:
         call_type: str,
         override_guardrails: list[str] | None = None,
     ) -> dict[str, Any]:
-        guardrails = self.registry.get_for_key(user_api_key_dict, override_guardrails=override_guardrails)
+        guardrails = self.registry.get_for_key(
+            user_api_key_dict, override_guardrails=override_guardrails
+        )
         pre_call = [item for item in guardrails if item.mode == GuardrailMode.PRE_CALL]
 
         modified = request_data
@@ -36,14 +41,22 @@ class GuardrailMiddleware:
                 )
                 if result is not None:
                     modified = result
+            except (WorkUnavailableError, RequestTimeoutError):
+                raise
             except GuardrailViolationError:
                 if guardrail.action == GuardrailAction.LOG:
-                    logger.warning("guardrail violation logged", extra={"guardrail": guardrail.name})
+                    logger.warning(
+                        "guardrail violation logged", extra={"guardrail": guardrail.name}
+                    )
                     continue
                 raise
             except Exception as exc:  # pragma: no cover - defensive branch
                 if guardrail.action == GuardrailAction.LOG:
-                    logger.exception("guardrail failed unexpectedly", extra={"guardrail": guardrail.name}, exc_info=exc)
+                    logger.exception(
+                        "guardrail failed unexpectedly",
+                        extra={"guardrail": guardrail.name},
+                        exc_info=exc,
+                    )
                     continue
                 raise GuardrailViolationError(
                     guardrail_name=guardrail.name,
@@ -64,7 +77,9 @@ class GuardrailMiddleware:
         override_guardrails: list[str] | None = None,
     ) -> None:
         del call_type
-        guardrails = self.registry.get_for_key(user_api_key_dict, override_guardrails=override_guardrails)
+        guardrails = self.registry.get_for_key(
+            user_api_key_dict, override_guardrails=override_guardrails
+        )
         post_call = [item for item in guardrails if item.mode == GuardrailMode.POST_CALL]
         for guardrail in post_call:
             try:
@@ -73,14 +88,22 @@ class GuardrailMiddleware:
                     user_api_key_dict=user_api_key_dict,
                     response=response_data,
                 )
+            except (WorkUnavailableError, RequestTimeoutError):
+                raise
             except GuardrailViolationError:
                 if guardrail.action == GuardrailAction.LOG:
-                    logger.warning("guardrail violation logged", extra={"guardrail": guardrail.name})
+                    logger.warning(
+                        "guardrail violation logged", extra={"guardrail": guardrail.name}
+                    )
                     continue
                 raise
             except Exception as exc:  # pragma: no cover - defensive branch
                 if guardrail.action == GuardrailAction.LOG:
-                    logger.exception("guardrail failed unexpectedly", extra={"guardrail": guardrail.name}, exc_info=exc)
+                    logger.exception(
+                        "guardrail failed unexpectedly",
+                        extra={"guardrail": guardrail.name},
+                        exc_info=exc,
+                    )
                     continue
                 raise GuardrailViolationError(
                     guardrail_name=guardrail.name,
@@ -99,7 +122,9 @@ class GuardrailMiddleware:
         override_guardrails: list[str] | None = None,
     ) -> None:
         del call_type
-        guardrails = self.registry.get_for_key(user_api_key_dict, override_guardrails=override_guardrails)
+        guardrails = self.registry.get_for_key(
+            user_api_key_dict, override_guardrails=override_guardrails
+        )
         for guardrail in guardrails:
             await guardrail.async_post_call_failure_hook(
                 request_data=request_data,

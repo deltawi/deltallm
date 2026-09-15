@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.request_deadline import inherited_request_deadline
+
 import asyncio
 import logging
 import math
@@ -683,7 +685,7 @@ class FailoverManager:
         )
 
     def create_request_deadline(self, timeout_seconds: float | None = None) -> RequestDeadline:
-        return RequestDeadline.after(self._effective_timeout(timeout_seconds))
+        return inherited_request_deadline(self._effective_timeout(timeout_seconds))
 
     async def select_context_fallback_for_local_rejection(
         self,

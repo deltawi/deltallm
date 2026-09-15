@@ -8,6 +8,8 @@ import os
 import socket
 from typing import Any
 
+from src.blocking_work import BlockingWorkExecutor
+from src.request_work_settings import resolve_request_work_settings
 from src.bootstrap.spend_operations import build_spend_operations
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.selector import configure_selector_execution
@@ -57,6 +59,7 @@ logger = logging.getLogger(__name__)
 class RuntimeServicesRuntime:
     callback_manager: CallbackManager
     governance_invalidation_service: GovernanceInvalidationService
+    guardrail_executor: BlockingWorkExecutor | None = None
     tier_policy_service: Any | None = None
     spend_ingestion_service: SpendIngestionService | None = None
     prompt_registry_service: PromptRegistryService | None = None
@@ -288,7 +291,16 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     )
     await app.state.governance_invalidation_service.start()
 
-    guardrail_registry = GuardrailRegistry()
+    request_work = resolve_request_work_settings(general_settings, app.state.settings)
+    guardrail_executor = BlockingWorkExecutor(
+        allocation="guardrail",
+        workers=request_work.guardrail_max_concurrency,
+        max_pending=request_work.guardrail_max_pending,
+        max_bytes=request_work.guardrail_max_bytes,
+        timeout_seconds=request_work.guardrail_timeout_seconds,
+        shutdown_seconds=request_work.guardrail_shutdown_seconds,
+    )
+    guardrail_registry = GuardrailRegistry(executor=guardrail_executor)
     if cfg.deltallm_settings.guardrails:
         guardrail_registry.load_from_config(cfg.deltallm_settings.guardrails)
     app.state.guardrail_registry = guardrail_registry
@@ -297,7 +309,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         cache_backend=app.state.cache_redis,
     )
 
-    callback_manager = CallbackManager()
+    callback_manager = CallbackManager(request_work)
     callback_manager.load_from_settings(
         success_callbacks=cfg.deltallm_settings.success_callback,
         failure_callbacks=cfg.deltallm_settings.failure_callback,
@@ -539,6 +551,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 
     runtime = RuntimeServicesRuntime(
         callback_manager=callback_manager,
+        guardrail_executor=guardrail_executor,
         governance_invalidation_service=app.state.governance_invalidation_service,
         tier_policy_service=app.state.tier_policy_service,
         spend_ingestion_service=spend_ingestion_service,
@@ -569,6 +582,8 @@ async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
     async with AsyncExitStack() as cleanup:
         cleanup.push_async_callback(close_shared_client)
         cleanup.push_async_callback(runtime.callback_manager.shutdown)
+        if runtime.guardrail_executor is not None:
+            cleanup.push_async_callback(runtime.guardrail_executor.shutdown)
         cleanup.push_async_callback(runtime.governance_invalidation_service.close)
         tier_policy_service = runtime.tier_policy_service
         if tier_policy_service is not None and callable(

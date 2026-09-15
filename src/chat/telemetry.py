@@ -191,7 +191,6 @@ async def emit_stream_success(
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),
         ),
-        wait_for_completion=True,
     )
     await emit_text_audit_event(
         request=request,

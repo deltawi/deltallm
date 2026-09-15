@@ -1,0 +1,636 @@
+{
+  "after-25rps": {
+    "summary": "after-25rps/gateway-load-0eb0203d88a04574a770552642ca8de5-summary.json",
+    "status_counts": {
+      "200": 176,
+      "503": 74
+    },
+    "success_count": 176,
+    "target_count": 250,
+    "offered_rps": 25.0,
+    "errors": {
+      "gateway_ingress_full": 74
+    },
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "latency_ms": {
+      "max": 59.34545899799559,
+      "mean": 28.7121063163504,
+      "p50": 35.53404100239277,
+      "p95": 50.38345800130628,
+      "p99": 57.855042003211565
+    },
+    "dependency_deltas_including_background": {
+      "cmdstat_client|setinfo": 0,
+      "cmdstat_decr": 0,
+      "cmdstat_decrby": 0,
+      "cmdstat_del": 1232,
+      "cmdstat_eval": 880,
+      "cmdstat_evalsha": 0,
+      "cmdstat_exec": 528,
+      "cmdstat_exists": 704,
+      "cmdstat_expire": 880,
+      "cmdstat_get": 880,
+      "cmdstat_hdel": 352,
+      "cmdstat_hget": 704,
+      "cmdstat_hgetall": 176,
+      "cmdstat_hincrby": 0,
+      "cmdstat_hset": 176,
+      "cmdstat_incr": 0,
+      "cmdstat_incrby": 352,
+      "cmdstat_mget": 352,
+      "cmdstat_multi": 528,
+      "cmdstat_pexpire": 176,
+      "cmdstat_pexpireat": 352,
+      "cmdstat_ping": 0,
+      "cmdstat_pttl": 176,
+      "cmdstat_publish": 0,
+      "cmdstat_scan": 0,
+      "cmdstat_script|load": 0,
+      "cmdstat_set": 176,
+      "cmdstat_setex": 0,
+      "cmdstat_subscribe": 0,
+      "cmdstat_time": 176,
+      "cmdstat_ttl": 0,
+      "cmdstat_unsubscribe": 0,
+      "cmdstat_zadd": 704,
+      "cmdstat_zcard": 1056,
+      "cmdstat_zincrby": 0,
+      "cmdstat_zrangebyscore": 0,
+      "cmdstat_zrem": 528,
+      "cmdstat_zremrangebyscore": 704,
+      "cmdstat_zrevrange": 176,
+      "cmdstat_zscore": 0,
+      "postgres_calls_including_background": 9233
+    },
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_audit_oldest_event_age_seconds:": {
+        "first": 0.008721,
+        "max": 0.008721,
+        "last": 0.00743
+      },
+      "deltallm_database_allocation_occupied:allocation=control": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=foreground": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_settlement": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_worker": {
+        "first": 2.0,
+        "max": 2.0,
+        "last": 2.0
+      },
+      "deltallm_ingress_active:allocation=health": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_ingress_active:allocation=inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds:": {
+        "first": 0.0,
+        "max": 0.017076,
+        "last": 0.0
+      },
+      "deltallm_event_loop_last_lag_seconds:": {
+        "first": 0.0009999999892897904,
+        "max": 0.0010000000183936208,
+        "last": 0.0
+      }
+    },
+    "metric_counter_deltas": {
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=query": 180.0,
+      "deltallm_database_allocation_seconds_count:allocation=foreground,operation=query": 182.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=query": 1416.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=finish": 888.0,
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=finish": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=finish": 352.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=finish": 176.0,
+      "deltallm_spend_operation_transitions_total:state=dispatched": 176.0,
+      "deltallm_spend_operation_transitions_total:state=accepted": 176.0
+    }
+  },
+  "after-5rps": {
+    "summary": "after-5rps/gateway-load-a0537635ee4c470692dbe30e25745550-summary.json",
+    "status_counts": {
+      "200": 50
+    },
+    "success_count": 50,
+    "target_count": 50,
+    "offered_rps": 5.0,
+    "errors": {},
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "latency_ms": {
+      "max": 62.183333007851616,
+      "mean": 37.0092891191598,
+      "p50": 36.49679198861122,
+      "p95": 42.008499993244186,
+      "p99": 62.183333007851616
+    },
+    "dependency_deltas_including_background": {
+      "cmdstat_client|setinfo": 0,
+      "cmdstat_decr": 0,
+      "cmdstat_decrby": 0,
+      "cmdstat_del": 350,
+      "cmdstat_eval": 250,
+      "cmdstat_evalsha": 0,
+      "cmdstat_exec": 150,
+      "cmdstat_exists": 200,
+      "cmdstat_expire": 250,
+      "cmdstat_get": 250,
+      "cmdstat_hdel": 100,
+      "cmdstat_hget": 200,
+      "cmdstat_hgetall": 50,
+      "cmdstat_hincrby": 0,
+      "cmdstat_hset": 50,
+      "cmdstat_incr": 0,
+      "cmdstat_incrby": 100,
+      "cmdstat_mget": 100,
+      "cmdstat_multi": 150,
+      "cmdstat_pexpire": 50,
+      "cmdstat_pexpireat": 100,
+      "cmdstat_ping": 0,
+      "cmdstat_pttl": 50,
+      "cmdstat_publish": 0,
+      "cmdstat_scan": 0,
+      "cmdstat_script|load": 0,
+      "cmdstat_set": 50,
+      "cmdstat_setex": 0,
+      "cmdstat_subscribe": 0,
+      "cmdstat_time": 50,
+      "cmdstat_ttl": 0,
+      "cmdstat_unsubscribe": 0,
+      "cmdstat_zadd": 200,
+      "cmdstat_zcard": 300,
+      "cmdstat_zincrby": 0,
+      "cmdstat_zrangebyscore": 0,
+      "cmdstat_zrem": 150,
+      "cmdstat_zremrangebyscore": 200,
+      "cmdstat_zrevrange": 50,
+      "cmdstat_zscore": 0,
+      "postgres_calls_including_background": 3503
+    },
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds:": {
+        "first": 0.008188,
+        "max": 0.009878,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=control": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=foreground": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_settlement": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_worker": {
+        "first": 2.0,
+        "max": 2.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_active:allocation=health": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_ingress_active:allocation=inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds:": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_event_loop_last_lag_seconds:": {
+        "first": 0.0,
+        "max": 0.0010000000183936208,
+        "last": 0.0010000000183936208
+      }
+    },
+    "metric_counter_deltas": {
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=query": 56.0,
+      "deltallm_database_allocation_seconds_count:allocation=foreground,operation=query": 57.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=query": 656.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=finish": 404.0,
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=finish": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=finish": 100.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=finish": 50.0,
+      "deltallm_spend_operation_transitions_total:state=dispatched": 50.0,
+      "deltallm_spend_operation_transitions_total:state=accepted": 50.0
+    }
+  },
+  "before-25rps": {
+    "summary": "before-25rps/gateway-load-1149a1b48fff4e638cdaccdfcd6d9c4e-summary.json",
+    "status_counts": {
+      "200": 192,
+      "503": 58
+    },
+    "success_count": 192,
+    "target_count": 250,
+    "offered_rps": 25.0,
+    "errors": {
+      "gateway_ingress_full": 58
+    },
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "latency_ms": {
+      "max": 62.19287498970516,
+      "mean": 28.898787175887264,
+      "p50": 36.19787500065286,
+      "p95": 44.45004199806135,
+      "p99": 53.052542003570125
+    },
+    "dependency_deltas_including_background": {
+      "cmdstat_client|setinfo": 0,
+      "cmdstat_decr": 0,
+      "cmdstat_decrby": 0,
+      "cmdstat_del": 1344,
+      "cmdstat_eval": 960,
+      "cmdstat_evalsha": 0,
+      "cmdstat_exec": 576,
+      "cmdstat_exists": 768,
+      "cmdstat_expire": 960,
+      "cmdstat_get": 960,
+      "cmdstat_hdel": 384,
+      "cmdstat_hget": 768,
+      "cmdstat_hgetall": 192,
+      "cmdstat_hincrby": 0,
+      "cmdstat_hset": 192,
+      "cmdstat_incr": 0,
+      "cmdstat_incrby": 384,
+      "cmdstat_mget": 384,
+      "cmdstat_multi": 576,
+      "cmdstat_pexpire": 192,
+      "cmdstat_pexpireat": 384,
+      "cmdstat_ping": 0,
+      "cmdstat_pttl": 192,
+      "cmdstat_publish": 0,
+      "cmdstat_scan": 0,
+      "cmdstat_script|load": 0,
+      "cmdstat_set": 192,
+      "cmdstat_setex": 0,
+      "cmdstat_subscribe": 0,
+      "cmdstat_time": 192,
+      "cmdstat_ttl": 0,
+      "cmdstat_unsubscribe": 0,
+      "cmdstat_zadd": 768,
+      "cmdstat_zcard": 1152,
+      "cmdstat_zincrby": 0,
+      "cmdstat_zrangebyscore": 0,
+      "cmdstat_zrem": 576,
+      "cmdstat_zremrangebyscore": 768,
+      "cmdstat_zrevrange": 192,
+      "cmdstat_zscore": 0,
+      "postgres_calls_including_background": 10135
+    },
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_audit_oldest_event_age_seconds:": {
+        "first": 0.007573,
+        "max": 0.007573,
+        "last": 0.00547
+      },
+      "deltallm_database_allocation_occupied:allocation=control": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=foreground": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_settlement": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_worker": {
+        "first": 2.0,
+        "max": 2.0,
+        "last": 1.0
+      },
+      "deltallm_ingress_active:allocation=health": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_ingress_active:allocation=inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds:": {
+        "first": 0.0,
+        "max": 0.01428,
+        "last": 0.0
+      },
+      "deltallm_event_loop_last_lag_seconds:": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      }
+    },
+    "metric_counter_deltas": {
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=query": 196.0,
+      "deltallm_database_allocation_seconds_count:allocation=foreground,operation=query": 199.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=query": 1561.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=finish": 984.0,
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=finish": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=finish": 384.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=finish": 192.0,
+      "deltallm_spend_operation_transitions_total:state=dispatched": 192.0,
+      "deltallm_spend_operation_transitions_total:state=accepted": 192.0
+    }
+  },
+  "before-5rps": {
+    "summary": "before-5rps/gateway-load-fee4fff32beb40768cc3a761ab009bef-summary.json",
+    "status_counts": {
+      "200": 50
+    },
+    "success_count": 50,
+    "target_count": 50,
+    "offered_rps": 5.0,
+    "errors": {},
+    "generator_drops": 0,
+    "metrics_scrape_errors": 0,
+    "latency_ms": {
+      "max": 51.886500004911795,
+      "mean": 29.73780822067056,
+      "p50": 28.78395801235456,
+      "p95": 32.02879198943265,
+      "p99": 51.886500004911795
+    },
+    "dependency_deltas_including_background": {
+      "cmdstat_client|setinfo": 0,
+      "cmdstat_decr": 0,
+      "cmdstat_decrby": 0,
+      "cmdstat_del": 350,
+      "cmdstat_eval": 250,
+      "cmdstat_evalsha": 0,
+      "cmdstat_exec": 150,
+      "cmdstat_exists": 200,
+      "cmdstat_expire": 250,
+      "cmdstat_get": 250,
+      "cmdstat_hdel": 100,
+      "cmdstat_hget": 200,
+      "cmdstat_hgetall": 50,
+      "cmdstat_hincrby": 0,
+      "cmdstat_hset": 50,
+      "cmdstat_incr": 0,
+      "cmdstat_incrby": 100,
+      "cmdstat_mget": 100,
+      "cmdstat_multi": 150,
+      "cmdstat_pexpire": 50,
+      "cmdstat_pexpireat": 100,
+      "cmdstat_ping": 0,
+      "cmdstat_pttl": 50,
+      "cmdstat_publish": 0,
+      "cmdstat_scan": 0,
+      "cmdstat_script|load": 0,
+      "cmdstat_set": 50,
+      "cmdstat_setex": 0,
+      "cmdstat_subscribe": 0,
+      "cmdstat_time": 50,
+      "cmdstat_ttl": 0,
+      "cmdstat_unsubscribe": 0,
+      "cmdstat_zadd": 200,
+      "cmdstat_zcard": 300,
+      "cmdstat_zincrby": 0,
+      "cmdstat_zrangebyscore": 0,
+      "cmdstat_zrem": 150,
+      "cmdstat_zremrangebyscore": 200,
+      "cmdstat_zrevrange": 50,
+      "cmdstat_zscore": 0,
+      "postgres_calls_including_background": 3503
+    },
+    "sampled_gauges": {
+      "deltallm_audit_queue_depth:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_audit_oldest_event_age_seconds:": {
+        "first": 0.007004,
+        "max": 0.007004,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=control": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=foreground": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_settlement": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_database_allocation_occupied:allocation=telemetry_worker": {
+        "first": 2.0,
+        "max": 2.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_active:allocation=health": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 1.0
+      },
+      "deltallm_ingress_active:allocation=inference": {
+        "first": 0.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_waiters:allocation=inference": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=health": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_ingress_buffered_bytes:allocation=inference": {
+        "first": 0.0,
+        "max": 144.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_backlog:": {
+        "first": 1.0,
+        "max": 1.0,
+        "last": 0.0
+      },
+      "deltallm_spend_ingestion_oldest_event_age_seconds:": {
+        "first": 0.0,
+        "max": 0.0,
+        "last": 0.0
+      },
+      "deltallm_event_loop_last_lag_seconds:": {
+        "first": 0.0010000000183936208,
+        "max": 0.0010000000183936208,
+        "last": 0.0009999999892897904
+      }
+    },
+    "metric_counter_deltas": {
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=query": 56.0,
+      "deltallm_database_allocation_seconds_count:allocation=foreground,operation=query": 57.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=query": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=query": 656.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_worker,operation=finish": 404.0,
+      "deltallm_database_allocation_seconds_count:allocation=control,operation=finish": 0.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry,operation=finish": 100.0,
+      "deltallm_database_allocation_seconds_count:allocation=telemetry_settlement,operation=finish": 50.0,
+      "deltallm_spend_operation_transitions_total:state=dispatched": 50.0,
+      "deltallm_spend_operation_transitions_total:state=accepted": 50.0
+    }
+  }
+}

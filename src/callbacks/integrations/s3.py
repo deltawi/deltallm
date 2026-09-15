@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import gzip
 import json
 import logging
@@ -15,6 +14,7 @@ logger = logging.getLogger(__name__)
 try:
     import boto3
     from botocore.exceptions import ClientError
+    from botocore.config import Config
 
     BOTO3_AVAILABLE = True
 except ImportError:
@@ -42,7 +42,16 @@ class S3Callback(CustomLogger):
     @property
     def s3(self):
         if self._s3 is None:
-            self._s3 = boto3.client("s3", region_name=self.region)
+            self._s3 = boto3.client(
+                "s3",
+                region_name=self.region,
+                config=Config(
+                    connect_timeout=5,
+                    read_timeout=5,
+                    max_pool_connections=1,
+                    retries={"total_max_attempts": 1},
+                ),
+            )
         return self._s3
 
     def _generate_key(self, kwargs: dict[str, Any]) -> str:
@@ -59,6 +68,11 @@ class S3Callback(CustomLogger):
             key += ".gz"
         return key
 
+    def close(self) -> None:
+        if self._s3 is not None:
+            self._s3.close()
+            self._s3 = None
+
     async def async_log_success_event(
         self,
         kwargs: dict[str, Any],
@@ -66,7 +80,7 @@ class S3Callback(CustomLogger):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        await asyncio.to_thread(self._upload_log, kwargs, response_obj, start_time, end_time, None)
+        await self.run_blocking(self._upload_log, kwargs, response_obj, start_time, end_time, None)
 
     async def async_log_failure_event(
         self,
@@ -75,7 +89,7 @@ class S3Callback(CustomLogger):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        await asyncio.to_thread(self._upload_log, kwargs, None, start_time, end_time, exception)
+        await self.run_blocking(self._upload_log, kwargs, None, start_time, end_time, exception)
 
     def _upload_log(
         self,
@@ -130,12 +144,13 @@ class S3Callback(CustomLogger):
                 Key=self._generate_key(kwargs),
                 Body=body,
                 ContentType="application/json",
-                ContentEncoding="gzip" if self.compression == "gzip" else None,
+                **({"ContentEncoding": "gzip"} if self.compression == "gzip" else {}),
                 Metadata={
                     "model": str(kwargs.get("model") or "unknown"),
                     "user": str(kwargs.get("user") or "unknown"),
                     "team": str(kwargs.get("team_id") or "unknown"),
                 },
             )
-        except ClientError as exc:
-            logger.warning("s3 upload failed: %s", exc)
+        except ClientError:
+            logger.warning("s3 upload failed")
+            raise

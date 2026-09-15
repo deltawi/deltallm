@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from typing import Any
 
 from fastapi import Request
 
 from src.models.errors import BudgetExceededError
 from src.providers.request_defaults import provider_request_defaults
-
-logger = logging.getLogger(__name__)
 
 
 def apply_default_params(
@@ -52,15 +48,3 @@ async def enforce_budget_if_configured(
             code="budget_exceeded",
         ) from exc
     request.state.budget_checked = True
-
-
-def fire_and_forget(coro: Any) -> None:
-    task = asyncio.create_task(coro)
-
-    def _on_done(done_task: asyncio.Task) -> None:
-        try:
-            done_task.result()
-        except Exception as exc:  # pragma: no cover
-            logger.warning("background side effect failed: %s", exc)
-
-    task.add_done_callback(_on_done)
