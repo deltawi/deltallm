@@ -75,7 +75,11 @@ inside the request deadline. They are distinct from required guardrail policy.
 Callback errors or overflow do not change a successful provider response. Delivery
 does not retry integrations. Capacity remains charged until actual task/thread
 completion, including cancellation-resistant extensions. Shutdown stops admission,
-waits for its grace, then cancels pending async/queued thread work. Python cannot
+waits for its grace, then cancels pending async/queued thread work. Cancelling or
+timing out a queued synchronous call keeps its slot and byte charge until a worker
+dequeues and skips it. Repeated disconnects cannot create replacement capacity
+while the queue still retains those payloads. Executor shutdown physically removes
+queued calls after closing admission. Python cannot
 kill an already-running thread; a permanently blocked extension can retain a bounded
 slot until process termination. Monitor this condition and fix or disable the
 extension before restarting. Process termination/drain coordination remains PR8 scope.
@@ -99,7 +103,9 @@ adapters have their own allocation and cannot consume guardrail execution slots.
 | `guardrail_shutdown_seconds` | 5 | Executor drain grace |
 
 The earliest request/guardrail timeout stops waiting. A running inspection keeps
-its slot and byte charge until completion; late results are discarded. Full,
+its slot and byte charge until completion; late results are discarded. Cancelled
+queued inspections retain the same charge until dequeued and skipped, so a blocked
+worker can keep the allocation full even after its callers have disconnected. Full,
 oversized or unavailable execution returns local HTTP 503
 `gateway_work_unavailable` and does not call or penalize the provider. Required
 guardrails are never skipped because execution capacity is exhausted.

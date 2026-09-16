@@ -48,6 +48,8 @@ work continues to occupy its allocation; it must never create replacement capaci
 Bootstrap owns guardrail and callback blocking allocations through one executor
 implementation. Threads cannot safely be killed: cancellation stops waiting and
 discards late results, while the executor retains capacity until actual completion.
+Queued cancellation marks work as abandoned without completing its pool future:
+the entry retains its count/byte charge until a worker dequeues and skips it.
 Shutdown stops admission, cancels queued work and waits only for its declared grace;
 remaining running work stays bounded. Required guardrail overload fails closed with
 a local unavailable error and never reaches the provider. Registry reloads reuse
@@ -86,6 +88,24 @@ locked operation-ID lookup and frozen ownership/snapshot check. Concurrent repla
 and injected selector-event collision tests verify one hold/capacity slot and
 rejection of a different operation. The transaction deadline, lock order and SQL
 call count remain unchanged; no retries or global locks were added.
+
+A subsequent review found that cancelling a queued pool future released accounting
+before Python's thread pool removed its work item and payload. Repeated disconnects
+behind a blocked worker could therefore exceed both admission bounds. The executor
+now marks abandoned work with a thread-safe flag, skips it on dequeue and records
+cancelled completion then. Shutdown still physically drains queued entries after
+closing admission. This keeps the existing owner and executor instead of adding a
+second queue or relying on private thread-pool internals. The trade-off is explicit
+load shedding while blocked workers retain abandoned entries; no dependency calls,
+retries, configuration limits or public error contracts change.
+
+Regression tests offer 100 distinct 256-KiB payloads behind one blocked worker.
+Independent weak references demonstrate that the old code retains all 100 while
+reporting no queued work. The fix retains one and rejects the other 99 for both
+count and byte bounds, under both caller cancellation and timeout. Tests verify
+that skipped functions never run, metrics complete only on dequeue, capacity
+recovers after drain, and shutdown removes queued payloads without waiting for the
+running worker.
 
 [Measurements](../project/benchmarks/request-work-2026-09-15/README.md) retain raw
 HTTP, callback, CPU, dependency and shutdown evidence. Callback retention is bounded

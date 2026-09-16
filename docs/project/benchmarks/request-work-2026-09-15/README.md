@@ -115,6 +115,52 @@ no address. At 5,000 / 10,000 / 20,000 characters, before takes
 26.60 / 105.27 / 416.56 ms; after takes 0.06 / 0.12 / 0.26 ms. Starting only at a
 local-part boundary removes repeated suffix scans while retaining email detection.
 
+## Queued-cancellation follow-up — September 16, 2026
+
+Review of `363a885f` found that cancelling queued thread-pool futures released
+admission capacity while their work items still retained payloads behind blocked
+workers. The fix marks them abandoned and keeps their capacity charged until a
+worker dequeues and skips them. Shutdown closes admission and physically removes
+queued work. The existing real-pool regression offers 100 distinct 256-KiB payloads
+behind one blocked worker: the old code retains 25 MiB despite a 1-MiB byte limit;
+the fix retains one 256-KiB queued payload, rejects 99 further submissions, and
+releases all payloads on drain. The test also covers timeout, a tighter byte bound,
+recovery, cancellation metrics, and queue removal during bounded shutdown.
+
+The unchanged component harness was run sequentially against `363a885f` and the
+fix, with the same Python 3.11.13 environment and no tests running concurrently.
+[Before](cancellation-before.json) and [after](cancellation-after.json) contain raw
+samples and source hashes. Both use `--mode after`, which selects PR7's bounded
+architecture; filenames distinguish the cancellation fix. The after manifest
+records the pre-commit HEAD, with source SHA-256
+`86e048be71e62b07de704de9b21a5a989dc8eeefd55cf920985fa497ba1e2efe`.
+
+| Component metric | Before fix | After fix |
+| --- | ---: | ---: |
+| CPU inspections completed / offered at 80/second | 240 / 240 | 240 / 240 |
+| Inspection latency from scheduled arrival p50 / p95 / p99 | 6.98 / 7.66 / 9.40 ms | 7.08 / 8.78 / 17.27 ms |
+| CPU event-loop lag p95 / p99 | 0.71 / 0.79 ms | 0.71 / 0.88 ms |
+| CPU pending / charged bytes after drain | 0 / 0 | 0 / 0 |
+| Stalled callback pending / charged bytes | 16 / 546,420 | 16 / 546,420 |
+| Callback pending / charged bytes after drain | 0 / 0 | 0 / 0 |
+
+These short component samples measure ordinary scheduling overhead, not the
+cancelled-queue burst itself or HTTP capacity. The barrier/weak-reference regression
+proves the cancellation bound independently. Neither probe performs SQL, Redis or
+provider calls (zero before/after); the production fix adds none. Inspection tail
+latency increased in this sample, so no latency improvement is claimed.
+
+To reproduce, use the PR7 Python environment and run the same harness from each
+checkout, with the checkout as both working directory and `PYTHONPATH`:
+
+```bash
+PYTHONPATH=. /absolute/path/to/pr7/.venv/bin/python \
+  /absolute/path/to/pr7/tests/performance/measure_request_work.py \
+  --mode after --output /absolute/path/to/cancellation-before.json
+# Repeat from the fixed checkout, writing cancellation-after.json.
+uv run pytest -q tests/test_bounded_work.py
+```
+
 ## Reproduction and validation
 
 Use the [canonical fixture instructions](../../../deployment/concurrency-measurement.md)

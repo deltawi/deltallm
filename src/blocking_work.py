@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import Context
+from threading import Event
 from time import perf_counter
 from typing import Literal, TypeVar
 
@@ -14,6 +15,10 @@ from src.models.errors import ServiceUnavailableError
 
 T = TypeVar("T")
 Allocation = Literal["guardrail", "callback_sync"]
+
+
+class _QueuedWorkCancelled(Exception):
+    """The worker dequeued abandoned work without calling its function."""
 
 
 class WorkUnavailableError(ServiceUnavailableError):
@@ -76,7 +81,14 @@ class BlockingWorkExecutor:
         # Inference context contains the ASGI timer/task. Do not retain that
         # request graph in a thread after its waiter has been cancelled.
         context = Context()
-        future = self._executor.submit(context.run, function)
+        abandoned = Event()
+
+        def execute() -> T:
+            if abandoned.is_set():
+                raise _QueuedWorkCancelled()
+            return function()
+
+        future = self._executor.submit(context.run, execute)
         self._pending[future] = payload_bytes
         self._bytes += payload_bytes
         work_in_flight.labels(self.allocation).inc()
@@ -99,10 +111,13 @@ class BlockingWorkExecutor:
             async with asyncio.timeout(self.timeout_seconds):
                 return await asyncio.shield(wrapped)
         except TimeoutError as exc:
-            future.cancel()  # Cancels only work that has not started.
+            abandoned.set()
             raise WorkUnavailableError(reason="timeout") from exc
         except BaseException:
-            future.cancel()
+            # Future.cancel() completes a queued future without removing the
+            # pool's work item or payload. Keep it charged until a worker dequeues
+            # and skips it; running work also stays charged until real completion.
+            abandoned.set()
             raise
 
     def _completed(self, future: Future[object], started: float) -> None:
@@ -110,8 +125,13 @@ class BlockingWorkExecutor:
         self._bytes -= size
         work_in_flight.labels(self.allocation).dec()
         work_bytes.labels(self.allocation).dec(size)
+        error = None if future.cancelled() else future.exception()
         outcome = (
-            "cancelled" if future.cancelled() else "failed" if future.exception() else "completed"
+            "cancelled"
+            if future.cancelled() or isinstance(error, _QueuedWorkCancelled)
+            else "failed"
+            if error is not None
+            else "completed"
         )
         work_duration.labels(self.allocation, outcome).observe(perf_counter() - started)
         if self.on_completion is not None:
@@ -120,6 +140,8 @@ class BlockingWorkExecutor:
     async def shutdown(self) -> None:
         self._closed = True
         pending = tuple(self._pending)
+        # Unlike caller cancellation, executor shutdown physically drains queued
+        # work items. Admission is closed before those futures release capacity.
         self._executor.shutdown(wait=False, cancel_futures=True)
         if pending:
             wrapped = [Context().run(asyncio.wrap_future, future) for future in pending]
