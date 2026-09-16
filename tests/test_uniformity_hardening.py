@@ -495,7 +495,8 @@ async def test_audio_transcription_preserves_600_second_default_timeout(client, 
     assert response.status_code == 200
     timeout = captured["timeout"]
     assert isinstance(timeout, httpx.Timeout)
-    assert timeout.read == 600.0
+    # The read limit keeps its 600s ceiling but consumes the ingress budget.
+    assert 590 < timeout.read < 600.0
     assert captured["failover_timeout_seconds"] is None
     timeout_for_deployment = captured["timeout_for_deployment"]
     assert callable(timeout_for_deployment)
@@ -591,7 +592,9 @@ async def test_audio_transcription_route_policy_timeout_overrides_default_failov
     assert captured["timeout_for_deployment"] is None
     timeout = captured["timeout"]
     assert isinstance(timeout, httpx.Timeout)
-    assert timeout.read == 600.0
+    # This fake manager captures policy without executing it; ingress still caps
+    # the transport. Actual route-policy shortening is covered by deadline tests.
+    assert 590 < timeout.read < 600.0
 
 
 @pytest.mark.asyncio

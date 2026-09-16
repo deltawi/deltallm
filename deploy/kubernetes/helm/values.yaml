@@ -266,6 +266,18 @@ config:
     auth_fallback_timeout_seconds: 0.5
     auth_fallback_cache_timeout_seconds: 0.1
     auth_fallback_cache_max_bytes: 131072
+    # Startup-only callback delivery and guardrail execution bounds.
+    callback_max_pending: 128
+    callback_max_concurrency: 4
+    callback_max_payload_bytes: 262144
+    callback_max_bytes: 8388608
+    callback_timeout_seconds: 5
+    callback_shutdown_seconds: 5
+    guardrail_max_concurrency: 2
+    guardrail_max_pending: 8
+    guardrail_max_bytes: 33554432
+    guardrail_timeout_seconds: 5
+    guardrail_shutdown_seconds: 5
     gateway_ingress_enabled: false
     gateway_ingress_max_active: 100
     gateway_ingress_max_waiters: 0

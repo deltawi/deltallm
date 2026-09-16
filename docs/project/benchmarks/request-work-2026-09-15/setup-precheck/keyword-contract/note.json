@@ -1,0 +1,1 @@
+{"excluded":true,"reason":"The component probe did not accept the baseline callback keyword signature. Review also restored keyword invocation in PR7 delivery. Repeat the component pair and final after HTTP sample; baseline HTTP source and samples are unchanged."}

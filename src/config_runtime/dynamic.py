@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.database_settings import DATABASE_ALLOCATION_FIELDS
 from src.spend_operation_settings import SpendOperationSettings
+from src.request_work_settings import RequestWorkSettings
 
 import asyncio
 import json
@@ -54,58 +55,62 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
         self.committed_app_config = committed_app_config.model_copy(deep=True)
 
 
-_STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
-    {
-        "spend_ingestion_worker_enabled",
-        "spend_operation_intents_enabled",
-        "spend_settlement_db_pool_size",
-        "budget_notifications_enabled",
-        "budget_alert_ttl_seconds",
-        "redis_bulk_url",
-        "redis_critical_max_connections",
-        "redis_cache_max_connections",
-        "redis_bulk_max_connections",
-        "redis_acquisition_timeout_seconds",
-        "redis_socket_timeout_seconds",
-        "redis_connect_timeout_seconds",
-        "gateway_ingress_control_max_active",
-        "gateway_ingress_control_max_buffered_bytes",
-        "auth_fallback_max_active",
-        "auth_fallback_max_waiters",
-        "auth_fallback_queue_timeout_ms",
-        "auth_fallback_timeout_seconds",
-        "auth_fallback_cache_timeout_seconds",
-        "auth_fallback_cache_max_bytes",
-        "gateway_ingress_enabled",
-        "gateway_ingress_max_active",
-        "gateway_ingress_max_waiters",
-        "gateway_ingress_queue_timeout_ms",
-        "gateway_ingress_max_body_bytes",
-        "gateway_ingress_max_buffered_bytes",
-        "gateway_ingress_body_timeout_seconds",
-        "gateway_ingress_health_max_active",
-        "provider_discovery_allow_http",
-        "provider_discovery_allowed_ports",
-        "provider_discovery_allowed_private_cidrs",
-        "database_url",
-        "db_pool_size",
-        "db_pool_timeout",
-        "telemetry_db_pool_size",
-        "telemetry_db_pool_timeout_seconds",
-        "spend_ingestion_mode",
-        "audit_ingestion_mode",
-        "prompt_singleflight_max_keys",
-        "prompt_singleflight_timeout_seconds",
-        "email_enabled",
-        "email_worker_enabled",
-        "email_worker_poll_interval_seconds",
-        "email_worker_max_concurrency",
-        "email_worker_batch_size",
-        "email_worker_delivery_lease_seconds",
-        "email_worker_audit_lease_seconds",
-        "email_worker_startup_timeout_seconds",
-        "email_worker_shutdown_drain_timeout_seconds",
-    }
+_STARTUP_ONLY_GENERAL_SETTINGS = (
+    DATABASE_ALLOCATION_FIELDS
+    | frozenset(RequestWorkSettings.model_fields)
+    | frozenset(
+        {
+            "spend_ingestion_worker_enabled",
+            "spend_operation_intents_enabled",
+            "spend_settlement_db_pool_size",
+            "budget_notifications_enabled",
+            "budget_alert_ttl_seconds",
+            "redis_bulk_url",
+            "redis_critical_max_connections",
+            "redis_cache_max_connections",
+            "redis_bulk_max_connections",
+            "redis_acquisition_timeout_seconds",
+            "redis_socket_timeout_seconds",
+            "redis_connect_timeout_seconds",
+            "gateway_ingress_control_max_active",
+            "gateway_ingress_control_max_buffered_bytes",
+            "auth_fallback_max_active",
+            "auth_fallback_max_waiters",
+            "auth_fallback_queue_timeout_ms",
+            "auth_fallback_timeout_seconds",
+            "auth_fallback_cache_timeout_seconds",
+            "auth_fallback_cache_max_bytes",
+            "gateway_ingress_enabled",
+            "gateway_ingress_max_active",
+            "gateway_ingress_max_waiters",
+            "gateway_ingress_queue_timeout_ms",
+            "gateway_ingress_max_body_bytes",
+            "gateway_ingress_max_buffered_bytes",
+            "gateway_ingress_body_timeout_seconds",
+            "gateway_ingress_health_max_active",
+            "provider_discovery_allow_http",
+            "provider_discovery_allowed_ports",
+            "provider_discovery_allowed_private_cidrs",
+            "database_url",
+            "db_pool_size",
+            "db_pool_timeout",
+            "telemetry_db_pool_size",
+            "telemetry_db_pool_timeout_seconds",
+            "spend_ingestion_mode",
+            "audit_ingestion_mode",
+            "prompt_singleflight_max_keys",
+            "prompt_singleflight_timeout_seconds",
+            "email_enabled",
+            "email_worker_enabled",
+            "email_worker_poll_interval_seconds",
+            "email_worker_max_concurrency",
+            "email_worker_batch_size",
+            "email_worker_delivery_lease_seconds",
+            "email_worker_audit_lease_seconds",
+            "email_worker_startup_timeout_seconds",
+            "email_worker_shutdown_drain_timeout_seconds",
+        }
+    )
 )
 
 
@@ -473,6 +478,7 @@ class DynamicConfigManager:
                     field_name.startswith(("redis_", "gateway_ingress_", "auth_fallback_"))
                     or field_name in DATABASE_ALLOCATION_FIELDS
                     or field_name in SpendOperationSettings.model_fields
+                    or field_name in RequestWorkSettings.model_fields
                     or field_name == "spend_ingestion_worker_enabled"
                 )
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)

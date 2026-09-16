@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import datetime
 from typing import Any
@@ -41,8 +40,18 @@ class LangfuseCallback(CustomLogger):
                 secret_key=self.secret_key,
                 host=self.host,
                 release=self.release,
+                threads=1,
+                timeout=5,
+                max_retries=1,
+                flush_at=1,
             )
         return self._client
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.shutdown()
+            self._client.httpx_client.close()
+            self._client = None
 
     async def async_log_success_event(
         self,
@@ -51,7 +60,7 @@ class LangfuseCallback(CustomLogger):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        await asyncio.to_thread(self._log_success, kwargs, response_obj, start_time, end_time)
+        await self.run_blocking(self._log_success, kwargs, response_obj, start_time, end_time)
 
     async def async_log_failure_event(
         self,
@@ -60,7 +69,7 @@ class LangfuseCallback(CustomLogger):
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        await asyncio.to_thread(self._log_failure, kwargs, exception, start_time, end_time)
+        await self.run_blocking(self._log_failure, kwargs, exception, start_time, end_time)
 
     def _log_success(
         self,

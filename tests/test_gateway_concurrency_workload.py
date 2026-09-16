@@ -111,6 +111,22 @@ deltallm_event_loop_last_lag_seconds NaN
     assert len(metrics.select_metrics(text, buckets=False)) == 1
 
 
+def test_deadline_and_work_metrics_preserve_capacity_without_private_labels():
+    selected = metrics.select_metrics("""
+deltallm_bounded_work_in_flight{allocation="guardrail"} 8
+deltallm_bounded_work_bytes{allocation="callback_sync"} 1024
+deltallm_bounded_work_rejections_total{allocation="callback",reason="payload"} 2
+deltallm_callback_outcomes_total{integration="custom",outcome="timeout"} 3
+deltallm_request_deadline_expirations_total{response="started"} 1
+deltallm_bounded_work_in_flight{allocation="private-tenant"} 99
+deltallm_callback_outcomes_total{integration="custom",outcome="private-error"} 99
+""")
+    assert len(selected) == 5
+    assert "private" not in repr(selected)
+    for code in ("request_deadline_exceeded", "gateway_work_unavailable"):
+        assert error_code({"error": {"code": code}}) == code
+
+
 def test_admission_metrics_and_errors_are_preserved_without_identity_labels() -> None:
     text = """
 deltallm_ingress_active{allocation="inference"} 4

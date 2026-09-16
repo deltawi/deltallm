@@ -1,0 +1,1 @@
+{"excluded":true,"reason":"Harness treated the normal Uvicorn SIGTERM exit as an error after collecting before samples. Both logs confirmed application shutdown complete. The paired comparison was restarted without resetting economic state."}

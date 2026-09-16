@@ -71,6 +71,18 @@ batchWorker:
 config:
   general_settings:
     # PR5 qualifies scope/reset parity; this is not an atomic monetary reservation.
+    # Startup-only callback delivery and guardrail execution bounds.
+    callback_max_pending: 128
+    callback_max_concurrency: 4
+    callback_max_payload_bytes: 262144
+    callback_max_bytes: 8388608
+    callback_timeout_seconds: 5
+    callback_shutdown_seconds: 5
+    guardrail_max_concurrency: 2
+    guardrail_max_pending: 8
+    guardrail_max_bytes: 33554432
+    guardrail_timeout_seconds: 5
+    guardrail_shutdown_seconds: 5
     budget_enforcement_query_mode: combined
     budget_enforcement_query_timeout_seconds: 2
     budget_enforcement_shadow_sample_rate: 0.01

@@ -261,8 +261,7 @@ class ModelHotReloadManager:
             )
         salt_key = generation.salt_key
 
-        if app_config.deltallm_settings.guardrails:
-            app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
+        app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
 
         app.state.callback_manager.load_from_settings(
             success_callbacks=app_config.deltallm_settings.success_callback,

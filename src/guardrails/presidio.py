@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import logging
 import re
-from functools import lru_cache
-from typing import Any
+from collections.abc import Callable
+from functools import lru_cache, partial
+from threading import Lock
+from typing import Any, TypeVar
 
+from src.blocking_work import BlockingWorkExecutor, WorkUnavailableError
+from src.bounded_payload import PayloadCapacityExceeded, retained_size
 from src.guardrails.base import CustomGuardrail, GuardrailAction, GuardrailMode
 from src.guardrails.exceptions import GuardrailViolationError
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +40,11 @@ class PresidioGuardrail(CustomGuardrail):
     ]
 
     _PATTERN_MAP: dict[str, re.Pattern[str]] = {
-        "EMAIL_ADDRESS": re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
+        # An unanchored greedy local part retries every suffix of a long run
+        # without an '@'. Only start at a local-part boundary to keep that scan linear.
+        "EMAIL_ADDRESS": re.compile(
+            r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+        ),
         "PHONE_NUMBER": re.compile(r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"),
         "US_SSN": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
         "CREDIT_CARD": re.compile(r"\b(?:\d[ -]*?){13,16}\b"),
@@ -51,8 +61,11 @@ class PresidioGuardrail(CustomGuardrail):
         entities: list[str] | None = None,
         language: str = "en",
         threshold: float = 0.5,
+        executor: BlockingWorkExecutor | None = None,
     ) -> None:
         super().__init__(name=name, mode=mode, default_on=default_on, action=action)
+        self.executor = executor
+        self._engine_lock = Lock()
         self.anonymize = anonymize
         self.entities = entities or self.SUPPORTED_ENTITIES
         self.language = language
@@ -72,6 +85,25 @@ class PresidioGuardrail(CustomGuardrail):
         call_type: str,
     ) -> dict[str, Any] | None:
         del user_api_key_dict, cache, call_type
+        return await self._offload(partial(self._pre_call, data), data)
+
+    async def _offload(self, work: Callable[[], T], payload: object) -> T:
+        executor = self.executor
+        if executor is None:
+            raise WorkUnavailableError()
+        try:
+            size = 4 * retained_size(payload, limit=executor.max_bytes // 4)
+        except PayloadCapacityExceeded as exc:
+            raise WorkUnavailableError() from exc
+
+        def locked() -> T:
+            # The optional NLP engine does not promise concurrent mutable access.
+            with self._engine_lock:
+                return work()
+
+        return await executor.run(locked, payload_bytes=size)
+
+    def _pre_call(self, data: dict[str, Any]) -> dict[str, Any] | None:
         messages = data.get("messages", [])
         if not isinstance(messages, list):
             return None
@@ -94,7 +126,9 @@ class PresidioGuardrail(CustomGuardrail):
                     status_code=400,
                 )
 
-            logger.warning("presidio pii detected", extra={"guardrail": self.name, "entities": entities})
+            logger.warning(
+                "presidio pii detected", extra={"guardrail": self.name, "entities": entities}
+            )
 
         if changed:
             next_data = dict(data)
@@ -109,6 +143,9 @@ class PresidioGuardrail(CustomGuardrail):
         response: dict[str, Any],
     ) -> None:
         del data, user_api_key_dict
+        await self._offload(partial(self._post_call, response), response)
+
+    def _post_call(self, response: dict[str, Any]) -> None:
         content = (
             response.get("choices", [{}])[0].get("message", {}).get("content", "")
             if isinstance(response, dict)
@@ -127,12 +164,20 @@ class PresidioGuardrail(CustomGuardrail):
             )
 
         if entities:
-            logger.warning("presidio output pii detected", extra={"guardrail": self.name, "entities": entities})
+            logger.warning(
+                "presidio output pii detected", extra={"guardrail": self.name, "entities": entities}
+            )
 
     def _detect(self, text: str) -> list[str]:
         if self.analyzer is not None:
-            results = self.analyzer.analyze(text=text, entities=self.entities, language=self.language)
-            return [item.entity_type for item in results if float(getattr(item, "score", 0)) >= self.threshold]
+            results = self.analyzer.analyze(
+                text=text, entities=self.entities, language=self.language
+            )
+            return [
+                item.entity_type
+                for item in results
+                if float(getattr(item, "score", 0)) >= self.threshold
+            ]
 
         detected: list[str] = []
         for entity in self.entities:
@@ -195,14 +240,21 @@ class PresidioGuardrail(CustomGuardrail):
 
     def _anonymize(self, text: str, entities: list[str]) -> str:
         if self.anonymizer is not None and self.analyzer is not None and OperatorConfig is not None:
-            results = self.analyzer.analyze(text=text, entities=self.entities, language=self.language)
-            filtered = [item for item in results if float(getattr(item, "score", 0)) >= self.threshold]
+            results = self.analyzer.analyze(
+                text=text, entities=self.entities, language=self.language
+            )
+            filtered = [
+                item for item in results if float(getattr(item, "score", 0)) >= self.threshold
+            ]
             if not filtered:
                 return text
             operators = {
-                entity: OperatorConfig("replace", {"new_value": f"<{entity}>"}) for entity in self.entities
+                entity: OperatorConfig("replace", {"new_value": f"<{entity}>"})
+                for entity in self.entities
             }
-            anonymized = self.anonymizer.anonymize(text=text, analyzer_results=filtered, operators=operators)
+            anonymized = self.anonymizer.anonymize(
+                text=text, analyzer_results=filtered, operators=operators
+            )
             return anonymized.text
 
         masked = text

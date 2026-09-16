@@ -171,7 +171,7 @@ class RouterSettings(BaseModel):
     routing_strategy: RoutingStrategyName = "simple-shuffle"
     num_retries: int = 0
     retry_after: float = 0
-    timeout: float = 600
+    timeout: float = Field(default=600, gt=0, allow_inf_nan=False)
     cooldown_time: int = 60
     allowed_fails: int = 2
     enable_pre_call_checks: bool = False

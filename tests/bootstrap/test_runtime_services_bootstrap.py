@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.bootstrap.runtime_services import init_runtime_services, shutdown_runtime_services
+from src.config import GeneralSettings, Settings
 
 
 def _runtime_config(
@@ -17,7 +18,7 @@ def _runtime_config(
     tier_policy_refresh_retry_delay_seconds: float = 5.0,
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        general_settings=SimpleNamespace(
+        general_settings=GeneralSettings(
             budget_alert_ttl_seconds=3600,
             tier_policy_mode=tier_policy_mode,
             tier_policy_missing_service_mode=tier_policy_missing_service_mode,
@@ -39,22 +40,24 @@ def _runtime_config(
 
 def _runtime_config_without_tier_policy_settings() -> SimpleNamespace:
     config = _runtime_config()
-    for field_name in (
+    fields = {
         "tier_policy_mode",
         "tier_policy_missing_service_mode",
         "tier_policy_refresh_interval_seconds",
         "tier_policy_refresh_jitter_seconds",
         "tier_policy_transition_grace_seconds",
         "tier_policy_refresh_retry_delay_seconds",
-    ):
-        delattr(config.general_settings, field_name)
+    }
+    config.general_settings = GeneralSettings.model_validate(
+        config.general_settings.model_dump(exclude_unset=True, exclude=fields)
+    )
     return config
 
 
 def _runtime_app(*, settings: SimpleNamespace | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         state=SimpleNamespace(
-            settings=settings,
+            settings=Settings(**vars(settings)) if settings is not None else Settings(),
             prompt_registry_repository="prompt-repo",
             route_group_repository="route-group-repo",
             tier_repository="tier-repo",
@@ -88,14 +91,16 @@ def _install_runtime_service_fakes(
     )
 
     class FakeGuardrailRegistry:
-        def __init__(self) -> None:
+        def __init__(self, *, executor) -> None:
+            self.executor = executor
             self.loaded = None
 
         def load_from_config(self, config) -> None:  # noqa: ANN001
             self.loaded = config
 
     class FakeCallbackManager:
-        def __init__(self) -> None:
+        def __init__(self, settings) -> None:
+            self.settings = settings
             self.loaded = None
             self.shutdown_called = False
             created["callback_manager"] = self
