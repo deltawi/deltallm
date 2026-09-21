@@ -1,0 +1,10 @@
+{
+  "id": "sha256:3f2dbd038cfc2e8cdbffe0cad9e8dda5372b247289285a3e30af2eb0eccc9fdb",
+  "architecture": "arm64",
+  "user": "10001:10001",
+  "command": [
+    "python",
+    "-m",
+    "src.server"
+  ]
+}

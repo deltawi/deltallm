@@ -1,0 +1,152 @@
+[
+  {
+    "seconds": 0.09091774997068569,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 2.194462708022911,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 3.48578925000038,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 4.783137707971036,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 6.081268874986563,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 7.372771458001807,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 8.660572291992139,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 9.90882466698531,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 11.207950917014387,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 12.516577375005,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 13.818964708014391,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": true
+  },
+  {
+    "seconds": 15.10943066701293,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 16.399809332971927,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 17.688658458006103,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 18.981372333015315,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 20.273033207980916,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 21.569804499973543,
+    "readiness": 503,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 22.682252249971498,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 23.77378200000385,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 24.86039804201573,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 25.95046837499831,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 27.037368207995314,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 28.12649858300574,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 29.209371917007957,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": false
+  },
+  {
+    "seconds": 30.299197582993656,
+    "readiness": 200,
+    "liveness": 200,
+    "pods_ready": true
+  }
+]

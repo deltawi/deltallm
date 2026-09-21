@@ -472,112 +472,87 @@ Completion checklist:
 - [x] Create the isolated PR8 worktree and record its base revision.
 - [x] Map all five PR8 issue requirements to implementation and validation above.
 - [x] Implement slices 1–6 with focused regressions and synchronized configuration.
-- [ ] Finish exact-image, rolling-update, pod-loss and failure/recovery evidence.
-- [ ] Publish the operator contracts and before/after measurements.
-- [ ] Complete review/fix iterations and all required checks on the final PR head.
+- [x] Finish exact-image, rolling-update, pod-loss and failure/recovery evidence.
+- [x] Publish the operator contracts and before/after measurements.
+- [x] Complete review/fix iterations and local verification; require final-head CI before merging.
 - [ ] Merge into the feature branch, then update #320 with acceptance links.
 
 The Uvicorn adapter must remain small and version-tested: its
 [graceful shutdown setting](https://uvicorn.dev/settings/#timeouts) bounds the
 server wait, while application cleanup needs the shared deadline described above.
 
-### Implementation checkpoint — 2026-09-21
+### Local qualification complete — 2026-09-21
+
+Runtime `be4016de` passes the full local exact-image gate. The default image is
+`sha256:c21c719fd14450e6159fdda24e7deee9701b88dcf843e94cf93ac269ff7aa034`;
+the Presidio image is
+`sha256:3f2dbd038cfc2e8cdbffe0cad9e8dda5372b247289285a3e30af2eb0eccc9fdb`.
+Both have application source hash
+`a3fa0bebd8911f2440bc01837f14d9c861a6cf038cf6d1dc092ac35d6a38151e`.
+The [public evidence report](../project/benchmarks/process-lifecycle-2026-09-21/README.md)
+retains normalized raw HTTP/metrics samples, source/image identities, SQL plans,
+readiness/shutdown timelines, accepted records and failed counterexamples.
 
 The managed launcher, readiness inventory, shared shutdown owner, read-only
 migration verifier, pre-release Job, frozen non-root images and operator contract
 are implemented. Review fixes cover partial bootstrap ownership, deferred config
 publication, policy catch-up after Redis reconnect, cancellation-resistant callback
-ownership, bounded Prisma process-group cleanup, and explicit HPA stabilization.
-The static bundle routes now share their required owner in `src/ui/routes.py`.
+ownership, bounded Prisma process-group cleanup, and HPA stabilization. Static
+bundle routes share their required owner in `src/ui/routes.py`.
 
-Local validation has passed the full app/PostgreSQL/Helm lanes and focused
-lifecycle tests. The 10 RPS comparison completed 200/200 requests on each image
-with no generator drops and clean exits; its raw artifacts remain preliminary
-until the final committed image is qualified. A 50 RPS baseline run saturated
-accounting admission. Neither sample establishes production capacity.
+Required-persistence contention exposed by rollout tests was fixed in two stages:
 
-The Kubernetes harness covers migration failure/concurrency, readiness recovery,
-streams and accepted batch/outbox work during rollout, and a killed claim owner.
-Its complete acceptance gate remains open: the local Docker VM exhausted memory
-with the multi-pod fixture, so qualification continues on a clean CI runner.
-The draft PR must remain unmerged until that gate and final review pass.
+1. Receipt acceptance and unknown-state marking now each use one owner-fenced
+   atomic UPDATE through the existing settlement allocation, removing interactive
+   transaction start, timeout-setup and commit round trips. Principal/model/call
+   guards, immutable replay, the 250 ms caller budget and ownership of late native
+   work remain intact. Admission keeps its separate advisory lock and fresh
+   transaction snapshot. Real PostgreSQL regressions cover conflicting receipts,
+   cancellation, lost acknowledgement and recovery. The retained SQL plans match
+   the current spend repository source and prove an indexed one-row update.
+2. The subsequent local rollout returned 91/100 successes: seven spend-admission
+   and two audit failures, nine acceptance-allocation overflow events, and no
+   receipt failures. The four acceptance connections had no business waiters.
+   Acceptance now uses one finite waiter per connection, matching settlement's
+   existing queue. No connection, SQL call, timeout or workload assertion was
+   increased. Overlap, overflow, closure, cancellation and shorter acquisition
+   deadlines are covered. The aggregate bound is documented above.
 
-### Final review checkpoint
+Artifact review also strengthened the gate: terminating pods cannot prove
+readiness recovery, and all four provider-side stream closures are mandatory.
+The earlier 97/100 receipt-contention and 91/100 acceptance-contention results
+remain in the public report; they are not presented as successful qualification.
 
-Review of the acceptance observer found that it retained upstream-close events
-without requiring all four test streams to close. The gate now waits a bounded
-ten seconds for exactly four provider-side closures and rejects duplicates; the
-final CI run must exercise this assertion. No production setting or test load
-was relaxed.
+Local validation uses the frozen development environment. The complete Python
+collection has 6,379 tests: 4,149 hermetic, 1,554 app, 446 PostgreSQL, 60 Redis
+and 170 Helm. Ruff check and format check pass on all 105 changed Python files.
+Generated API/config/provider references, documentation health, strict MkDocs
+build and public-artifact containment are verified before publication.
 
-The final ARM64 comparison uses runtime `66d977d9`, the bounded settlement queue
-fix, and the immutable PR7 baseline. Both images completed 200/200 requests at
-10 RPS with zero generator drops and exit code zero. Mean latency was 32.84 ms
-and 32.80 ms; the recorded raw samples retain dependency counters and durable
-records. See the public lifecycle measurement report for provenance and limits.
+Both image variants pass offline, non-root, read-only startup and blocked-cleanup
+watchdog checks. Presidio additionally passes managed startup, 10/10 requests,
+durable recovery and SIGTERM exit zero. The matched 10 RPS, 20-second comparison
+against PR7 completes 200/200 requests per image with zero generator drops and
+exit zero. Baseline/candidate mean is 32.15/31.69 ms and p95 is 41.49/42.75 ms.
+Redis counts match; receipt round trips decrease. These short observations do
+not establish a performance improvement or production capacity.
 
-### Receipt round-trip review fix
+The full Kubernetes experiment uses Helm 3.19.0, kubectl 1.34.3, kind 0.31.0,
+two API pods and one worker. It passes fresh/concurrent/retried migrations,
+failed-hook ordering, dependency recovery with probe hysteresis, 100/100 requests
+before and after rollout, active-stream interruption without terminal success,
+accepted spend/audit recovery with one ledger effect, and 20/20 batch completion
+with 20 ledger effects after natural lease expiry. Runtime SIGKILL is verified as
+exit 137; the survivor serves, the lost claim recovers with stale acknowledgement
+rejected, and all four upstream streams close. Four ambiguous stream intents
+remain unknown and uncharged. No drain duration is inferred from the early
+port-forwarded rollout stream disconnect.
 
-The post-rollout rerun on `a30d5d29` returned 97/100 successes. All three failures
-left dispatched spend intents; the batch scenario still completed all 20 items
-and economic records. One bounded settlement waiter fixes short overlap but does
-not remove the receipt transaction's start, timeout-setup and commit round trips.
+The user explicitly approved temporarily stopping the 11 running Bunyan containers
+to fit the local fixture. Those exact containers were restored to their original
+running/healthy states afterward. The owned Kubernetes cluster and temporary
+comparison services are removed by their lifecycle owners.
 
-Plan: execute receipt acceptance and unknown-state marking as single atomic
-PostgreSQL UPDATE statements through the same owned settlement allocation. Keep
-owner/principal/model/call-type guards, immutable replay and the 250 ms absolute
-caller deadline. Cancellation or lost acknowledgement remains ambiguous; the
-allocation continues owning native work through its configured deadline, and
-late accepted receipts remain recoverable. Admission keeps its existing
-multi-statement transaction and post-lock snapshot. No extra pool, waiter,
-provider retry or timeout increase is introduced. Verify fencing, concurrency,
-late acknowledgement and exact SQL counts on real PostgreSQL; refresh image
-measurements and rerun the unchanged strict lifecycle load assertions.
-
-### Local verification before the next push
-
-The user's latest direction requires local verification before another push.
-Runtime `c9f8d480` remains local; remote PR #331 still points to `a30d5d29`.
-The frozen local environment passes all five complete pytest lanes:
-`-m hermetic` (4,142), `-m app` (1,554), `-m postgres` (445), `-m redis` (60),
-and `-m helm` (170), totalling 6,371 tests. Ruff check and format check pass
-for all 105 changed Python files. Real PostgreSQL tests cover conflicting
-concurrent receipts, lost acknowledgements, cancellation ownership and recovery.
-
-Both rebuilt image variants pass the offline non-root runtime and blocked-cleanup
-watchdog checks. The optional Presidio image additionally passes managed startup,
-10/10 requests, one-ledger-effect spend/audit recovery and SIGTERM exit zero.
-The refreshed 10 RPS comparison completes 200/200 requests on each image with
-zero generator drops and clean exits. Baseline/candidate mean latency is
-33.87/31.42 ms and p95 is 44.15/38.54 ms. The query-plan artifact verifies a
-single indexed receipt UPDATE; the historical two-statement receipt measurement
-has the same repository source hash as the PR7 baseline.
-Generated reference checks, documentation structure, all nine documentation tests,
-strict MkDocs build and public-artifact containment also pass. The completed local
-PostgreSQL/Redis test containers and their network have been removed; their raw
-test and benchmark evidence is retained.
-
-After explicit approval, all 11 running Bunyan containers were temporarily stopped
-for the local Kubernetes experiment and restored to their original running/healthy
-states afterward. Fresh and concurrent migrations, failed migration ordering,
-dependency recovery, active-stream rollout and 20/20 batch accounting passed.
-The post-rollout load failed at 91/100, so no push was made. Per-pod counters show
-zero receipt failures; seven spend-admission and two audit failures exhausted the
-shared telemetry acceptance allocation. Its four connections had no business waiters.
-
-Remediation: permit one finite waiter per telemetry acceptance connection using
-the existing DatabaseOwner and acquisition deadline, matching settlement's bounded
-waiting contract. Keep native work owned through completion, preserve admission's
-lock/snapshot transaction, and retain the existing connection and SQL-call budgets.
-The total waiting bound becomes `3 + telemetry_db_pool_size` per process: eight
-with the default five-connection telemetry total, or 352 at the 44-process rollout
-ceiling. Test overlap, overflow, cancellation, shorter acquisition budgets, and
-real PostgreSQL commits; then rebuild both images, refresh measurements and rerun
-the unchanged strict load and upstream-close assertions before pushing.
-
-Artifact review also found that readiness observations included terminating pods.
-The observer now requires the expected active-pod count and ignores retiring pods.
-Its new regression rejects a false recovery caused only by a retiring pod. Replay
-of all 25 saved live HTTP/pod observations passes the corrected observer: active
-pods withdraw by 15.01 seconds and recover at 30.35 seconds. The full hermetic
-suite with this observer change passed 4,144 tests before the acceptance-queue fix.
+PR #331 remains targeted at `feature/issue-320-concurrency`. Final-head CI and
+review readiness are tracked in the PR and issue #320; passing local validation
+is required before pushing. Merging and PR9 implementation remain separate work.

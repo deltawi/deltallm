@@ -1,0 +1,7 @@
+INFO:src.process_lifecycle:process shutdown phase completed phase=withdrawal seconds=5.007
+INFO:src.process_lifecycle:process shutdown phase completed phase=responses seconds=0.100
+INFO:src.process_lifecycle:process shutdown phase completed phase=cancellation seconds=0.000
+INFO:src.process_lifecycle:process shutdown phase completed phase=workers seconds=0.003
+INFO:src.process_lifecycle:process shutdown phase completed phase=close seconds=0.006
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1]

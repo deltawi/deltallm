@@ -1,0 +1,11 @@
+{
+  "environment": "Local ARM64 Docker VM; approved unrelated workloads temporarily stopped during acceptance.",
+  "helm_version": "v3.19.0",
+  "kubectl_client_version": "v1.34.3",
+  "readiness_observer_review": "The observer evaluates the two active API pods and requires readiness withdrawal and full recovery; terminating pods are excluded. Regression tests reject withdrawal seen only on a retiring pod.",
+  "runtime_commit": "be4016de780c1b53ae72f9737dda51a9b8967073",
+  "source_sha256": "a3fa0bebd8911f2440bc01837f14d9c861a6cf038cf6d1dc092ac35d6a38151e",
+  "command": "uv run python -m tests.performance.run_lifecycle_acceptance --image deltallm-pr8:working --kind /private/tmp/pr8-kind --output /private/tmp/pr8-local-acceptance-kubernetes",
+  "path_normalization": "HTTP and metrics paths refer to adjacent copied artifact files.",
+  "shutdown_log_selection": "Only process lifecycle phase and normal server completion lines are retained."
+}

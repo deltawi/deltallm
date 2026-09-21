@@ -17,6 +17,12 @@ required governance/tier refresh are checked on every sample.
 Database and critical Redis probes share one refresh, cached for one second.
 There are at most six concurrent dependency operations and a bounded number of
 health callers. Timed-out work retains its allocation until it actually stops.
+Each database owner allows one business operation to wait behind its single
+readiness probe, within the existing acquisition deadline. This prevents a probe
+from immediately rejecting settlement on a one-connection allocation. There are
+no extra connections. Telemetry acceptance and settlement each reserve one waiting
+position per configured connection for overlapping required writes; other business
+saturation still has zero waiters. All waits consume the same acquisition deadline.
 No provider request or new client pool is created for a probe. Optional callback,
 notification and cache failures do not withdraw otherwise usable inference pods;
 inspect their feature metrics for degradation.
@@ -50,6 +56,10 @@ closer cannot reset the budget or prevent later owners from attempting cleanup.
 Required consumers remain available while request and batch producers settle.
 Stopping one replica does not require a shared outbox backlog to become empty.
 Committed pending records remain available for another replica to reclaim.
+Recovery is not necessarily immediate when a pod exits: an interrupted batch
+item retains its existing fenced lease until expiry. The default item lease is
+360 seconds; the surviving worker then needs its sweep/poll and execution time.
+Monitor pending claims and completion accounting separately from pod readiness.
 
 A stream that exceeds the response allocation is interrupted without a terminal
 success marker. A 600-second request timeout does not promise survival through a
@@ -188,3 +198,6 @@ explicit fixture exception; production split workers use shared object storage.
 Its samples and event timeline are lifecycle evidence, not a supported production
 RPS or stream-concurrency certificate. Resource/HPA tuning and sustained capacity
 qualification remain separate requirements.
+
+See the [recorded lifecycle measurements](../project/benchmarks/process-lifecycle-2026-09-21/README.md)
+for source/image identities, raw samples, recovery evidence and observed limits.
