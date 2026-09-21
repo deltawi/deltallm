@@ -110,7 +110,7 @@ of any cancellation-resistant work until completion, following PR7's rule.
 Cancelling a refresh observes/cancels child probes and cannot create replacement
 capacity while old work is still live.
 
-#### Review decision: readiness must not shed settlement
+#### Review decision: bounded readiness and required-write contention
 
 The Kubernetes experiment found two spend-persistence rejections among 100
 requests, with metrics showing a full settlement gate. Review reproduced the
@@ -122,13 +122,16 @@ probe-only fix. The zero-waiter policy shed already-admitted economic acceptance
 while its one readiness query owns an existing slot; query and transaction
 acquisition retain their original absolute deadlines. A cancelled probe retains
 ownership until native work finishes, and queued work rechecks owner closure.
-Settlement also reserves one waiting position per connection for overlapping
-receipts. Probes cannot enter this queue ahead of business work. Other saturation
-retains zero waiters. This adds no SQL call or connection on inference paths and
-no pool. With all allocations enabled the bound is four borrowed probe waiters
-plus the configured settlement size: 220 at the 44-process illustrative ceiling
-with the default one-connection settlement allocation, inside existing bounded
-request/worker allocations.
+Acceptance and settlement each reserve one waiting position per connection for
+overlapping required writes. The first local rollout after the atomic receipt fix
+returned 91/100 successes: seven operation-admission and two audit failures, with
+nine acceptance-allocation overflow events and no receipt failures. This justified
+applying the same finite queue to acceptance. Probes cannot enter these queues
+ahead of business work. Other saturation retains zero waiters. This adds no SQL
+call, connection, or pool on inference paths. With all allocations enabled the
+waiter bound is three borrowed probe waiters plus `telemetry_db_pool_size`, shared
+between acceptance and settlement: eight per process by default, or 352 at the
+44-process illustrative ceiling, inside existing bounded request/worker allocations.
 
 Alternatives considered were a separate health pool, which would add connection
 capacity, and client-presence checks, which would not verify connectivity. The
@@ -530,3 +533,51 @@ multi-statement transaction and post-lock snapshot. No extra pool, waiter,
 provider retry or timeout increase is introduced. Verify fencing, concurrency,
 late acknowledgement and exact SQL counts on real PostgreSQL; refresh image
 measurements and rerun the unchanged strict lifecycle load assertions.
+
+### Local verification before the next push
+
+The user's latest direction requires local verification before another push.
+Runtime `c9f8d480` remains local; remote PR #331 still points to `a30d5d29`.
+The frozen local environment passes all five complete pytest lanes:
+`-m hermetic` (4,142), `-m app` (1,554), `-m postgres` (445), `-m redis` (60),
+and `-m helm` (170), totalling 6,371 tests. Ruff check and format check pass
+for all 105 changed Python files. Real PostgreSQL tests cover conflicting
+concurrent receipts, lost acknowledgements, cancellation ownership and recovery.
+
+Both rebuilt image variants pass the offline non-root runtime and blocked-cleanup
+watchdog checks. The optional Presidio image additionally passes managed startup,
+10/10 requests, one-ledger-effect spend/audit recovery and SIGTERM exit zero.
+The refreshed 10 RPS comparison completes 200/200 requests on each image with
+zero generator drops and clean exits. Baseline/candidate mean latency is
+33.87/31.42 ms and p95 is 44.15/38.54 ms. The query-plan artifact verifies a
+single indexed receipt UPDATE; the historical two-statement receipt measurement
+has the same repository source hash as the PR7 baseline.
+Generated reference checks, documentation structure, all nine documentation tests,
+strict MkDocs build and public-artifact containment also pass. The completed local
+PostgreSQL/Redis test containers and their network have been removed; their raw
+test and benchmark evidence is retained.
+
+After explicit approval, all 11 running Bunyan containers were temporarily stopped
+for the local Kubernetes experiment and restored to their original running/healthy
+states afterward. Fresh and concurrent migrations, failed migration ordering,
+dependency recovery, active-stream rollout and 20/20 batch accounting passed.
+The post-rollout load failed at 91/100, so no push was made. Per-pod counters show
+zero receipt failures; seven spend-admission and two audit failures exhausted the
+shared telemetry acceptance allocation. Its four connections had no business waiters.
+
+Remediation: permit one finite waiter per telemetry acceptance connection using
+the existing DatabaseOwner and acquisition deadline, matching settlement's bounded
+waiting contract. Keep native work owned through completion, preserve admission's
+lock/snapshot transaction, and retain the existing connection and SQL-call budgets.
+The total waiting bound becomes `3 + telemetry_db_pool_size` per process: eight
+with the default five-connection telemetry total, or 352 at the 44-process rollout
+ceiling. Test overlap, overflow, cancellation, shorter acquisition budgets, and
+real PostgreSQL commits; then rebuild both images, refresh measurements and rerun
+the unchanged strict load and upstream-close assertions before pushing.
+
+Artifact review also found that readiness observations included terminating pods.
+The observer now requires the expected active-pod count and ignores retiring pods.
+Its new regression rejects a false recovery caused only by a retiring pod. Replay
+of all 25 saved live HTTP/pod observations passes the corrected observer: active
+pods withdraw by 15.01 seconds and recover at 30.35 seconds. The full hermetic
+suite with this observer change passed 4,144 tests before the acceptance-queue fix.

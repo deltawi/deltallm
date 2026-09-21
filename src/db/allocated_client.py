@@ -88,10 +88,10 @@ async def _native_call(operation: Callable[[], Awaitable[T]], seconds: float) ->
 class DatabaseOwner:
     def __init__(self, policy: DatabasePolicy):
         self.policy = policy
-        # Already-admitted receipts need a finite burst buffer. Other business
-        # allocations keep immediate shedding; health may borrow one waiter.
+        # Required acceptance and receipts need a finite burst buffer. Other
+        # business allocations keep immediate shedding; health may borrow one waiter.
         self._business_waiters = (
-            policy.connections if policy.allocation == "telemetry_settlement" else 0
+            policy.connections if policy.allocation in {"telemetry", "telemetry_settlement"} else 0
         )
         self.gate = BoundedCapacityGate(
             concurrency=policy.connections, max_waiters=self._business_waiters
@@ -148,7 +148,7 @@ class DatabaseOwner:
     async def readiness_query(self, operation: Callable[[], Awaitable[T]]) -> T:
         # Borrow one existing slot. A business operation may wait behind this
         # probe within its existing acquisition deadline instead of being shed
-        # by health traffic. One probe uses the existing settlement queue or
+        # by health traffic. One probe uses the existing telemetry queue or
         # borrows one waiter; other business saturation still has zero waiters.
         if self._probe_active or self.gate.waiters or self.gate.active >= self.policy.connections:
             raise DatabaseUnavailableError()

@@ -36,12 +36,16 @@ async def readiness_recovery(cluster: LifecycleCluster, urls: list[str]) -> None
                     )
                 ).stdout
             )
+            active_pods = [
+                pod for pod in pods["items"] if not pod["metadata"].get("deletionTimestamp")
+            ]
+            assert len(active_pods) == len(urls), "readiness requires the expected active API pods"
             ready = all(
                 any(
                     condition["type"] == "Ready" and condition["status"] == "True"
                     for condition in pod["status"].get("conditions", [])
                 )
-                for pod in pods["items"]
+                for pod in active_pods
             )
             samples.append(
                 {

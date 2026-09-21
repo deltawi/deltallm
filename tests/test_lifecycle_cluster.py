@@ -2,11 +2,14 @@
 
 import json
 from subprocess import CompletedProcess
+from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 from tests.performance.lifecycle_cluster import LifecycleCluster
+from tests.performance import lifecycle_recovery
 
 
 @pytest.fixture
@@ -66,3 +69,54 @@ def test_abrupt_loss_rejects_unowned_or_ambiguous_targets(owned_pod, invalid):
     with pytest.raises(ValueError, match="Pod loss requires"):
         cluster.kill_container("fixture-pod")
     runtime.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active_withdraws", [False, True])
+async def test_retiring_pod_cannot_prove_dependency_readiness_recovery(
+    tmp_path, monkeypatch, active_withdraws
+):
+    sample = 0
+
+    async def advance(_):
+        nonlocal sample
+        sample += 1
+
+    def kubectl(*args):
+        if args[0] == "exec":
+            return CompletedProcess(args, 0, "OK")
+        active_ready = not active_withdraws or sample in (0, 3)
+        pods = [
+            {
+                "metadata": {"name": name},
+                "status": {"conditions": [{"type": "Ready", "status": str(active_ready)}]},
+            }
+            for name in ("api-a", "api-b")
+        ]
+        if sample < 3:
+            pods.append(
+                {
+                    "metadata": {"name": "retiring-api", "deletionTimestamp": "fixture"},
+                    "status": {"conditions": [{"type": "Ready", "status": str(sample == 0)}]},
+                }
+            )
+        return CompletedProcess(args, 0, json.dumps({"items": pods}))
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                503 if request.url.path.endswith("readiness") and sample < 2 else 200
+            )
+        )
+    )
+    monkeypatch.setattr(lifecycle_recovery.httpx, "AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr(lifecycle_recovery, "monotonic", lambda: sample * 20)
+    monkeypatch.setattr(lifecycle_recovery.asyncio, "sleep", advance)
+    cluster = SimpleNamespace(kubectl=kubectl, output=tmp_path, event=Mock())
+    if active_withdraws:
+        await lifecycle_recovery.readiness_recovery(cluster, ["http://api-a", "http://api-b"])
+        cluster.event.assert_called_once_with("dependency_and_probe_hysteresis_recovered")
+    else:
+        with pytest.raises(TimeoutError, match="readiness did not recover"):
+            await lifecycle_recovery.readiness_recovery(cluster, ["http://api-a", "http://api-b"])
+        cluster.event.assert_not_called()

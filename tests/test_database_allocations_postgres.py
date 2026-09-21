@@ -128,10 +128,11 @@ async def test_real_health_probe_does_not_reject_a_single_slot_transaction(
         await asyncio.gather(probe, settlement, return_exceptions=True)
 
 
-async def test_real_overlapping_settlements_wait_and_commit_with_one_connection(
-    allocated_databases,
+@pytest.mark.parametrize("allocation", ["telemetry", "telemetry_settlement"])
+async def test_real_overlapping_acceptance_transactions_wait_and_commit_with_one_connection(
+    allocated_databases, allocation
 ):
-    client = allocated_databases["telemetry_settlement"]
+    client = allocated_databases[allocation]
 
     async def settle():
         async with client.tx() as tx:

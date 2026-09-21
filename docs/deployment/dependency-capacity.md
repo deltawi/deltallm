@@ -65,7 +65,7 @@ acceptance; the background budgets apply to control and telemetry workers. Repos
 transaction options can shorten the configured transaction/acquisition ceilings.
 
 Capacity admission happens before Prisma: each pool permits at most its configured
-number of operations or transactions and has zero capacity waiters. Excess work
+number of operations or transactions and normally has zero capacity waiters. Excess work
 returns a controlled HTTP 503 with code `database_unavailable`. Native connection,
 lock and statement timeouts use the same response; record/constraint errors retain
 their repository semantics. Local dependency failures never mark a provider unhealthy
@@ -73,6 +73,26 @@ or trigger provider retries. A transaction owns one slot through
 commit or rollback, and permits only one outstanding native query on that transaction.
 Model queries, raw SQL and generated batch execution share this owner. There are no
 new per-request SQL calls or client retries.
+
+The telemetry acceptance and settlement allocations each reserve one bounded
+waiting position per configured connection for required writes. With ordinary
+operation intents enabled, the default telemetry total of five connections splits
+into four acceptance connections/waiters and one settlement connection/waiter.
+Waits consume the existing acquisition deadline, including transaction startup;
+overflow and expired waits return the same explicit unavailable result. No native
+slot is freed while a cancelled operation is still running.
+
+A readiness probe borrows one existing slot and temporarily permits one business
+waiter, bounded by the same acquisition deadline. Each allocation permits only one
+probe; cancellation retains its slot until native work ends. This prevents health
+traffic from immediately shedding settlement on a one-connection allocation.
+No extra connection is added. With all allocations enabled, there are at most
+`3 + telemetry_db_pool_size` waiting operations per process, or 352 with
+the default telemetry total at the illustrative 44-process
+rollout ceiling below, within the existing bounded request/worker allocations.
+`deltallm_database_allocation_seconds{operation="readiness"}` measures probe time;
+`deltallm_database_allocation_events_total{outcome="queue_timeout"}` records
+business acquisition deadlines exceeded in these bounded queues.
 
 PostgreSQL receives native `statement_timeout`, `lock_timeout` and
 `idle_in_transaction_session_timeout` options on every connection. Startup verifies

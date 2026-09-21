@@ -15,9 +15,9 @@ def owner(acquisition_seconds=1, *, allocation="foreground"):
     return DatabaseOwner(DatabasePolicy(allocation, 1, acquisition_seconds, 1, 0.1, 2))
 
 
-async def wait_for_waiter(allocation):
+async def wait_for_waiter(allocation, count=1):
     async with asyncio.timeout(1):
-        while allocation.gate.waiters != 1:
+        while allocation.gate.waiters != count:
             await asyncio.sleep(0)
 
 
@@ -151,37 +151,63 @@ async def test_shorter_transaction_acquisition_budget_also_covers_the_probe_wait
         await allocation.close()
 
 
-async def test_settlement_keeps_one_burst_waiter_after_a_probe_and_bounds_overflow():
-    allocation = owner(allocation="telemetry_settlement")
+@pytest.mark.parametrize("name", ["telemetry", "telemetry_settlement"])
+@pytest.mark.parametrize("connections", [1, 4])
+async def test_telemetry_keeps_bounded_burst_waiters_after_a_probe(name, connections):
+    allocation = DatabaseOwner(DatabasePolicy(name, connections, 1, 1, 0.1, 2))
     assert await allocation.readiness_query(AsyncMock(return_value=True)) is True
     entered, release = asyncio.Event(), asyncio.Event()
+    started = 0
 
     async def first_receipt():
-        entered.set()
+        nonlocal started
+        started += 1
+        if started == connections:
+            entered.set()
         await release.wait()
         return "first"
 
-    first = asyncio.create_task(allocation.query(first_receipt))
+    first = [asyncio.create_task(allocation.query(first_receipt)) for _ in range(connections)]
     await entered.wait()
     try:
-        # Health must not consume the one queue position reserved for receipts.
+        # Health must not consume the queue positions reserved for required writes.
         with pytest.raises(DatabaseUnavailableError):
             await allocation.readiness_query(AsyncMock())
         assert allocation.gate.waiters == 0
-        second = asyncio.create_task(allocation.query(AsyncMock(return_value="second")))
+        second = [
+            asyncio.create_task(allocation.query(AsyncMock(return_value="second")))
+            for _ in range(connections)
+        ]
         try:
-            await wait_for_waiter(allocation)
+            await wait_for_waiter(allocation, connections)
             with pytest.raises(DatabaseUnavailableError):
                 await allocation.query(AsyncMock())
-            assert len(allocation.tasks) == 1
+            assert len(allocation.tasks) == connections
             release.set()
-            assert await first == "first"
-            assert await second == "second"
+            assert await asyncio.gather(*first) == ["first"] * connections
+            assert await asyncio.gather(*second) == ["second"] * connections
         finally:
             release.set()
-            await asyncio.gather(first, second, return_exceptions=True)
+            await asyncio.gather(*first, *second, return_exceptions=True)
     finally:
         release.set()
-        await first
+        await asyncio.gather(*first, return_exceptions=True)
         await allocation.close()
     assert allocation.gate.active == allocation.gate.waiters == 0
+
+
+@pytest.mark.parametrize("name", ["telemetry", "telemetry_settlement"])
+async def test_queued_telemetry_transaction_does_not_extend_its_acquisition_deadline(name):
+    allocation = owner(allocation=name)
+    await allocation.acquire()
+    native = AsyncMock()
+    transaction = AllocatedTransaction(allocation, native, acquisition_seconds=0.01)
+    try:
+        with pytest.raises(DatabaseUnavailableError):
+            await transaction.start()
+        native.start.assert_not_called()
+        assert allocation.gate.waiters == 0
+        assert allocation.gate.active == 1
+    finally:
+        await allocation.release()
+        await allocation.close()
