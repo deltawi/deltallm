@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 from pathlib import Path
+import re
 import socket
 import subprocess
 import tempfile
@@ -84,6 +85,39 @@ class LifecycleCluster:
         path = Path(self.directory.name) / "resources.yaml"
         path.write_text(yaml.safe_dump_all(documents))
         self.kubectl("apply", "-f", str(path))
+
+    def kill_container(self, pod: str) -> str:
+        document = json.loads(self.kubectl("get", "pod", pod, "-o", "json").stdout)
+        metadata = document["metadata"]
+        node = document["spec"]["nodeName"]
+        statuses = document["status"]["containerStatuses"]
+        if (
+            metadata["namespace"] != NAMESPACE
+            or metadata["labels"].get("app.kubernetes.io/instance") != "gateway"
+            or node != self.name + "-control-plane"
+            or len(statuses) != 1
+        ):
+            raise ValueError("Pod loss requires one application container on the owned kind node")
+        container_id = statuses[0]["containerID"]
+        if re.fullmatch(r"containerd://[0-9a-f]{64}", container_id) is None:
+            raise ValueError("Pod loss requires a containerd identity")
+        # PID namespace init ignores SIGKILL from peers in its own namespace.
+        # Signal through the parent runtime, never through `kubectl exec kill 1`.
+        self.run(
+            "docker",
+            "exec",
+            node,
+            "ctr",
+            "--namespace",
+            "k8s.io",
+            "tasks",
+            "kill",
+            "--signal",
+            "SIGKILL",
+            container_id.removeprefix("containerd://"),
+            timeout=15,
+        )
+        return container_id
 
     @contextmanager
     def owned(self, image: str):

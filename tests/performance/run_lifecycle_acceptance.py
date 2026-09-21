@@ -264,7 +264,14 @@ async def exercise_ready_cluster(cluster: LifecycleCluster, values: Path) -> Non
         report = await sample(cluster, ports, "after-rollout")
         assert report["success_count"] == 100, report["error_counts"]
     await pod_loss(cluster)
-    cluster.kubectl("rollout", "status", "deployment/gateway-deltallm", "--timeout=120s")
+    cluster.kubectl(
+        "rollout",
+        "status",
+        "deployment",
+        "-l",
+        "app.kubernetes.io/instance=gateway",
+        "--timeout=120s",
+    )
     cluster.event("interrupted_streams_reconciled", **await reconcile_interrupted_streams())
     with cluster.forward("service/provider", 8000) as port:
         async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
@@ -303,17 +310,9 @@ async def pod_loss(cluster: LifecycleCluster) -> None:
                 victim = owned["locked_by"].split(":", 1)[0]
                 assert victim in pods, owned
                 cluster.event("pod_killed_with_owned_claim", pod=victim, event_id=owned["event_id"])
-                await asyncio.to_thread(
-                    cluster.kubectl,
-                    "exec",
-                    victim,
-                    "--",
-                    "python",
-                    "-c",
-                    "import os,signal; os.kill(1,signal.SIGKILL)",
-                    check=False,
-                )
+                killed_id = await asyncio.to_thread(cluster.kill_container, victim)
                 await asyncio.wait_for(streams[pods.index(victim)], timeout=10)
+            await observe_killed_container(cluster, victim, killed_id)
             survivor = next(url for pod, url in zip(pods, urls) if pod != victim)
             await ready(survivor)
             await accept(survivor)
@@ -326,6 +325,22 @@ async def pod_loss(cluster: LifecycleCluster) -> None:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*streams, return_exceptions=True)
+
+
+async def observe_killed_container(cluster: LifecycleCluster, pod: str, container_id: str) -> None:
+    deadline = monotonic() + 30
+    while monotonic() < deadline:
+        document = json.loads(
+            (await asyncio.to_thread(cluster.kubectl, "get", "pod", pod, "-o", "json")).stdout
+        )
+        statuses = document["status"]["containerStatuses"]
+        terminated = statuses[0].get("lastState", {}).get("terminated", {})
+        if terminated.get("containerID") == container_id:
+            assert terminated["exitCode"] == 137, terminated
+            cluster.event("abrupt_container_exit_verified", pod=pod, **terminated)
+            return
+        await asyncio.sleep(0.2)
+    raise TimeoutError("Kubernetes did not report the selected container's SIGKILL exit")
 
 
 def main() -> None:
