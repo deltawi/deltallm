@@ -11,8 +11,8 @@ from src.db.allocation_config import DatabasePolicy
 pytestmark = pytest.mark.hermetic
 
 
-def owner(acquisition_seconds=1):
-    return DatabaseOwner(DatabasePolicy("telemetry_settlement", 1, acquisition_seconds, 1, 0.1, 2))
+def owner(acquisition_seconds=1, *, allocation="foreground"):
+    return DatabaseOwner(DatabasePolicy(allocation, 1, acquisition_seconds, 1, 0.1, 2))
 
 
 async def wait_for_waiter(allocation):
@@ -21,7 +21,7 @@ async def wait_for_waiter(allocation):
             await asyncio.sleep(0)
 
 
-async def test_settlement_can_wait_for_one_probe_and_normal_saturation_still_sheds():
+async def test_business_can_wait_for_one_probe_and_normal_saturation_still_sheds():
     allocation = owner()
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -149,3 +149,39 @@ async def test_shorter_transaction_acquisition_budget_also_covers_the_probe_wait
         release.set()
         await health
         await allocation.close()
+
+
+async def test_settlement_keeps_one_burst_waiter_after_a_probe_and_bounds_overflow():
+    allocation = owner(allocation="telemetry_settlement")
+    assert await allocation.readiness_query(AsyncMock(return_value=True)) is True
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def first_receipt():
+        entered.set()
+        await release.wait()
+        return "first"
+
+    first = asyncio.create_task(allocation.query(first_receipt))
+    await entered.wait()
+    try:
+        # Health must not consume the one queue position reserved for receipts.
+        with pytest.raises(DatabaseUnavailableError):
+            await allocation.readiness_query(AsyncMock())
+        assert allocation.gate.waiters == 0
+        second = asyncio.create_task(allocation.query(AsyncMock(return_value="second")))
+        try:
+            await wait_for_waiter(allocation)
+            with pytest.raises(DatabaseUnavailableError):
+                await allocation.query(AsyncMock())
+            assert len(allocation.tasks) == 1
+            release.set()
+            assert await first == "first"
+            assert await second == "second"
+        finally:
+            release.set()
+            await asyncio.gather(first, second, return_exceptions=True)
+    finally:
+        release.set()
+        await first
+        await allocation.close()
+    assert allocation.gate.active == allocation.gate.waiters == 0

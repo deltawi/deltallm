@@ -113,18 +113,22 @@ capacity while old work is still live.
 #### Review decision: readiness must not shed settlement
 
 The Kubernetes experiment found two spend-persistence rejections among 100
-requests while readiness borrowed the single settlement connection. Allocation
-metrics showed a full settlement gate. The existing zero-waiter policy made
-otherwise valid economic acceptance lose a race with health traffic.
+requests, with metrics showing a full settlement gate. Review reproduced the
+health-traffic race on a single connection. A subsequent run exposed overlapping
+business settlements as a second cause, returning 99/100 successes after the
+probe-only fix. The zero-waiter policy shed already-admitted economic acceptance.
 
 `DatabaseOwner` remains the single admission owner. It permits one waiter only
 while its one readiness query owns an existing slot; query and transaction
 acquisition retain their original absolute deadlines. A cancelled probe retains
 ownership until native work finishes, and queued work rechecks owner closure.
-Other saturation retains zero waiters. This adds no SQL call or connection on
-inference paths and no pool. At most five database allocations per process each
-retain one extra waiting operation: 220 at the 44-process illustrative ceiling,
-inside the existing bounded request/worker allocations.
+Settlement also reserves one waiting position per connection for overlapping
+receipts. Probes cannot enter this queue ahead of business work. Other saturation
+retains zero waiters. This adds no SQL call or connection on inference paths and
+no pool. With all allocations enabled the bound is four borrowed probe waiters
+plus the configured settlement size: 220 at the 44-process illustrative ceiling
+with the default one-connection settlement allocation, inside existing bounded
+request/worker allocations.
 
 Alternatives considered were a separate health pool, which would add connection
 capacity, and client-presence checks, which would not verify connectivity. The

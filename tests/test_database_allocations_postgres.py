@@ -26,7 +26,13 @@ async def allocated_databases():
         pytest.skip("DATABASE_URL is required")
     async with AsyncExitStack() as stack:
         clients = {}
-        for name in ("control", "foreground", "telemetry", "telemetry_worker"):
+        for name in (
+            "control",
+            "foreground",
+            "telemetry",
+            "telemetry_worker",
+            "telemetry_settlement",
+        ):
             policy = DatabasePolicy(name, 1, 0.2, 0.8, 0.1, 2)
             allocation = DatabaseOwner(policy)
             client = AllocatedPrisma(
@@ -120,6 +126,32 @@ async def test_real_health_probe_does_not_reject_a_single_slot_transaction(
     finally:
         release.set()
         await asyncio.gather(probe, settlement, return_exceptions=True)
+
+
+async def test_real_overlapping_settlements_wait_and_commit_with_one_connection(
+    allocated_databases,
+):
+    client = allocated_databases["telemetry_settlement"]
+
+    async def settle():
+        async with client.tx() as tx:
+            return await tx.query_raw("SELECT 2 AS settled")
+
+    second = None
+    try:
+        async with client.tx() as first:
+            assert await first.query_raw("SELECT 1 AS settled") == [{"settled": 1}]
+            second = asyncio.create_task(settle())
+            async with asyncio.timeout(1):
+                while client.allocation.gate.waiters != 1:
+                    await asyncio.sleep(0)
+            with pytest.raises(DatabaseUnavailableError):
+                await client.query_raw("SELECT 3 AS overflow")
+        assert await second == [{"settled": 2}]
+        assert client.allocation.gate.active == client.allocation.gate.waiters == 0
+    finally:
+        if second is not None:
+            await asyncio.gather(second, return_exceptions=True)
 
 
 async def test_real_native_lock_deadline_rolls_back_and_does_not_authorize_on_exhaustion(

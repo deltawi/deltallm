@@ -88,7 +88,14 @@ async def _native_call(operation: Callable[[], Awaitable[T]], seconds: float) ->
 class DatabaseOwner:
     def __init__(self, policy: DatabasePolicy):
         self.policy = policy
-        self.gate = BoundedCapacityGate(concurrency=policy.connections, max_waiters=0)
+        # Already-admitted receipts need a finite burst buffer. Other business
+        # allocations keep immediate shedding; health may borrow one waiter.
+        self._business_waiters = (
+            policy.connections if policy.allocation == "telemetry_settlement" else 0
+        )
+        self.gate = BoundedCapacityGate(
+            concurrency=policy.connections, max_waiters=self._business_waiters
+        )
         self.tasks: set[asyncio.Task] = set()
         self.closed = False
         self._probe_active = False
@@ -109,7 +116,7 @@ class DatabaseOwner:
             _events.labels(self.policy.allocation, "full").inc()
             raise DatabaseUnavailableError() from None
         except CapacityGateTimedOut:
-            _events.labels(self.policy.allocation, "probe_wait_timeout").inc()
+            _events.labels(self.policy.allocation, "queue_timeout").inc()
             raise DatabaseUnavailableError() from None
         if self.closed:
             await self.gate.release()
@@ -141,9 +148,9 @@ class DatabaseOwner:
     async def readiness_query(self, operation: Callable[[], Awaitable[T]]) -> T:
         # Borrow one existing slot. A business operation may wait behind this
         # probe within its existing acquisition deadline instead of being shed
-        # by health traffic. There is only one probe and one waiter per owner;
-        # ordinary business saturation retains the zero-waiter contract.
-        if self._probe_active or self.gate.waiters:
+        # by health traffic. One probe uses the existing settlement queue or
+        # borrows one waiter; other business saturation still has zero waiters.
+        if self._probe_active or self.gate.waiters or self.gate.active >= self.policy.connections:
             raise DatabaseUnavailableError()
         deadline = monotonic() + self.policy.acquisition_seconds + self.policy.statement_seconds
         self._probe_active = True
@@ -153,7 +160,9 @@ class DatabaseOwner:
             self._probe_active = False
             raise
         try:
-            await self.gate.reconfigure(concurrency=self.policy.connections, max_waiters=1)
+            await self.gate.reconfigure(
+                concurrency=self.policy.connections, max_waiters=max(1, self._business_waiters)
+            )
         except BaseException:
             self._probe_active = False
             await self.release()
@@ -186,7 +195,9 @@ class DatabaseOwner:
             )
             if readiness:
                 self._probe_active = False
-                await self.gate.reconfigure(concurrency=self.policy.connections, max_waiters=0)
+                await self.gate.reconfigure(
+                    concurrency=self.policy.connections, max_waiters=self._business_waiters
+                )
             await self.release()
 
     async def close(self):
