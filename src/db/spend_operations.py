@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 from typing import TYPE_CHECKING
 
 from src.billing.spend_operations import OperationHandle, SpendPersistenceUnavailable
-from src.db.billing_operations import BillingOperationRepository
+from src.billing.operation_reservation import BillingOperationUnavailable
+from src.db.billing_operations import BillingOperationRepository, DB_BUDGET_SECONDS
 from src.db.spend_ingestion import SpendIngestionRepository
 
 if TYPE_CHECKING:
@@ -67,51 +70,67 @@ class SpendOperationRepository:
         encoded = json.dumps(payload, default=str, allow_nan=False, sort_keys=True)
         if len(encoded.encode()) > 262_144:
             raise SpendPersistenceUnavailable()
-        async with self.transactions._transaction(expires_at) as tx:
-            rows = await tx.query_raw(
-                "UPDATE deltallm_spend_ingestion_outbox SET "
-                "payload_json=$3::jsonb,operation_state='accepted',"
-                "status=CASE WHEN operation_state='accepted' THEN status ELSE 'queued' END,"
-                "blocked_at=CASE WHEN operation_state='accepted' THEN blocked_at ELSE NULL END,"
-                "last_error=CASE WHEN operation_state='accepted' THEN last_error ELSE NULL END,"
-                "updated_at=NOW() "
-                "WHERE event_id=$1 AND operation_owner=$2 "
-                "AND (operation_state IN ('dispatched','unknown') OR "
-                "(operation_state='accepted' AND payload_json=$3::jsonb)) "
-                "AND operation_intent->'principal' = $4::jsonb "
-                "AND operation_intent->>'model'=$5 AND operation_intent->>'call_type'=$6 "
-                "RETURNING event_id",
-                event_id,
-                owner_token,
-                encoded,
-                json.dumps(
-                    {
-                        name: payload.get(name)
-                        for name in (
-                            "api_key",
-                            "user_id",
-                            "team_id",
-                            "organization_id",
-                            "owner_account_id",
-                        )
-                    }
-                ),
-                payload.get("model"),
-                payload.get("call_type"),
-            )
-            if not rows:
-                raise SpendPersistenceUnavailable()
+        rows = await self._settlement_statement(
+            "UPDATE deltallm_spend_ingestion_outbox SET "
+            "payload_json=$3::jsonb,operation_state='accepted',"
+            "status=CASE WHEN operation_state='accepted' THEN status ELSE 'queued' END,"
+            "blocked_at=CASE WHEN operation_state='accepted' THEN blocked_at ELSE NULL END,"
+            "last_error=CASE WHEN operation_state='accepted' THEN last_error ELSE NULL END,"
+            "updated_at=NOW() "
+            "WHERE event_id=$1 AND operation_owner=$2 "
+            "AND (operation_state IN ('dispatched','unknown') OR "
+            "(operation_state='accepted' AND payload_json=$3::jsonb)) "
+            "AND operation_intent->'principal' = $4::jsonb "
+            "AND operation_intent->>'model'=$5 AND operation_intent->>'call_type'=$6 "
+            "RETURNING event_id",
+            event_id,
+            owner_token,
+            encoded,
+            json.dumps(
+                {
+                    name: payload.get(name)
+                    for name in (
+                        "api_key",
+                        "user_id",
+                        "team_id",
+                        "organization_id",
+                        "owner_account_id",
+                    )
+                }
+            ),
+            payload.get("model"),
+            payload.get("call_type"),
+            expires_at=expires_at,
+        )
+        if not rows:
+            raise BillingOperationUnavailable()
 
     async def mark_unknown(self, *, event_id: str, owner_token: str, expires_at: float) -> bool:
-        async with self.transactions._transaction(expires_at) as tx:
-            rows = await tx.query_raw(
-                "UPDATE deltallm_spend_ingestion_outbox SET operation_state='unknown',"
-                "last_error='operation_outcome_unknown',updated_at=NOW() "
-                "WHERE event_id=$1 AND operation_owner=$2 AND operation_state='dispatched' RETURNING event_id",
-                event_id,
-                owner_token,
-            )
-            return bool(rows)
+        rows = await self._settlement_statement(
+            "UPDATE deltallm_spend_ingestion_outbox SET operation_state='unknown',"
+            "last_error='operation_outcome_unknown',updated_at=NOW() "
+            "WHERE event_id=$1 AND operation_owner=$2 AND operation_state='dispatched' RETURNING event_id",
+            event_id,
+            owner_token,
+            expires_at=expires_at,
+        )
+        return bool(rows)
+
+    async def _settlement_statement(
+        self, query: str, *parameters: object, expires_at: float
+    ) -> list[dict[str, object]]:
+        # These fenced updates each need one implicit PostgreSQL transaction.
+        # Keep admission's multi-statement transaction separate. The allocated
+        # client owns native work after caller cancellation/lost acknowledgement;
+        # a late commit is recovered by event ID, never by repeating provider work.
+        remaining = expires_at - asyncio.get_running_loop().time()
+        if not math.isfinite(remaining) or remaining <= 0:
+            raise BillingOperationUnavailable()
+        try:
+            async with asyncio.timeout(min(remaining, DB_BUDGET_SECONDS)):
+                return await self.db.query_raw(query, *parameters)
+        except Exception:
+            raise BillingOperationUnavailable() from None
 
     async def recover_expired(self, *, limit: int = 100) -> int:
         rows = await self.db.query_raw(

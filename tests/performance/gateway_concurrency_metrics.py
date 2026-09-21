@@ -57,6 +57,7 @@ ALLOWED_NAMES = {
     "deltallm_audit_queue_depth",
     "deltallm_audit_oldest_event_age_seconds",
     "deltallm_spend_ingestion_backlog",
+    "deltallm_spend_ingestion_failures_total",
     "deltallm_spend_operation_unknown",
     "deltallm_spend_operation_observed_timestamp_seconds",
     "deltallm_spend_operation_transitions_total",
@@ -74,6 +75,12 @@ ALLOWED_NAMES = {
     "deltallm_database_allocation_events_total",
 } | {name + suffix for name in HISTOGRAMS for suffix in ("_bucket", "_count", "_sum")}
 LABEL_VALUES = {
+    "stage": {
+        "operation_admission",
+        "operation_receipt",
+        "operation_unknown",
+        "operation_recovery",
+    },
     "state": {
         "starting",
         "serving",
@@ -120,6 +127,7 @@ LABEL_VALUES = {
         "overloaded",
         "deadline",
         "queue_full",
+        "queue_timeout",
         "coalesced",
         "completed",
         "failed",

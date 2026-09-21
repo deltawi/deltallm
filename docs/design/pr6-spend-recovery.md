@@ -61,8 +61,9 @@ explicitly ambiguous unless authoritative usage resolves them. A successful aggr
 receipt does not prove that an earlier failed provider attempt was free.
 
 Receipt acceptance validates the owner and attribution, persists frozen usage,
-pricing, currency and exact cost, and makes the reserved row claimable in one short
-transaction. It does not acquire additional queue capacity or run the ordinary full
+pricing, currency and exact cost, and makes the reserved row claimable in one
+atomic update. PR8 removes the interactive transaction around that single statement;
+its 250 ms caller deadline and native allocation ownership remain bounded. It does not acquire additional queue capacity or run the ordinary full
 queue fallback. Ledger changes and acknowledgement retain the existing transaction
 and claim fence. Recovery never calls a provider. Unknown records are retained and
 capacity-accounted until investigated; a timeout is not proof of non-execution.

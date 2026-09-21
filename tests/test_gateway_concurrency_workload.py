@@ -151,11 +151,14 @@ deltallm_ingress_active{allocation="inference"} 4
 deltallm_ingress_rejections_total{allocation="inference",reason="gateway_ingress_full"} 10
 deltallm_auth_fallback_events_total{phase="lookup",outcome="coalesced"} 3
 deltallm_database_allocation_occupied{allocation="foreground"} 1
+deltallm_database_allocation_events_total{allocation="telemetry_settlement",outcome="queue_timeout"} 2
+deltallm_spend_ingestion_failures_total{stage="operation_receipt"} 3
+deltallm_spend_ingestion_failures_total{stage="private-stage"} 99
 deltallm_auth_fallback_tasks{api_key="private-key"} 99
 deltallm_ingress_rejections_total{allocation="inference",reason="private-error"} 99
 """
     selected = metrics.select_metrics(text)
-    assert len(selected) == 4
+    assert len(selected) == 6
     assert "private" not in repr(selected)
     for code in ("gateway_ingress_full", "auth_fallback_unavailable", "database_unavailable"):
         assert workload.error_code({"error": {"code": code}}) == code

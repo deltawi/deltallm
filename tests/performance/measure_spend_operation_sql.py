@@ -173,7 +173,9 @@ async def measure(args: argparse.Namespace, *, database_url: str | None = None) 
         recovery_plan = await explain(db.observer, query, values)
         assert baseline == {"transactions": 1, "statements": 2}
         assert admission == {"transactions": 1, "statements": 3}
-        assert receipt == {"transactions": 1, "statements": 2}
+        # One owner-fenced UPDATE commits atomically without interactive
+        # transaction start, timeout setup or commit round trips.
+        assert receipt == {"transactions": 0, "statements": 1}
         # LIKE INCLUDING ALL creates schema-local index names. Check its
         # definition instead of requiring the production index name.
         indexes = await db.observer.query_raw(

@@ -512,3 +512,21 @@ fix, and the immutable PR7 baseline. Both images completed 200/200 requests at
 10 RPS with zero generator drops and exit code zero. Mean latency was 32.84 ms
 and 32.80 ms; the recorded raw samples retain dependency counters and durable
 records. See the public lifecycle measurement report for provenance and limits.
+
+### Receipt round-trip review fix
+
+The post-rollout rerun on `a30d5d29` returned 97/100 successes. All three failures
+left dispatched spend intents; the batch scenario still completed all 20 items
+and economic records. One bounded settlement waiter fixes short overlap but does
+not remove the receipt transaction's start, timeout-setup and commit round trips.
+
+Plan: execute receipt acceptance and unknown-state marking as single atomic
+PostgreSQL UPDATE statements through the same owned settlement allocation. Keep
+owner/principal/model/call-type guards, immutable replay and the 250 ms absolute
+caller deadline. Cancellation or lost acknowledgement remains ambiguous; the
+allocation continues owning native work through its configured deadline, and
+late accepted receipts remain recoverable. Admission keeps its existing
+multi-statement transaction and post-lock snapshot. No extra pool, waiter,
+provider retry or timeout increase is introduced. Verify fencing, concurrency,
+late acknowledgement and exact SQL counts on real PostgreSQL; refresh image
+measurements and rerun the unchanged strict lifecycle load assertions.
