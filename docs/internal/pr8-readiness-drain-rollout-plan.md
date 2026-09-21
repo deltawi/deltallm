@@ -110,6 +110,31 @@ of any cancellation-resistant work until completion, following PR7's rule.
 Cancelling a refresh observes/cancels child probes and cannot create replacement
 capacity while old work is still live.
 
+#### Review decision: readiness must not shed settlement
+
+The Kubernetes experiment found two spend-persistence rejections among 100
+requests while readiness borrowed the single settlement connection. Allocation
+metrics showed a full settlement gate. The existing zero-waiter policy made
+otherwise valid economic acceptance lose a race with health traffic.
+
+`DatabaseOwner` remains the single admission owner. It permits one waiter only
+while its one readiness query owns an existing slot; query and transaction
+acquisition retain their original absolute deadlines. A cancelled probe retains
+ownership until native work finishes, and queued work rechecks owner closure.
+Other saturation retains zero waiters. This adds no SQL call or connection on
+inference paths and no pool. At most five database allocations per process each
+retain one extra waiting operation: 220 at the 44-process illustrative ceiling,
+inside the existing bounded request/worker allocations.
+
+Alternatives considered were a separate health pool, which would add connection
+capacity, and client-presence checks, which would not verify connectivity. The
+borrowed-slot design preserves real bounded probes and the declared pool ceiling.
+Hermetic saturation/deadline/cancellation tests and a real one-connection
+transaction regression verify the contract. Both before/after measurements and
+the strict 100-success Kubernetes sample remain required. This change needs no
+schema/config migration or compatibility mode; binary rollback restores the old
+health-contention behavior.
+
 Use Kubernetes probe hysteresis as the single pod-membership policy: retain
 `failureThreshold: 3`, expose `successThreshold: 2`, and retain a five-second
 readiness period as the initial test profile. Do not duplicate those counters in

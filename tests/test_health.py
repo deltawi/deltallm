@@ -9,10 +9,17 @@ import pytest
 
 from src.bootstrap.readiness import dependency_probes, fresh_task_check, service_check, task_check
 from src.lifecycle_settings import LifecycleSettings
+from src.db.client import PrismaClientManager
 from src.process_lifecycle import ProcessLifecycle
 from src.readiness import ReadinessRuntime
 
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
+
+
+def database_manager(client):
+    manager = PrismaClientManager()
+    manager.client = client
+    return manager
 
 
 @pytest.fixture(autouse=True)
@@ -21,9 +28,7 @@ def ready_databases(test_app):
         setattr(
             test_app.state,
             name,
-            SimpleNamespace(
-                client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
-            ),
+            database_manager(SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))),
         )
 
 
@@ -105,8 +110,8 @@ async def test_readiness_requires_each_new_database_allocation(
 ):
     if allocation == "telemetry_worker":
         test_app.state.audit_ingestion_mode = "outbox"
-        test_app.state.telemetry_prisma_manager = SimpleNamespace(
-            client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
+        test_app.state.telemetry_prisma_manager = database_manager(
+            SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
         )
     manager_name = allocation + "_prisma_manager"
     manager = getattr(test_app.state, manager_name)
@@ -135,7 +140,7 @@ async def test_readiness_requires_each_new_database_allocation(
     assert (await client.get("/health/liveliness")).status_code == 200
 
     recovered = SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
-    setattr(test_app.state, manager_name, SimpleNamespace(client=recovered))
+    setattr(test_app.state, manager_name, database_manager(recovered))
     response = await client.get("/health/readiness")
     assert response.status_code == 200
     assert response.json()["checks"][check] is True
@@ -163,9 +168,7 @@ async def test_readiness_probes_all_dependency_allocations_concurrently(client, 
         "telemetry_prisma_manager",
         "telemetry_worker_prisma_manager",
     ):
-        setattr(
-            test_app.state, name, SimpleNamespace(client=SimpleNamespace(query_raw=probe(name)))
-        )
+        setattr(test_app.state, name, database_manager(SimpleNamespace(query_raw=probe(name))))
     async with asyncio.timeout(2):
         response = await client.get("/health/readiness")
     assert response.status_code == 200
@@ -339,9 +342,7 @@ async def test_readiness_checks_dedicated_telemetry_database(client, test_app) -
     telemetry_db = _TelemetryDB()
     test_app.state.spend_ingestion_mode = "outbox"
     test_app.state.audit_ingestion_mode = "legacy"
-    test_app.state.telemetry_prisma_manager = type(
-        "TelemetryManager", (), {"client": telemetry_db}
-    )()
+    test_app.state.telemetry_prisma_manager = database_manager(telemetry_db)
 
     unavailable = await client.get("/health/readiness")
     assert unavailable.status_code == 503

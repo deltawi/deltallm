@@ -208,12 +208,6 @@ async def exercise_ready_cluster(cluster: LifecycleCluster, values: Path) -> Non
         for url in urls:
             payload = await ready(url)
             assert payload["details"]["process"]["state"] == "serving"
-        await readiness_recovery(cluster, urls)
-        report = await sample(cluster, ports, "before-rollout")
-        assert report["success_count"] == 100, report["error_counts"]
-        await failed_migrations(cluster, values)
-        for url in urls:
-            await ready(url)
         all_pods = json.loads(
             cluster.kubectl(
                 "get", "pods", "-l", "app.kubernetes.io/instance=gateway", "-o", "json"
@@ -221,6 +215,12 @@ async def exercise_ready_cluster(cluster: LifecycleCluster, values: Path) -> Non
         )
         for pod in all_pods["items"]:
             forwards.enter_context(cluster.follow_logs(pod["metadata"]["name"]))
+        await readiness_recovery(cluster, urls)
+        report = await sample(cluster, ports, "before-rollout")
+        assert report["success_count"] == 100, report["error_counts"]
+        await failed_migrations(cluster, values)
+        for url in urls:
+            await ready(url)
         entered = asyncio.Event()
         stream = asyncio.create_task(long_stream(cluster, urls[0], entered))
         draining = None

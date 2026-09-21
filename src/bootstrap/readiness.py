@@ -55,8 +55,8 @@ def dependency_probes(state: State) -> dict[str, Probe]:
     for name, manager_name in databases.items():
 
         async def database(attribute: str = manager_name) -> object:
-            client = getattr(getattr(state, attribute, None), "client", None)
-            return False if client is None else await client.query_raw("SELECT 1")
+            manager = getattr(state, attribute, None)
+            return False if manager is None else await manager.readiness_probe()
 
         probes[name] = database
     return probes
