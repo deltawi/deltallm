@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from src.bootstrap.readiness import dependency_probes, service_check, task_check
+from src.bootstrap.readiness import dependency_probes, fresh_task_check, service_check, task_check
 from src.lifecycle_settings import LifecycleSettings
 from src.process_lifecycle import ProcessLifecycle
 from src.readiness import ReadinessRuntime
@@ -71,7 +71,8 @@ async def client(test_app):
             ),
         ):
             if getattr(test_app.state, expected, False):
-                required[name] = task_check(
+                check = fresh_task_check if name.startswith("organization_") else task_check
+                required[name] = check(
                     getattr(test_app.state, task, None),
                     worker=getattr(test_app.state, worker, None) if worker else None,
                 )
@@ -252,7 +253,9 @@ async def test_readiness_tracks_expected_batch_webhook_worker(client, test_app) 
             return self._done
 
     test_app.state.batch_webhook_worker_expected = True
-    test_app.state.batch_webhook_outbox_worker = SimpleNamespace()
+    started = asyncio.Event()
+    started.set()
+    test_app.state.batch_webhook_outbox_worker = SimpleNamespace(started=started)
     test_app.state.batch_webhook_outbox_task = _Task(done=True)
 
     stopped = await client.get("/health/readiness")
@@ -363,6 +366,8 @@ async def test_readiness_tracks_organization_lifecycle_tasks(client, test_app) -
     class _RuntimeHealth:
         def __init__(self, ready: bool) -> None:
             self.ready = ready
+            self.started = asyncio.Event()
+            self.started.set()
 
         def is_ready(self) -> bool:
             return self.ready

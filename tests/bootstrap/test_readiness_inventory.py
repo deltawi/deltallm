@@ -9,6 +9,8 @@ from src.telemetry.lifecycle import WorkerHealth, WorkerState
 
 
 def base(**settings):
+    started = asyncio.Event()
+    started.set()
     general = GeneralSettings(
         **(
             {
@@ -25,7 +27,7 @@ def base(**settings):
             worker_health=WorkerHealth(WorkerState.READY)
         ),
         organization_lifecycle_task=SimpleNamespace(done=lambda: False),
-        organization_lifecycle_authorizer=SimpleNamespace(is_ready=lambda: True),
+        organization_lifecycle_authorizer=SimpleNamespace(started=started, is_ready=lambda: True),
         dynamic_config_manager=SimpleNamespace(worker_health=WorkerHealth(WorkerState.READY)),
         model_hot_reload_manager=SimpleNamespace(
             get_applied_routing_state=lambda: SimpleNamespace(requires_reconciliation=False)
@@ -93,3 +95,33 @@ def test_environment_tier_enforcement_requires_its_refresh_worker():
     required, optional = collect_workers(worker_inventory(state, cfg))
     assert "tier_policy_refresh" not in required
     assert optional["tier_policy_refresh"].state == "disabled"
+
+
+def test_live_worker_without_startup_acknowledgement_contract_is_unavailable():
+    state, cfg = base(cache_invalidation_worker_enabled=True)
+    state.cache_invalidation_worker = SimpleNamespace()
+    state.cache_invalidation_task = SimpleNamespace(done=lambda: False)
+    required, _ = collect_workers(worker_inventory(state, cfg))
+    assert not required["cache_invalidation_worker"].ready
+    assert required["cache_invalidation_worker"].state == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "worker", ["organization_lifecycle_authorizer", "organization_deletion_worker"]
+)
+def test_organization_workers_require_freshness_after_startup(worker):
+    state, cfg = base(organization_deletion_worker_enabled=True)
+    state.organization_deletion_worker = SimpleNamespace(
+        started=state.organization_lifecycle_authorizer.started, is_ready=lambda: True
+    )
+    state.organization_deletion_task = SimpleNamespace(done=lambda: False)
+    getattr(state, worker).is_ready = lambda: False
+    required, _ = collect_workers(worker_inventory(state, cfg))
+    name = "organization_lifecycle_refresher" if worker.endswith("authorizer") else worker
+    assert required[name].state == "stale"
+    other = (
+        "organization_deletion_worker"
+        if worker.endswith("authorizer")
+        else "organization_lifecycle_refresher"
+    )
+    assert required[other].ready

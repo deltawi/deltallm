@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Protocol
 
-from src.config import AppConfig
+from fastapi import FastAPI
+from starlette.datastructures import State
+
+from src.config import AppConfig, GeneralSettings
 from src.process_lifecycle import ProcessLifecycle
 from src.readiness import Checks, HealthCheck, Probe, ReadinessRuntime
 from src.telemetry.lifecycle import WorkerState
@@ -20,7 +24,15 @@ class WorkerCheck:
     read: Callable[[], HealthCheck]
 
 
-def dependency_probes(state: Any) -> dict[str, Probe]:
+class StartedWorker(Protocol):
+    started: asyncio.Event
+
+
+class FreshWorker(StartedWorker, Protocol):
+    def is_ready(self) -> bool: ...
+
+
+def dependency_probes(state: State) -> dict[str, Probe]:
     async def redis() -> object:
         client = getattr(state, "redis", None)
         return False if client is None else await client.ping()
@@ -51,7 +63,7 @@ def dependency_probes(state: Any) -> dict[str, Probe]:
 
 
 def service_check(
-    state: Any, attribute: str, *, health_attribute: str = "worker_health", disabled: bool = False
+    state: State, attribute: str, *, health_attribute: str = "worker_health", disabled: bool = False
 ) -> HealthCheck:
     health = getattr(getattr(state, attribute, None), health_attribute, None)
     if health is None:
@@ -62,19 +74,25 @@ def service_check(
     return HealthCheck(bool(health.ready) and (disabled or value != "disabled"), value)
 
 
-def task_check(task: object, *, worker: object = None) -> HealthCheck:
+def task_check(
+    task: asyncio.Future[object] | None, *, worker: StartedWorker | None = None
+) -> HealthCheck:
     if task is None or worker is None:
         return HealthCheck(False, "unavailable")
     if task.done():
         return HealthCheck(False, "failed")
-    if worker is not None:
-        started = getattr(worker, "started", None)
-        if started is not None and not started.is_set():
-            return HealthCheck(False, "starting")
-        is_ready = getattr(worker, "is_ready", None)
-        if is_ready is not None and not is_ready():
-            return HealthCheck(False, "stale")
+    if not worker.started.is_set():
+        return HealthCheck(False, "starting")
     return HealthCheck(True, "ready")
+
+
+def fresh_task_check(
+    task: asyncio.Future[object] | None, *, worker: FreshWorker | None = None
+) -> HealthCheck:
+    result = task_check(task, worker=worker)
+    if result.ready and worker is not None and not worker.is_ready():
+        return HealthCheck(False, "stale")
+    return result
 
 
 def collect_workers(inventory: tuple[WorkerCheck, ...]) -> tuple[Checks, Checks]:
@@ -88,7 +106,7 @@ def collect_workers(inventory: tuple[WorkerCheck, ...]) -> tuple[Checks, Checks]
     return required, optional
 
 
-def worker_inventory(state: Any, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
+def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
     general = cfg.general_settings
     tier_mode = startup_setting(general, state.settings, "tier_policy_mode", "disabled")
     tier_fail_closed = (
@@ -171,27 +189,30 @@ def worker_inventory(state: Any, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
             "organization_lifecycle_task",
             "organization_lifecycle_authorizer",
             True,
+            fresh_task_check,
         ),
         (
             "organization_deletion_worker",
             "organization_deletion_task",
             "organization_deletion_worker",
             general.organization_deletion_worker_enabled,
+            fresh_task_check,
         ),
         (
             "cache_invalidation_worker",
             "cache_invalidation_task",
             "cache_invalidation_worker",
             general.cache_invalidation_worker_enabled,
+            task_check,
         ),
     )
-    for name, task, worker, enabled in task_specs:
+    for name, task, worker, enabled, check in task_specs:
         if enabled:
             inventory.append(
                 WorkerCheck(
                     name,
                     True,
-                    lambda task=task, worker=worker: task_check(
+                    lambda task=task, worker=worker, check=check: check(
                         getattr(state, task, None), worker=getattr(state, worker, None)
                     ),
                 )
@@ -201,7 +222,7 @@ def worker_inventory(state: Any, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
     return tuple(inventory)
 
 
-def _routing_check(state: Any) -> HealthCheck:
+def _routing_check(state: State) -> HealthCheck:
     manager = getattr(state, "model_hot_reload_manager", None)
     if manager is None:
         return HealthCheck(False, "unavailable")
@@ -209,7 +230,7 @@ def _routing_check(state: Any) -> HealthCheck:
     return HealthCheck(ready, "ready" if ready else "stale")
 
 
-def _batch_checks(state: Any, general: Any) -> list[WorkerCheck]:
+def _batch_checks(state: State, general: GeneralSettings) -> list[WorkerCheck]:
     specs = (
         ("batch_executor", "worker", "worker_task", general.embeddings_batch_worker_enabled),
         (
@@ -253,7 +274,9 @@ def _batch_checks(state: Any, general: Any) -> list[WorkerCheck]:
     return checks
 
 
-def initialize_readiness(app: Any, cfg: AppConfig, lifecycle: ProcessLifecycle) -> ReadinessRuntime:
+def initialize_readiness(
+    app: FastAPI, cfg: AppConfig, lifecycle: ProcessLifecycle
+) -> ReadinessRuntime:
     inventory = worker_inventory(app.state, cfg)
     runtime = ReadinessRuntime(
         lifecycle=lifecycle,
