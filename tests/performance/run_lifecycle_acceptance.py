@@ -275,9 +275,22 @@ async def exercise_ready_cluster(cluster: LifecycleCluster, values: Path) -> Non
     cluster.event("interrupted_streams_reconciled", **await reconcile_interrupted_streams())
     with cluster.forward("service/provider", 8000) as port:
         async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
-            events = await client.get(f"http://127.0.0.1:{port}/fixture/stream-events")
-            events.raise_for_status()
-            (cluster.output / "upstream-closures.json").write_text(events.text + "\n")
+            # One rollout stream and three pod-loss streams must each close
+            # upstream, including the two cancelled surviving connections.
+            deadline = monotonic() + 10
+            while True:
+                response = await client.get(f"http://127.0.0.1:{port}/fixture/stream-events")
+                response.raise_for_status()
+                events = response.json()
+                (cluster.output / "upstream-closures.json").write_text(response.text + "\n")
+                assert len(events) <= 4, events
+                assert all(event["event"] == "upstream_closed" for event in events), events
+                if len(events) == 4:
+                    break
+                if monotonic() >= deadline:
+                    raise TimeoutError("interrupted streams did not all close upstream")
+                await asyncio.sleep(0.2)
+    cluster.event("all_upstream_streams_closed", count=len(events))
 
 
 async def pod_loss(cluster: LifecycleCluster) -> None:

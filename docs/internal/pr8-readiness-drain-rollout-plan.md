@@ -498,3 +498,17 @@ streams and accepted batch/outbox work during rollout, and a killed claim owner.
 Its complete acceptance gate remains open: the local Docker VM exhausted memory
 with the multi-pod fixture, so qualification continues on a clean CI runner.
 The draft PR must remain unmerged until that gate and final review pass.
+
+### Final review checkpoint
+
+Review of the acceptance observer found that it retained upstream-close events
+without requiring all four test streams to close. The gate now waits a bounded
+ten seconds for exactly four provider-side closures and rejects duplicates; the
+final CI run must exercise this assertion. No production setting or test load
+was relaxed.
+
+The final ARM64 comparison uses runtime `66d977d9`, the bounded settlement queue
+fix, and the immutable PR7 baseline. Both images completed 200/200 requests at
+10 RPS with zero generator drops and exit code zero. Mean latency was 32.84 ms
+and 32.80 ms; the recorded raw samples retain dependency counters and durable
+records. See the public lifecycle measurement report for provenance and limits.
