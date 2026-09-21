@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import logging
-from contextlib import AsyncExitStack, asynccontextmanager
-from pathlib import Path
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from src.bootstrap import (
     BootstrapStatus,
@@ -27,6 +24,11 @@ from src.bootstrap import (
     shutdown_routing_runtime,
 )
 from src.bootstrap.metrics import start_runtime_metrics
+from src.bootstrap.lifecycle import process_scope, mark_process_serving, shutdown_readiness
+from src.shutdown import BoundedExitStack
+from src.startup_config import StartupConfig
+from src.process_lifecycle import ProcessLifecycle
+from src.rate_limit_release_retry import get_rate_limit_release_retry_queue
 from src.cache import (
     CacheMiddleware,
 )
@@ -40,6 +42,7 @@ from src.middleware.request_timing import RequestTimingMiddleware
 from src.api.v1.router import v1_router
 from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
+from src.ui.routes import mount_ui_bundle
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,12 +57,15 @@ def _collect_startup_statuses(*groups: tuple[BootstrapStatus, ...]) -> tuple[Boo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with AsyncExitStack() as exit_stack:
+    async with process_scope(app) as lifecycle, BoundedExitStack() as exit_stack:
         infrastructure_runtime = await init_infrastructure_runtime(app)
-        exit_stack.push_async_callback(shutdown_infrastructure_runtime, infrastructure_runtime)
+        exit_stack.push_async_callback(
+            shutdown_infrastructure_runtime, infrastructure_runtime, cleanup_phase="close"
+        )
 
         cfg = app.state.app_config
         initialize_ingress(app, cfg.general_settings, app.state.settings)
+        exit_stack.push_async_callback(get_rate_limit_release_retry_queue(app).stop)
         audit_runtime = await init_audit_runtime(app, cfg)
         exit_stack.push_async_callback(shutdown_audit_runtime, app, audit_runtime)
 
@@ -98,12 +104,20 @@ async def lifespan(app: FastAPI):
             batch_runtime.statuses,
         )
         logger.info(format_bootstrap_summary("startup", startup_statuses))
+        mark_process_serving(app, lifecycle)
+        exit_stack.push_async_callback(shutdown_readiness, app, lifecycle)
         logger.info("application startup complete")
         yield
 
 
-def create_app() -> FastAPI:
+def create_app(
+    *, startup: StartupConfig | None = None, lifecycle: ProcessLifecycle | None = None
+) -> FastAPI:
     app = FastAPI(title="DeltaLLM Core API", version="0.1.0", lifespan=lifespan)
+    if startup is not None:
+        app.state.startup_config = startup
+    if lifecycle is not None:
+        app.state.process_lifecycle = lifecycle
     register_exception_handlers(app)
     app.add_middleware(CacheMiddleware)
     app.add_middleware(RateLimitHeaderMiddleware)
@@ -123,20 +137,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_router)
     app.include_router(admin_router)
 
-    ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
-    if ui_dist.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(ui_dist / "assets")), name="ui-assets")
-
-        @app.get("/{full_path:path}")
-        async def serve_spa(request: Request, full_path: str):
-            del request
-            if full_path.startswith(("ui/api/", "v1/", "auth/", "health/")):
-                return JSONResponse(status_code=404, content={"detail": "Not Found"})
-            file_path = ui_dist / full_path
-            if file_path.is_file():
-                return FileResponse(str(file_path))
-            return FileResponse(str(ui_dist / "index.html"))
-
+    mount_ui_bundle(app)
     return app
 
 

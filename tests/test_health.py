@@ -4,7 +4,13 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+
+from src.bootstrap.readiness import dependency_probes, service_check, task_check
+from src.lifecycle_settings import LifecycleSettings
+from src.process_lifecycle import ProcessLifecycle
+from src.readiness import ReadinessRuntime
 
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
 
@@ -19,6 +25,76 @@ def ready_databases(test_app):
                 client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
             ),
         )
+
+
+@pytest.fixture
+async def client(test_app):
+    # Route tests install fake owners just as bootstrap installs real owners.
+    # Advance the clock between samples; cache/coalescing has separate tests.
+    now = [0.0]
+    lifecycle = ProcessLifecycle(LifecycleSettings())
+    lifecycle.mark_serving()
+
+    def workers():
+        required, optional = {}, {}
+        for name, attribute in (
+            ("spend_ingestion_worker", "spend_tracking_service"),
+            ("audit_ingestion_worker", "audit_service"),
+            ("email_outbox_worker", "email_outbox_worker"),
+        ):
+            if getattr(getattr(test_app.state, attribute, None), "worker_health", None) is not None:
+                required[name] = service_check(test_app.state, attribute)
+        optional["audit_policy_listener"] = service_check(
+            test_app.state,
+            "audit_service",
+            health_attribute="policy_listener_health",
+            disabled=True,
+        )
+        for name, expected, task, worker in (
+            (
+                "batch_webhook_worker",
+                "batch_webhook_worker_expected",
+                "batch_webhook_outbox_task",
+                "batch_webhook_outbox_worker",
+            ),
+            (
+                "organization_lifecycle_refresher",
+                "organization_lifecycle_refresher_expected",
+                "organization_lifecycle_task",
+                "organization_lifecycle_authorizer",
+            ),
+            (
+                "organization_deletion_worker",
+                "organization_deletion_worker_expected",
+                "organization_deletion_task",
+                "organization_deletion_worker",
+            ),
+        ):
+            if getattr(test_app.state, expected, False):
+                required[name] = task_check(
+                    getattr(test_app.state, task, None),
+                    worker=getattr(test_app.state, worker, None) if worker else None,
+                )
+        return required, optional
+
+    async def application(scope, receive, send):
+        now[0] += 2
+        if getattr(test_app.state, "readiness_runtime", None) is None:
+            test_app.state.readiness_runtime = ReadinessRuntime(
+                lifecycle=lifecycle,
+                probes=dependency_probes(test_app.state),
+                workers=workers,
+                clock=lambda: now[0],
+            )
+        await test_app(scope, receive, send)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        yield client
+    owner = getattr(test_app.state, "readiness_runtime", None)
+    if owner is not None:
+        await owner.close(deadline=asyncio.get_running_loop().time() + 1)
 
 
 @pytest.mark.parametrize("allocation", ["foreground", "telemetry_worker"])
@@ -176,6 +252,7 @@ async def test_readiness_tracks_expected_batch_webhook_worker(client, test_app) 
             return self._done
 
     test_app.state.batch_webhook_worker_expected = True
+    test_app.state.batch_webhook_outbox_worker = SimpleNamespace()
     test_app.state.batch_webhook_outbox_task = _Task(done=True)
 
     stopped = await client.get("/health/readiness")
@@ -204,7 +281,6 @@ async def test_readiness_fails_for_expected_telemetry_worker_crash(client, test_
     assert payload["checks"]["spend_ingestion_worker"] is False
     assert payload["details"]["spend_ingestion_worker"] == {
         "state": "failed",
-        "detail": "database worker stopped",
     }
 
 
@@ -225,7 +301,6 @@ async def test_readiness_fails_for_email_outbox_worker_failure(client, test_app)
     assert payload["checks"]["email_outbox_worker"] is False
     assert payload["details"]["email_outbox_worker"] == {
         "state": "failed",
-        "detail": "required delivery audits are blocked",
     }
 
 
@@ -244,7 +319,6 @@ async def test_policy_listener_degradation_is_visible_but_not_readiness_fatal(
     assert response.status_code == 200
     assert response.json()["details"]["audit_policy_listener"] == {
         "state": "degraded",
-        "detail": "redis disconnected",
     }
 
 

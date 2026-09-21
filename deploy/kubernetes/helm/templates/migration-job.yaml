@@ -1,23 +1,21 @@
 {{- if .Values.migrationJob.enabled }}
-{{- $dbSecretName := .Values.runtime.database.existingSecret.name -}}
-{{- $redisSecretName := .Values.runtime.redis.existingSecret.name -}}
-{{- $s3SecretName := include "deltallm.s3SecretName" . -}}
+{{- $image := include "deltallm.image" . -}}
+{{- $identity := printf "%s/%d/%s/%s/%s/%v" .Release.Name (int .Release.Revision) $image (toJson .Values.migrationJob.command) (toJson .Values.migrationJob.args) .Values.migrationJob.timeoutSeconds | sha256sum | trunc 12 -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "deltallm.fullname" . }}-migrate
+  name: {{ include "deltallm.fullname" . | trunc 40 | trimSuffix "-" }}-migrate-{{ $identity }}
   labels:
     {{- include "deltallm.labels" . | nindent 4 }}
-  {{- if or .Values.migrationJob.annotations .Values.migrationJob.hook.enabled }}
   annotations:
+    deltallm.ai/migration-image: {{ $image | quote }}
     {{- with .Values.migrationJob.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
     {{- if .Values.migrationJob.hook.enabled }}
-    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-delete-policy: {{ .Values.migrationJob.hook.deletePolicy }}
     {{- end }}
-  {{- end }}
 spec:
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrationJob.activeDeadlineSeconds }}
@@ -25,11 +23,12 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deltallm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ include "deltallm.name" . | trunc 53 | trimSuffix "-" }}-migration
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migration
     spec:
-      restartPolicy: OnFailure
-      serviceAccountName: {{ include "deltallm.serviceAccountName" . }}
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      restartPolicy: Never
+      automountServiceAccountToken: false
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -38,105 +37,30 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: migrate
-          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          image: {{ $image | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           command:
             {{- toYaml .Values.migrationJob.command | nindent 12 }}
           args:
-            {{- toYaml .Values.migrationJob.args | nindent 12 }}
+            {{- toYaml (concat .Values.migrationJob.args (list "--timeout-seconds" (toString .Values.migrationJob.timeoutSeconds))) | nindent 12 }}
           env:
-            - name: DELTALLM_CONFIG_PATH
-              value: /app/config/config.yaml
-            - name: DELTALLM_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "deltallm.appSecretName" . }}
-                  key: {{ .Values.secret.keys.masterKey }}
-            - name: DELTALLM_SALT_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "deltallm.appSecretName" . }}
-                  key: {{ .Values.secret.keys.saltKey }}
-            {{- if or $dbSecretName .Values.runtime.database.url .Values.postgresql.enabled }}
-            - name: DATABASE_URL
-              {{- if $dbSecretName }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $dbSecretName }}
-                  key: {{ .Values.runtime.database.existingSecret.urlKey }}
-              {{- else if .Values.runtime.database.url }}
-              value: {{ .Values.runtime.database.url | quote }}
-              {{- else }}
-              value: {{ include "deltallm.bundledDatabaseUrl" . | quote }}
-              {{- end }}
-            {{- end }}
-            {{- if or $redisSecretName .Values.runtime.redis.url .Values.redis.enabled }}
-            - name: REDIS_URL
-              {{- if $redisSecretName }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $redisSecretName }}
-                  key: {{ .Values.runtime.redis.existingSecret.urlKey }}
-              {{- else if .Values.runtime.redis.url }}
-              value: {{ .Values.runtime.redis.url | quote }}
-              {{- else }}
-              value: {{ include "deltallm.bundledRedisUrl" . | quote }}
-              {{- end }}
-            - name: DELTALLM_REDIS_URL
-              {{- if $redisSecretName }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $redisSecretName }}
-                  key: {{ .Values.runtime.redis.existingSecret.urlKey }}
-              {{- else if .Values.runtime.redis.url }}
-              value: {{ .Values.runtime.redis.url | quote }}
-              {{- else }}
-              value: {{ include "deltallm.bundledRedisUrl" . | quote }}
-              {{- end }}
-            {{- end }}
-            {{- if .Values.s3.enabled }}
-            - name: AWS_DEFAULT_REGION
-              value: {{ .Values.s3.region | quote }}
-            - name: DELTALLM_S3_BUCKET
-              value: {{ .Values.s3.bucket | quote }}
-            {{- if or .Values.s3.existingSecret.name .Values.s3.accessKeyId }}
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $s3SecretName }}
-                  key: {{ .Values.s3.existingSecret.accessKeyIdKey }}
-            {{- end }}
-            {{- if or .Values.s3.existingSecret.name .Values.s3.secretAccessKey }}
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $s3SecretName }}
-                  key: {{ .Values.s3.existingSecret.secretAccessKeyKey }}
-            {{- end }}
-            {{- end }}
-            {{- with .Values.env }}
+            {{- include "deltallm.databaseEnv" . | nindent 12 }}
+            {{- with .Values.migrationJob.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- with .Values.envFrom }}
+          {{- with .Values.migrationJob.envFrom }}
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            - name: config
-              mountPath: /app/config
-              readOnly: true
-            {{- with .Values.extraVolumeMounts }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            - name: scratch
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.migrationJob.resources | nindent 12 }}
       volumes:
-        - name: config
-          configMap:
-            name: {{ include "deltallm.fullname" . }}-config
-        {{- with .Values.extraVolumes }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        - name: scratch
+          emptyDir:
+            sizeLimit: 64Mi
 {{- end }}

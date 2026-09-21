@@ -106,6 +106,17 @@ router_settings:
   #         lane: quality
 
 general_settings:
+  # Startup-only managed process budgets. Production uses migration_mode: external.
+  readiness_probe_timeout_seconds: 1
+  readiness_cache_seconds: 1
+  lifecycle_withdrawal_seconds: 5
+  lifecycle_request_drain_seconds: 45
+  lifecycle_cancellation_seconds: 5
+  lifecycle_worker_drain_seconds: 20
+  lifecycle_close_seconds: 5
+  lifecycle_shutdown_seconds: 80
+  migration_mode: startup
+  migration_verify_timeout_seconds: 10
   instance_name: DeltaLLM
   # Installation-wide UI branding. Logo and favicon BLOBs are managed from Settings > Theme.
   ui_branding:

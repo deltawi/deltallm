@@ -34,6 +34,19 @@ async def init_batch_runtime(
 ) -> BatchRuntime:
     runtime = BatchRuntime()
     app.state.batch_runtime = runtime
+    try:
+        return await _initialize_batch_runtime(app, cfg, repository, runtime)
+    except BaseException:
+        await shutdown_batch_runtime(runtime)
+        raise
+
+
+async def _initialize_batch_runtime(
+    app: Any,
+    cfg: Any,
+    repository: BatchRepository,
+    runtime: BatchRuntime,
+) -> BatchRuntime:
     _apply_batch_advisory_lock_mode(cfg.general_settings)
 
     if not cfg.general_settings.embeddings_batch_enabled:
@@ -61,6 +74,16 @@ async def init_batch_runtime(
         runtime,
         core.session_repository,
     )
+    lifecycle = getattr(app.state, "process_lifecycle", None)
+    if lifecycle is not None:
+        for worker, task in (
+            (runtime.worker, runtime.worker_task),
+            (runtime.webhook_outbox_worker, runtime.webhook_outbox_task),
+            (runtime.create_session_cleanup_worker, runtime.create_session_cleanup_task),
+            (runtime.stale_lease_sweeper_worker, runtime.stale_lease_sweeper_task),
+        ):
+            if worker is not None and task is not None:
+                lifecycle.register_producer(worker.stop, task)
     runtime.statuses = build_batch_statuses(
         runtime,
         cfg,

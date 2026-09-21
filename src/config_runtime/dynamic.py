@@ -3,6 +3,9 @@ from __future__ import annotations
 from src.database_settings import DATABASE_ALLOCATION_FIELDS
 from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import RequestWorkSettings
+from src.lifecycle_settings import LifecycleSettings
+from src.telemetry.lifecycle import WorkerHealth, WorkerState, stop_tasks_before_deadline
+from src.shutdown import cleanup_deadline
 
 import asyncio
 import json
@@ -58,6 +61,7 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
 _STARTUP_ONLY_GENERAL_SETTINGS = (
     DATABASE_ALLOCATION_FIELDS
     | frozenset(RequestWorkSettings.model_fields)
+    | frozenset(LifecycleSettings.model_fields)
     | frozenset(
         {
             "spend_ingestion_worker_enabled",
@@ -125,6 +129,7 @@ class DynamicConfigManager:
         secret_resolver: SecretResolver | None = None,
         channel_name: str = "config_updates",
         poll_interval_seconds: float | None = 30.0,
+        defer_updates: bool = False,
     ) -> None:
         self.db = db_client
         self.redis = redis_client
@@ -139,12 +144,34 @@ class DynamicConfigManager:
         self._pubsub_task: asyncio.Task[None] | None = None
         self._poll_task: asyncio.Task[None] | None = None
         self._stopping = False
+        self._listener_ready = False
+        self._poll_ready = False
         self._update_lock = asyncio.Lock()
         self._config_generation = 0
+        self._updates_enabled = asyncio.Event()
+        if not defer_updates:
+            self._updates_enabled.set()
         if poll_interval_seconds is None:
             self._poll_interval_seconds = 0.0
         else:
             self._poll_interval_seconds = max(0.0, float(poll_interval_seconds))
+
+    @property
+    def worker_health(self) -> WorkerHealth:
+        if self._stopping:
+            return WorkerHealth(WorkerState.STOPPING)
+        expected = []
+        if self.redis is not None:
+            expected.append(self._pubsub_task)
+        if self.db is not None and self._poll_interval_seconds > 0:
+            expected.append(self._poll_task)
+        if not expected:
+            return WorkerHealth(WorkerState.DISABLED)
+        if any(task is None or task.done() for task in expected):
+            return WorkerHealth(WorkerState.FAILED)
+        return WorkerHealth(
+            WorkerState.READY if self._listener_ready or self._poll_ready else WorkerState.DEGRADED
+        )
 
     async def initialize(self) -> None:
         self._db_config = await self._load_from_db(allow_stale_on_error=True)
@@ -163,21 +190,20 @@ class DynamicConfigManager:
         self.redis = redis_client
         self._pubsub_task = asyncio.create_task(self._listen_for_changes())
 
+    def activate_updates(self) -> None:
+        """Publish updates only after bootstrap has registered every subscriber."""
+        self._updates_enabled.set()
+
     async def close(self) -> None:
         self._stopping = True
-        if self._pubsub_task is not None:
-            self._pubsub_task.cancel()
-            try:
-                await self._pubsub_task
-            except asyncio.CancelledError:
-                pass
+        await stop_tasks_before_deadline(
+            (self._pubsub_task, self._poll_task),
+            deadline=cleanup_deadline(5),
+            cancel_first=True,
+        )
+        if self._pubsub_task is not None and self._pubsub_task.done():
             self._pubsub_task = None
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            try:
-                await self._poll_task
-            except asyncio.CancelledError:
-                pass
+        if self._poll_task is not None and self._poll_task.done():
             self._poll_task = None
 
     def subscribe(self, callback: ConfigSubscriber) -> None:
@@ -340,15 +366,31 @@ class DynamicConfigManager:
         await self._publish_reload_event(event_type="model_updated")
 
     async def _listen_for_changes(self) -> None:
+        await self._updates_enabled.wait()
+        while not self._stopping:
+            try:
+                await self._listen_once()
+            finally:
+                self._listener_ready = False
+            if not self._stopping:
+                await asyncio.sleep(1.0)
+
+    async def _listen_once(self) -> None:
         if self.redis is None:
             return
 
         pubsub = None
         try:
             pubsub = self.redis.pubsub()
-            await pubsub.subscribe(self.channel_name)
-            async for message in pubsub.listen():
-                if message.get("type") != "message":
+            async with asyncio.timeout(5.0):
+                await pubsub.subscribe(self.channel_name)
+                # Pub/sub is only a wake-up signal. Catch up durable changes
+                # missed between the original snapshot and this subscription.
+                await self._reload_config()
+            self._listener_ready = True
+            while not self._stopping:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if not message or message.get("type") != "message":
                     continue
 
                 payload = message.get("data")
@@ -372,22 +414,35 @@ class DynamicConfigManager:
                     )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception:
             if not self._stopping:
                 increment_config_reload(source="pubsub", result="listener_failed")
-                logger.error("config pub/sub error: %s", exc)
+                logger.error("config pub/sub unavailable")
         finally:
+            self._listener_ready = False
             if pubsub is not None:
                 try:
                     await pubsub.unsubscribe(self.channel_name)
                 except Exception:
                     pass
-                await pubsub.close()
+                try:
+                    await pubsub.close()
+                except Exception:
+                    logger.warning("config pub/sub close failed")
 
     async def _poll_for_changes(self) -> None:
+        await self._updates_enabled.wait()
         while not self._stopping:
             await asyncio.sleep(self._poll_interval_seconds)
-            await self._reload_config_from_source(source="poll")
+            try:
+                async with asyncio.timeout(5.0):
+                    changed = await self._reload_config()
+                self._poll_ready = True
+                increment_config_reload(source="poll", result="applied" if changed else "unchanged")
+            except Exception:
+                self._poll_ready = False
+                increment_config_reload(source="poll", result="failed")
+                logger.warning("dynamic config polling unavailable")
 
     async def _reload_config_from_source(
         self,
@@ -479,6 +534,7 @@ class DynamicConfigManager:
                     or field_name in DATABASE_ALLOCATION_FIELDS
                     or field_name in SpendOperationSettings.model_fields
                     or field_name in RequestWorkSettings.model_fields
+                    or field_name in LifecycleSettings.model_fields
                     or field_name == "spend_ingestion_worker_enabled"
                 )
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)

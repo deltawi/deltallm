@@ -24,6 +24,7 @@ from src.metrics.admission import (
     ingress_rejections,
 )
 from src.middleware.errors import anthropic_error_response
+from src.process_lifecycle import ProcessLifecycle
 
 
 class _BufferedBody:
@@ -73,10 +74,19 @@ class IngressMiddleware:
         runtime: IngressRuntime | None = getattr(
             getattr(application, "state", None), "ingress_runtime", None
         )
-        if scope["type"] != "http" or runtime is None or not runtime.limits.enabled:
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         allocation = ingress_class(get_route_path(scope), scope.get("method", ""))
+        lifecycle: ProcessLifecycle | None = getattr(
+            getattr(application, "state", None), "process_lifecycle", None
+        )
+        if lifecycle is not None and lifecycle.draining and allocation != IngressClass.HEALTH:
+            await _reject(scope, receive, send, 503, "gateway_draining")
+            return
+        if runtime is None or not runtime.limits.enabled:
+            await self.app(scope, receive, send)
+            return
         gate = runtime.gate(allocation)
         started, outcome = perf_counter(), "admitted"
         ingress_waiters.labels(allocation.value).inc()
@@ -98,6 +108,10 @@ class IngressMiddleware:
         body = _BufferedBody(runtime, allocation)
         ingress_active.labels(allocation.value).inc()
         try:
+            # A request queued before the signal has not yet been admitted.
+            if lifecycle is not None and lifecycle.draining and allocation != IngressClass.HEALTH:
+                await _reject(scope, receive, send, 503, "gateway_draining")
+                return
             await self._admitted(
                 scope, receive, send, runtime, body, health=allocation == IngressClass.HEALTH
             )

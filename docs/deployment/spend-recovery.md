@@ -173,3 +173,7 @@ check `deltallm_spend_operation_observed_timestamp_seconds` for freshness. Aggre
 these shared counts with `max` across replicas, never `sum`. Failed observations
 retain the last value and emit a recovery failure; they do not report an unknown
 count of zero. Recovery and observation share a bounded 250 ms worker slice.
+
+See [Process lifecycle](process-lifecycle.md) for migration-before-rollout ordering,
+the managed 80-second shutdown budget, interrupted-stream behavior and recovery of
+committed records after a pod exits. Keep the managed image command in production.

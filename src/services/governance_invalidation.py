@@ -8,6 +8,8 @@ from typing import Any, Callable, Iterable, Protocol
 from uuid import uuid4
 
 from src.metrics import increment_config_reload
+from src.telemetry.lifecycle import WorkerHealth, WorkerState, stop_tasks_before_deadline
+from src.shutdown import cleanup_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,7 @@ class GovernanceInvalidationService:
         self._apply_lock = asyncio.Lock()
         self._remote_targets_lock = asyncio.Lock()
         self._ready = asyncio.Event()
+        self._listener_ready = False
         self._remote_targets: set[str] = set()
 
     async def start(self) -> None:
@@ -90,28 +93,36 @@ class GovernanceInvalidationService:
             self._pubsub_task = asyncio.create_task(self._listen())
             await self._ready.wait()
 
+    @property
+    def worker_health(self) -> WorkerHealth:
+        if self._stopping:
+            return WorkerHealth(WorkerState.STOPPING)
+        expected = []
+        if self.redis is not None:
+            expected.append(self._pubsub_task)
+        if (
+            self.route_group_revision_source is not None
+            and self.route_group_poll_interval_seconds > 0
+        ):
+            expected.append(self._route_group_poll_task)
+        if any(task is None or task.done() for task in expected):
+            return WorkerHealth(WorkerState.FAILED)
+        if self.redis is not None and not self._listener_ready:
+            return WorkerHealth(WorkerState.DEGRADED)
+        return WorkerHealth(WorkerState.READY)
+
     async def close(self) -> None:
         self._stopping = True
-        if self._pubsub_task is not None:
-            self._pubsub_task.cancel()
-            try:
-                await self._pubsub_task
-            except asyncio.CancelledError:
-                pass
+        await stop_tasks_before_deadline(
+            (self._pubsub_task, self._remote_apply_task, self._route_group_poll_task),
+            deadline=cleanup_deadline(5),
+            cancel_first=True,
+        )
+        if self._pubsub_task is not None and self._pubsub_task.done():
             self._pubsub_task = None
-        if self._remote_apply_task is not None:
-            self._remote_apply_task.cancel()
-            try:
-                await self._remote_apply_task
-            except asyncio.CancelledError:
-                pass
+        if self._remote_apply_task is not None and self._remote_apply_task.done():
             self._remote_apply_task = None
-        if self._route_group_poll_task is not None:
-            self._route_group_poll_task.cancel()
-            try:
-                await self._route_group_poll_task
-            except asyncio.CancelledError:
-                pass
+        if self._route_group_poll_task is not None and self._route_group_poll_task.done():
             self._route_group_poll_task = None
 
     async def invalidate_local(self, *targets: str) -> None:
@@ -152,21 +163,31 @@ class GovernanceInvalidationService:
             pubsub = None
             try:
                 pubsub = self.redis.pubsub()
-                await pubsub.subscribe(self.channel_name)
+                async with asyncio.timeout(5):
+                    await pubsub.subscribe(self.channel_name)
+                    # Pub/sub can miss policy changes before subscription or
+                    # during an outage. Prove a durable catch-up before readiness.
+                    async with self._apply_lock:
+                        failed = await self._apply_targets(tuple(sorted(_ALLOWED_TARGETS)))
+                    if failed:
+                        raise GovernanceInvalidationApplyError(failed)
+                self._listener_ready = True
                 self._ready.set()
                 retry_seconds = 0.25
-                async for message in pubsub.listen():
-                    if message.get("type") != "message":
+                while not self._stopping:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    if message is None or message.get("type") != "message":
                         continue
                     await self._handle_pubsub_message(message)
                 if not self._stopping:
                     raise RuntimeError("governance invalidation listener stopped")
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception:
                 if not self._stopping:
-                    logger.error("governance invalidation pub/sub error: %s", exc)
+                    logger.error("governance invalidation subscription or catch-up unavailable")
             finally:
+                self._listener_ready = False
                 self._ready.set()
                 if pubsub is not None:
                     try:

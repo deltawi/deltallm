@@ -66,7 +66,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          image: {{ include "deltallm.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -89,6 +89,8 @@ spec:
 {{ $envFrom | nindent 10 }}
           {{- end }}
           volumeMounts:
+            - name: scratch
+              mountPath: /tmp
             - name: config
               mountPath: /app/config
               readOnly: true
@@ -99,6 +101,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 512Mi
         - name: config
           configMap:
             name: {{ include "deltallm.fullname" . }}-config

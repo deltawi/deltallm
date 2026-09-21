@@ -59,12 +59,12 @@ class FakePubSub:
     async def subscribe(self, channel: str) -> None:
         del channel
 
-    async def listen(self):
-        while True:
-            item = await self.queue.get()
-            if item.get("type") == "stop":
-                break
-            yield item
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float):
+        del ignore_subscribe_messages
+        try:
+            return await asyncio.wait_for(self.queue.get(), timeout=timeout)
+        except TimeoutError:
+            return None
 
     async def unsubscribe(self, channel: str) -> None:
         del channel
@@ -89,9 +89,8 @@ class FailingPubSub:
     async def subscribe(self, channel: str) -> None:
         del channel
 
-    async def listen(self):
+    async def get_message(self, **_):
         raise RuntimeError("redis unavailable")
-        yield {}  # pragma: no cover
 
     async def unsubscribe(self, channel: str) -> None:
         del channel
@@ -1113,6 +1112,11 @@ async def test_dynamic_config_pubsub_failure_keeps_polling_and_records_metric(mo
     await manager.initialize()
 
     try:
+        # Initial subscription now catches up from PostgreSQL. Prove that a
+        # subsequent update after listener failure is recovered by polling.
+        async with asyncio.timeout(1):
+            while {"source": "pubsub", "result": "listener_failed"} not in events:
+                await asyncio.sleep(0)
         db.config_value["router_settings"] = RouterSettings(
             routing_strategy="weighted"
         ).model_dump()

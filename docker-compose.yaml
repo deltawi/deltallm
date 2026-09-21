@@ -1,5 +1,6 @@
 services:
   deltallm:
+    stop_grace_period: 90s
     build:
       context: .
       dockerfile: Dockerfile
@@ -38,6 +39,7 @@ services:
       start_period: 10s
 
   deltallm-ha-1:
+    stop_grace_period: 90s
     build:
       context: .
       dockerfile: Dockerfile
@@ -69,6 +71,7 @@ services:
         condition: service_healthy
 
   deltallm-ha-2:
+    stop_grace_period: 90s
     build:
       context: .
       dockerfile: Dockerfile

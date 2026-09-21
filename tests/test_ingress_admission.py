@@ -414,3 +414,46 @@ async def test_disabled_or_non_http_traffic_preserves_original_call(bypass: str)
     app.assert_awaited_once_with(request_scope, receive, send)
     receive.assert_not_called()
     assert rt.requests.active == rt.buffered_bytes == 0
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages", "/ui/api/config"])
+async def test_drain_rejects_before_body_and_dependencies_even_without_ingress_limits(
+    enabled, path
+):
+    from src.lifecycle_settings import LifecycleSettings
+    from src.process_lifecycle import ProcessLifecycle
+
+    rt = runtime(enabled=enabled)
+    request = scope(rt, path)
+    lifecycle = ProcessLifecycle(LifecycleSettings())
+    request["app"].state.process_lifecycle = lifecycle
+    lifecycle.begin_drain()
+    app, receive, send = AsyncMock(), AsyncMock(), AsyncMock()
+    await IngressMiddleware(app)(request, receive, send)
+    app.assert_not_called()
+    receive.assert_not_called()
+    assert send.await_args_list[0].args[0]["status"] == 503
+    assert rt.requests.active == rt.control.active == rt.buffered_bytes == 0
+
+
+async def test_queued_request_rechecks_drain_and_releases_only_its_permit():
+    from src.lifecycle_settings import LifecycleSettings
+    from src.process_lifecycle import ProcessLifecycle
+
+    rt = runtime(max_waiters=1, queue_timeout_ms=1000)
+    request = scope(rt)
+    lifecycle = ProcessLifecycle(LifecycleSettings())
+    lifecycle.mark_serving()
+    request["app"].state.process_lifecycle = lifecycle
+    await rt.requests.acquire(timeout_seconds=1)
+    app, receive, send = AsyncMock(), AsyncMock(), AsyncMock()
+    task = asyncio.create_task(IngressMiddleware(app)(request, receive, send))
+    await wait_until(lambda: rt.requests.waiters == 1)
+    lifecycle.begin_drain()
+    await rt.requests.release()
+    await task
+    app.assert_not_called()
+    receive.assert_not_called()
+    assert send.await_args_list[0].args[0]["status"] == 503
+    assert rt.requests.active == rt.requests.waiters == 0

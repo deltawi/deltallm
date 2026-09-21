@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline
+
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -149,4 +151,15 @@ class BlockingWorkExecutor:
                 item.add_done_callback(
                     lambda done: None if done.cancelled() else done.exception(), context=Context()
                 )
-            await asyncio.wait(wrapped, timeout=self.shutdown_seconds)
+            _, unfinished = await asyncio.wait(
+                wrapped,
+                timeout=max(
+                    0, cleanup_deadline(self.shutdown_seconds) - asyncio.get_running_loop().time()
+                ),
+            )
+            if unfinished:
+                from src.shutdown import shutdown_owner
+
+                owner = shutdown_owner.get()
+                if owner is not None and owner.lifecycle.draining:
+                    owner.report_unfinished()

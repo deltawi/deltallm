@@ -4,12 +4,18 @@ fullnameOverride: ""
 replicaCount: 2
 revisionHistoryLimit: 10
 minReadySeconds: 5
-terminationGracePeriodSeconds: 30
+terminationGracePeriodSeconds: 90
+
+managedLifecycle:
+  enabled: true
+  production: false
+  exitMarginSeconds: 10
 
 image:
   repository: deltallm/deltallm
   pullPolicy: IfNotPresent
   tag: latest
+  digest: ""
   pullSecrets: []
 
 serviceAccount:
@@ -21,8 +27,17 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
-podSecurityContext: {}
-securityContext: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
 
 strategy:
   type: RollingUpdate
@@ -73,6 +88,7 @@ probes:
     timeoutSeconds: 5
     failureThreshold: 3
   readiness:
+    successThreshold: 2
     path: /health/readiness
     initialDelaySeconds: 5
     periodSeconds: 5
@@ -80,6 +96,7 @@ probes:
     failureThreshold: 3
 
 autoscaling:
+  scaleDownStabilizationSeconds: 300
   enabled: false
   minReplicas: 2
   maxReplicas: 10
@@ -150,6 +167,7 @@ batchWorker:
       cpu: 2000m
       memory: 2Gi
   autoscaling:
+    scaleDownStabilizationSeconds: 300
     enabled: false
     minReplicas: 1
     maxReplicas: 6
@@ -222,6 +240,16 @@ config:
     callback_settings: {}
     turn_off_message_logging: false
   general_settings:
+    readiness_probe_timeout_seconds: 1
+    readiness_cache_seconds: 1
+    lifecycle_withdrawal_seconds: 5
+    lifecycle_request_drain_seconds: 45
+    lifecycle_cancellation_seconds: 5
+    lifecycle_worker_drain_seconds: 20
+    lifecycle_close_seconds: 5
+    lifecycle_shutdown_seconds: 80
+    migration_mode: startup
+    migration_verify_timeout_seconds: 10
     # Finite Redis allocations (restart required).
     redis_bulk_url: null
     redis_critical_max_connections: 64
@@ -483,20 +511,26 @@ prometheus:
 
 migrationJob:
   enabled: false
+  external: false
   annotations: {}
   hook:
     enabled: false
     deletePolicy: before-hook-creation,hook-succeeded
-  backoffLimit: 4
-  activeDeadlineSeconds: 600
-  ttlSecondsAfterFinished: 300
-  resources: {}
-  command:
-    - sh
-    - -c
-  args:
-    - |
-      python -m src.organization_deletion_migrations deploy --schema ./prisma/schema.prisma
+  backoffLimit: 0
+  activeDeadlineSeconds: 330
+  timeoutSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  command: [python, -m, src.prisma_bootstrap]
+  args: [--schema, ./prisma/schema.prisma, --max-attempts, "30", --sleep-seconds, "2"]
+  env: []
+  envFrom: []
 
 postgresql:
   enabled: false

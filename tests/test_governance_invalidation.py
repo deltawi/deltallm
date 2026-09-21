@@ -44,6 +44,10 @@ class _FakePubSub:
         if self.broker.subscribe_count >= 2:
             self.broker.resubscribed.set()
 
+    async def get_message(self, **kwargs):
+        del kwargs
+        return await self.__anext__()
+
     def listen(self):  # noqa: ANN201
         return self
 
@@ -118,14 +122,16 @@ async def test_governance_invalidation_service_notifies_other_instances() -> Non
     await local.notify("callable_target", "mcp", "tier_policy")
     await asyncio.sleep(0.1)
 
-    assert local_callable.reload_calls == 0
-    assert local_tier.reload_calls == 0
-    assert local_registry.invalidate_calls == 0
-    assert local_mcp.reload_calls == 0
-    assert remote_callable.reload_calls == 1
-    assert remote_tier.reload_calls == 1
-    assert remote_registry.invalidate_calls == 1
-    assert remote_mcp.reload_calls == 1
+    # Each listener catches up once at subscription; only the remote instance
+    # applies this subsequent invalidation message.
+    assert local_callable.reload_calls == 1
+    assert local_tier.reload_calls == 1
+    assert local_registry.invalidate_calls == 1
+    assert local_mcp.reload_calls == 1
+    assert remote_callable.reload_calls == 2
+    assert remote_tier.reload_calls == 2
+    assert remote_registry.invalidate_calls == 2
+    assert remote_mcp.reload_calls == 2
 
     await local.close()
     await remote.close()
@@ -293,10 +299,10 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
     await asyncio.sleep(0.05)
 
     assert remote_callable.reload_calls == 0
-    assert remote_tier.reload_calls == 1
-    assert remote_registry.invalidate_calls == 1
-    assert remote_mcp.reload_calls == 1
-    assert route_group_reload_calls == 1
+    assert remote_tier.reload_calls == 2
+    assert remote_registry.invalidate_calls == 2
+    assert remote_mcp.reload_calls == 2
+    assert route_group_reload_calls == 2
 
     await local.close()
     await remote.close()
@@ -305,7 +311,7 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
 @pytest.mark.asyncio
 async def test_governance_invalidation_service_retries_failed_remote_targets() -> None:
     redis = _FakeRedis()
-    remote_tier = _FakeReloadService(fail_times=1)
+    remote_tier = _FakeReloadService()
 
     local = GovernanceInvalidationService(redis_client=redis, remote_apply_delay_seconds=0.01)
     remote = GovernanceInvalidationService(
@@ -316,14 +322,15 @@ async def test_governance_invalidation_service_retries_failed_remote_targets() -
     )
     await local.start()
     await remote.start()
+    remote_tier.fail_times = 2  # fail the next refresh, after initial catch-up
 
     assert await local.notify("tier_policy") is True
     for _ in range(20):
-        if remote_tier.reload_calls >= 2:
+        if remote_tier.reload_calls >= 3:
             break
         await asyncio.sleep(0.02)
 
-    assert remote_tier.reload_calls == 2
+    assert remote_tier.reload_calls == 3
 
     await local.close()
     await remote.close()

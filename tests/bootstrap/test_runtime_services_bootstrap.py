@@ -470,3 +470,18 @@ async def test_notification_and_spend_drains_overlap_before_dependencies_close(m
     )
     monkeypatch.setattr("src.bootstrap.runtime_services.close_shared_client", AsyncMock())
     await asyncio.wait_for(shutdown_runtime_services(runtime), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_mid_bootstrap_failure_closes_owners_created_before_runtime_return(monkeypatch):
+    created = {}
+    _install_runtime_service_fakes(monkeypatch, created)
+
+    def invalid_callback_config(*args, **kwargs):
+        raise RuntimeError("callback configuration rejected")
+
+    monkeypatch.setattr("src.bootstrap.runtime_services.CallbackManager", invalid_callback_config)
+    with pytest.raises(RuntimeError, match="callback configuration rejected"):
+        await init_runtime_services(_runtime_app(), _runtime_config())
+    assert created["governance_invalidation_service"].closed
+    assert created["tier_policy_service"].closed

@@ -186,11 +186,13 @@ PostgreSQL peak = Σ(peak role processes × enabled database pool sizes) + reser
 Redis peak = Σ(peak role processes × all three Redis pool sizes) + reserved clients
 ```
 
-The production example has 12 maximum API pods, one surge pod, one retiring generation
-and one process per pod: 25 peak processes. With both outboxes enabled, this is
-`25 × (20 + 8 + 5 + 5) = 950` PostgreSQL connections and
-`25 × (64 + 16 + 16) = 2400` Redis connections before reserves. Enabling two fixed
-batch-worker pods adds five peak processes: 190 PostgreSQL and 480 Redis connections.
+The production example has 12 maximum API pods, one surge pod, two retiring
+generations and one process per pod: 37 peak processes. With both outboxes enabled,
+this is `37 × (20 + 8 + 5 + 5) = 1406` PostgreSQL connections and
+`37 × (64 + 16 + 16) = 3552` Redis connections before reserves. Enabling two fixed
+batch-worker pods adds seven peak processes: 266 PostgreSQL and 672 Redis connections.
+Including the example reserves, the API-only totals are 1506 PostgreSQL and 3680 Redis;
+the split-role totals are 1772 PostgreSQL and 4352 Redis.
 Both worker and API telemetry jobs share their process allocations. A batch-worker
 Deployment is not a distinct telemetry-only process role.
 
@@ -249,3 +251,7 @@ statement deadlines, transaction expiry, cancellation/recovery, and real Redis c
 floods, idle subscriptions, socket failures and memory isolation. Test definitions and
 rendered arithmetic are not a concurrency certificate. Publish supported traffic
 only with matching workload, commit/image, resources, error rates and latency evidence.
+
+The [managed lifecycle](process-lifecycle.md) uses a 90-second pod grace. Serialize
+release and scale operations within the declared terminating-pod allowance; live Helm
+upgrades reject existing terminating pods, while offline rendering cannot inspect them.

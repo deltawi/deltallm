@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from src.bootstrap.batch_runtime.runtime import BatchRuntime
+from src.shutdown import cleanup_timeout, retain_unfinished
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ async def drain_worker_task(
     """Drain one stopped worker, falling back to bounded cancellation."""
 
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        await asyncio.wait_for(asyncio.shield(task), timeout=cleanup_timeout(timeout))
         return
     except asyncio.TimeoutError:
         logger.warning(
@@ -82,9 +83,10 @@ async def _cancel_worker_tasks_bounded(
     try:
         done, pending = await asyncio.wait(
             active,
-            timeout=max(0.0, float(timeout)),
+            timeout=cleanup_timeout(timeout),
         )
     except asyncio.CancelledError:
+        retain_unfinished(active)
         for task in active:
             if task.done():
                 _consume_task_result(task)
@@ -95,6 +97,7 @@ async def _cancel_worker_tasks_bounded(
     for task in done:
         _consume_task_result(task)
     pending_tasks = tuple(pending)
+    retain_unfinished(pending_tasks)
     for task in pending_tasks:
         task.cancel()
         task.add_done_callback(_consume_task_result)
@@ -112,9 +115,10 @@ async def _close_webhook_transport_bounded(
     try:
         done, _pending = await asyncio.wait(
             {close_task},
-            timeout=max(0.0, float(timeout)),
+            timeout=cleanup_timeout(timeout, phase="close"),
         )
     except asyncio.CancelledError:
+        retain_unfinished((close_task,))
         close_task.cancel()
         close_task.add_done_callback(_consume_task_result)
         raise
@@ -127,6 +131,7 @@ async def _close_webhook_transport_bounded(
             logger.warning("batch webhook transport close failed during shutdown")
         return
 
+    retain_unfinished((close_task,))
     close_task.cancel()
     close_task.add_done_callback(_consume_task_result)
     logger.warning("batch webhook transport close timed out during shutdown")

@@ -529,38 +529,21 @@ prometheus:
 
 ## Production migration sequence
 
-The current container image still bootstraps Prisma on startup by default.
+The production overlay uses a `pre-install,pre-upgrade` migration Job, the exact
+release image and a pre-existing database Secret. Pass an explicit `image.tag` or
+`image.digest`; the production overlay does not choose a release for you. Both
+API and worker pods use the managed image command and read-only migration-history
+verification (`migration_mode: external`).
 
-The chart exposes an optional `migrationJob`, but its built-in hook is a
-`post-install,post-upgrade` hook. It does not prove that schema migration finishes before a
-Deployment rollout. Its default command is also the release-specific organization-deletion
-coordinator rather than a generic migration-only contract.
+The chart's initial shutdown profile reserves 80 seconds for withdrawal, requests,
+cancellation, workers and client close, plus a 10-second Kubernetes margin.
+Readiness requires two successes to restore membership and three failures to
+withdraw it. The process rejects new work immediately when termination starts.
 
-For production, make migration an explicit delivery stage before `helm upgrade`:
-
-1. Pin the application image by release tag and, preferably, digest.
-2. Run one retry-safe migration job using that exact release image.
-3. Wait for the job and release-specific verification to pass.
-4. Roll API and worker replicas with an explicit application command that bypasses the image's
-   bootstrap wrapper.
-
-Use this values override after the separate migration succeeds:
-
-```yaml
-migrationJob:
-  enabled: false
-
-command: ["uvicorn"]
-args: ["src.main:app", "--host", "0.0.0.0", "--port", "4000"]
-```
-
-The global command also applies to the chart's batch-worker Deployment; each role still receives
-its role-specific configuration. If a release calls for the organization-deletion coordinator or
-another special cutover, run that documented workflow instead of the generic command and keep its
-feature gate disabled until every required verification passes.
-
-See [Database migrations](database-migrations.md) for the job manifest and ordering contract and
-[Upgrades and rollbacks](upgrade-and-rollback.md) for the complete release procedure.
+Follow [Process lifecycle](process-lifecycle.md) for prerequisites, migration-hook
+ordering, external orchestration, capacity overlap and failure recovery. Named
+release coordinators retain their existing gates. See also
+[Database migrations](database-migrations.md) and [Upgrades and rollbacks](upgrade-and-rollback.md).
 
 ## S3 request logging
 

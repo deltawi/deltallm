@@ -1,3 +1,24 @@
+# Release prerequisites: a pre-existing database Secret and an immutable release image.
+managedLifecycle:
+  enabled: true
+  production: true
+  exitMarginSeconds: 10
+terminationGracePeriodSeconds: 90
+image:
+  tag: "" # Required: pass a tested release tag or, preferably, image.digest.
+securityContext:
+  readOnlyRootFilesystem: true
+runtime:
+  database:
+    existingSecret:
+      name: deltallm-database
+      urlKey: database-url
+migrationJob:
+  enabled: true
+  external: false
+  hook:
+    enabled: true
+
 replicaCount: 3
 
 resources:
@@ -9,6 +30,7 @@ resources:
     memory: 2Gi
 
 autoscaling:
+  scaleDownStabilizationSeconds: 300
   enabled: true
   minReplicas: 3
   maxReplicas: 12
@@ -59,6 +81,7 @@ batchWorker:
       cpu: 2000m
       memory: 2Gi
   autoscaling:
+    scaleDownStabilizationSeconds: 300
     enabled: false
     minReplicas: 1
     maxReplicas: 8
@@ -70,6 +93,7 @@ batchWorker:
 
 config:
   general_settings:
+    migration_mode: external
     # PR5 qualifies scope/reset parity; this is not an atomic monetary reservation.
     # Startup-only callback delivery and guardrail execution bounds.
     callback_max_pending: 128
@@ -161,7 +185,7 @@ config:
 dependencyCapacity:
   apiProcessesPerPod: 1
   batchWorkerProcessesPerPod: 1
-  retiringGenerations: 1
+  retiringGenerations: 2
   postgresqlMaxConnections: 2000
   postgresqlReservedConnections: 100
   redisMaxClients: 5000

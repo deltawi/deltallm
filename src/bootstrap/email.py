@@ -25,6 +25,15 @@ class EmailRuntime:
 
 
 async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
+    runtime = EmailRuntime()
+    try:
+        return await _init_email_runtime(app, cfg, runtime)
+    except BaseException:
+        await shutdown_email_runtime(runtime)
+        raise
+
+
+async def _init_email_runtime(app: Any, cfg: Any, runtime: EmailRuntime) -> EmailRuntime:
     repository = getattr(app.state, "email_outbox_repository", None)
     if repository is None:
         repository = EmailOutboxRepository(
@@ -73,7 +82,6 @@ async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
             )
         )
 
-    runtime = EmailRuntime()
     statuses = [BootstrapStatus("email", "ready")]
     if bool(getattr(cfg.general_settings, "email_worker_enabled", True)):
         runtime.worker = EmailOutboxWorker(
@@ -111,6 +119,9 @@ async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
             ),
         )
         await runtime.worker.start()
+        lifecycle = getattr(app.state, "process_lifecycle", None)
+        if lifecycle is not None and runtime.worker.task is not None:
+            lifecycle.register_producer(runtime.worker.stop, runtime.worker.task)
         runtime.worker_task = runtime.worker.task
         app.state.email_outbox_worker = runtime.worker
         statuses.append(BootstrapStatus("email_worker", "ready"))

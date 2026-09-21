@@ -33,6 +33,7 @@ from tests.performance.gateway_concurrency_metrics import MetricsRecorder
 from tests.performance.gateway_concurrency_manifest import read_manifest
 
 ERROR_CODES = {
+    "gateway_draining",
     "request_deadline_exceeded",
     "gateway_work_unavailable",
     "gateway_ingress_full",

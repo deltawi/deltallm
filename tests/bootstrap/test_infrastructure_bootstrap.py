@@ -41,7 +41,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
     created: dict[str, object] = {}
 
     class FakeDynamicConfigManager:
-        def __init__(self, *, db_client, redis_client, file_config) -> None:  # noqa: ANN001
+        def __init__(self, *, db_client, redis_client, file_config, defer_updates) -> None:  # noqa: ANN001
             self.db_client = db_client
             self.redis_client = redis_client
             self.file_config = file_config
@@ -149,7 +149,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
             del cfg, changes
 
     monkeypatch.setattr(
-        "src.bootstrap.infrastructure.get_settings",
+        "src.startup_config.get_settings",
         lambda: Settings(
             app_env="test",
             config_path="config.yaml",
@@ -162,11 +162,9 @@ async def test_init_and_shutdown_infrastructure_runtime(
             redis_password=None,
         ),
     )
+    monkeypatch.setattr("src.startup_config.load_yaml_dict", lambda path: {"loaded_from": path})
     monkeypatch.setattr(
-        "src.bootstrap.infrastructure.load_yaml_dict", lambda path: {"loaded_from": path}
-    )
-    monkeypatch.setattr(
-        "src.bootstrap.infrastructure.build_app_config",
+        "src.startup_config.build_app_config",
         lambda file_config, secret_resolver: SimpleNamespace(  # noqa: ARG005
             general_settings=GeneralSettings(
                 audit_ingestion_mode="outbox" if durable else "legacy",
@@ -383,8 +381,10 @@ async def test_durable_config_cannot_expand_startup_dependency_budget(
             client=object(), connect=AsyncMock(), disconnect=AsyncMock()
         )
         monkeypatch.setattr(infrastructure, name, managers[name])
-    monkeypatch.setattr(infrastructure, "get_settings", lambda: settings)
-    monkeypatch.setattr(infrastructure, "load_yaml_dict", lambda _: initial)
+    from src import startup_config
+
+    monkeypatch.setattr(startup_config, "get_settings", lambda: settings)
+    monkeypatch.setattr(startup_config, "load_yaml_dict", lambda _: initial)
     monkeypatch.setattr(infrastructure, "DynamicConfigManager", lambda **_: dynamic)
     build_redis = Mock(side_effect=AssertionError("Redis built before capacity validation"))
     monkeypatch.setattr(infrastructure, "build_redis_client", build_redis)

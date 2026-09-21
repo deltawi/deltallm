@@ -17,6 +17,8 @@ def render(*args: str) -> subprocess.CompletedProcess[str]:
         [
             HELM,
             "template",
+            "--set",
+            "image.tag=pr8-test-release",
             "deltallm",
             str(CHART),
             "--set",

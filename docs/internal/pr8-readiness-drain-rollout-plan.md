@@ -1,6 +1,6 @@
 # PR8 implementation plan: readiness, drain and release ordering
 
-Status: planning complete; implementation has not started.
+Status: implementation in progress; final review and acceptance gates remain open.
 Prepared September 21, 2026 for [issue #320](https://github.com/deltawi/deltallm/issues/320).
 
 - Base: latest fetched `origin/feature/issue-320-concurrency`,
@@ -439,7 +439,7 @@ Completion checklist:
 - [x] Read RULES.md completely and inspect the latest merged feature branch.
 - [x] Create the isolated PR8 worktree and record its base revision.
 - [x] Map all five PR8 issue requirements to implementation and validation above.
-- [ ] Implement slices 1–6 with focused regressions and synchronized configuration.
+- [x] Implement slices 1–6 with focused regressions and synchronized configuration.
 - [ ] Finish exact-image, rolling-update, pod-loss and failure/recovery evidence.
 - [ ] Publish the operator contracts and before/after measurements.
 - [ ] Complete review/fix iterations and all required checks on the final PR head.
@@ -448,3 +448,24 @@ Completion checklist:
 The Uvicorn adapter must remain small and version-tested: its
 [graceful shutdown setting](https://uvicorn.dev/settings/#timeouts) bounds the
 server wait, while application cleanup needs the shared deadline described above.
+
+### Implementation checkpoint — 2026-09-21
+
+The managed launcher, readiness inventory, shared shutdown owner, read-only
+migration verifier, pre-release Job, frozen non-root images and operator contract
+are implemented. Review fixes cover partial bootstrap ownership, deferred config
+publication, policy catch-up after Redis reconnect, cancellation-resistant callback
+ownership, bounded Prisma process-group cleanup, and explicit HPA stabilization.
+The static bundle routes now share their required owner in `src/ui/routes.py`.
+
+Local validation has passed the full app/PostgreSQL/Helm lanes and focused
+lifecycle tests. The 10 RPS comparison completed 200/200 requests on each image
+with no generator drops and clean exits; its raw artifacts remain preliminary
+until the final committed image is qualified. A 50 RPS baseline run saturated
+accounting admission. Neither sample establishes production capacity.
+
+The Kubernetes harness covers migration failure/concurrency, readiness recovery,
+streams and accepted batch/outbox work during rollout, and a killed claim owner.
+Its complete acceptance gate remains open: the local Docker VM exhausted memory
+with the multi-pod fixture, so qualification continues on a clean CI runner.
+The draft PR must remain unmerged until that gate and final review pass.

@@ -16,7 +16,7 @@ from tests.performance import run_gateway_concurrency as workload
 from tests.performance.gateway_concurrency_dependencies import fixture_database_url
 from tests.performance.gateway_concurrency_fixture import fixture_key
 from tests.performance.gateway_concurrency_manifest import ServerManifest
-from tests.performance.gateway_concurrency_mock import app
+from tests.performance.gateway_concurrency_mock import app, complete, CompletionRequest
 from tests.performance.run_gateway_concurrency import error_code, valid_completion
 from tests.performance.summarize_historical_concurrency import summarize
 
@@ -37,10 +37,25 @@ async def test_provider_is_fixed_and_rejects_other_workloads() -> None:
         response = await client.post("/v1/chat/completions", json=body)
         assert response.status_code == 200
         assert valid_completion(response.json())
-        for changed in ({"model": "other"}, {"max_tokens": 2}, {"stream": True}):
+        for changed in ({"model": "other"}, {"max_tokens": 2}):
             assert (
                 await client.post("/v1/chat/completions", json={**body, **changed})
             ).status_code == 400
+
+
+async def test_lifecycle_provider_stream_starts_and_closes_without_terminal_success():
+    response = await complete(
+        CompletionRequest(
+            model="fixed-one-token",
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            max_tokens=1,
+            stream=True,
+        )
+    )
+    first = await anext(response.body_iterator)
+    assert '"content": "OK"' in first
+    assert "[DONE]" not in first
+    await response.body_iterator.aclose()
 
 
 def test_profile_uses_supported_settings_and_keeps_required_dependencies_enabled() -> None:

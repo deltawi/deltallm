@@ -38,6 +38,7 @@ class BatchStaleLeaseSweeperWorker:
         self.config = config or BatchStaleLeaseSweeperConfig()
         self._running = False
         self._stop_event = asyncio.Event()
+        self.started = asyncio.Event()
 
     def _next_sleep_seconds(self, *, iteration_failed: bool) -> float:
         base = max(
@@ -104,7 +105,9 @@ class BatchStaleLeaseSweeperWorker:
         observe_batch_stale_lease_sweeper_duration(duration_seconds=perf_counter() - started)
 
         if items or jobs:
-            logger.info("batch stale lease sweeper reclaimed items=%s released_jobs=%s", items, jobs)
+            logger.info(
+                "batch stale lease sweeper reclaimed items=%s released_jobs=%s", items, jobs
+            )
         await self._refresh_batch_runtime_metrics(now=now)
         return {
             "items": items,
@@ -115,6 +118,7 @@ class BatchStaleLeaseSweeperWorker:
         }
 
     async def run(self) -> None:
+        self.started.set()
         self._running = True
         while self._running and not self._stop_event.is_set():
             iteration_failed = False

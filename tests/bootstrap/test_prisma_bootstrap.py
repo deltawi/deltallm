@@ -7,7 +7,9 @@ import sys
 import pytest
 
 
-def _completed_process(*, returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
+def _completed_process(
+    *, returncode: int, stdout: str = "", stderr: str = ""
+) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(
         args=["prisma", "migrate", "deploy"],
         returncode=returncode,
@@ -20,8 +22,12 @@ def _prisma_bootstrap_module():
     return importlib.import_module("src.prisma_bootstrap")
 
 
-def test_prisma_bootstrap_module_does_not_import_src_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
-    for module_name in [name for name in sys.modules if name == "src.bootstrap" or name.startswith("src.bootstrap.")]:
+def test_prisma_bootstrap_module_does_not_import_src_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for module_name in [
+        name for name in sys.modules if name == "src.bootstrap" or name.startswith("src.bootstrap.")
+    ]:
         monkeypatch.delitem(sys.modules, module_name, raising=False)
     monkeypatch.delitem(sys.modules, "src.prisma_bootstrap", raising=False)
 
@@ -35,12 +41,19 @@ def test_prisma_bootstrap_module_does_not_import_src_bootstrap(monkeypatch: pyte
 def test_classify_prisma_failure_marks_connectivity_errors_retryable() -> None:
     module = _prisma_bootstrap_module()
 
-    assert module.classify_prisma_failure("Error: P1001: Can't reach database server") == "retryable_connectivity"
-    assert module.classify_prisma_failure("Database system is starting up") == "retryable_connectivity"
+    assert (
+        module.classify_prisma_failure("Error: P1001: Can't reach database server")
+        == "retryable_connectivity"
+    )
+    assert (
+        module.classify_prisma_failure("Database system is starting up") == "retryable_connectivity"
+    )
     assert module.classify_prisma_failure("migration failed because type already exists") == "fatal"
 
 
-def test_run_prisma_bootstrap_retries_retryable_connectivity_errors_then_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_prisma_bootstrap_retries_retryable_connectivity_errors_then_succeeds(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     module = _prisma_bootstrap_module()
     calls: list[list[str]] = []
     sleeps: list[float] = []
@@ -73,7 +86,9 @@ def test_run_prisma_bootstrap_retries_retryable_connectivity_errors_then_succeed
     assert "Prisma migrate deploy completed" in captured.out
 
 
-def test_run_prisma_bootstrap_raises_immediately_on_fatal_error(capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_prisma_bootstrap_raises_immediately_on_fatal_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     module = _prisma_bootstrap_module()
     calls: list[list[str]] = []
 
@@ -93,15 +108,21 @@ def test_run_prisma_bootstrap_raises_immediately_on_fatal_error(capsys: pytest.C
     assert "relation already exists" in captured.err
 
 
-def test_run_prisma_bootstrap_raises_after_retry_budget_exhausted(capsys: pytest.CaptureFixture[str]) -> None:
+def test_run_prisma_bootstrap_raises_after_retry_budget_exhausted(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     module = _prisma_bootstrap_module()
     sleeps: list[float] = []
 
     def fake_runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         del command
-        return _completed_process(returncode=1, stderr="Error: P1002: Timed out while connecting to database")
+        return _completed_process(
+            returncode=1, stderr="Error: P1002: Timed out while connecting to database"
+        )
 
-    with pytest.raises(module.PrismaBootstrapError, match="did not succeed after 2 attempts") as exc_info:
+    with pytest.raises(
+        module.PrismaBootstrapError, match="did not succeed after 2 attempts"
+    ) as exc_info:
         module.run_prisma_bootstrap(
             max_attempts=2,
             sleep_seconds=1.5,
@@ -113,3 +134,51 @@ def test_run_prisma_bootstrap_raises_after_retry_budget_exhausted(capsys: pytest
     assert exc_info.value.retryable is True
     assert sleeps == [1.5]
     assert "Waiting for database before Prisma migrate deploy... (1/2)" in captured.err
+
+
+def test_migration_wall_time_is_shared_across_connectivity_retries():
+    module = _prisma_bootstrap_module()
+    now = [0.0]
+    timeouts = []
+
+    def runner(command, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        now[0] += 2
+        return _completed_process(returncode=1, stderr="P1001")
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    with pytest.raises(module.PrismaBootstrapError, match="wall-time"):
+        module.run_prisma_bootstrap(
+            runner=runner,
+            sleeper=sleep,
+            clock=lambda: now[0],
+            timeout_seconds=5,
+            max_attempts=10,
+            sleep_seconds=1,
+        )
+    assert timeouts == [5, 2]
+
+
+def test_migration_command_output_redacts_credentialed_urls_and_secrets(capsys):
+    module = _prisma_bootstrap_module()
+    module.run_prisma_bootstrap(
+        runner=lambda *a, **kw: _completed_process(
+            returncode=0,
+            stdout="Datasource postgresql://user:private-password@host/db?secret=secret-value\n",
+            stderr="token=private-token password=private-password",
+        )
+    )
+    captured = capsys.readouterr()
+    assert "private-" not in captured.out + captured.err
+    assert "secret-value" not in captured.out + captured.err
+
+
+def test_migration_subprocess_bounds_hung_children_and_excess_output():
+    from src.migration_process import MigrationOutputLimitError, run_migration_process
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_migration_process([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.05)
+    with pytest.raises(MigrationOutputLimitError):
+        run_migration_process([sys.executable, "-c", "print('x' * 1000000)"], timeout=3)

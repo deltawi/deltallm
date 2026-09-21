@@ -155,3 +155,7 @@ are bounded allocations; PR10 still supplies production throughput qualification
 raw HTTP and component samples, callback retention, event-loop lag, tail latency,
 dependency counts and post-shutdown durable drain. They are local evidence, not a
 Kubernetes capacity certificate.
+
+See [Process lifecycle](process-lifecycle.md) for migration-before-rollout ordering,
+the managed 80-second shutdown budget, interrupted-stream behavior and recovery of
+committed records after a pod exits. Keep the managed image command in production.

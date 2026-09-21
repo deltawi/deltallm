@@ -293,12 +293,14 @@ jobs:
             > /dev/null
           helm lint deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             --set runtime.database.url="${VALID_DATABASE_URL}" \
             --set runtime.redis.url="${VALID_REDIS_URL}"
           helm template deltallm deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             --set runtime.database.url="${VALID_DATABASE_URL}" \
@@ -310,10 +312,13 @@ jobs:
           uv run pytest -q -m helm -rs
           --durations=25 --durations-min=0.5
 
+  lifecycle-acceptance:
+    uses: ./.github/workflows/lifecycle-acceptance.yml
+
   test:
     name: test
     if: ${{ always() }}
-    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm]
+    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm, lifecycle-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -324,8 +329,9 @@ jobs:
           REDIS: ${{ needs.redis-tests.result }}
           MIGRATIONS: ${{ needs.migration-paths.result }}
           HELM: ${{ needs.helm.result }}
+          LIFECYCLE: ${{ needs.lifecycle-acceptance.result }}
         run: |
-          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM"; do
+          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM" "$LIFECYCLE"; do
             if [ "$result" != success ]; then
               echo "Required test job finished with status: $result"
               exit 1
