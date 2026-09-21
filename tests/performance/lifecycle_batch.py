@@ -11,6 +11,33 @@ from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.lifecycle_cluster import LOAD_KEY, LifecycleCluster
 
 ITEMS = 20
+ITEM_LEASE_SECONDS = 360
+
+
+async def batch_recovery_budget(cluster: LifecycleCluster, batch_id: str) -> float:
+    # A cancelled item remains owned until its durable lease expires. Observe
+    # the actual remaining lease after the old pod exits, then allow bounded
+    # execution/finalization time; never shorten a production lease for the test.
+    async with local_database() as db:
+        rows = await db.query_raw(
+            "SELECT item_id,status,attempts,claim_epoch,"
+            "GREATEST(0,EXTRACT(EPOCH FROM (lease_expires_at-NOW())))::float8 "
+            "AS lease_remaining_seconds FROM deltallm_batch_item "
+            "WHERE batch_id=$1 ORDER BY item_id LIMIT 21",
+            batch_id,
+        )
+    assert len(rows) == ITEMS, rows
+    remaining = max(float(row["lease_remaining_seconds"]) for row in rows)
+    assert 0 <= remaining <= ITEM_LEASE_SECONDS, rows
+    (cluster.output / "batch-after-worker-exit.json").write_text(json.dumps(rows, indent=2) + "\n")
+    budget = max(240.0, remaining + 60.0)
+    cluster.event(
+        "batch_recovery_wait_started",
+        lease_remaining_seconds=remaining,
+        timeout_seconds=budget,
+        completed=sum(row["status"] == "completed" for row in rows),
+    )
+    return budget
 
 
 async def start_batch(cluster: LifecycleCluster, url: str) -> str:
@@ -64,14 +91,16 @@ async def start_batch(cluster: LifecycleCluster, url: str) -> str:
 
 
 async def finish_batch(cluster: LifecycleCluster, url: str, batch_id: str) -> None:
+    recovery_seconds = await batch_recovery_budget(cluster, batch_id)
     async with httpx.AsyncClient(
         timeout=10, trust_env=False, headers={"Authorization": "Bearer " + LOAD_KEY}
     ) as client:
-        deadline = monotonic() + 240
+        deadline = monotonic() + recovery_seconds
         while monotonic() < deadline:
             response = await client.get(url + "/v1/batches/" + batch_id)
             assert response.status_code == 200, response.text
             result = response.json()
+            (cluster.output / "batch-result.json").write_text(json.dumps(result, indent=2) + "\n")
             if result["status"] in {"completed", "failed", "expired", "cancelled"}:
                 break
             await asyncio.sleep(1)

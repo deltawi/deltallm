@@ -144,7 +144,7 @@ async def export_records(output: Path) -> None:
                 "FROM deltallm_audit_ingestion_outbox ORDER BY event_id LIMIT 4096"
             ),
             "batch_items": await db.query_raw(
-                "SELECT batch_id,item_id,custom_id,status,attempts FROM deltallm_batch_item "
+                "SELECT batch_id,item_id,custom_id,status,attempts,claim_epoch FROM deltallm_batch_item "
                 "ORDER BY item_id LIMIT 4096"
             ),
             "batch_completions": await db.query_raw(

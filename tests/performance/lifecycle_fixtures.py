@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from tests.performance.lifecycle_batch import ITEM_LEASE_SECONDS
 from tests.performance.lifecycle_cluster import LifecycleCluster, MASTER_KEY, SALT_KEY
 
 CHART = Path("deploy/kubernetes/helm")
@@ -129,6 +130,7 @@ def chart_values(cluster: LifecycleCluster, image: str) -> Path:
         spend_operation_intents_enabled=True,
         model_deployment_bootstrap_from_config=False,
         embeddings_batch_enabled=True,
+        embeddings_batch_item_lease_seconds=ITEM_LEASE_SECONDS,
         embeddings_batch_storage_dir="/artifacts",
         embeddings_batch_stale_lease_sweeper_interval_seconds=1,
         embeddings_batch_stale_lease_sweeper_failure_interval_seconds=1,
