@@ -30,6 +30,7 @@ from tests.performance.lifecycle_economics import (
     export_records,
     held_ledger,
     recovered,
+    reconcile_interrupted_streams,
 )
 from tests.performance.lifecycle_batch import batch_rollout
 from tests.performance.lifecycle_migrations import concurrent_migrations, failed_migrations
@@ -264,6 +265,7 @@ async def exercise_ready_cluster(cluster: LifecycleCluster, values: Path) -> Non
         assert report["success_count"] == 100, report["error_counts"]
     await pod_loss(cluster)
     cluster.kubectl("rollout", "status", "deployment/gateway-deltallm", "--timeout=120s")
+    cluster.event("interrupted_streams_reconciled", **await reconcile_interrupted_streams())
     with cluster.forward("service/provider", 8000) as port:
         async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
             events = await client.get(f"http://127.0.0.1:{port}/fixture/stream-events")

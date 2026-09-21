@@ -91,6 +91,10 @@ The image runs as UID/GID 10001, using frozen dependencies from `uv.lock` and
 prebuilt Prisma/Node assets. Production mounts writable `/tmp` while keeping the
 root filesystem read-only. Configure shared artifact storage and any persistent
 application storage explicitly; a pod-local directory is not shared storage.
+The Presidio variant includes its NLP model and uses the locked `tldextract`
+package's bundled suffix snapshot for email validation. Its recognizer disables
+[HTTP suffix-list fetching](https://github.com/john-kurkowski/tldextract#how-to-disable-http-suffix-list-fetching-for-production)
+and disk caching; upgrades to that data ship with a tested image.
 
 ## Release procedure
 

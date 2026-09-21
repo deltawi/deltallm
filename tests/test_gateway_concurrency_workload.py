@@ -37,6 +37,9 @@ async def test_provider_is_fixed_and_rejects_other_workloads() -> None:
         response = await client.post("/v1/chat/completions", json=body)
         assert response.status_code == 200
         assert valid_completion(response.json())
+        discovered = await client.get("/v1/models")
+        assert discovered.status_code == 200
+        assert discovered.json()["data"][0]["id"] == body["model"]
         for changed in ({"model": "other"}, {"max_tokens": 2}):
             assert (
                 await client.post("/v1/chat/completions", json={**body, **changed})

@@ -500,6 +500,7 @@ guardrails-presidio = [
     { name = "en-core-web-lg" },
     { name = "presidio-analyzer" },
     { name = "presidio-anonymizer" },
+    { name = "tldextract" },
 ]
 
 [package.metadata]
@@ -526,6 +527,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
     { name = "redis", specifier = ">=5.0,<6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.2,<1.0" },
+    { name = "tldextract", marker = "extra == 'guardrails-presidio'", specifier = "==5.3.1" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.40.0" },
 ]
 provides-extras = ["dev", "docs", "batch-s3", "guardrails-presidio"]

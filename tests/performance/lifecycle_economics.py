@@ -153,3 +153,35 @@ async def export_records(output: Path) -> None:
             ),
         }
     output.write_text(json.dumps(records, indent=2) + "\n")
+
+
+async def reconcile_interrupted_streams() -> dict:
+    """Accelerate only owned fixture leases; let surviving production workers recover."""
+    async with local_database() as db:
+        pending = await db.query_raw(
+            "SELECT event_id FROM deltallm_spend_ingestion_outbox "
+            "WHERE operation_state='dispatched' ORDER BY event_id LIMIT 17"
+        )
+        assert 0 < len(pending) <= 16, pending
+        ids = [row["event_id"] for row in pending]
+        # Production's 15-minute ambiguity lease is intentionally unchanged.
+        # Streams have all disconnected; no provider receipt exists to invent.
+        await db.execute_raw(
+            "UPDATE deltallm_spend_ingestion_outbox SET operation_expires_at=NOW()-interval '1 second' "
+            "WHERE event_id=ANY($1::text[]) AND operation_state='dispatched'",
+            ids,
+        )
+        deadline = monotonic() + 30
+        while monotonic() < deadline:
+            rows = await db.query_raw(
+                "SELECT o.event_id,o.status,o.operation_state,(s.id IS NOT NULL) AS charged "
+                "FROM deltallm_spend_ingestion_outbox o LEFT JOIN deltallm_spendlog_events s "
+                "ON s.id=o.event_id WHERE o.event_id=ANY($1::text[]) ORDER BY o.event_id",
+                ids,
+            )
+            if all(row["operation_state"] == "unknown" for row in rows):
+                assert len(rows) == len(ids)
+                assert all(row["status"] == "blocked" and not row["charged"] for row in rows), rows
+                return {"fixture_lease_expiry_accelerated": True, "operations": rows}
+            await asyncio.sleep(0.2)
+    raise TimeoutError("surviving workers did not classify interrupted operations")

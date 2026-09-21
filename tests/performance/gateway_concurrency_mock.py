@@ -13,6 +13,14 @@ stream_events: list[dict[str, object]] = []
 batch_gate: asyncio.Event | None = None
 
 
+@app.get("/v1/models")
+async def models():
+    return {
+        "object": "list",
+        "data": [{"id": "fixed-one-token", "object": "model", "owned_by": "fixture"}],
+    }
+
+
 @app.get("/fixture/stream-events")
 async def events():
     return stream_events

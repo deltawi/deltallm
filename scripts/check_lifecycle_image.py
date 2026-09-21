@@ -14,8 +14,13 @@ assert importlib.util.find_spec("pytest") is None
 subprocess.run(["prisma", "-v"], check=True, timeout=30)
 subprocess.run(["python", "-m", "src.server", "--help"], check=True, timeout=15)
 if sys.argv[1] == "true":
-    from presidio_analyzer import AnalyzerEngine
-    assert AnalyzerEngine().analyze(text="test@example.com", language="en", entities=["EMAIL_ADDRESS"])
+    from unittest.mock import patch
+    from src.guardrails.presidio_runtime import build_analyzer
+    # A no-network container alone would allow a failed download with fallback.
+    # Fail on the attempt itself, even if the library catches the exception.
+    with patch("requests.sessions.Session.send", side_effect=RuntimeError("Unexpected network attempt")) as send:
+        assert build_analyzer().analyze(text="test@example.com", language="en", entities=["EMAIL_ADDRESS"])
+        send.assert_not_called()
 """
 
 

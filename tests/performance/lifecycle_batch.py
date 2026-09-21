@@ -179,4 +179,7 @@ async def batch_rollout(cluster: LifecycleCluster, url: str) -> None:
             "deployment/gateway-deltallm-batch-worker",
             "--timeout=180s",
         )
+        await asyncio.to_thread(
+            cluster.kubectl, "wait", "--for=delete", "pod/" + pod, "--timeout=90s"
+        )
     await finish_batch(cluster, url, batch_id)
