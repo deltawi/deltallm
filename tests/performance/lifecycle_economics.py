@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from decimal import Decimal
 import json
 from pathlib import Path
 from time import monotonic
@@ -102,7 +103,7 @@ async def recovered(request_id: str, *, old_claim: dict | None = None) -> dict:
             request_id,
         )
         assert ledger[0]["rows"] == 1, ledger
-        assert abs(float(ledger[0]["spend"]) - 0.000007) < 1e-15, ledger
+        assert Decimal(ledger[0]["spend"]) == Decimal("0.000007"), ledger
         if old_claim:
             stale = await SpendIngestionRepository(db).mark_completed(
                 event_ids=[old_claim["event_id"]],
@@ -114,7 +115,7 @@ async def recovered(request_id: str, *, old_claim: dict | None = None) -> dict:
             audit = await db.query_raw(
                 "SELECT o.event_id,o.status,(a.event_id IS NOT NULL) AS persisted "
                 "FROM deltallm_audit_ingestion_outbox o LEFT JOIN deltallm_auditevent a "
-                "ON a.event_id=o.event_id WHERE o.payload_json->'event'->>'request_id'=$1 LIMIT 16",
+                "ON a.event_id::text=o.event_id WHERE o.payload_json->'event'->>'request_id'=$1 LIMIT 16",
                 request_id,
             )
             if audit and all(row["status"] == "completed" and row["persisted"] for row in audit):
@@ -135,12 +136,20 @@ async def export_records(output: Path) -> None:
                 "concurrency-org",
             ),
             "spend": await db.query_raw(
-                "SELECT event_id,status,attempt_count,operation_state "
+                "SELECT event_id,status,attempt_count,operation_state,payload_json->>'request_id' AS request_id "
                 "FROM deltallm_spend_ingestion_outbox ORDER BY event_id LIMIT 4096"
             ),
             "audit": await db.query_raw(
-                "SELECT event_id,status,attempt_count "
+                "SELECT event_id,status,attempt_count,payload_json->'event'->>'request_id' AS request_id "
                 "FROM deltallm_audit_ingestion_outbox ORDER BY event_id LIMIT 4096"
+            ),
+            "batch_items": await db.query_raw(
+                "SELECT batch_id,item_id,custom_id,status,attempts FROM deltallm_batch_item "
+                "ORDER BY item_id LIMIT 4096"
+            ),
+            "batch_completions": await db.query_raw(
+                "SELECT completion_id,batch_id,item_id,status FROM deltallm_batch_completion_outbox "
+                "ORDER BY completion_id LIMIT 4096"
             ),
         }
     output.write_text(json.dumps(records, indent=2) + "\n")

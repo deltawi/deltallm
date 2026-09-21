@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import Any, Callable, Iterable, Protocol
 from uuid import uuid4
@@ -203,7 +204,7 @@ class GovernanceInvalidationService:
                                 exc_info=True,
                             )
             if not self._stopping:
-                await asyncio.sleep(retry_seconds)
+                await asyncio.sleep(random.uniform(retry_seconds / 2, retry_seconds))
                 retry_seconds = min(retry_seconds * 2, 10.0)
 
     async def _handle_pubsub_message(self, message: dict[str, Any]) -> None:

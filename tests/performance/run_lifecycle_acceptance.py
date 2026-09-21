@@ -31,7 +31,7 @@ from tests.performance.lifecycle_economics import (
     held_ledger,
     recovered,
 )
-from tests.performance.lifecycle_batch import start_batch, finish_batch
+from tests.performance.lifecycle_batch import batch_rollout
 from tests.performance.lifecycle_migrations import concurrent_migrations, failed_migrations
 from tests.performance.lifecycle_recovery import readiness_recovery
 
@@ -96,7 +96,11 @@ async def long_stream(cluster: LifecycleCluster, url: str, entered: asyncio.Even
             pass
     assert entered.is_set()
     assert b"[DONE]" not in data, "interrupted stream emitted terminal success"
-    result = {"seconds": monotonic() - started, "bytes": len(data), "terminal_success": False}
+    result = {
+        "duration_seconds": monotonic() - started,
+        "bytes": len(data),
+        "terminal_success": False,
+    }
     cluster.event("stream_interrupted", **result)
     return result
 
@@ -165,96 +169,106 @@ async def exercise(cluster: LifecycleCluster, values: Path) -> None:
             DELTALLM_SALT_KEY=SALT_KEY,
         )
         await seed()
-        async with local_database() as db:
-            await db.execute_raw("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
-        await concurrent_migrations(cluster, values)
-        cluster.kubectl(
-            "rollout", "restart", "deployment", "-l", "app.kubernetes.io/instance=gateway"
-        )
-        cluster.kubectl(
-            "rollout",
-            "status",
-            "deployment",
-            "-l",
-            "app.kubernetes.io/instance=gateway",
-            "--timeout=180s",
-        )
-        cluster.event("fixture_loaded")
-        profile = Path(cluster.directory.name) / "profile.yaml"
-        profile.write_text(yaml.safe_dump(yaml.safe_load(values.read_text())["config"]))
-        os.environ["DELTALLM_CONFIG_PATH"] = str(profile)
-        pods = api_pods(cluster)
-        assert len(pods) == 2
-        with ExitStack() as forwards:
-            ports = [forwards.enter_context(cluster.forward("pod/" + pod, 4000)) for pod in pods]
-            urls = [f"http://127.0.0.1:{port}" for port in ports]
-            for url in urls:
-                payload = await ready(url)
-                assert payload["details"]["process"]["state"] == "serving"
-            await readiness_recovery(cluster, urls)
-            report = await sample(cluster, ports, "before-rollout")
-            assert report["success_count"] == 100, report["error_counts"]
-            await failed_migrations(cluster, values)
-            for url in urls:
-                await ready(url)
-            batch_id = await start_batch(cluster, urls[1])
-            all_pods = json.loads(
-                cluster.kubectl(
-                    "get", "pods", "-l", "app.kubernetes.io/instance=gateway", "-o", "json"
-                ).stdout
-            )
-            for pod in all_pods["items"]:
-                forwards.enter_context(cluster.follow_logs(pod["metadata"]["name"]))
-            entered = asyncio.Event()
-            stream = asyncio.create_task(long_stream(cluster, urls[0], entered))
-            draining = None
+        completed = False
+        try:
+            await exercise_ready_cluster(cluster, values)
+            completed = True
+        finally:
             try:
-                async with asyncio.timeout(10):
-                    await entered.wait()
-                async with held_ledger():
-                    request_id = await accept(urls[1])
-                    await claim(request_id)
-                    cluster.event("rollout_started_with_accepted_backlog")
-                    draining = asyncio.create_task(observe_drain(cluster, urls[0], pods[0]))
-                    rollout = asyncio.create_task(
-                        asyncio.to_thread(
-                            release,
-                            cluster,
-                            values,
-                            "--set",
-                            "podAnnotations.lifecycle-test=rollout-1,batchWorker.podAnnotations.lifecycle-test=rollout-1",
-                        )
-                    )
-                    await asyncio.wait_for(stream, timeout=185)
-                    await rollout
-                    await draining
-                    await assert_backlog(request_id)
-                    cluster.event("rollout_completed_with_shared_backlog")
-                cluster.event("rollout_records_recovered", **await recovered(request_id))
-            finally:
-                if not stream.done():
-                    stream.cancel()
-                await asyncio.gather(stream, return_exceptions=True)
-                if draining is not None:
-                    draining.cancel()
-                    await asyncio.gather(draining, return_exceptions=True)
+                await export_records(cluster.output / "accepted-records.json")
+            except Exception:
+                cluster.event("economic_export_failed")
+                if completed:
+                    raise
 
-        pods = api_pods(cluster)
-        with ExitStack() as forwards:
-            ports = [forwards.enter_context(cluster.forward("pod/" + pod, 4000)) for pod in pods]
-            for port in ports:
-                await ready(f"http://127.0.0.1:{port}")
-            await finish_batch(cluster, f"http://127.0.0.1:{ports[0]}", batch_id)
-            report = await sample(cluster, ports, "after-rollout")
-            assert report["success_count"] == 100, report["error_counts"]
-        await pod_loss(cluster)
-        cluster.kubectl("rollout", "status", "deployment/gateway-deltallm", "--timeout=120s")
-        await export_records(cluster.output / "accepted-records.json")
-        with cluster.forward("service/provider", 8000) as port:
-            async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
-                events = await client.get(f"http://127.0.0.1:{port}/fixture/stream-events")
-                events.raise_for_status()
-                (cluster.output / "upstream-closures.json").write_text(events.text + "\n")
+
+async def exercise_ready_cluster(cluster: LifecycleCluster, values: Path) -> None:
+    async with local_database() as db:
+        await db.execute_raw("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+    await concurrent_migrations(cluster, values)
+    cluster.kubectl("rollout", "restart", "deployment", "-l", "app.kubernetes.io/instance=gateway")
+    cluster.kubectl(
+        "rollout",
+        "status",
+        "deployment",
+        "-l",
+        "app.kubernetes.io/instance=gateway",
+        "--timeout=180s",
+    )
+    cluster.event("fixture_loaded")
+    profile = Path(cluster.directory.name) / "profile.yaml"
+    profile.write_text(yaml.safe_dump(yaml.safe_load(values.read_text())["config"]))
+    os.environ["DELTALLM_CONFIG_PATH"] = str(profile)
+    pods = api_pods(cluster)
+    assert len(pods) == 2
+    with ExitStack() as forwards:
+        ports = [forwards.enter_context(cluster.forward("pod/" + pod, 4000)) for pod in pods]
+        urls = [f"http://127.0.0.1:{port}" for port in ports]
+        for url in urls:
+            payload = await ready(url)
+            assert payload["details"]["process"]["state"] == "serving"
+        await readiness_recovery(cluster, urls)
+        report = await sample(cluster, ports, "before-rollout")
+        assert report["success_count"] == 100, report["error_counts"]
+        await failed_migrations(cluster, values)
+        for url in urls:
+            await ready(url)
+        all_pods = json.loads(
+            cluster.kubectl(
+                "get", "pods", "-l", "app.kubernetes.io/instance=gateway", "-o", "json"
+            ).stdout
+        )
+        for pod in all_pods["items"]:
+            forwards.enter_context(cluster.follow_logs(pod["metadata"]["name"]))
+        entered = asyncio.Event()
+        stream = asyncio.create_task(long_stream(cluster, urls[0], entered))
+        draining = None
+        try:
+            async with asyncio.timeout(10):
+                await entered.wait()
+            async with held_ledger():
+                request_id = await accept(urls[1])
+                await claim(request_id)
+                cluster.event("rollout_started_with_accepted_backlog")
+                draining = asyncio.create_task(observe_drain(cluster, urls[0], pods[0]))
+                rollout = asyncio.create_task(
+                    asyncio.to_thread(
+                        release,
+                        cluster,
+                        values,
+                        "--set",
+                        "podAnnotations.lifecycle-test=rollout-1,batchWorker.podAnnotations.lifecycle-test=rollout-1",
+                    )
+                )
+                await asyncio.wait_for(stream, timeout=185)
+                await rollout
+                await draining
+                await assert_backlog(request_id)
+                cluster.event("rollout_completed_with_shared_backlog")
+            cluster.event("rollout_records_recovered", **await recovered(request_id))
+        finally:
+            if not stream.done():
+                stream.cancel()
+            await asyncio.gather(stream, return_exceptions=True)
+            if draining is not None:
+                draining.cancel()
+                await asyncio.gather(draining, return_exceptions=True)
+
+    pods = api_pods(cluster)
+    with ExitStack() as forwards:
+        ports = [forwards.enter_context(cluster.forward("pod/" + pod, 4000)) for pod in pods]
+        for port in ports:
+            await ready(f"http://127.0.0.1:{port}")
+        await batch_rollout(cluster, f"http://127.0.0.1:{ports[0]}")
+        report = await sample(cluster, ports, "after-rollout")
+        assert report["success_count"] == 100, report["error_counts"]
+    await pod_loss(cluster)
+    cluster.kubectl("rollout", "status", "deployment/gateway-deltallm", "--timeout=120s")
+    with cluster.forward("service/provider", 8000) as port:
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+            events = await client.get(f"http://127.0.0.1:{port}/fixture/stream-events")
+            events.raise_for_status()
+            (cluster.output / "upstream-closures.json").write_text(events.text + "\n")
 
 
 async def pod_loss(cluster: LifecycleCluster) -> None:

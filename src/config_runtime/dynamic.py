@@ -10,6 +10,7 @@ from src.shutdown import cleanup_deadline
 import asyncio
 import json
 import logging
+import random
 import time
 from copy import deepcopy
 from typing import Any, Awaitable, Callable
@@ -367,13 +368,18 @@ class DynamicConfigManager:
 
     async def _listen_for_changes(self) -> None:
         await self._updates_enabled.wait()
+        retry_seconds = 1.0
         while not self._stopping:
+            started = time.monotonic()
             try:
                 await self._listen_once()
             finally:
                 self._listener_ready = False
             if not self._stopping:
-                await asyncio.sleep(1.0)
+                if time.monotonic() - started >= 30.0:
+                    retry_seconds = 1.0
+                await asyncio.sleep(random.uniform(retry_seconds / 2, retry_seconds))
+                retry_seconds = min(retry_seconds * 2, 10.0)
 
     async def _listen_once(self) -> None:
         if self.redis is None:

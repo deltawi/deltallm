@@ -10,11 +10,28 @@ from pydantic import BaseModel, Field
 
 app = FastAPI()
 stream_events: list[dict[str, object]] = []
+batch_gate: asyncio.Event | None = None
 
 
 @app.get("/fixture/stream-events")
 async def events():
     return stream_events
+
+
+@app.post("/fixture/batch-hold")
+async def hold_batch():
+    global batch_gate
+    if batch_gate is not None and not batch_gate.is_set():
+        raise HTTPException(409, "Batch fixture is already held")
+    batch_gate = asyncio.Event()
+    return {"held": True}
+
+
+@app.post("/fixture/batch-release")
+async def release_batch():
+    if batch_gate is not None:
+        batch_gate.set()
+    return {"held": False}
 
 
 class CompletionRequest(BaseModel):
@@ -55,6 +72,8 @@ async def complete(request: CompletionRequest):
 
         return StreamingResponse(chunks(), media_type="text/event-stream")
     if request.messages == [{"role": "user", "content": "Lifecycle batch fixture."}]:
+        if batch_gate is not None:
+            await asyncio.wait_for(batch_gate.wait(), timeout=180)
         await asyncio.sleep(10)
     return {
         "id": "fixed-local-completion",

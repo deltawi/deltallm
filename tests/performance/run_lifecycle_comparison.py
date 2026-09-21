@@ -21,6 +21,14 @@ from tests.performance.gateway_concurrency_manifest import local_manifest
 from tests.performance.lifecycle_cluster import LOAD_KEY, MASTER_KEY, SALT_KEY
 from tests.performance.run_gateway_concurrency import measure
 from tests.performance.run_lifecycle_acceptance import ready
+from tests.performance.lifecycle_economics import (
+    accept,
+    assert_backlog,
+    claim,
+    held_ledger,
+    recovered,
+    export_records,
+)
 
 
 class ComparisonEnvironment:
@@ -29,6 +37,7 @@ class ComparisonEnvironment:
         self.output.mkdir(parents=True, exist_ok=True)
         self.name = "deltallm-pr8-compare-" + uuid4().hex[:8]
         self.containers: list[str] = []
+        self.records_available = False
 
     def run(
         self, *args: str, timeout: float = 180, check: bool = True, include_stderr: bool = False
@@ -150,6 +159,7 @@ async def compare(args: argparse.Namespace, environment: ComparisonEnvironment) 
         DELTALLM_SALT_KEY=SALT_KEY,
     )
     await seed()
+    environment.records_available = True
     async with local_database() as database:
         await database.execute_raw("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
     config = yaml.safe_load(Path("tests/performance/gateway_concurrency_profile.yaml").read_text())
@@ -244,6 +254,12 @@ async def compare(args: argparse.Namespace, environment: ComparisonEnvironment) 
                 assert await anext(response.aiter_bytes())
                 report["stream_ttft_seconds"] = monotonic() - started
         reports[label] = report
+        if label == "after":
+            async with held_ledger():
+                accepted = await accept(url)
+                await claim(accepted)
+                await assert_backlog(accepted)
+            report["accepted_work_recovery"] = await recovered(accepted)
         environment.run("docker", "stop", "--time", "90", name, timeout=100)
         state = json.loads(environment.run("docker", "inspect", name))[0]["State"]
         report["exit_code"] = state["ExitCode"]
@@ -262,7 +278,20 @@ def main() -> None:
     args = parser.parse_args()
     environment = ComparisonEnvironment(args.output)
     with environment.owned():
-        asyncio.run(compare(args, environment))
+        completed = False
+        try:
+            asyncio.run(compare(args, environment))
+            completed = True
+        finally:
+            if environment.records_available:
+                try:
+                    asyncio.run(export_records(args.output / "accepted-records.json"))
+                except Exception:
+                    (args.output / "economic-export-failed.txt").write_text(
+                        "Fixture database export failed\n"
+                    )
+                    if completed:
+                        raise
 
 
 if __name__ == "__main__":
