@@ -117,6 +117,7 @@ def initialize_organization_deletion_runtime(
 
 
 def start_organization_deletion_tasks(app: Any, runtime: Any) -> None:
+    lifecycle = getattr(app.state, "process_lifecycle", None)
     runtime.organization_lifecycle_task = create_task(
         app.state.organization_lifecycle_authorizer.run()
     )
@@ -129,7 +130,11 @@ def start_organization_deletion_tasks(app: Any, runtime: Any) -> None:
         runtime.organization_deletion_task = create_task(runtime.organization_deletion_worker.run())
         app.state.organization_deletion_task = runtime.organization_deletion_task
         runtime.organization_deletion_task.add_done_callback(
-            lambda task: _report_background_task_exit("organization deletion worker", task)
+            lambda task: _report_background_task_exit(
+                "organization deletion worker",
+                task,
+                expected_stop=bool(lifecycle and lifecycle.draining),
+            )
         )
 
 
@@ -187,12 +192,15 @@ def _organization_deletion_worker_id() -> str:
     return f"organization-deletion-{host or 'unknown-host'}-{os.getpid()}-{_WORKER_BOOT_ID}"
 
 
-def _report_background_task_exit(label: str, task: Task[None]) -> None:
+def _report_background_task_exit(
+    label: str, task: Task[None], *, expected_stop: bool = False
+) -> None:
     if task.cancelled():
         return
     error = task.exception()
     if error is None:
-        logger.error("%s exited unexpectedly", label)
+        if not expected_stop:
+            logger.error("%s exited unexpectedly", label)
         return
     logger.error(
         "%s crashed",
