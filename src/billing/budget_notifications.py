@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline
+
 import asyncio
 import logging
 import random
@@ -103,12 +105,15 @@ class BudgetNotificationWorker:
             await self.shutdown()
             raise
 
+    def stop(self) -> None:
+        self._stop.set()
+
     async def shutdown(self) -> None:
         self._state = WorkerState.STOPPING
         self._stop.set()
         await stop_tasks_before_deadline(
             [self.task],
-            deadline=asyncio.get_running_loop().time() + 11,
+            deadline=cleanup_deadline(11),
         )
 
     async def run(self) -> None:

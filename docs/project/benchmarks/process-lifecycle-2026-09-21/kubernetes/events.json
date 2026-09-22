@@ -1,0 +1,221 @@
+[
+  {
+    "event": "cluster_created",
+    "seconds": 52.252301416010596,
+    "image": "deltallm-pr8:working",
+    "node_image": "kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48"
+  },
+  {
+    "event": "fresh_migration_completed",
+    "seconds": 107.30255170800956
+  },
+  {
+    "event": "concurrent_and_retried_migrations_verified",
+    "seconds": 131.15894254099112
+  },
+  {
+    "event": "fixture_loaded",
+    "seconds": 181.99956500000553
+  },
+  {
+    "event": "dependency_and_probe_hysteresis_recovered",
+    "seconds": 212.96231683297083
+  },
+  {
+    "event": "failed_migration_blocked_rollout",
+    "seconds": 234.69424491602695,
+    "reason": "invalid_schema"
+  },
+  {
+    "event": "failed_migration_blocked_rollout",
+    "seconds": 240.80192375002662,
+    "reason": "wall_time"
+  },
+  {
+    "event": "stream_first_byte",
+    "seconds": 240.89769825001713,
+    "ttft_seconds": 0.046413500036578625
+  },
+  {
+    "event": "rollout_started_with_accepted_backlog",
+    "seconds": 241.27987595798913
+  },
+  {
+    "event": "drain_observed_and_fresh_work_rejected",
+    "seconds": 272.0443941249978,
+    "pod": "gateway-deltallm-5cfc5fc87f-b9zhf"
+  },
+  {
+    "event": "stream_interrupted",
+    "seconds": 272.0582985410001,
+    "duration_seconds": 31.206967792008072,
+    "bytes": 185,
+    "terminal_success": false
+  },
+  {
+    "event": "repeated_signal_sent",
+    "seconds": 272.24174095800845,
+    "pod": "gateway-deltallm-5cfc5fc87f-b9zhf"
+  },
+  {
+    "event": "rollout_completed_with_shared_backlog",
+    "seconds": 288.11390954098897
+  },
+  {
+    "event": "rollout_records_recovered",
+    "seconds": 308.49514295801055,
+    "request_id": "1dc96a85e33f4b2092f76a7b36348d38",
+    "outbox": {
+      "event_id": "affd4b6b-d307-4b00-9fc7-d03d49778b73",
+      "status": "completed",
+      "attempt_count": 6,
+      "operation_state": "accepted"
+    },
+    "ledger": {
+      "rows": 1,
+      "spend": "0.000007000000000000"
+    },
+    "audit": [
+      {
+        "event_id": "a083dac3-dd56-4650-af1e-cefc2e9fe506",
+        "status": "completed",
+        "persisted": true
+      }
+    ]
+  },
+  {
+    "event": "batch_claimed_before_rollout",
+    "seconds": 310.4452347080223,
+    "batch_id": "0e6ee4f6-ecca-40b8-b829-c49851bd761d",
+    "active": 10
+  },
+  {
+    "event": "batch_worker_draining_with_active_claims",
+    "seconds": 331.1391176659963,
+    "pod": "gateway-deltallm-batch-worker-79c88f6f5-452lw",
+    "active": 10
+  },
+  {
+    "event": "batch_recovery_wait_started",
+    "seconds": 384.05028249998577,
+    "lease_remaining_seconds": 286.267872,
+    "timeout_seconds": 346.267872,
+    "completed": 8
+  },
+  {
+    "event": "accepted_batch_completed_after_rollout",
+    "seconds": 680.7807741250144,
+    "batch_id": "0e6ee4f6-ecca-40b8-b829-c49851bd761d",
+    "completed": 20
+  },
+  {
+    "event": "accepted_batch_accounting_completed",
+    "seconds": 680.9551615829696,
+    "batch_id": "0e6ee4f6-ecca-40b8-b829-c49851bd761d",
+    "ledger_rows": 20
+  },
+  {
+    "event": "stream_first_byte",
+    "seconds": 692.4517195409862,
+    "ttft_seconds": 0.040989624976646155
+  },
+  {
+    "event": "stream_first_byte",
+    "seconds": 692.4674686249928,
+    "ttft_seconds": 0.04660462500760332
+  },
+  {
+    "event": "stream_first_byte",
+    "seconds": 692.4917357080267,
+    "ttft_seconds": 0.07574933301657438
+  },
+  {
+    "event": "pod_killed_with_owned_claim",
+    "seconds": 692.9032206659904,
+    "pod": "gateway-deltallm-869ff587c9-lx5qf",
+    "event_id": "ec84924b-ea98-4340-8854-4073e22ae5b8"
+  },
+  {
+    "event": "stream_interrupted",
+    "seconds": 694.1457905829884,
+    "duration_seconds": 1.7350535409641452,
+    "bytes": 185,
+    "terminal_success": false
+  },
+  {
+    "event": "abrupt_container_exit_verified",
+    "seconds": 694.8010540410178,
+    "pod": "gateway-deltallm-869ff587c9-lx5qf",
+    "containerID": "containerd://db3027227943877407f73b9be6549a508fdfe214307b278aab45b0043bf52bb1",
+    "exitCode": 137,
+    "finishedAt": "2026-09-21T14:51:24Z",
+    "reason": "Error",
+    "startedAt": "2026-09-21T14:44:23Z"
+  },
+  {
+    "event": "survivor_served_after_pod_loss",
+    "seconds": 694.8815737909754
+  },
+  {
+    "event": "lost_pod_records_recovered",
+    "seconds": 723.0259934160276,
+    "request_id": "40e7e39ed4054c079c7ee288327d093b",
+    "outbox": {
+      "event_id": "ec84924b-ea98-4340-8854-4073e22ae5b8",
+      "status": "completed",
+      "attempt_count": 2,
+      "operation_state": "accepted"
+    },
+    "ledger": {
+      "rows": 1,
+      "spend": "0.000007000000000000"
+    },
+    "audit": [
+      {
+        "event_id": "7cad2b4e-3680-4ea5-b3b9-bf9044290e01",
+        "status": "completed",
+        "persisted": true
+      }
+    ]
+  },
+  {
+    "event": "interrupted_streams_reconciled",
+    "seconds": 723.5290996659896,
+    "fixture_lease_expiry_accelerated": true,
+    "operations": [
+      {
+        "event_id": "4d7cdbf7-cbd3-4dcc-b445-ba060e092fdd",
+        "status": "blocked",
+        "operation_state": "unknown",
+        "charged": false
+      },
+      {
+        "event_id": "77ef3f78-4452-4741-a792-7a63cd2239e0",
+        "status": "blocked",
+        "operation_state": "unknown",
+        "charged": false
+      },
+      {
+        "event_id": "884985b0-af33-4fb4-92bd-605eba9251c1",
+        "status": "blocked",
+        "operation_state": "unknown",
+        "charged": false
+      },
+      {
+        "event_id": "c06fa10f-1a74-4eaa-9eea-1e9f46e0a383",
+        "status": "blocked",
+        "operation_state": "unknown",
+        "charged": false
+      }
+    ]
+  },
+  {
+    "event": "all_upstream_streams_closed",
+    "seconds": 724.1312684579752,
+    "count": 4
+  },
+  {
+    "event": "acceptance_completed",
+    "seconds": 724.4024195409729
+  }
+]

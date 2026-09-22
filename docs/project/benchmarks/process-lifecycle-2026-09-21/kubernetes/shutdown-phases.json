@@ -1,0 +1,52 @@
+{
+  "gateway-deltallm-5cfc5fc87f-b9zhf.log": [
+    "2026-09-21T14:44:23.033816345Z INFO:src.process_lifecycle:process draining",
+    "2026-09-21T14:44:28.109270056Z INFO:src.process_lifecycle:process shutdown phase completed phase=withdrawal seconds=5.076",
+    "2026-09-21T14:44:28.210321056Z INFO:src.process_lifecycle:process shutdown phase completed phase=responses seconds=0.101",
+    "2026-09-21T14:44:28.210517973Z INFO:src.process_lifecycle:process shutdown phase completed phase=cancellation seconds=0.000",
+    "2026-09-21T14:44:28.217574139Z INFO:src.process_lifecycle:process shutdown phase completed phase=workers seconds=0.007",
+    "2026-09-21T14:44:28.240134431Z INFO:src.process_lifecycle:process shutdown phase completed phase=close seconds=0.022",
+    "2026-09-21T14:44:28.246478598Z INFO:     Application shutdown complete.",
+    "2026-09-21T14:44:28.246496181Z INFO:     Finished server process [1]"
+  ],
+  "gateway-deltallm-batch-worker-6c4cdcc4dc-gf4gg.log": [
+    "2026-09-21T14:44:23.038835845Z INFO:src.process_lifecycle:process draining",
+    "2026-09-21T14:44:28.061729848Z INFO:src.process_lifecycle:process shutdown phase completed phase=withdrawal seconds=5.023",
+    "2026-09-21T14:44:28.162083473Z INFO:src.process_lifecycle:process shutdown phase completed phase=responses seconds=0.100",
+    "2026-09-21T14:44:28.162181056Z INFO:src.process_lifecycle:process shutdown phase completed phase=cancellation seconds=0.000",
+    "2026-09-21T14:44:28.170000056Z INFO:src.process_lifecycle:process shutdown phase completed phase=workers seconds=0.008",
+    "2026-09-21T14:44:28.182230931Z INFO:src.process_lifecycle:process shutdown phase completed phase=close seconds=0.012",
+    "2026-09-21T14:44:28.183171264Z INFO:     Application shutdown complete.",
+    "2026-09-21T14:44:28.183243181Z INFO:     Finished server process [1]"
+  ],
+  "gateway-deltallm-5cfc5fc87f-llsl7.log": [
+    "2026-09-21T14:44:43.029374813Z INFO:src.process_lifecycle:process draining",
+    "2026-09-21T14:44:48.125748441Z INFO:src.process_lifecycle:process shutdown phase completed phase=withdrawal seconds=5.098",
+    "2026-09-21T14:44:48.225958691Z INFO:src.process_lifecycle:process shutdown phase completed phase=responses seconds=0.100",
+    "2026-09-21T14:44:48.226004149Z INFO:src.process_lifecycle:process shutdown phase completed phase=cancellation seconds=0.000",
+    "2026-09-21T14:44:48.232059566Z INFO:src.process_lifecycle:process shutdown phase completed phase=workers seconds=0.006",
+    "2026-09-21T14:44:48.244755149Z INFO:src.process_lifecycle:process shutdown phase completed phase=close seconds=0.012",
+    "2026-09-21T14:44:48.245044899Z INFO:     Application shutdown complete.",
+    "2026-09-21T14:44:48.245326316Z INFO:     Finished server process [1]"
+  ],
+  "gateway-deltallm-batch-worker-79c88f6f5-452lw.log": [
+    "2026-09-21T14:45:22.032135748Z INFO:src.process_lifecycle:process draining",
+    "2026-09-21T14:45:27.034221251Z INFO:src.process_lifecycle:process shutdown phase completed phase=withdrawal seconds=5.003",
+    "2026-09-21T14:46:12.032434356Z INFO:src.process_lifecycle:process shutdown phase completed phase=responses seconds=44.998",
+    "2026-09-21T14:46:12.040497606Z INFO:src.process_lifecycle:process shutdown phase completed phase=cancellation seconds=0.004",
+    "2026-09-21T14:46:12.042533064Z INFO:src.process_lifecycle:process shutdown phase completed phase=workers seconds=0.006",
+    "2026-09-21T14:46:12.054223481Z INFO:src.process_lifecycle:process shutdown phase completed phase=close seconds=0.011",
+    "2026-09-21T14:46:12.054349022Z INFO:     Application shutdown complete.",
+    "2026-09-21T14:46:12.054357731Z INFO:     Finished server process [1]"
+  ],
+  "gateway-deltallm-c8b4b49b4-6b55f.log": [
+    "2026-09-21T14:42:53.047171219Z INFO:src.process_lifecycle:process draining",
+    "2026-09-21T14:42:58.108575263Z INFO:src.process_lifecycle:process shutdown phase completed phase=withdrawal seconds=5.062",
+    "2026-09-21T14:42:58.209673388Z INFO:src.process_lifecycle:process shutdown phase completed phase=responses seconds=0.101",
+    "2026-09-21T14:42:58.209694263Z INFO:src.process_lifecycle:process shutdown phase completed phase=cancellation seconds=0.000",
+    "2026-09-21T14:42:58.214872180Z INFO:src.process_lifecycle:process shutdown phase completed phase=workers seconds=0.005",
+    "2026-09-21T14:42:58.225888846Z INFO:src.process_lifecycle:process shutdown phase completed phase=close seconds=0.010",
+    "2026-09-21T14:42:58.231491721Z INFO:     Application shutdown complete.",
+    "2026-09-21T14:42:58.231524346Z INFO:     Finished server process [1]"
+  ]
+}

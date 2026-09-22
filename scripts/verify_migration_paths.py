@@ -99,6 +99,32 @@ def _migrate(prisma: str, *, schema: Path, database_url: str) -> None:
     )
 
 
+def _verify_image_history(database_url: str) -> None:
+    _run(
+        [
+            sys.executable,
+            "-c",
+            """
+import asyncio
+from datetime import timedelta
+from prisma import Prisma
+from src.db.migration_status import verify_migration_status
+async def verify():
+    db = Prisma()
+    try:
+        await db.connect(timeout=timedelta(seconds=10))
+        async with db.tx() as tx:
+            await tx.execute_raw('SET TRANSACTION READ ONLY')
+            await verify_migration_status(tx, timeout_seconds=2)
+    finally:
+        await db.disconnect(timeout=timedelta(seconds=5))
+asyncio.run(verify())
+""",
+        ],
+        env=_database_env(database_url),
+    )
+
+
 def _extract_prisma_at_ref(base_ref: str, destination: Path) -> Path:
     archive = subprocess.run(
         ["git", "archive", "--format=tar", base_ref, "prisma"],
@@ -825,6 +851,8 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _verify_pr5_budgets(prisma, shared_url)
         _pr6_fixture(prisma, upgrade_url, CURRENT_SCHEMA, "verify")
         _pr6_fixture(prisma, shared_url, CURRENT_SCHEMA, "verify")
+        for database_url in (fresh_url, upgrade_url, shared_url):
+            _verify_image_history(database_url)
     finally:
         primary_error = sys.exc_info()[1]
         cleanup_errors: list[subprocess.CalledProcessError] = []

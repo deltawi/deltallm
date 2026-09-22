@@ -52,3 +52,7 @@ Stop and use a reviewed recovery plan when:
 
 If database restore is required, follow [Backup and restore](backup-and-restore.md); do not point
 application replicas at a partially restored database.
+
+See [Process lifecycle](process-lifecycle.md) for migration-before-rollout ordering,
+the managed 80-second shutdown budget, interrupted-stream behavior and recovery of
+committed records after a pod exits. Keep the managed image command in production.

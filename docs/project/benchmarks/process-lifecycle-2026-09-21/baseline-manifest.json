@@ -1,0 +1,6 @@
+{
+  "server_commit": "4d856670e54e689ea4fc1ceead787730e5edcf5c",
+  "server_source_sha256": "86e048be71e62b07de704de9b21a5a989dc8eeefd55cf920985fa497ba1e2efe",
+  "image_digest": "sha256:00682f99aa45f742b3c3e3100a5b0617c3f4b0bceb2d3e4452a2914f904ea673",
+  "packaging": "candidate Dockerfile; baseline application and frozen dependency lock"
+}

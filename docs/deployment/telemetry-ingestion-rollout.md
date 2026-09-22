@@ -99,3 +99,7 @@ DELTALLM_LOAD_API_KEY=... uv run python scripts/measure_gateway_load.py \
 ```
 
 Do not treat unit-test timings or runs against different providers/configuration as a before/after result. Compare success count, generator drops, arrival-window throughput, drain time, scheduling lag, latency p50/p95/p99/max, and database/Redis dependency counts from the matching server metrics interval.
+
+See [Process lifecycle](process-lifecycle.md) for migration-before-rollout ordering,
+the managed 80-second shutdown budget, interrupted-stream behavior and recovery of
+committed records after a pod exits. Keep the managed image command in production.

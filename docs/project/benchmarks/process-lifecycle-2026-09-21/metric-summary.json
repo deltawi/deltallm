@@ -1,0 +1,196 @@
+{
+  "before": {
+    "counter_deltas": [
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "control",
+          "outcome": "completed"
+        },
+        "delta": 208.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "foreground",
+          "outcome": "completed"
+        },
+        "delta": 213.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "telemetry_settlement",
+          "outcome": "completed"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "telemetry",
+          "outcome": "completed"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "telemetry_worker",
+          "outcome": "completed"
+        },
+        "delta": 1809.0
+      },
+      {
+        "name": "deltallm_telemetry_acceptance_operations_total",
+        "labels": {
+          "outcome": "accepted",
+          "queue": "audit",
+          "transaction_scope": "owned"
+        },
+        "delta": 200.0
+      }
+    ],
+    "observed_gauges": {
+      "deltallm_audit_queue_depth": {
+        "first": 0.0,
+        "last": 0.0,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "deltallm_event_loop_last_lag_seconds": {
+        "first": 0.0,
+        "last": 0.0009999999892897904,
+        "min": 0.0,
+        "max": 0.001999999978579581
+      },
+      "deltallm_http_requests_in_flight": {
+        "first": 0.0,
+        "last": 1.0,
+        "min": 0.0,
+        "max": 1.0
+      }
+    }
+  },
+  "after": {
+    "counter_deltas": [
+      {
+        "name": "deltallm_readiness_probes_total",
+        "labels": {
+          "component": "redis",
+          "outcome": "ready"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_readiness_probes_total",
+        "labels": {
+          "component": "database",
+          "outcome": "ready"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_readiness_probes_total",
+        "labels": {
+          "component": "foreground_database",
+          "outcome": "ready"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_readiness_probes_total",
+        "labels": {
+          "component": "telemetry_database",
+          "outcome": "ready"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_readiness_probes_total",
+        "labels": {
+          "component": "telemetry_worker_database",
+          "outcome": "ready"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_readiness_probes_total",
+        "labels": {
+          "component": "telemetry_settlement_database",
+          "outcome": "ready"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "control",
+          "outcome": "completed"
+        },
+        "delta": 208.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "foreground",
+          "outcome": "completed"
+        },
+        "delta": 213.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "telemetry_settlement",
+          "outcome": "completed"
+        },
+        "delta": 200.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "telemetry",
+          "outcome": "completed"
+        },
+        "delta": 0.0
+      },
+      {
+        "name": "deltallm_database_allocation_events_total",
+        "labels": {
+          "allocation": "telemetry_worker",
+          "outcome": "completed"
+        },
+        "delta": 1817.0
+      },
+      {
+        "name": "deltallm_telemetry_acceptance_operations_total",
+        "labels": {
+          "outcome": "accepted",
+          "queue": "audit",
+          "transaction_scope": "owned"
+        },
+        "delta": 200.0
+      }
+    ],
+    "observed_gauges": {
+      "deltallm_audit_queue_depth": {
+        "first": 1.0,
+        "last": 0.0,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "deltallm_event_loop_last_lag_seconds": {
+        "first": 0.0,
+        "last": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "deltallm_http_requests_in_flight": {
+        "first": 0.0,
+        "last": 1.0,
+        "min": 0.0,
+        "max": 1.0
+      }
+    }
+  }
+}

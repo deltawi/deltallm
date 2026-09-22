@@ -53,17 +53,12 @@ stack on a trusted machine and do not bind it directly to an untrusted network.
 
 ## Using the image outside Compose
 
-The current image command runs `src.prisma_bootstrap` and then starts Uvicorn. That default is
-convenient for one-container evaluation. It is not the production multi-replica migration
-contract.
-
-For a production orchestrator:
-
-1. Pin the image by immutable version or digest.
-2. Run the release's migration command once in a dedicated job.
-3. Wait for migration verification to succeed.
-4. Start API and worker replicas with an explicit command that launches the application without
-   the image's per-container bootstrap wrapper.
+The image command is `python -m src.server`. It uses `migration_mode: startup`
+for single-container evaluation, then runs the managed one-process server.
+Production runs the exact-image migration stage once and sets
+`migration_mode: external`; retain the managed command for early signal drain.
+Use the [process lifecycle contract](process-lifecycle.md) and provide at least
+90 seconds of container stop grace for the initial profile.
 
 See [Database migrations](database-migrations.md), the
 [production checklist](production-checklist.md), and [Kubernetes](kubernetes.md) for the

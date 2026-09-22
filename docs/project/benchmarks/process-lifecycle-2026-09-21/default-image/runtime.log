@@ -1,0 +1,19 @@
+prisma                : 5.17.0
+@prisma/client        : Not found
+Computed binaryTarget : linux-arm64-openssl-3.0.x
+Operating System      : linux
+Architecture          : arm64
+Node.js               : v22.16.0
+Query Engine (Binary) : query-engine 393aa359c9ad4a4bb28630fb5613f9c281cde053 (at ../opt/prisma/binaries/node_modules/@prisma/engines/query-engine-linux-arm64-openssl-3.0.x)
+Schema Engine         : schema-engine-cli 393aa359c9ad4a4bb28630fb5613f9c281cde053 (at ../opt/prisma/binaries/node_modules/@prisma/engines/schema-engine-linux-arm64-openssl-3.0.x)
+Schema Wasm           : @prisma/prisma-schema-wasm 5.17.0-31.393aa359c9ad4a4bb28630fb5613f9c281cde053
+Default Engines Hash  : 393aa359c9ad4a4bb28630fb5613f9c281cde053
+Studio                : 0.502.0
+usage: server.py [-h] [--host HOST] [--port PORT]
+
+Managed, one-process container entrypoint: ``python -m src.server``.
+
+options:
+  -h, --help   show this help message and exit
+  --host HOST
+  --port PORT

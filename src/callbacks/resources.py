@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline, retain_unfinished
+
 import asyncio
 from contextvars import Context
 from threading import Lock
@@ -111,7 +113,7 @@ class CallbackResources:
     async def shutdown(self, *, timeout: float) -> None:
         for handler in tuple(self._handlers.values()):
             self.retire(handler)
-        deadline = asyncio.get_running_loop().time() + timeout
+        deadline = cleanup_deadline(timeout)
         while self._tasks:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
@@ -121,3 +123,4 @@ class CallbackResources:
         for task in tuple(self._tasks):
             task.cancel()
         await asyncio.sleep(0)
+        retain_unfinished(self._tasks)

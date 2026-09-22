@@ -1,0 +1,137 @@
+{
+  "0": [
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "control",
+        "outcome": "completed"
+      },
+      "delta": 103.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "foreground",
+        "outcome": "completed"
+      },
+      "delta": 110.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "telemetry_settlement",
+        "outcome": "completed"
+      },
+      "delta": 97.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "telemetry",
+        "outcome": "completed"
+      },
+      "delta": 2.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "telemetry_worker",
+        "outcome": "completed"
+      },
+      "delta": 699.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "telemetry",
+        "outcome": "full"
+      },
+      "delta": 9.0
+    },
+    {
+      "name": "deltallm_telemetry_acceptance_operations_total",
+      "labels": {
+        "outcome": "accepted",
+        "queue": "audit",
+        "transaction_scope": "owned"
+      },
+      "delta": 97.0
+    },
+    {
+      "name": "deltallm_telemetry_acceptance_operations_total",
+      "labels": {
+        "outcome": "accepted",
+        "queue": "spend",
+        "transaction_scope": "owned"
+      },
+      "delta": 4.0
+    },
+    {
+      "name": "deltallm_telemetry_acceptance_operations_total",
+      "labels": {
+        "outcome": "error",
+        "queue": "spend",
+        "transaction_scope": "owned"
+      },
+      "delta": 3.0
+    },
+    {
+      "name": "deltallm_telemetry_acceptance_operations_total",
+      "labels": {
+        "outcome": "error",
+        "queue": "audit",
+        "transaction_scope": "owned"
+      },
+      "delta": 2.0
+    },
+    {
+      "name": "deltallm_spend_ingestion_failures_total",
+      "labels": {
+        "stage": "operation_admission"
+      },
+      "delta": 7.0
+    }
+  ],
+  "1": [
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "control",
+        "outcome": "completed"
+      },
+      "delta": 2.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "foreground",
+        "outcome": "completed"
+      },
+      "delta": 9.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "telemetry_settlement",
+        "outcome": "completed"
+      },
+      "delta": 2.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "telemetry",
+        "outcome": "completed"
+      },
+      "delta": 2.0
+    },
+    {
+      "name": "deltallm_database_allocation_events_total",
+      "labels": {
+        "allocation": "telemetry_worker",
+        "outcome": "completed"
+      },
+      "delta": 387.0
+    }
+  ]
+}

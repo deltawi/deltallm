@@ -82,7 +82,8 @@ while the queue still retains those payloads. Executor shutdown physically remov
 queued calls after closing admission. Python cannot
 kill an already-running thread; a permanently blocked extension can retain a bounded
 slot until process termination. Monitor this condition and fix or disable the
-extension before restarting. Process termination/drain coordination remains PR8 scope.
+extension before restarting. The [managed process lifecycle](process-lifecycle.md)
+bounds termination and reports unfinished cleanup separately from a graceful exit.
 
 ## CPU guardrails
 
@@ -129,9 +130,10 @@ extensions that hold the GIL require process isolation for strict latency bounds
 The fallback email scan also avoids retrying every suffix of a long local part.
 
 Multiply by every process and overlapping API replica that constructs these owners.
-The existing example peak of 25 API processes therefore allocates up to 150 threads
-and 1200 MiB of payload capacity across the deployment. Include worker roles only
-if they construct these runtimes. This change adds no PostgreSQL, Redis or provider
+The [managed rollout example](dependency-capacity.md) reserves 37 API processes,
+allocating up to 222 threads and 1776 MiB of payload capacity. Its seven overlapping
+worker processes also construct these runtimes, bringing the deployment total to
+264 threads and 2112 MiB. This change adds no PostgreSQL, Redis or provider
 HTTP pool and no data-plane SQL/Redis/network call for deadline propagation.
 
 - `deltallm_request_deadline_expirations_total{response}` distinguishes expiry
@@ -155,3 +157,7 @@ are bounded allocations; PR10 still supplies production throughput qualification
 raw HTTP and component samples, callback retention, event-loop lag, tail latency,
 dependency counts and post-shutdown durable drain. They are local evidence, not a
 Kubernetes capacity certificate.
+
+See [Process lifecycle](process-lifecycle.md) for migration-before-rollout ordering,
+the managed 80-second shutdown budget, interrupted-stream behavior and recovery of
+committed records after a pod exits. Keep the managed image command in production.

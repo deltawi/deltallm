@@ -42,6 +42,7 @@ class BatchCreateSessionCleanupWorker:
         self.staging = staging
         self.config = config or BatchCreateSessionCleanupConfig()
         self._stop_event = asyncio.Event()
+        self.started = asyncio.Event()
 
     async def _refresh_create_session_metrics(self) -> None:
         try:
@@ -91,7 +92,9 @@ class BatchCreateSessionCleanupWorker:
                 continue
 
             deleted_artifacts += 1
-            increment_batch_create_session_action(action=f"cleanup_delete_{deleted_session.status}", status="success")
+            increment_batch_create_session_action(
+                action=f"cleanup_delete_{deleted_session.status}", status="success"
+            )
 
         orphan_cutoff = now - timedelta(seconds=self.config.orphan_grace_seconds)
         orphan_candidates = await self.staging.list_orphan_candidates(
@@ -107,7 +110,9 @@ class BatchCreateSessionCleanupWorker:
             try:
                 await self.staging.delete(artifact)
             except Exception as exc:
-                increment_batch_create_session_action(action="cleanup_orphan_delete", status="error")
+                increment_batch_create_session_action(
+                    action="cleanup_orphan_delete", status="error"
+                )
                 logger.warning(
                     "batch create-session cleanup orphan artifact delete failed backend=%s storage_key=%s error=%s",
                     artifact.storage_backend,
@@ -129,6 +134,7 @@ class BatchCreateSessionCleanupWorker:
         return deleted_sessions, deleted_artifacts
 
     async def run(self) -> None:
+        self.started.set()
         while not self._stop_event.is_set():
             try:
                 await self.process_once()

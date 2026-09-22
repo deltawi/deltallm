@@ -161,6 +161,7 @@ general_settings:
 {{- end -}}
 {{- end -}}
 {{- define "deltallm.validateRenderedConfig" -}}
+{{- include "deltallm.validateLifecycle" . -}}
 {{- $apiConfig := include "deltallm.apiConfigYaml" . | fromYaml -}}
 {{- $apiGeneral := default (dict) (get $apiConfig "general_settings") -}}
 {{- $telemetryDrainSeconds := float64 (default 20 (get $apiGeneral "telemetry_shutdown_drain_timeout_seconds")) -}}

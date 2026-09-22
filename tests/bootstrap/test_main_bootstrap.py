@@ -26,7 +26,7 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     async def _init_infrastructure(app):  # noqa: ANN001, ANN202
         app.state.app_config = BootstrapConfig()
         app.state.settings = Settings()
-        app.state.dynamic_config_manager = "dynamic-config"
+        app.state.dynamic_config_manager = SimpleNamespace(activate_updates=lambda: None)
         app.state.redis = "redis"
         app.state.salt_key = "salt"
         app.state.batch_repository = "batch-repo"
@@ -151,7 +151,7 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
     async def _init_infrastructure(app):  # noqa: ANN001, ANN202
         app.state.app_config = BootstrapConfig()
         app.state.settings = Settings()
-        app.state.dynamic_config_manager = "dynamic-config"
+        app.state.dynamic_config_manager = SimpleNamespace(activate_updates=lambda: None)
         app.state.redis = "redis"
         app.state.salt_key = "salt"
         app.state.batch_repository = "batch-repo"

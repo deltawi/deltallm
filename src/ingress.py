@@ -32,7 +32,16 @@ INFERENCE_PATHS = frozenset(
         "/rerank",
     )
 )
-HEALTH_PATHS = frozenset({"/health", "/health/liveliness", "/health/readiness", "/metrics"})
+HEALTH_PATHS = frozenset(
+    {
+        "/health",
+        "/health/liveliness",
+        "/health/readiness",
+        "/metrics",
+        "/health/deployments",
+        "/health/fallback-events",
+    }
+)
 
 
 def ingress_class(path: str, method: str) -> IngressClass:

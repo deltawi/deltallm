@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
+from src.shutdown import cleanup_deadline
+from src.telemetry.lifecycle import stop_tasks_before_deadline
+
 import inspect
 import logging
 from asyncio import Task, create_task
@@ -10,7 +11,7 @@ from typing import Any
 
 from src.bootstrap.status import BootstrapStatus
 from src.cache import configure_cache_runtime
-from src.config_runtime import ModelHotReloadManager
+from src.config_runtime.models import ModelHotReloadManager
 from src.router.runtime_generation import (
     RoutingRuntimeGeneration,
     RoutingRuntimeGenerationStore,
@@ -274,6 +275,6 @@ async def init_routing_runtime(
 async def shutdown_routing_runtime(runtime: RoutingRuntime) -> None:
     runtime.health_checker.stop()
     if runtime.health_task is not None:
-        runtime.health_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runtime.health_task
+        await stop_tasks_before_deadline(
+            [runtime.health_task], deadline=cleanup_deadline(5), cancel_first=True
+        )

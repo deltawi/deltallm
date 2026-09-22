@@ -144,6 +144,7 @@ nav:
       - Governance Rollout: deployment/governance.md
       - Kubernetes: deployment/kubernetes.md
       - Dependency Capacity: deployment/dependency-capacity.md
+      - Process Lifecycle: deployment/process-lifecycle.md
       - Organization Tiers Rollout: deployment/organization-tiers-rollout.md
       - Batch Scheduler Rollout: deployment/batch-scheduler-rollout.md
       - Batch Webhook Rollout: deployment/batch-webhook-rollout.md
@@ -172,6 +173,7 @@ nav:
       - Spend Recovery Design: design/pr6-spend-recovery.md
       - Request Deadline Design: design/pr7-deadlines-bounded-work.md
       - Request Work Measurements: project/benchmarks/request-work-2026-09-15/README.md
+      - Process Lifecycle Measurements: project/benchmarks/process-lifecycle-2026-09-21/README.md
       - Spend Recovery Measurements: project/benchmarks/spend-recovery-2026-09-15/README.md
       - Budget and Prompt Measurements: project/benchmarks/budget-prompts-2026-09-15/README.md
       - Documentation Governance: project/documentation-governance.md

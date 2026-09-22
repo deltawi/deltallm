@@ -236,14 +236,33 @@ async def test_pending_answer_can_settle_from_a_late_direct_writer_receipt(opera
         str(operation.attribution.operation_id),
     )
     recovery = BillingOperationRecovery(repository, max_pending_events=100000, max_attempts=10)
-    await recovery.recover()
+
+    async def recover_until(answer_state: str) -> None:
+        # Production retries bounded recovery slices on subsequent worker polls.
+        # A busy CI runner can exhaust one 250 ms slice without losing the receipt.
+        async with asyncio.timeout(5):
+            while True:
+                try:
+                    await recovery.recover()
+                except BillingOperationUnavailable:
+                    pass
+                rows = await db.query_raw(
+                    "SELECT selector_state,answer_state FROM deltallm_billing_operations "
+                    "WHERE operation_id=$1",
+                    str(operation.attribution.operation_id),
+                )
+                if rows == [{"selector_state": "pending", "answer_state": answer_state}]:
+                    return
+                await asyncio.sleep(0.05)
+
+    await recover_until("pending")
     payload = charge.spend_payload()
     payload["call_type"] = "chat_completion"
     async with db.tx() as tx:
         await SpendTrackingService(tx).log_batch_once(
             [(str(operation.attribution.operation_id), "spend", payload)]
         )
-    await recovery.recover()
+    await recover_until("settled")
     assert await hold(db, operation) == operation.selector.allowance
     rows = await db.query_raw(
         "SELECT selector_state,answer_state FROM deltallm_billing_operations WHERE operation_id=$1",

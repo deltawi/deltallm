@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack
+from src.shutdown import BoundedExitStack, run_cleanup
 from dataclasses import dataclass
 import logging
 import os
@@ -57,8 +57,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RuntimeServicesRuntime:
-    callback_manager: CallbackManager
-    governance_invalidation_service: GovernanceInvalidationService
+    callback_manager: CallbackManager | None = None
+    governance_invalidation_service: GovernanceInvalidationService | None = None
     guardrail_executor: BlockingWorkExecutor | None = None
     tier_policy_service: Any | None = None
     spend_ingestion_service: SpendIngestionService | None = None
@@ -92,6 +92,17 @@ def _explicit_general_setting(general_settings: Any, field_name: str) -> Any:
 
 
 async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
+    runtime = RuntimeServicesRuntime()
+    try:
+        return await _init_runtime_services(app, cfg, runtime)
+    except BaseException:
+        await shutdown_runtime_services(runtime)
+        raise
+
+
+async def _init_runtime_services(
+    app: Any, cfg: Any, runtime: RuntimeServicesRuntime
+) -> RuntimeServicesRuntime:
     app.state.callable_target_grant_service = CallableTargetGrantService(
         repository=getattr(app.state, "callable_target_binding_repository", None),
         policy_repository=getattr(app.state, "callable_target_scope_policy_repository", None),
@@ -165,6 +176,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             5.0,
         ),
     )
+    runtime.tier_policy_service = app.state.tier_policy_service
     resolved_tier_policy_mode = str(
         getattr(app.state.tier_policy_service, "mode", tier_policy_mode) or "disabled"
     )
@@ -237,6 +249,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             2.0,
         ),
     )
+    runtime.prompt_registry_service = prompt_registry_service
     app.state.prompt_registry_service = prompt_registry_service
     app.state.mcp_registry_service = MCPRegistryService(
         repository=app.state.mcp_repository,
@@ -289,6 +302,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             None,
         ),
     )
+    runtime.governance_invalidation_service = app.state.governance_invalidation_service
     await app.state.governance_invalidation_service.start()
 
     request_work = resolve_request_work_settings(general_settings, app.state.settings)
@@ -300,6 +314,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         timeout_seconds=request_work.guardrail_timeout_seconds,
         shutdown_seconds=request_work.guardrail_shutdown_seconds,
     )
+    runtime.guardrail_executor = guardrail_executor
     guardrail_registry = GuardrailRegistry(executor=guardrail_executor)
     if cfg.deltallm_settings.guardrails:
         guardrail_registry.load_from_config(cfg.deltallm_settings.guardrails)
@@ -310,6 +325,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     )
 
     callback_manager = CallbackManager(request_work)
+    runtime.callback_manager = callback_manager
     callback_manager.load_from_settings(
         success_callbacks=cfg.deltallm_settings.success_callback,
         failure_callbacks=cfg.deltallm_settings.failure_callback,
@@ -503,6 +519,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         ),
     )
     configure_selector_execution(app.state, spend_ingestion_service)
+    runtime.spend_ingestion_service = spend_ingestion_service
     await spend_ingestion_service.start()
     app.state.spend_tracking_service = spend_ingestion_service
     budget_notification_repository = BudgetNotificationRepository(app.state.prisma_manager.client)
@@ -513,6 +530,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
             budget_notification_repository,
             app.state.alert_service,
         )
+        runtime.budget_notification_worker = budget_notification_worker
         app.state.budget_notification_worker = budget_notification_worker
     budget_notification_producer = BudgetNotificationProducer(
         budget_notification_repository,
@@ -549,42 +567,34 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         if callable(start_tier_policy_service):
             await start_tier_policy_service()
 
-    runtime = RuntimeServicesRuntime(
-        callback_manager=callback_manager,
-        guardrail_executor=guardrail_executor,
-        governance_invalidation_service=app.state.governance_invalidation_service,
-        tier_policy_service=app.state.tier_policy_service,
-        spend_ingestion_service=spend_ingestion_service,
-        prompt_registry_service=prompt_registry_service,
-        budget_notification_worker=budget_notification_worker,
-        statuses=(
-            BootstrapStatus("callable_target_grants", "ready"),
-            BootstrapStatus("tier_policy", tier_policy_status),
-            BootstrapStatus("prompt_registry", "ready"),
-            BootstrapStatus("mcp_runtime", "ready"),
-            BootstrapStatus("guardrails", "ready"),
-            BootstrapStatus("callbacks", "ready"),
-            BootstrapStatus("billing", "ready"),
-        ),
+    runtime.statuses = (
+        BootstrapStatus("callable_target_grants", "ready"),
+        BootstrapStatus("tier_policy", tier_policy_status),
+        BootstrapStatus("prompt_registry", "ready"),
+        BootstrapStatus("mcp_runtime", "ready"),
+        BootstrapStatus("guardrails", "ready"),
+        BootstrapStatus("callbacks", "ready"),
+        BootstrapStatus("billing", "ready"),
     )
-
-    try:
-        if budget_notification_worker is not None:
-            await budget_notification_worker.start()
-    except BaseException:
-        # init has not returned to the application's AsyncExitStack yet.
-        await shutdown_runtime_services(runtime)
-        raise
+    if budget_notification_worker is not None:
+        await budget_notification_worker.start()
+        lifecycle = getattr(app.state, "process_lifecycle", None)
+        if lifecycle is not None and budget_notification_worker.task is not None:
+            lifecycle.register_producer(
+                budget_notification_worker.stop, budget_notification_worker.task
+            )
     return runtime
 
 
 async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
-    async with AsyncExitStack() as cleanup:
+    async with BoundedExitStack() as cleanup:
         cleanup.push_async_callback(close_shared_client)
-        cleanup.push_async_callback(runtime.callback_manager.shutdown)
+        if runtime.callback_manager is not None:
+            cleanup.push_async_callback(runtime.callback_manager.shutdown)
         if runtime.guardrail_executor is not None:
             cleanup.push_async_callback(runtime.guardrail_executor.shutdown)
-        cleanup.push_async_callback(runtime.governance_invalidation_service.close)
+        if runtime.governance_invalidation_service is not None:
+            cleanup.push_async_callback(runtime.governance_invalidation_service.close)
         tier_policy_service = runtime.tier_policy_service
         if tier_policy_service is not None and callable(
             getattr(tier_policy_service, "close", None)
@@ -596,7 +606,7 @@ async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
         # Independent bounded drains overlap, before dependencies close. Adding
         # optional alerts must not add eleven seconds to the spend drain budget.
         drains = [
-            service.shutdown()
+            run_cleanup(service.shutdown)
             for service in (
                 runtime.budget_notification_worker,
                 runtime.spend_ingestion_service,

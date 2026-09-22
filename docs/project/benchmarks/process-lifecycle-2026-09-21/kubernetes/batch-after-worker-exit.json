@@ -1,0 +1,142 @@
+[
+  {
+    "item_id": "12555140-25bd-443c-96d9-2c5f97dc8ffc",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "1f98bc72-93af-477e-a561-cc139eb146f8",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "3574b283-6a1f-431c-86d7-b73faddf6ffe",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "39e9c54e-839e-4155-bd18-401c141e4db1",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "3d95268c-31f9-4138-9f18-bba5a04b8a78",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "4c4c90ca-0f5e-4a44-8371-d6ab145b4320",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "4dd4ccc7-a0f8-4bbd-9e1f-866476ce4ef9",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "5845a667-5087-4768-8f34-a315b2919b44",
+    "status": "in_progress",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 286.267872
+  },
+  {
+    "item_id": "6838bc55-e124-4f59-aa89-8a73ada1056e",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "7e046bca-48e0-4d77-8eea-f81b0e107700",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "80975288-f30a-4c04-bc05-eb2bf6d12edf",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "8af9dece-1936-4bbc-926e-1b596d0e42a3",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "96c6fae9-eafa-4260-8353-240f488615fb",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "a3400d0c-db02-4ebb-ade9-e48d58af9528",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "b033b003-03fe-41e4-aa80-7cb856f24c48",
+    "status": "in_progress",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 286.267872
+  },
+  {
+    "item_id": "c45bef34-6ea8-4dee-ae10-b55d288bb563",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "c92435ae-1316-40e6-b0d4-f295b5e2a64a",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "f736d5e2-fd2e-49be-97e6-3b9f0fe67601",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "fcdee724-71d6-4370-a441-a2f4b676a217",
+    "status": "pending",
+    "attempts": 0,
+    "claim_epoch": 0,
+    "lease_remaining_seconds": 0.0
+  },
+  {
+    "item_id": "fd16e8d2-53f3-4ac2-822e-b8c8f29a06d4",
+    "status": "completed",
+    "attempts": 1,
+    "claim_epoch": 1,
+    "lease_remaining_seconds": 0.0
+  }
+]

@@ -105,7 +105,8 @@
         "repository": { "type": "string", "minLength": 1 },
         "pullPolicy": { "type": "string" },
         "tag": { "type": "string" },
-        "pullSecrets": { "type": "array" }
+        "pullSecrets": { "type": "array" },
+        "digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$"}
       }
     },
     "serviceAccount": {
@@ -143,6 +144,7 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
         "enabled": { "type": "boolean" },
         "minReplicas": { "type": "integer", "minimum": 1 },
         "maxReplicas": { "type": "integer", "minimum": 1 },
@@ -267,6 +269,7 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
+            "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
             "enabled": { "type": "boolean" },
             "minReplicas": { "type": "integer", "minimum": 1 },
             "maxReplicas": { "type": "integer", "minimum": 1 },
@@ -339,7 +342,17 @@
                 },
                 "db_background_transaction_timeout_seconds": {
                   "$ref": "#/properties/config/properties/general_settings/properties/db_background_transaction_timeout_seconds"
-                }
+                },
+                "readiness_probe_timeout_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/readiness_probe_timeout_seconds"},
+                "readiness_cache_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/readiness_cache_seconds"},
+                "lifecycle_withdrawal_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_withdrawal_seconds"},
+                "lifecycle_request_drain_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_request_drain_seconds"},
+                "lifecycle_cancellation_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_cancellation_seconds"},
+                "lifecycle_worker_drain_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_worker_drain_seconds"},
+                "lifecycle_close_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_close_seconds"},
+                "lifecycle_shutdown_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_shutdown_seconds"},
+                "migration_mode": {"$ref": "#/properties/config/properties/general_settings/properties/migration_mode"},
+                "migration_verify_timeout_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/migration_verify_timeout_seconds"}
               }
             }
           }
@@ -686,7 +699,17 @@
             "embeddings_batch_min_large_job_claim_interval_seconds": { "type": "integer", "minimum": 0 },
             "embeddings_batch_small_job_fast_lane_enabled": { "type": "boolean" },
             "embeddings_batch_small_job_max_work_units": { "type": "integer", "minimum": 1 },
-            "embeddings_batch_finalization_first": { "type": "boolean" }
+            "embeddings_batch_finalization_first": { "type": "boolean" },
+            "readiness_probe_timeout_seconds": {"type": "number", "maximum": 2, "exclusiveMinimum": 0},
+            "readiness_cache_seconds": {"type": "number", "maximum": 5, "exclusiveMinimum": 0},
+            "lifecycle_withdrawal_seconds": {"type": "number", "minimum": 0, "maximum": 30},
+            "lifecycle_request_drain_seconds": {"type": "number", "maximum": 600, "exclusiveMinimum": 0},
+            "lifecycle_cancellation_seconds": {"type": "number", "maximum": 30, "exclusiveMinimum": 0},
+            "lifecycle_worker_drain_seconds": {"type": "number", "maximum": 60, "exclusiveMinimum": 0},
+            "lifecycle_close_seconds": {"type": "number", "maximum": 30, "exclusiveMinimum": 0},
+            "lifecycle_shutdown_seconds": {"type": "number", "maximum": 750, "exclusiveMinimum": 0},
+            "migration_mode": {"type": "string", "enum": ["startup", "external"]},
+            "migration_verify_timeout_seconds": {"type": "number", "maximum": 60, "exclusiveMinimum": 0}
           }
         }
       }
@@ -755,8 +778,11 @@
         "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
         "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
         "command": { "type": "array" },
-        "args": { "type": "array" }
+        "args": { "type": "array" },
+        "external": {"type": "boolean"},
+        "timeoutSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 600}
       }
-    }
+    },
+    "managedLifecycle": {"type": "object", "additionalProperties": false, "required": ["enabled", "production", "exitMarginSeconds"], "properties": {"enabled": {"type": "boolean"}, "production": {"type": "boolean"}, "exitMarginSeconds": {"type": "integer", "minimum": 1, "maximum": 60}}}
   }
 }

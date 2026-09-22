@@ -25,7 +25,7 @@ def test_production_counts_all_pools_surge_retiring_pods_and_enabled_roles(worke
         f"batchWorker.enabled={str(workers).lower()}",
     )
     result = capacity(docs)
-    processes = 12 + 1 + 12 + ((2 + 1 + 2) if workers else 0)
+    processes = 12 + 1 + 24 + ((2 + 1 + 4) if workers else 0)
     assert int(result["peak-processes"]) == processes
     assert (
         int(result["postgresql-connections-including-reserve"])
@@ -47,6 +47,8 @@ def test_production_counts_all_pools_surge_retiring_pods_and_enabled_roles(worke
 
 def test_percentage_surge_rounds_up_and_worker_overrides_are_counted():
     docs = _render(
+        "--set",
+        "managedLifecycle.enabled=false",
         "--set",
         "replicaCount=3",
         "--set",

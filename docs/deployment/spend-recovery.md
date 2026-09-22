@@ -78,8 +78,13 @@ explicit default cannot silently change environment precedence during reload.
 The protocol adds a short pre-provider transaction per attempted deployment. Its
 whole-operation deadline is 250 ms, further bounded by the existing routing attempt
 deadline; statement, lock and acquisition limits remain enforced by the database
-allocation. Final receipt acceptance also has a 250 ms bound and skips the global
-admission/capacity lock. The additional call/latency cost must be included in local
+allocation. Final receipt acceptance also has a 250 ms caller bound and skips the
+global admission/capacity lock. PR8 makes receipt and unknown-state updates single
+atomic SQL statements, removing interactive transaction start, timeout setup and
+commit round trips. Native statement/lock limits still come from the owned
+settlement allocation. If the caller times out or disconnects, that owner retains
+the slot until native work ends; a late commit remains an ambiguous acknowledgement
+with a recoverable receipt. The additional call/latency cost must be included in local
 comparisons and production qualification; this change does not certify a pod RPS.
 
 The [local comparison](../project/benchmarks/spend-recovery-2026-09-15/README.md)
@@ -173,3 +178,7 @@ check `deltallm_spend_operation_observed_timestamp_seconds` for freshness. Aggre
 these shared counts with `max` across replicas, never `sum`. Failed observations
 retain the last value and emit a recovery failure; they do not report an unknown
 count of zero. Recovery and observation share a bounded 250 ms worker slice.
+
+See [Process lifecycle](process-lifecycle.md) for migration-before-rollout ordering,
+the managed 80-second shutdown budget, interrupted-stream behavior and recovery of
+committed records after a pod exits. Keep the managed image command in production.

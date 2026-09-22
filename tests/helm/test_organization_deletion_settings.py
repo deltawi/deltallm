@@ -26,6 +26,8 @@ def _render(*args: str) -> list[dict[str, Any]]:
         [
             HELM,
             "template",
+            "--set",
+            "image.tag=pr8-test-release",
             "deltallm",
             str(HELM_CHART_DIR),
             "--set",

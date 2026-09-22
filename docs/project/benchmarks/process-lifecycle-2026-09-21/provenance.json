@@ -1,0 +1,7 @@
+{
+  "baseline_commit": "4d856670e54e689ea4fc1ceead787730e5edcf5c",
+  "baseline_lock_sha256": "e504943a9c04e95e79bee7ea46caf6076eab6a554d54c6a439b8daf8c6ecab7e",
+  "candidate_runtime_commit": "be4016de780c1b53ae72f9737dda51a9b8967073",
+  "candidate_lock_sha256": "431f2e9d73f58ce3455a54a1f042835e61ec3a4feb546508b6eba3f2576bb591",
+  "purpose": "Lifecycle qualification; production capacity remains unqualified"
+}

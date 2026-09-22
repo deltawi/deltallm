@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from asyncio import CancelledError, Task, create_task
+from asyncio import Task, create_task
+from src.shutdown import BoundedExitStack, cleanup_deadline
+from src.telemetry.lifecycle import stop_tasks_before_deadline
 from dataclasses import dataclass
 import logging
 import os
@@ -127,12 +129,20 @@ def _cache_invalidation_worker_config(general_settings: Any) -> CacheInvalidatio
 
 
 async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
+    runtime = AuthRuntime()
+    try:
+        return await _init_auth_runtime(app, cfg, runtime)
+    except BaseException:
+        await shutdown_auth_runtime(runtime)
+        raise
+
+
+async def _init_auth_runtime(app: Any, cfg: Any, runtime: AuthRuntime) -> AuthRuntime:
     statuses = [
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
         BootstrapStatus("master_session_store", "ready"),
     ]
-    runtime = AuthRuntime()
 
     organization_deletion_repository = initialize_organization_lifecycle(app, cfg)
     await app.state.organization_lifecycle_authorizer.initialize()
@@ -339,37 +349,32 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     if runtime.cache_invalidation_worker is not None:
         runtime.cache_invalidation_task = create_task(runtime.cache_invalidation_worker.run())
 
+    app.state.cache_invalidation_task = runtime.cache_invalidation_task
+    lifecycle = getattr(app.state, "process_lifecycle", None)
+    if lifecycle is not None:
+        for worker, task in (
+            (runtime.cache_invalidation_worker, runtime.cache_invalidation_task),
+            (runtime.organization_deletion_worker, runtime.organization_deletion_task),
+        ):
+            if worker is not None and task is not None:
+                lifecycle.register_producer(worker.stop, task)
     runtime.statuses = tuple(statuses)
     return runtime
 
 
 async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
-    if runtime.key_service is not None:
-        await runtime.key_service.close()
-    lifecycle_task = getattr(runtime, "organization_lifecycle_task", None)
-    if lifecycle_task is not None:
-        lifecycle_task.cancel()
-        try:
-            await lifecycle_task
-        except CancelledError:
-            pass
-    worker = getattr(runtime, "cache_invalidation_worker", None)
-    task = getattr(runtime, "cache_invalidation_task", None)
-    if worker is not None:
-        worker.stop()
-    if task is not None:
-        task.cancel()
-        try:
-            await task
-        except CancelledError:
-            pass
-    deletion_worker = getattr(runtime, "organization_deletion_worker", None)
-    deletion_task = getattr(runtime, "organization_deletion_task", None)
-    if deletion_worker is not None:
-        deletion_worker.stop()
-    if deletion_task is not None:
-        deletion_task.cancel()
-        try:
-            await deletion_task
-        except CancelledError:
-            pass
+    async with BoundedExitStack() as cleanup:
+        if runtime.key_service is not None:
+            cleanup.push_async_callback(runtime.key_service.close)
+        for worker in (runtime.cache_invalidation_worker, runtime.organization_deletion_worker):
+            if worker is not None:
+                worker.stop()
+        await stop_tasks_before_deadline(
+            (
+                runtime.organization_lifecycle_task,
+                runtime.cache_invalidation_task,
+                runtime.organization_deletion_task,
+            ),
+            deadline=cleanup_deadline(5),
+            cancel_first=True,
+        )

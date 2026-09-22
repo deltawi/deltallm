@@ -6,6 +6,9 @@ metadata:
   labels:
     {{- include "deltallm.labels" . | nindent 4 }}
 spec:
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationSeconds }}
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment

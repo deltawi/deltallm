@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.109,<1.0",
-  "uvicorn[standard]>=0.27,<1.0",
+  "uvicorn[standard]==0.40.0",
   "pydantic>=2.5,<3.0",
   "pydantic-settings>=2.1,<3.0",
   "PyYAML>=6.0,<7.0",
@@ -39,8 +39,10 @@ batch-s3 = [
   "boto3>=1.35,<2.0",
 ]
 guardrails-presidio = [
-  "presidio-analyzer>=2.2,<3.0",
-  "presidio-anonymizer>=2.2,<3.0",
+  "tldextract==5.3.1",
+  "presidio-analyzer==2.2.362",
+  "presidio-anonymizer==2.2.362",
+  "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl#sha256=293e9547a655b25499198ab15a525b05b9407a75f10255e405e8c3854329ab63",
 ]
 
 [tool.pytest.ini_options]

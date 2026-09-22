@@ -65,7 +65,7 @@ acceptance; the background budgets apply to control and telemetry workers. Repos
 transaction options can shorten the configured transaction/acquisition ceilings.
 
 Capacity admission happens before Prisma: each pool permits at most its configured
-number of operations or transactions and has zero capacity waiters. Excess work
+number of operations or transactions and normally has zero capacity waiters. Excess work
 returns a controlled HTTP 503 with code `database_unavailable`. Native connection,
 lock and statement timeouts use the same response; record/constraint errors retain
 their repository semantics. Local dependency failures never mark a provider unhealthy
@@ -73,6 +73,26 @@ or trigger provider retries. A transaction owns one slot through
 commit or rollback, and permits only one outstanding native query on that transaction.
 Model queries, raw SQL and generated batch execution share this owner. There are no
 new per-request SQL calls or client retries.
+
+The telemetry acceptance and settlement allocations each reserve one bounded
+waiting position per configured connection for required writes. With ordinary
+operation intents enabled, the default telemetry total of five connections splits
+into four acceptance connections/waiters and one settlement connection/waiter.
+Waits consume the existing acquisition deadline, including transaction startup;
+overflow and expired waits return the same explicit unavailable result. No native
+slot is freed while a cancelled operation is still running.
+
+A readiness probe borrows one existing slot and temporarily permits one business
+waiter, bounded by the same acquisition deadline. Each allocation permits only one
+probe; cancellation retains its slot until native work ends. This prevents health
+traffic from immediately shedding settlement on a one-connection allocation.
+No extra connection is added. With all allocations enabled, there are at most
+`3 + telemetry_db_pool_size` waiting operations per process, or 352 with
+the default telemetry total at the illustrative 44-process
+rollout ceiling below, within the existing bounded request/worker allocations.
+`deltallm_database_allocation_seconds{operation="readiness"}` measures probe time;
+`deltallm_database_allocation_events_total{outcome="queue_timeout"}` records
+business acquisition deadlines exceeded in these bounded queues.
 
 PostgreSQL receives native `statement_timeout`, `lock_timeout` and
 `idle_in_transaction_session_timeout` options on every connection. Startup verifies
@@ -186,11 +206,13 @@ PostgreSQL peak = Σ(peak role processes × enabled database pool sizes) + reser
 Redis peak = Σ(peak role processes × all three Redis pool sizes) + reserved clients
 ```
 
-The production example has 12 maximum API pods, one surge pod, one retiring generation
-and one process per pod: 25 peak processes. With both outboxes enabled, this is
-`25 × (20 + 8 + 5 + 5) = 950` PostgreSQL connections and
-`25 × (64 + 16 + 16) = 2400` Redis connections before reserves. Enabling two fixed
-batch-worker pods adds five peak processes: 190 PostgreSQL and 480 Redis connections.
+The production example has 12 maximum API pods, one surge pod, two retiring
+generations and one process per pod: 37 peak processes. With both outboxes enabled,
+this is `37 × (20 + 8 + 5 + 5) = 1406` PostgreSQL connections and
+`37 × (64 + 16 + 16) = 3552` Redis connections before reserves. Enabling two fixed
+batch-worker pods adds seven peak processes: 266 PostgreSQL and 672 Redis connections.
+Including the example reserves, the API-only totals are 1506 PostgreSQL and 3680 Redis;
+the split-role totals are 1772 PostgreSQL and 4352 Redis.
 Both worker and API telemetry jobs share their process allocations. A batch-worker
 Deployment is not a distinct telemetry-only process role.
 
@@ -249,3 +271,7 @@ statement deadlines, transaction expiry, cancellation/recovery, and real Redis c
 floods, idle subscriptions, socket failures and memory isolation. Test definitions and
 rendered arithmetic are not a concurrency certificate. Publish supported traffic
 only with matching workload, commit/image, resources, error rates and latency evidence.
+
+The [managed lifecycle](process-lifecycle.md) uses a 90-second pod grace. Serialize
+release and scale operations within the declared terminating-pod allowance; live Helm
+upgrades reject existing terminating pods, while offline rendering cannot inspect them.

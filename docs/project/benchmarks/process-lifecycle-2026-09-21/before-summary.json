@@ -1,0 +1,243 @@
+{
+  "summary": "before-summary.json",
+  "raw": "before-http.jsonl",
+  "run_id": "eda26244a9124ccf9a25f1c2314dc89e",
+  "started_at": "2026-09-21T14:37:43.673079+00:00",
+  "target_rate_rps": 10,
+  "target_count": 200,
+  "client_started_count": 200,
+  "generator_dropped_count": 0,
+  "completion_count": 200,
+  "success_count": 200,
+  "status_counts": {
+    "200": 200
+  },
+  "arrival_window_seconds": 20,
+  "drain_window_seconds": 0.0015695409965701401,
+  "client_started_rps": 10.0,
+  "arrival_window_completion_rps": 10.0,
+  "max_in_flight_observed": 1,
+  "latency_seconds": {
+    "mean": 0.03215373935381649,
+    "p50": 0.03088266699342057,
+    "p95": 0.04148962500039488,
+    "p99": 0.058434292033780366,
+    "max": 0.06882812496041879
+  },
+  "scheduling_lag_seconds": {
+    "mean": 0.0017899549071444198,
+    "p50": 0.0012079579755663872,
+    "p95": 0.0014465409913100302,
+    "p99": 0.026353041001129895,
+    "max": 0.036688458058051765
+  },
+  "ttft_seconds": {
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null,
+    "max": null
+  },
+  "label": "before",
+  "workload": "fixed-one-token-nonstream-v1",
+  "response_cache_bypass": true,
+  "generator_python": "3.11.13",
+  "generator_commit": "be4016de780c1b53ae72f9737dda51a9b8967073",
+  "server_manifest": {
+    "server_commit": "4d856670e54e689ea4fc1ceead787730e5edcf5c",
+    "server_source_sha256": "86e048be71e62b07de704de9b21a5a989dc8eeefd55cf920985fa497ba1e2efe",
+    "server_python": "3.11.13",
+    "api_processes": 1,
+    "host_cpu_count": 14,
+    "main_db_pool_size": 20,
+    "telemetry_db_pool_size": 5,
+    "preflight_global": 100,
+    "preflight_org": 50,
+    "budget_query_mode": "combined",
+    "audit_ingestion_mode": "outbox",
+    "spend_ingestion_mode": "outbox",
+    "redis_degraded_mode": "fail_closed",
+    "postgres_version": "15.19",
+    "redis_version": "7.4.11",
+    "profile_sha256": "5123b4e98860039cdc4d1133b652d272498615c837a7c56c68dce68f9d148639",
+    "database_allocations": {
+      "db_foreground_pool_size": 8,
+      "telemetry_worker_db_pool_size": 5,
+      "db_acquisition_timeout_seconds": 0.2,
+      "db_statement_timeout_seconds": 1.0,
+      "db_lock_timeout_seconds": 0.2,
+      "db_transaction_timeout_seconds": 2.0,
+      "db_background_statement_timeout_seconds": 5.0,
+      "db_background_lock_timeout_seconds": 1.0,
+      "db_background_transaction_timeout_seconds": 10.0
+    },
+    "spend_operations": {
+      "enabled": true,
+      "settlement_connections": 1
+    },
+    "ingress": {
+      "enabled": false,
+      "max_active": 100,
+      "max_waiters": 0,
+      "queue_timeout_ms": 10,
+      "max_body_bytes": 33554432,
+      "max_buffered_bytes": 67108864,
+      "body_timeout_seconds": 10.0,
+      "health_max_active": 4,
+      "control_max_active": 16,
+      "control_max_buffered_bytes": 67108864
+    },
+    "auth_fallback": {
+      "max_active": 8,
+      "max_waiters": 32,
+      "queue_timeout_ms": 10,
+      "timeout_seconds": 0.5,
+      "cache_timeout_seconds": 0.1,
+      "cache_max_bytes": 131072
+    },
+    "request_work": {
+      "callback_max_pending": 128,
+      "callback_max_concurrency": 4,
+      "callback_max_payload_bytes": 262144,
+      "callback_max_bytes": 8388608,
+      "callback_timeout_seconds": 5.0,
+      "callback_shutdown_seconds": 5.0,
+      "guardrail_max_concurrency": 2,
+      "guardrail_max_pending": 8,
+      "guardrail_max_bytes": 33554432,
+      "guardrail_timeout_seconds": 5.0,
+      "guardrail_shutdown_seconds": 5.0
+    },
+    "image_digest": "sha256:00682f99aa45f742b3c3e3100a5b0617c3f4b0bceb2d3e4452a2914f904ea673",
+    "cpu_limit_cores": 2.0,
+    "memory_limit_mib": 2048,
+    "postgres_cpu_limit_cores": 2.0,
+    "postgres_memory_limit_mib": 1024,
+    "redis_cpu_limit_cores": 2.0,
+    "redis_memory_limit_mib": 1024
+  },
+  "server_manifest_source": "embedded server_manifest",
+  "metrics_file": "before-metrics.jsonl",
+  "metrics_arrival_start_offset_seconds": 0.04975633299909532,
+  "metrics_scrape_errors": 0,
+  "client_in_flight": [
+    {
+      "offset_seconds": 0.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 1.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 2.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 3.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 4.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 5.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 6.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 7.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 8.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 9.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 10.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 11.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 12.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 13.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 14.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 15.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 16.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 17.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 18.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 19.0,
+      "client_in_flight": 0.0
+    },
+    {
+      "offset_seconds": 20.0,
+      "client_in_flight": 0.0
+    }
+  ],
+  "error_counts": {},
+  "dependency_call_deltas_including_background": {
+    "cmdstat_mget": 400,
+    "cmdstat_eval": 1000,
+    "cmdstat_expire": 1000,
+    "cmdstat_get": 1000,
+    "cmdstat_pttl": 200,
+    "cmdstat_zrem": 600,
+    "cmdstat_incrby": 400,
+    "cmdstat_zadd": 800,
+    "cmdstat_del": 1400,
+    "cmdstat_set": 200,
+    "cmdstat_pexpire": 200,
+    "cmdstat_subscribe": 0,
+    "cmdstat_zrevrange": 200,
+    "cmdstat_hgetall": 200,
+    "cmdstat_exec": 600,
+    "cmdstat_multi": 600,
+    "postgres_calls_including_background": 11468,
+    "cmdstat_time": 200,
+    "cmdstat_hget": 800,
+    "cmdstat_zremrangebyscore": 800,
+    "cmdstat_zcard": 1200,
+    "cmdstat_hset": 200,
+    "cmdstat_ping": 0,
+    "cmdstat_setex": 0,
+    "cmdstat_hdel": 400,
+    "cmdstat_exists": 800,
+    "cmdstat_pexpireat": 400,
+    "cmdstat_client|setinfo": 0
+  },
+  "qualification": "baseline_only",
+  "stream_ttft_seconds": 0.02650370803894475,
+  "exit_code": 0
+}

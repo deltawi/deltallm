@@ -90,12 +90,14 @@ class BatchWebhookOutboxWorker:
             worker_id=config.worker_id,
         )
         self._stop_event = asyncio.Event()
+        self.started = asyncio.Event()
         self._active_tasks: set[asyncio.Task[None]] = set()
 
     def stop(self) -> None:
         self._stop_event.set()
 
     async def run(self) -> None:
+        self.started.set()
         try:
             while not self._stop_event.is_set():
                 capacity = max(0, self.config.max_concurrency - len(self._active_tasks))

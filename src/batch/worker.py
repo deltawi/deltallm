@@ -121,6 +121,8 @@ class BatchExecutorWorker:
         self.config = config
         self.model_capacity_resolver = model_capacity_resolver
         self._running = False
+        self.started = asyncio.Event()
+        self._stop_requested = False
         self._idle_backoff_attempts = 0
         self._fair_share_flow_lock_busy_attempts: dict[tuple[str, str], int] = {}
         self._fair_share_flow_lock_busy_until: dict[tuple[str, str], float] = {}
@@ -133,11 +135,9 @@ class BatchExecutorWorker:
             max(1.0, float(self.config.claim_diagnostic_interval_seconds or 60.0)),
             max(1, int(self.config.claim_diagnostic_max_keys or 1024)),
         )
-        self._claim_decision_diagnostic_probe_limiter = (
-            ClaimDecisionDiagnosticProbeLimiter(
-                window_seconds=self._claim_decision_diagnostic_probe_limiter_config[0],
-                max_keys=self._claim_decision_diagnostic_probe_limiter_config[1],
-            )
+        self._claim_decision_diagnostic_probe_limiter = ClaimDecisionDiagnosticProbeLimiter(
+            window_seconds=self._claim_decision_diagnostic_probe_limiter_config[0],
+            max_keys=self._claim_decision_diagnostic_probe_limiter_config[1],
         )
         self._applied_scheduler_general_settings: Any | None = None
         self._applied_scheduler_config_generation: int | None = None
@@ -186,7 +186,9 @@ class BatchExecutorWorker:
     async def _call_execute_chat(self, request, payload, deployment, *, record_usage: bool = True):  # noqa: ANN001, ANN201
         return await execute_chat(request, payload, deployment, record_usage=record_usage)
 
-    async def _call_record_router_usage(self, router_state_backend, deployment_id: str, *, mode: str, usage: dict) -> None:
+    async def _call_record_router_usage(
+        self, router_state_backend, deployment_id: str, *, mode: str, usage: dict
+    ) -> None:
         await record_router_usage(
             router_state_backend,
             deployment_id,
@@ -214,6 +216,9 @@ class BatchExecutorWorker:
         await self._stop_heartbeat(task)
 
     async def run(self) -> None:
+        self.started.set()
+        if self._stop_requested:
+            return
         self._running = True
         try:
             while self._running:
@@ -231,6 +236,7 @@ class BatchExecutorWorker:
             await self._cancel_shadow_tasks()
 
     def stop(self) -> None:
+        self._stop_requested = True
         self._running = False
 
     def _reset_idle_backoff(self) -> None:
@@ -456,7 +462,9 @@ class BatchExecutorWorker:
         configured = int(self.config.work_claim_max_items or 0)
         if configured > 0:
             return max(1, min(configured, 200))
-        microbatch_floor = max(1, min(int(self.config.work_claim_min_items_for_microbatch or 1), 200))
+        microbatch_floor = max(
+            1, min(int(self.config.work_claim_min_items_for_microbatch or 1), 200)
+        )
         return max(microbatch_floor, min(self._claim_limit(), 200))
 
     def _work_claim_max_work_units(self) -> int:
@@ -761,7 +769,9 @@ class BatchExecutorWorker:
                 recommendation=recommendation,
                 claim=resolved_claim,
                 model_group=str(getattr(snapshot, "model_group", "") or model_group or "unknown"),
-                service_tier=str(getattr(snapshot, "service_tier", "") or service_tier or "standard"),
+                service_tier=str(
+                    getattr(snapshot, "service_tier", "") or service_tier or "standard"
+                ),
                 active_mode=active_mode,
                 shadow_mode=shadow_mode,
             )
@@ -928,7 +938,9 @@ class BatchExecutorWorker:
                 capacity=self.config.worker_concurrency,
             )
             await self._stop_heartbeat(job_heartbeat)
-            await self.repository.release_job_lease(batch_id=job.batch_id, worker_id=self.config.worker_id)
+            await self.repository.release_job_lease(
+                batch_id=job.batch_id, worker_id=self.config.worker_id
+            )
 
     async def _process_finalization_job(self, job) -> None:  # noqa: ANN001
         logger.info("batch finalization claimed id=%s", job.batch_id)
@@ -950,7 +962,9 @@ class BatchExecutorWorker:
                 capacity=self.config.worker_concurrency,
             )
             await self._stop_heartbeat(job_heartbeat)
-            await self.repository.release_job_lease(batch_id=job.batch_id, worker_id=self.config.worker_id)
+            await self.repository.release_job_lease(
+                batch_id=job.batch_id, worker_id=self.config.worker_id
+            )
 
     async def _try_process_finalization_claim(self) -> bool:
         job = await self.repository.claim_next_finalization(
@@ -1041,8 +1055,12 @@ class BatchExecutorWorker:
             else:
                 items = await self.repository.load_claim_items(claim.item_ids)
                 if not items:
-                    logger.warning("batch work slice skipped after missing claimed items id=%s", claim.batch_id)
-                    increment_batch_work_claim(result="missing_items", claim_mode=self.config.scheduler_claim_mode)
+                    logger.warning(
+                        "batch work slice skipped after missing claimed items id=%s", claim.batch_id
+                    )
+                    increment_batch_work_claim(
+                        result="missing_items", claim_mode=self.config.scheduler_claim_mode
+                    )
                 else:
                     await self._process_items(job, items)
         finally:
@@ -1089,9 +1107,7 @@ class BatchExecutorWorker:
             else None
         )
         shadow_work_attempted = (
-            shadow_mode != "none"
-            and shadow_mode != active_mode
-            and not shadow_uses_fair_share
+            shadow_mode != "none" and shadow_mode != active_mode and not shadow_uses_fair_share
         )
         if resolver is None or not active_uses_model_capacity:
             shadow_fair_share_attempted = resolver is not None and shadow_uses_fair_share
@@ -1139,9 +1155,13 @@ class BatchExecutorWorker:
 
         select_model_groups = getattr(resolver, "select_model_groups", None)
         if callable(select_model_groups):
-            selections = await select_model_groups(max_items=max_items, max_work_units=max_work_units)
+            selections = await select_model_groups(
+                max_items=max_items, max_work_units=max_work_units
+            )
         else:
-            selection = await resolver.select_model_group(max_items=max_items, max_work_units=max_work_units)
+            selection = await resolver.select_model_group(
+                max_items=max_items, max_work_units=max_work_units
+            )
             selections = [selection] if selection is not None else []
         if not selections:
             self._log_model_capacity_blocked_snapshots(
@@ -1489,7 +1509,9 @@ class BatchExecutorWorker:
                 select_model_group = getattr(resolver, "select_model_group", None)
                 if not callable(select_model_group):
                     return None
-                selection = await select_model_group(max_items=max_items, max_work_units=max_work_units)
+                selection = await select_model_group(
+                    max_items=max_items, max_work_units=max_work_units
+                )
                 selections = [selection] if selection is not None else []
             for selection in selections:
                 snapshot = selection.snapshot
@@ -1936,7 +1958,9 @@ class BatchExecutorWorker:
         if flow is None:
             return
         try:
-            selected_in_flight_work_units = max(0, int(getattr(flow, "in_flight_work_units", 0) or 0))
+            selected_in_flight_work_units = max(
+                0, int(getattr(flow, "in_flight_work_units", 0) or 0)
+            )
             total_in_flight_work_units = max(
                 0,
                 int(getattr(recommendation, "total_in_flight_work_units", 0) or 0),
@@ -1984,7 +2008,9 @@ class BatchExecutorWorker:
         )
 
     @staticmethod
-    def _capacity_claim_caps(snapshot: Any, *, max_items: int, max_work_units: int) -> tuple[int, int | None]:
+    def _capacity_claim_caps(
+        snapshot: Any, *, max_items: int, max_work_units: int
+    ) -> tuple[int, int | None]:
         in_flight_items = max(0, int(getattr(snapshot, "in_flight_items", 0) or 0))
         available_in_flight_items = max(
             0,
@@ -1993,9 +2019,7 @@ class BatchExecutorWorker:
         in_flight_work_units = max(0, int(getattr(snapshot, "in_flight_work_units", 0) or 0))
         tpm_remaining = getattr(snapshot, "tpm_remaining", None)
         work_unit_cap = (
-            in_flight_work_units + max(0, int(tpm_remaining))
-            if tpm_remaining is not None
-            else None
+            in_flight_work_units + max(0, int(tpm_remaining)) if tpm_remaining is not None else None
         )
         return in_flight_items + available_in_flight_items, work_unit_cap
 
@@ -2023,7 +2047,9 @@ class BatchExecutorWorker:
             available_in_flight_items=_optional_worker_int(
                 getattr(snapshot, "available_in_flight_items", None)
             ),
-            available_work_units=_optional_worker_int(getattr(snapshot, "available_work_units", None)),
+            available_work_units=_optional_worker_int(
+                getattr(snapshot, "available_work_units", None)
+            ),
             in_flight_items=_optional_worker_int(getattr(snapshot, "in_flight_items", None)),
             in_flight_work_units=_optional_worker_int(
                 getattr(snapshot, "in_flight_work_units", None)
@@ -2172,8 +2198,7 @@ class BatchExecutorWorker:
                 )
                 diagnostic = diagnostic.with_defaults_from(base).with_overrides(
                     diagnostic_source="db",
-                    diagnostic_probe_suppressed_count=probe_decision.suppressed_count
-                    or None,
+                    diagnostic_probe_suppressed_count=probe_decision.suppressed_count or None,
                 )
                 self._record_claim_diagnostic_probe_result(probe_key, diagnostic)
                 return diagnostic
@@ -2212,7 +2237,9 @@ class BatchExecutorWorker:
             logger.warning("batch capacity empty claim diagnostic failed", exc_info=True)
             return self._diagnostic_from_cached_probe(base, probe_decision)
 
-    async def _capacity_empty_claim_result(self, *, snapshot: Any, max_items: int, max_work_units: int) -> str:
+    async def _capacity_empty_claim_result(
+        self, *, snapshot: Any, max_items: int, max_work_units: int
+    ) -> str:
         return (
             await self._capacity_empty_claim_diagnostic(
                 snapshot=snapshot,
@@ -2244,7 +2271,9 @@ class BatchExecutorWorker:
         )
         return claim
 
-    async def _empty_work_claim_diagnostic(self, *, active_mode: str) -> BatchClaimDecisionDiagnostic:
+    async def _empty_work_claim_diagnostic(
+        self, *, active_mode: str
+    ) -> BatchClaimDecisionDiagnostic:
         fallback = BatchClaimDecisionDiagnostic(
             reason="no_available_work",
             diagnostic_source="fallback",
@@ -2267,8 +2296,7 @@ class BatchExecutorWorker:
                 diagnostic = await diagnose_empty_work_claim_context()
                 diagnostic = diagnostic.with_defaults_from(fallback).with_overrides(
                     diagnostic_source="db",
-                    diagnostic_probe_suppressed_count=probe_decision.suppressed_count
-                    or None,
+                    diagnostic_probe_suppressed_count=probe_decision.suppressed_count or None,
                 )
                 self._record_claim_diagnostic_probe_result(probe_key, diagnostic)
                 return diagnostic
@@ -2301,13 +2329,17 @@ class BatchExecutorWorker:
             )
         ).reason
 
-    async def _prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem | _PreparedChatItem:  # noqa: ANN001
+    async def _prepare_item_for_execution(
+        self, job, item
+    ) -> _PreparedEmbeddingItem | _PreparedChatItem:  # noqa: ANN001
         self._sync_dependencies()
         return await self._execution_engine.prepare_item_for_execution(job, item)
 
     async def _process_item(self, job, item) -> None:  # noqa: ANN001
         self._sync_dependencies()
-        await self._execution_engine.process_item(job, item, prepare_item=self._prepare_item_for_execution)
+        await self._execution_engine.process_item(
+            job, item, prepare_item=self._prepare_item_for_execution
+        )
 
     async def _process_items(self, job, items) -> None:  # noqa: ANN001
         self._sync_dependencies()
@@ -2324,7 +2356,9 @@ class BatchExecutorWorker:
 
     async def _finalize_with_retry(self, job) -> None:  # noqa: ANN001
         self._sync_dependencies()
-        await self._artifact_finalizer.finalize_with_retry(job, finalize_artifacts=self._finalize_artifacts)
+        await self._artifact_finalizer.finalize_with_retry(
+            job, finalize_artifacts=self._finalize_artifacts
+        )
 
     async def _iter_output_lines(self, batch_id: str, *, endpoint: str = "/v1/embeddings"):  # noqa: ANN201
         self._sync_dependencies()

@@ -17,11 +17,11 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
-    from presidio_analyzer import AnalyzerEngine
+    from src.guardrails.presidio_runtime import build_analyzer
     from presidio_anonymizer import AnonymizerEngine
     from presidio_anonymizer.entities import OperatorConfig
 except Exception:  # pragma: no cover - optional dependency
-    AnalyzerEngine = None
+    build_analyzer = None
     AnonymizerEngine = None
     OperatorConfig = None
 
@@ -71,7 +71,7 @@ class PresidioGuardrail(CustomGuardrail):
         self.language = language
         self.threshold = threshold
         if presidio_full_engine_installed():
-            self.analyzer = AnalyzerEngine()
+            self.analyzer = build_analyzer()
             self.anonymizer = AnonymizerEngine()
         else:
             self.analyzer = None
@@ -270,10 +270,10 @@ PRESIDIO_FALLBACK_SUPPORTED_ENTITIES = tuple(PresidioGuardrail._PATTERN_MAP)
 
 @lru_cache(maxsize=1)
 def _presidio_engine_ready() -> bool:
-    if AnalyzerEngine is None or AnonymizerEngine is None or OperatorConfig is None:
+    if build_analyzer is None or AnonymizerEngine is None or OperatorConfig is None:
         return False
     try:
-        AnalyzerEngine()
+        build_analyzer()
         AnonymizerEngine()
     except Exception as exc:  # pragma: no cover - depends on optional local runtime assets
         logger.warning(

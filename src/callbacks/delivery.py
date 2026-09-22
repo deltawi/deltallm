@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline, retain_unfinished
+
 import asyncio
 import logging
 from contextvars import Context
@@ -136,7 +138,7 @@ class CallbackDelivery:
 
     async def shutdown(self) -> None:
         self._closed = True
-        deadline = perf_counter() + self.settings.callback_shutdown_seconds
+        deadline = cleanup_deadline(self.settings.callback_shutdown_seconds)
         if self._tasks:
             _, pending = await asyncio.wait(
                 tuple(self._tasks), timeout=max(0, deadline - perf_counter())
@@ -146,6 +148,7 @@ class CallbackDelivery:
             # Capacity remains charged until each task actually exits, including
             # trusted extensions that suppress cancellation.
             await asyncio.sleep(0)
+            retain_unfinished(pending)
         await self.resources.shutdown(timeout=max(0, deadline - perf_counter()))
         self.blocking.shutdown_seconds = max(0, deadline - perf_counter())
         await self.blocking.shutdown()

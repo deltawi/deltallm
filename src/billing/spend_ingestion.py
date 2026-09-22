@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline
+
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -244,7 +246,7 @@ class SpendIngestionService:
 
     async def shutdown(self) -> None:
         self._closed = True
-        await self._stop_worker_tasks(drain_pending=True)
+        await self._stop_worker_tasks(drain_pending=False)
         self._started = False
 
     async def _stop_worker_tasks(self, *, drain_pending: bool) -> None:
@@ -256,7 +258,7 @@ class SpendIngestionService:
         self._worker_state = WorkerState.STOPPING
         self._worker_detail = None
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.config.shutdown_drain_timeout_seconds
+        deadline = cleanup_deadline(self.config.shutdown_drain_timeout_seconds)
         if drain_pending:
             while loop.time() < deadline:
                 pending_count = await self._pending_count_before_deadline(deadline)
@@ -287,9 +289,13 @@ class SpendIngestionService:
         if not cleanup_stopped or not worker_stopped:
             increment_spend_ingestion_failure("shutdown_timeout")
             logger.error("spend ingestion worker exceeded its shutdown deadline and was cancelled")
-        self._cleanup_task = None
-        self._worker = None
-        self._worker_state = WorkerState.DISABLED
+        if cleanup_stopped:
+            self._cleanup_task = None
+        if worker_stopped:
+            self._worker = None
+        self._worker_state = (
+            WorkerState.DISABLED if cleanup_stopped and worker_stopped else WorkerState.FAILED
+        )
         self._worker_detail = None
 
     async def reconfigure(self, config: SpendIngestionConfig) -> None:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from src.config import DatabaseConnectionSettings
 from src.db.allocation_config import DatabasePolicy
+
+if TYPE_CHECKING:
+    from prisma import Prisma
+    from src.db.allocated_client import DatabaseOwner
 
 
 def is_prisma_transaction_client(client: object | None) -> bool:
@@ -22,8 +26,8 @@ def is_prisma_transaction_client(client: object | None) -> bool:
 
 class PrismaClientManager:
     def __init__(self) -> None:
-        self.client: Any | None = None
-        self.allocation = None
+        self.client: Prisma | None = None
+        self.allocation: DatabaseOwner | None = None
 
     async def connect(
         self,
@@ -78,6 +82,15 @@ class PrismaClientManager:
             await self.allocation.close()
         if self.client is not None:
             await self.client.disconnect()
+
+    async def readiness_probe(self) -> bool:
+        if self.client is None:
+            return False
+        if self.allocation is None:
+            return bool(await self.client.query_raw("SELECT 1"))
+        from src.db.allocated_client import AllocatedPrisma
+
+        return await cast(AllocatedPrisma, self.client).readiness_probe()
 
 
 prisma_manager = PrismaClientManager()

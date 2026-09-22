@@ -4,9 +4,22 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
+from src.bootstrap.readiness import dependency_probes, fresh_task_check, service_check, task_check
+from src.lifecycle_settings import LifecycleSettings
+from src.db.client import PrismaClientManager
+from src.process_lifecycle import ProcessLifecycle
+from src.readiness import ReadinessRuntime
+
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
+
+
+def database_manager(client):
+    manager = PrismaClientManager()
+    manager.client = client
+    return manager
 
 
 @pytest.fixture(autouse=True)
@@ -15,10 +28,79 @@ def ready_databases(test_app):
         setattr(
             test_app.state,
             name,
-            SimpleNamespace(
-                client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
-            ),
+            database_manager(SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))),
         )
+
+
+@pytest.fixture
+async def client(test_app):
+    # Route tests install fake owners just as bootstrap installs real owners.
+    # Advance the clock between samples; cache/coalescing has separate tests.
+    now = [0.0]
+    lifecycle = ProcessLifecycle(LifecycleSettings())
+    lifecycle.mark_serving()
+
+    def workers():
+        required, optional = {}, {}
+        for name, attribute in (
+            ("spend_ingestion_worker", "spend_tracking_service"),
+            ("audit_ingestion_worker", "audit_service"),
+            ("email_outbox_worker", "email_outbox_worker"),
+        ):
+            if getattr(getattr(test_app.state, attribute, None), "worker_health", None) is not None:
+                required[name] = service_check(test_app.state, attribute)
+        optional["audit_policy_listener"] = service_check(
+            test_app.state,
+            "audit_service",
+            health_attribute="policy_listener_health",
+            disabled=True,
+        )
+        for name, expected, task, worker in (
+            (
+                "batch_webhook_worker",
+                "batch_webhook_worker_expected",
+                "batch_webhook_outbox_task",
+                "batch_webhook_outbox_worker",
+            ),
+            (
+                "organization_lifecycle_refresher",
+                "organization_lifecycle_refresher_expected",
+                "organization_lifecycle_task",
+                "organization_lifecycle_authorizer",
+            ),
+            (
+                "organization_deletion_worker",
+                "organization_deletion_worker_expected",
+                "organization_deletion_task",
+                "organization_deletion_worker",
+            ),
+        ):
+            if getattr(test_app.state, expected, False):
+                check = fresh_task_check if name.startswith("organization_") else task_check
+                required[name] = check(
+                    getattr(test_app.state, task, None),
+                    worker=getattr(test_app.state, worker, None) if worker else None,
+                )
+        return required, optional
+
+    async def application(scope, receive, send):
+        now[0] += 2
+        if getattr(test_app.state, "readiness_runtime", None) is None:
+            test_app.state.readiness_runtime = ReadinessRuntime(
+                lifecycle=lifecycle,
+                probes=dependency_probes(test_app.state),
+                workers=workers,
+                clock=lambda: now[0],
+            )
+        await test_app(scope, receive, send)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        yield client
+    owner = getattr(test_app.state, "readiness_runtime", None)
+    if owner is not None:
+        await owner.close(deadline=asyncio.get_running_loop().time() + 1)
 
 
 @pytest.mark.parametrize("allocation", ["foreground", "telemetry_worker"])
@@ -28,8 +110,8 @@ async def test_readiness_requires_each_new_database_allocation(
 ):
     if allocation == "telemetry_worker":
         test_app.state.audit_ingestion_mode = "outbox"
-        test_app.state.telemetry_prisma_manager = SimpleNamespace(
-            client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
+        test_app.state.telemetry_prisma_manager = database_manager(
+            SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
         )
     manager_name = allocation + "_prisma_manager"
     manager = getattr(test_app.state, manager_name)
@@ -58,7 +140,7 @@ async def test_readiness_requires_each_new_database_allocation(
     assert (await client.get("/health/liveliness")).status_code == 200
 
     recovered = SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
-    setattr(test_app.state, manager_name, SimpleNamespace(client=recovered))
+    setattr(test_app.state, manager_name, database_manager(recovered))
     response = await client.get("/health/readiness")
     assert response.status_code == 200
     assert response.json()["checks"][check] is True
@@ -86,9 +168,7 @@ async def test_readiness_probes_all_dependency_allocations_concurrently(client, 
         "telemetry_prisma_manager",
         "telemetry_worker_prisma_manager",
     ):
-        setattr(
-            test_app.state, name, SimpleNamespace(client=SimpleNamespace(query_raw=probe(name)))
-        )
+        setattr(test_app.state, name, database_manager(SimpleNamespace(query_raw=probe(name))))
     async with asyncio.timeout(2):
         response = await client.get("/health/readiness")
     assert response.status_code == 200
@@ -176,6 +256,9 @@ async def test_readiness_tracks_expected_batch_webhook_worker(client, test_app) 
             return self._done
 
     test_app.state.batch_webhook_worker_expected = True
+    started = asyncio.Event()
+    started.set()
+    test_app.state.batch_webhook_outbox_worker = SimpleNamespace(started=started)
     test_app.state.batch_webhook_outbox_task = _Task(done=True)
 
     stopped = await client.get("/health/readiness")
@@ -204,7 +287,6 @@ async def test_readiness_fails_for_expected_telemetry_worker_crash(client, test_
     assert payload["checks"]["spend_ingestion_worker"] is False
     assert payload["details"]["spend_ingestion_worker"] == {
         "state": "failed",
-        "detail": "database worker stopped",
     }
 
 
@@ -225,7 +307,6 @@ async def test_readiness_fails_for_email_outbox_worker_failure(client, test_app)
     assert payload["checks"]["email_outbox_worker"] is False
     assert payload["details"]["email_outbox_worker"] == {
         "state": "failed",
-        "detail": "required delivery audits are blocked",
     }
 
 
@@ -244,7 +325,6 @@ async def test_policy_listener_degradation_is_visible_but_not_readiness_fatal(
     assert response.status_code == 200
     assert response.json()["details"]["audit_policy_listener"] == {
         "state": "degraded",
-        "detail": "redis disconnected",
     }
 
 
@@ -262,9 +342,7 @@ async def test_readiness_checks_dedicated_telemetry_database(client, test_app) -
     telemetry_db = _TelemetryDB()
     test_app.state.spend_ingestion_mode = "outbox"
     test_app.state.audit_ingestion_mode = "legacy"
-    test_app.state.telemetry_prisma_manager = type(
-        "TelemetryManager", (), {"client": telemetry_db}
-    )()
+    test_app.state.telemetry_prisma_manager = database_manager(telemetry_db)
 
     unavailable = await client.get("/health/readiness")
     assert unavailable.status_code == 503
@@ -289,6 +367,8 @@ async def test_readiness_tracks_organization_lifecycle_tasks(client, test_app) -
     class _RuntimeHealth:
         def __init__(self, ready: bool) -> None:
             self.ready = ready
+            self.started = asyncio.Event()
+            self.started.set()
 
         def is_ready(self) -> bool:
             return self.ready

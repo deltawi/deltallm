@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from contextlib import AsyncExitStack
+from src.shutdown import BoundedExitStack
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -8,20 +9,19 @@ import httpx
 from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
+from src.startup_config import StartupConfig
+from src.db.migration_status import verify_migration_status
+from src.process_lifecycle import ProcessLifecycle
 from src.bootstrap.dependency_capacity import DependencyAllocationSnapshot
 from src.redis_runtime import build_redis_client
 from src.batch import BatchRepository
 from src.config import (
-    get_settings,
     resolve_database_settings,
     resolve_salt_key,
     resolve_telemetry_database_settings,
 )
 from src.config_runtime import (
     DynamicConfigManager,
-    SecretResolver,
-    build_app_config,
-    load_yaml_dict,
 )
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
@@ -76,7 +76,7 @@ class InfrastructureRuntime:
     statuses: tuple[BootstrapStatus, ...] = ()
     bulk_redis_client: Redis | None = None
     cache_redis_client: Redis | None = None
-    cleanup: AsyncExitStack | None = None
+    cleanup: BoundedExitStack | None = None
 
 
 def _startup_setting(general_settings: Any, settings: Any, field_name: str, default: Any) -> Any:
@@ -89,19 +89,22 @@ def _startup_setting(general_settings: Any, settings: Any, field_name: str, defa
 
 
 async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
-    async with AsyncExitStack() as cleanup:
-        resources = await cleanup.enter_async_context(AsyncExitStack())
+    async with BoundedExitStack() as cleanup:
+        resources = BoundedExitStack(phase="close")
+        cleanup.push_async_callback(resources.aclose, cleanup_phase="close")
         runtime = await _init_infrastructure_runtime(app, cleanup, resources)
         runtime.cleanup = cleanup.pop_all()
         return runtime
 
 
 async def _init_infrastructure_runtime(
-    app: Any, cleanup: AsyncExitStack, resources: AsyncExitStack
+    app: Any, cleanup: BoundedExitStack, resources: BoundedExitStack
 ) -> InfrastructureRuntime:
-    settings = get_settings()
-    file_config = load_yaml_dict(settings.config_path)
-    cfg = build_app_config(file_config, secret_resolver=SecretResolver())
+    startup = getattr(app.state, "startup_config", None) or StartupConfig.load()
+    app.state.startup_config = startup
+    if getattr(app.state, "process_lifecycle", None) is None:
+        app.state.process_lifecycle = ProcessLifecycle(startup.lifecycle)
+    settings, file_config, cfg = startup.settings, startup.file_config, startup.app_config
 
     app.state.settings = settings
     app.state.app_config = cfg
@@ -122,16 +125,23 @@ async def _init_infrastructure_runtime(
         ),
     )
     app.state.prisma_manager = prisma_manager
+    if startup.lifecycle.migration_mode == "external":
+        await verify_migration_status(
+            prisma_manager.client,
+            timeout_seconds=startup.lifecycle.migration_verify_timeout_seconds,
+        )
 
     dynamic_config_manager = DynamicConfigManager(
         db_client=prisma_manager.client,
         redis_client=None,
         file_config=file_config,
+        defer_updates=True,
     )
     cleanup.push_async_callback(dynamic_config_manager.close)
     await dynamic_config_manager.initialize()
     cfg = dynamic_config_manager.get_app_config()
     startup_allocations.validate_effective(cfg, settings)
+    startup.validate_effective(cfg)
     resources.push_async_callback(foreground_prisma_manager.disconnect)
     await foreground_prisma_manager.connect(
         database_settings,
@@ -154,6 +164,13 @@ async def _init_infrastructure_runtime(
         settings, cfg.general_settings, allocation="bulk", endpoint_settings=redis_endpoint_settings
     )
     resources.push_async_callback(bulk_redis_client.aclose)
+    redis_status = BootstrapStatus("redis", "degraded", "unavailable")
+    try:
+        async with asyncio.timeout(startup.lifecycle.readiness_probe_timeout_seconds):
+            if await redis_client.ping():
+                redis_status = BootstrapStatus("redis", "ready")
+    except Exception:
+        pass  # The readiness owner reports recovery; no exception text is exposed.
     app.state.redis = redis_client
     app.state.bulk_redis = bulk_redis_client
     cache_redis_client = build_redis_client(
@@ -313,7 +330,7 @@ async def _init_infrastructure_runtime(
         telemetry_database_connected=telemetry_database_connected,
         statuses=(
             BootstrapStatus("config", "ready"),
-            BootstrapStatus("redis", "ready"),
+            redis_status,
             BootstrapStatus("database", "ready"),
             BootstrapStatus("dynamic_config", "ready"),
             BootstrapStatus("ui_branding_assets", "ready"),

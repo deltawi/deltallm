@@ -1,0 +1,2 @@
+{"seconds": 0.18797254096716642, "closures": 2}
+Both direct client cancellations closed upstream before pod shutdown.

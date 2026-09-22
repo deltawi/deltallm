@@ -31,8 +31,15 @@ HISTOGRAMS = (
     "deltallm_auth_fallback_seconds",
     "deltallm_database_allocation_seconds",
     "deltallm_bounded_work_seconds",
+    "deltallm_readiness_refresh_seconds",
+    "deltallm_shutdown_phase_seconds",
+    "deltallm_shutdown_cleanup_seconds",
 )
 ALLOWED_NAMES = {
+    "deltallm_readiness_probes_total",
+    "deltallm_process_state",
+    "deltallm_shutdown_cleanup_total",
+    "deltallm_shutdown_forced_exit_intent_total",
     "deltallm_request_deadline_expirations_total",
     "deltallm_bounded_work_rejections_total",
     "deltallm_bounded_work_in_flight",
@@ -50,6 +57,7 @@ ALLOWED_NAMES = {
     "deltallm_audit_queue_depth",
     "deltallm_audit_oldest_event_age_seconds",
     "deltallm_spend_ingestion_backlog",
+    "deltallm_spend_ingestion_failures_total",
     "deltallm_spend_operation_unknown",
     "deltallm_spend_operation_observed_timestamp_seconds",
     "deltallm_spend_operation_transitions_total",
@@ -67,12 +75,49 @@ ALLOWED_NAMES = {
     "deltallm_database_allocation_events_total",
 } | {name + suffix for name in HISTOGRAMS for suffix in ("_bucket", "_count", "_sum")}
 LABEL_VALUES = {
+    "stage": {
+        "operation_admission",
+        "operation_receipt",
+        "operation_unknown",
+        "operation_recovery",
+    },
+    "state": {
+        "starting",
+        "serving",
+        "draining",
+        "stopping",
+        "stopped",
+        "dispatched",
+        "accepted",
+        "unknown",
+    },
+    "component": {
+        "redis",
+        "database",
+        "foreground_database",
+        "telemetry_database",
+        "telemetry_worker_database",
+        "telemetry_settlement_database",
+    },
     "queue": {"audit", "spend"},
     "phase": PHASES
     | {phase.value for phase in AcceptancePhase}
-    | {"cache_read", "cache_write", "lookup", "admission", "caller", "execution"},
+    | {
+        "cache_read",
+        "cache_write",
+        "lookup",
+        "admission",
+        "caller",
+        "execution",
+        "withdrawal",
+        "responses",
+        "cancellation",
+        "workers",
+        "close",
+    },
     "outcome": OUTCOMES
     | {
+        "ready",
         "accepted",
         "duplicate",
         "full",
@@ -82,6 +127,7 @@ LABEL_VALUES = {
         "overloaded",
         "deadline",
         "queue_full",
+        "queue_timeout",
         "coalesced",
         "completed",
         "failed",
@@ -106,6 +152,7 @@ LABEL_VALUES = {
     "reason": {reason.value for reason in AcceptanceFailure}
     | {
         "gateway_ingress_full",
+        "gateway_draining",
         "gateway_ingress_buffer_full",
         "gateway_request_body_too_large",
         "gateway_request_body_timeout",
@@ -130,7 +177,6 @@ LABEL_VALUES = {
         "guardrail",
     },
     "operation": {"query", "finish"},
-    "state": {"dispatched", "accepted", "unknown"},
     "response": {"started", "not_started"},
     "integration": {"prometheus", "langfuse", "opentelemetry", "s3", "custom"},
 }

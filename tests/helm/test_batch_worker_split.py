@@ -23,6 +23,8 @@ def _render(*args: str) -> list[dict[str, Any]]:
     command = [
         HELM,
         "template",
+        "--set",
+        "image.tag=pr8-test-release",
         "deltallm",
         str(HELM_CHART_DIR),
         "--set",
@@ -41,6 +43,8 @@ def _render_error(*args: str) -> str:
     command = [
         HELM,
         "template",
+        "--set",
+        "image.tag=pr8-test-release",
         "deltallm",
         str(HELM_CHART_DIR),
         "--set",
@@ -910,10 +914,11 @@ def test_migration_job_default_uses_coordinated_migration_runner_without_db_push
         "templates/migration-job.yaml",
     )
 
-    job = _by_kind_and_name(docs, "Job", "deltallm-migrate")
-    migrate_args = "\n".join(job["spec"]["template"]["spec"]["containers"][0]["args"])
-
-    assert "python -m src.organization_deletion_migrations deploy" in migrate_args
+    job = next(item for item in docs if item.get("kind") == "Job")
+    assert job["metadata"]["name"].startswith("deltallm-migrate-")
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    assert container["command"] == ["python", "-m", "src.prisma_bootstrap"]
+    migrate_args = " ".join(container["args"])
     assert "--schema ./prisma/schema.prisma" in migrate_args
     assert "prisma db push" not in migrate_args
     assert "--accept-data-loss" not in migrate_args

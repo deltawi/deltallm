@@ -13,7 +13,8 @@ connectivity failures:
 python -m src.prisma_bootstrap \
   --schema ./prisma/schema.prisma \
   --max-attempts 30 \
-  --sleep-seconds 2
+  --sleep-seconds 2 \
+  --timeout-seconds 300
 ```
 
 It runs `prisma migrate deploy`; it does not run `prisma db push`. A non-connectivity error is fatal
@@ -39,15 +40,15 @@ metadata:
     app.kubernetes.io/name: deltallm
     app.kubernetes.io/component: migration
 spec:
-  backoffLimit: 4
-  activeDeadlineSeconds: 900
+  backoffLimit: 0
+  activeDeadlineSeconds: 330
   template:
     metadata:
       labels:
         app.kubernetes.io/name: deltallm
         app.kubernetes.io/component: migration
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       automountServiceAccountToken: false
       containers:
         - name: migrate
@@ -60,6 +61,8 @@ spec:
             - "30"
             - --sleep-seconds
             - "2"
+            - --timeout-seconds
+            - "300"
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -85,19 +88,27 @@ Do not reuse a completed Job name for a different image or command.
 
 ## Rollout after migration
 
-Only after the migration and any release-specific verification succeed, deploy the application
-with the image bootstrap wrapper disabled:
+The production chart runs its migration hook before either Deployment changes.
+The database Secret must already exist; the hook has no application ConfigMap,
+Redis or application-key dependency. Keep the default managed image command.
+
+For a separately orchestrated migration stage, use this configuration only after
+the exact-image job and any named coordinator complete:
 
 ```yaml
 migrationJob:
   enabled: false
-
-command: ["uvicorn"]
-args: ["src.main:app", "--host", "0.0.0.0", "--port", "4000"]
+  external: true
+config:
+  general_settings:
+    migration_mode: external
 ```
 
-The global command applies to both API and chart-managed batch-worker pods. Confirm the rendered
-manifests before rollout.
+Each API and worker verifies required migration names/checksums and rejects missing,
+failed or unfinished history before serving. This is read-only and uses an existing
+startup allocation. Completed additional migrations permit a schema-compatible
+application rollback. See [Process lifecycle](process-lifecycle.md) for hook identity,
+timeouts, non-root execution, retained failure logs and rollout commands.
 
 ## Migration design and failure handling
 
