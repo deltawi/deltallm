@@ -169,10 +169,11 @@ metrics, recovery and pod loss. The experiment uses 1 process, CPU request/limit
 from 30–50 held streams without requiring hundreds of local test connections.
 Preflight limits apply only during the preflight phase. Neither target is an
 SLO. The runner retains bounded raw samples in its output directory.
-The disposable worker node gives Kubernetes enough schedulable CPU for four
-1-core API requests plus monitoring and dependency pods on a standard public
-GitHub runner. The nodes share the runner's physical CPU; this functional
-experiment does not measure production throughput or per-node isolation.
+The disposable cluster makes both owned nodes schedulable. This gives Kubernetes
+enough requested CPU for four 1-core API pods, rolling-update surge, monitoring
+and dependency pods on a standard public GitHub runner. The nodes share the
+runner's physical CPU; this functional experiment does not measure production
+throughput or per-node isolation.
 
 ```bash
 uv sync --frozen --extra dev

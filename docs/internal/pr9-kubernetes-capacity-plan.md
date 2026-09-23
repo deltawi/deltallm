@@ -1,6 +1,6 @@
 # PR9 implementation plan: Kubernetes capacity and autoscaling
 
-Status: implementation and local acceptance complete; PR publication pending.
+Status: implementation and local acceptance complete; PR #332 is published and awaiting CI/review.
 Prepared September 22, 2026 for [issue #320](https://github.com/deltawi/deltallm/issues/320).
 
 - Base: fetched `origin/feature/issue-320-concurrency`, commit
@@ -430,9 +430,10 @@ No production promotion or supported concurrency claim follows automatically.
   generated references, documentation tests, strict MkDocs and public-site
   containment passed. The final Helm lane passed 210 tests.
 - The final two-node campaign is retained at
-  `/private/tmp/pr9-capacity-trial-7`. It completed 600/600 fixed-profile requests,
+  `/private/tmp/pr9-capacity-trial-8`. Both owned nodes were schedulable; it
+  completed 600/600 fixed-profile requests,
   scaled 2→3→4 from held admitted work at low CPU, bounded overload, kept four pods
-  for 333 seconds with the adapter unavailable, restored the warm minimum, killed
+  for 339 seconds with the adapter unavailable, restored the warm minimum, killed
   a real API container, and recovered the accepted spend/audit work exactly once.
 - Candidate image ID `sha256:43427327cb5b449c0b5dc233b802becb8b1f96e7c4a6323068c2dc5efe6d5f7b`
   was compared with the PR8 baseline image recorded in the campaign manifest.

@@ -106,6 +106,15 @@ async def preflight(cluster: LifecycleCluster) -> CapacityReport:
         if any(c["type"] == "Ready" and c["status"] == "True" for c in node["status"]["conditions"])
     ]
     assert ready_nodes and len(ready_nodes) == len(nodes)
+    schedulable_nodes = [
+        node
+        for node in ready_nodes
+        if not any(
+            taint.get("effect") in {"NoSchedule", "NoExecute"}
+            for taint in node["spec"].get("taints", [])
+        )
+    ]
+    assert len(schedulable_nodes) == len(nodes)
     pods = api_pods(cluster)
     assert pods
     for pod in pods:
@@ -158,6 +167,7 @@ async def preflight(cluster: LifecycleCluster) -> CapacityReport:
                     }
                     for node in ready_nodes
                 ],
+                "schedulable_nodes": [node["metadata"]["name"] for node in schedulable_nodes],
                 "postgresql_max_connections": int(maximum[0]["max_connections"]),
                 "redis_maxclients": int(config["maxclients"]),
                 "ready_api_pods": [pod["metadata"]["name"] for pod in pods],

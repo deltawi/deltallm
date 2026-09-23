@@ -175,6 +175,18 @@ class LifecycleCluster:
             self.kubectl(
                 "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=120s"
             )
+            if self.nodes == 2:
+                # Capacity acceptance needs both owned nodes for the fixed pod
+                # requests and the rolling-update surge. kind taints its control
+                # plane by default, which otherwise leaves only one 4-CPU worker
+                # on a standard GitHub runner.
+                self.kubectl(
+                    "taint",
+                    "nodes",
+                    self.name + "-control-plane",
+                    "node-role.kubernetes.io/control-plane-",
+                    timeout=30,
+                )
             self.run(self.kind, "load", "docker-image", image, "--name", self.name, timeout=600)
             self.kubectl("create", "namespace", NAMESPACE)
             self.event("cluster_created", image=image, node_image=NODE_IMAGE, nodes=self.nodes)
