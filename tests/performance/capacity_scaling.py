@@ -91,6 +91,21 @@ async def exercise_scaling(cluster: LifecycleCluster, values: Path, url: str) ->
     cluster.event("saturation_downscale_completed")
 
 
+def assert_bounded_overload(results: list[dict]) -> tuple[int, int]:
+    """Validate prompt edge shedding without timing admitted held streams."""
+    rejected = [result for result in results if result.get("status") in {429, 503}]
+    assert rejected
+    assert max(result["seconds"] for result in rejected) < 2
+    # Requests admitted before the edge gate fills remain deliberately held by
+    # the streaming provider. Their client-side read timeout can exceed five
+    # wall-clock seconds on a busy runner; it is not a local rejection latency.
+    assert all(
+        result.get("status") in {429, 503} or result.get("error") == "ReadTimeout"
+        for result in results
+    )
+    return len(rejected), sum(result.get("error") == "ReadTimeout" for result in results)
+
+
 async def overload_probe(cluster: LifecycleCluster, url: str) -> None:
     """Check a bounded edge burst and retain every response and elapsed time."""
     async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
@@ -114,11 +129,11 @@ async def overload_probe(cluster: LifecycleCluster, url: str) -> None:
 
         results = await asyncio.gather(*(request() for _ in range(80)))
     (cluster.output / "overload-responses.json").write_text(json.dumps(results, indent=2) + "\n")
-    assert any(result.get("status") in {429, 503} for result in results)
-    assert max(result["seconds"] for result in results) < 6
+    rejected, admitted_timeouts = assert_bounded_overload(results)
     cluster.event(
         "bounded_overload_observed",
-        rejected=sum(result.get("status") in {429, 503} for result in results),
+        rejected=rejected,
+        admitted_timeouts=admitted_timeouts,
     )
 
 

@@ -354,7 +354,7 @@ additional module capability-specific rather than extending oversized owners.
   remain explicit acceptance jobs rather than disguised hermetic tests.
 - [x] Review the complete diff, build a fix list, fix it and repeat until there are
   no actionable findings. Re-run checks affected by fixes; retain failure evidence.
-- [ ] Publish a PR to the feature branch with exact validation/evidence links only
+- [x] Publish a PR to the feature branch with exact validation/evidence links only
   after implementation and local gates pass. Update #320's six PR9 checkboxes only
   as their scope is completed; keep PR10 unchecked.
 
@@ -424,17 +424,27 @@ No production promotion or supported concurrency claim follows automatically.
 
 - Read `RULES.md` completely and kept all work in the isolated PR9 worktree.
 - All five dependency lanes passed locally before final review: application,
-  hermetic, PostgreSQL, Redis and Helm. Final classification contains 6,422 tests;
+  hermetic, PostgreSQL, Redis and Helm. Final classification contains 6,427 tests;
   the focused timeline and saturation regressions passed after the review fix.
 - Fresh and previous-release migration paths, container startup contract, Ruff,
   generated references, documentation tests, strict MkDocs and public-site
   containment passed. The final Helm lane passed 210 tests.
-- The final two-node campaign is retained at
-  `/private/tmp/pr9-capacity-trial-8`. Both owned nodes were schedulable; it
+- The final lifecycle campaign is retained at
+  `/private/tmp/pr9-lifecycle-trial-9`. The PR8 fixture was isolated from PR9's
+  production ingress/capacity overlay; both strict 100-request gates completed
+  100/100, and migration, drain, rollout, pod-loss and exactly-once recovery
+  checks passed.
+- The final two-node capacity campaign is retained at
+  `/private/tmp/pr9-capacity-trial-9`. Both owned nodes were schedulable; it
   completed 600/600 fixed-profile requests,
   scaled 2→3→4 from held admitted work at low CPU, bounded overload, kept four pods
   for 339 seconds with the adapter unavailable, restored the warm minimum, killed
   a real API container, and recovered the accepted spend/audit work exactly once.
+- CI's failing overload sample contained 68 fast 429/503 responses and 12
+  deliberately admitted streams that reached the client read timeout. The local
+  rerun observed 61 and 19 respectively. The acceptance assertion now bounds only
+  edge-rejection latency and separately permits only those expected `ReadTimeout`
+  results; unexpected errors and slow rejections still fail.
 - Candidate image ID `sha256:43427327cb5b449c0b5dc233b802becb8b1f96e7c4a6323068c2dc5efe6d5f7b`
   was compared with the PR8 baseline image recorded in the campaign manifest.
   This is functional PR9 evidence; no production throughput or concurrency

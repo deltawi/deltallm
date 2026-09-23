@@ -129,6 +129,9 @@ def chart_values(cluster: LifecycleCluster, image: str) -> Path:
         budget_enforcement_query_mode="combined",
         spend_operation_intents_enabled=True,
         model_deployment_bootstrap_from_config=False,
+        # Keep the PR8 lifecycle qualification on its recorded ingress path.
+        # PR9's separate capacity acceptance owns production ingress saturation.
+        gateway_ingress_enabled=False,
         embeddings_batch_enabled=True,
         embeddings_batch_item_lease_seconds=ITEM_LEASE_SECONDS,
         embeddings_batch_storage_dir="/artifacts",
@@ -141,6 +144,7 @@ def chart_values(cluster: LifecycleCluster, image: str) -> Path:
         # This PR8 fixture keeps its deterministic config-only provider. PR9's
         # separate capacity fixture exercises the strict production/DB-only contract.
         "managedLifecycle": {"production": False},
+        "dependencyCapacity": {"extended": {"enabled": False}},
         "replicaCount": 2,
         "autoscaling": {"enabled": False},
         "prometheus": {"serviceMonitor": {"enabled": False}},
@@ -180,8 +184,6 @@ def release(cluster: LifecycleCluster, values: Path, *extra: str, check: bool = 
         str(CHART),
         "-f",
         str(CHART / "values-production.yaml"),
-        "-f",
-        str(CHART / "values-capacity-fixture.yaml"),
         "-f",
         str(values),
         "--wait",
