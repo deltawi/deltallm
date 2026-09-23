@@ -149,9 +149,13 @@ async def exercise(cluster: LifecycleCluster, values: Path, image: str, baseline
         await wait_edge(url)
         await check_edge_bounds(cluster, url)
         await sample(cluster, "baseline-before", observe_processes=False)
-        await arrival(url, cluster.output / "baseline")
+        baseline_summary = await arrival(
+            url,
+            cluster.output / "baseline",
+            allow_controlled_rejections=True,
+        )
         await sample(cluster, "baseline-after", observe_processes=False)
-        cluster.event("baseline_completed", image=baseline)
+        cluster.event("baseline_completed", image=baseline, summary=baseline_summary)
         candidate_values = capacity_values(cluster, image)
         completed = False
         try:

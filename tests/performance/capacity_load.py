@@ -9,6 +9,7 @@ import httpx
 
 from scripts.measure_gateway_load import (
     RequestResult,
+    RunResult,
     run_constant_arrival,
     summarize,
     write_results,
@@ -23,7 +24,28 @@ PAYLOAD = {
 }
 
 
-async def arrival(url: str, output: Path, *, rate: float = 10, duration: float = 20) -> dict:
+def assert_valid_arrival(result: RunResult, *, allow_controlled_rejections: bool) -> None:
+    """Keep candidate traffic strict while allowing measured baseline shedding."""
+    expected_statuses = {200, 429, 503} if allow_controlled_rejections else {200}
+    if result.generator_dropped_count or any(
+        sample.error is not None or sample.status_code not in expected_statuses
+        for sample in result.samples
+    ):
+        raise AssertionError("Controlled capacity arrival workload lost or rejected requests")
+    if allow_controlled_rejections and not any(
+        sample.status_code == 200 for sample in result.samples
+    ):
+        raise AssertionError("Baseline capacity workload completed no successful requests")
+
+
+async def arrival(
+    url: str,
+    output: Path,
+    *,
+    rate: float = 10,
+    duration: float = 20,
+    allow_controlled_rejections: bool = False,
+) -> dict:
     async with httpx.AsyncClient(
         timeout=10,
         trust_env=False,
@@ -45,10 +67,7 @@ async def arrival(url: str, output: Path, *, rate: float = 10, duration: float =
         )
     summary = summarize(result, target_rate=rate)
     write_results(result, summary, output)
-    if result.generator_dropped_count or any(
-        sample.status_code != 200 for sample in result.samples
-    ):
-        raise AssertionError("Controlled capacity arrival workload lost or rejected requests")
+    assert_valid_arrival(result, allow_controlled_rejections=allow_controlled_rejections)
     return summary
 
 

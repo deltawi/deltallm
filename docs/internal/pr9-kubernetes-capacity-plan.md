@@ -424,7 +424,7 @@ No production promotion or supported concurrency claim follows automatically.
 
 - Read `RULES.md` completely and kept all work in the isolated PR9 worktree.
 - All five dependency lanes passed locally before final review: application,
-  hermetic, PostgreSQL, Redis and Helm. Final classification contains 6,427 tests;
+  hermetic, PostgreSQL, Redis and Helm. Final classification contains 6,433 tests;
   the focused timeline and saturation regressions passed after the review fix.
 - Fresh and previous-release migration paths, container startup contract, Ruff,
   generated references, documentation tests, strict MkDocs and public-site
@@ -435,7 +435,7 @@ No production promotion or supported concurrency claim follows automatically.
   100/100, and migration, drain, rollout, pod-loss and exactly-once recovery
   checks passed.
 - The final two-node capacity campaign is retained at
-  `/private/tmp/pr9-capacity-trial-9`. Both owned nodes were schedulable; it
+  `/private/tmp/pr9-capacity-trial-10`. Both owned nodes were schedulable; it
   completed 600/600 fixed-profile requests,
   scaled 2→3→4 from held admitted work at low CPU, bounded overload, kept four pods
   for 339 seconds with the adapter unavailable, restored the warm minimum, killed
@@ -445,6 +445,12 @@ No production promotion or supported concurrency claim follows automatically.
   rerun observed 61 and 19 respectively. The acceptance assertion now bounds only
   edge-rejection latency and separately permits only those expected `ReadTimeout`
   results; unexpected errors and slow rejections still fail.
+- A later CI run recorded 183 baseline successes and 17 controlled 503 responses.
+  Baseline measurements now retain 200/429/503 outcomes without weakening the
+  candidate gate: generator drops, client errors, unexpected statuses, and a
+  baseline with no success still fail; every candidate fixed-profile request must
+  still return 200. The final local rerun recorded a 200/200 baseline and 60/20
+  overload split and completed in 1,457.5 seconds.
 - Candidate image ID `sha256:43427327cb5b449c0b5dc233b802becb8b1f96e7c4a6323068c2dc5efe6d5f7b`
   was compared with the PR8 baseline image recorded in the campaign manifest.
   This is functional PR9 evidence; no production throughput or concurrency
