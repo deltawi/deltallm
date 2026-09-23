@@ -1,0 +1,45 @@
+# Cluster monitoring release, not a DeltaLLM application subchart.
+# Chart 5.3.0; provide tls.ca/key/certificate or use the TLS preparation script.
+image:
+  tag: v0.12.0@sha256:932eae60e2bcf9c4660d6442da066ef1a79b4ea7cc232c61c7303069216ca006
+replicas: 2
+logLevel: 2
+metricsRelistInterval: 15s
+extraArguments:
+  - --metrics-max-age=45s
+prometheus:
+  url: http://prometheus.monitoring.svc
+  port: 9090
+tls:
+  enable: true
+rbac:
+  customMetrics:
+    resources: [pods]
+rules:
+  default: false
+  custom:
+    - seriesQuery: 'deltallm_ingress_active{allocation="inference",deltallm_role="api",namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name:
+        matches: ^deltallm_ingress_active$
+        as: deltallm_admitted_inflight
+      # Keep missing/stale data absent; deduplicate repeated scrapes per pod.
+      metricsQuery: >-
+        max by (<<.GroupBy>>) (
+          <<.Series>>{<<.LabelMatchers>>,allocation="inference",deltallm_role="api"}
+          and
+          (time() - timestamp(<<.Series>>{<<.LabelMatchers>>,allocation="inference",deltallm_role="api"}) < 45)
+        )
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

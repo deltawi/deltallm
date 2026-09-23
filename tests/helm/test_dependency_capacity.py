@@ -29,7 +29,7 @@ def test_production_counts_all_pools_surge_retiring_pods_and_enabled_roles(worke
     assert int(result["peak-processes"]) == processes
     assert (
         int(result["postgresql-connections-including-reserve"])
-        == processes * (20 + 8 + 5 + 5) + 100
+        == processes * (20 + 8 + 5 + 5) + 100 + 2
     )
     assert int(result["redis-critical-connections"]) == processes * 64
     assert int(result["redis-cache-connections"]) == processes * (16 + 16)

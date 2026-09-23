@@ -1,3 +1,4 @@
+{{- include "deltallm.validateSaturationScaling" . -}}
 {{- if .Values.autoscaling.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -16,6 +17,15 @@ spec:
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:
+    {{- if .Values.autoscaling.admittedInflight.enabled }}
+    - type: Pods
+      pods:
+        metric:
+          name: deltallm_admitted_inflight
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.admittedInflight.targetAverageValue | quote }}
+    {{- end }}
     - type: Resource
       resource:
         name: cpu

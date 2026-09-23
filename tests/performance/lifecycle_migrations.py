@@ -22,6 +22,8 @@ async def concurrent_migrations(cluster: LifecycleCluster, values: Path) -> None
         "-f",
         str(CHART / "values-production.yaml"),
         "-f",
+        str(CHART / "values-capacity-fixture.yaml"),
+        "-f",
         str(values),
     ).stdout
     template = next(doc for doc in yaml.safe_load_all(rendered) if doc and doc["kind"] == "Job")

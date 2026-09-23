@@ -96,6 +96,9 @@ probes:
     failureThreshold: 3
 
 autoscaling:
+  admittedInflight:
+    enabled: false
+    targetAverageValue: 70
   scaleDownStabilizationSeconds: 300
   enabled: false
   minReplicas: 2
@@ -249,6 +252,8 @@ config:
     lifecycle_close_seconds: 5
     lifecycle_shutdown_seconds: 80
     migration_mode: startup
+    deployment_capacity_path: null
+    deployment_capacity_role: api
     migration_verify_timeout_seconds: 10
     # Finite Redis allocations (restart required).
     redis_bulk_url: null
@@ -500,6 +505,8 @@ s3:
     secretAccessKeyKey: aws-secret-access-key
 
 prometheus:
+  customMetrics:
+    enabled: false # Externally managed Prometheus Adapter APIService.
   podAnnotations:
     enabled: true
   serviceMonitor:
@@ -567,3 +574,25 @@ dependencyCapacity:
   postgresqlReservedConnections: 20
   redisMaxClients: 2000
   redisReservedClients: 64
+  # Governed deployment allocations. Physical limits must be verified by operators.
+  extended:
+    enabled: false
+    postgresqlMigrationConnections: 0
+    postgresqlOtherConnections: 0
+    redisOtherClients: 0
+    proxyPoolsPerClient: 0
+    auxiliaryHttpConnectionsPerProcess: 0
+    cacheRedis:
+      separate: false
+      maxClients: 2000
+      reservedClients: 64
+    fileDescriptors:
+      processLimit: 8192
+      engineLimit: 1024
+      inboundConnectionsPerProcess: 256
+      otherPerProcess: 128
+      headroomPerProcess: 256
+      maxPodsPerNode: 44
+      nodeLimit: 1048576
+      nodeReserved: 8192
+    providerDomains: {}

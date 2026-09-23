@@ -8,7 +8,7 @@ from typing import Any
 
 from src.concurrency import BoundedCapacityGate
 from src.config_startup import startup_field_values
-from src.metrics.admission import ingress_bytes
+from src.metrics.admission import ingress_active, ingress_bytes
 
 
 class IngressClass(StrEnum):
@@ -82,6 +82,10 @@ class IngressBufferFull(RuntimeError):
 class IngressRuntime:
     def __init__(self, limits: IngressLimits) -> None:
         self.limits = limits
+        # A ready idle pod must expose zero to the HPA. Merely constructing the
+        # labelled child preserves any existing lifetimes in an embedded runtime.
+        for allocation in IngressClass:
+            ingress_active.labels(allocation.value)
         self.requests = BoundedCapacityGate(
             concurrency=limits.max_active, max_waiters=limits.max_waiters
         )

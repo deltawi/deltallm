@@ -106,6 +106,9 @@ router_settings:
   #         lane: quality
 
 general_settings:
+  # Startup-only Helm capacity contract; null for standalone development.
+  deployment_capacity_path: null
+  deployment_capacity_role: api
   # Startup-only managed process budgets. Production uses migration_mode: external.
   readiness_probe_timeout_seconds: 1
   readiness_cache_seconds: 1

@@ -293,6 +293,7 @@ jobs:
             > /dev/null
           helm lint deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
             --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
@@ -300,12 +301,39 @@ jobs:
             --set runtime.redis.url="${VALID_REDIS_URL}"
           helm template deltallm deploy/kubernetes/helm \
             -f deploy/kubernetes/helm/values-production.yaml \
+            -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
             --set image.tag=ci-validation \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             --set runtime.database.url="${VALID_DATABASE_URL}" \
             --set runtime.redis.url="${VALID_REDIS_URL}" \
             > /dev/null
+          for replicas in 2 3 4; do
+            helm lint deploy/kubernetes/helm \
+              -f deploy/kubernetes/helm/values-production.yaml \
+              -f deploy/kubernetes/helm/values-capacity-experiment.yaml \
+              -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
+              --set replicaCount="$replicas" \
+              --set image.tag=ci-validation \
+              --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+              --set secret.values.saltKey="${VALID_SALT_KEY}" \
+              --set runtime.database.url="${VALID_DATABASE_URL}" \
+              --set runtime.redis.url="${VALID_REDIS_URL}"
+            helm template deltallm deploy/kubernetes/helm \
+              -f deploy/kubernetes/helm/values-production.yaml \
+              -f deploy/kubernetes/helm/values-capacity-experiment.yaml \
+              -f deploy/kubernetes/helm/values-capacity-fixture.yaml \
+              --set replicaCount="$replicas" \
+              --set image.tag=ci-validation \
+              --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+              --set secret.values.saltKey="${VALID_SALT_KEY}" \
+              --set runtime.database.url="${VALID_DATABASE_URL}" \
+              --set runtime.redis.url="${VALID_REDIS_URL}" \
+              > /dev/null
+          done
+
+      - name: Verify effective profile documentation
+        run: uv run python scripts/render_capacity_profiles.py --check
 
       - name: Run Helm tests
         run: >-
@@ -315,10 +343,13 @@ jobs:
   lifecycle-acceptance:
     uses: ./.github/workflows/lifecycle-acceptance.yml
 
+  capacity-acceptance:
+    uses: ./.github/workflows/capacity-acceptance.yml
+
   test:
     name: test
     if: ${{ always() }}
-    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm, lifecycle-acceptance]
+    needs: [python-tests, postgres-tests, redis-tests, migration-paths, helm, lifecycle-acceptance, capacity-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -330,8 +361,9 @@ jobs:
           MIGRATIONS: ${{ needs.migration-paths.result }}
           HELM: ${{ needs.helm.result }}
           LIFECYCLE: ${{ needs.lifecycle-acceptance.result }}
+          CAPACITY: ${{ needs.capacity-acceptance.result }}
         run: |
-          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM" "$LIFECYCLE"; do
+          for result in "$APP_AND_HERMETIC" "$POSTGRES" "$REDIS" "$MIGRATIONS" "$HELM" "$LIFECYCLE" "$CAPACITY"; do
             if [ "$result" != success ]; then
               echo "Required test job finished with status: $result"
               exit 1
