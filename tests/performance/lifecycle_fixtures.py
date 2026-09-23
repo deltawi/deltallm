@@ -138,6 +138,9 @@ def chart_values(cluster: LifecycleCluster, image: str) -> Path:
     config["model_list"][0]["deltallm_params"]["api_base"] = "http://provider:8000/v1"
     values = {
         "image": {"repository": repository, "tag": tag, "pullPolicy": "Never"},
+        # This PR8 fixture keeps its deterministic config-only provider. PR9's
+        # separate capacity fixture exercises the strict production/DB-only contract.
+        "managedLifecycle": {"production": False},
         "replicaCount": 2,
         "autoscaling": {"enabled": False},
         "prometheus": {"serviceMonitor": {"enabled": False}},
