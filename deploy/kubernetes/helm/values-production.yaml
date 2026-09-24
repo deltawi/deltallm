@@ -30,6 +30,9 @@ resources:
     memory: 2Gi
 
 autoscaling:
+  admittedInflight:
+    enabled: true
+    targetAverageValue: 70
   scaleDownStabilizationSeconds: 300
   enabled: true
   minReplicas: 3
@@ -63,6 +66,8 @@ redis:
   enabled: false
 
 prometheus:
+  customMetrics:
+    enabled: true
   serviceMonitor:
     enabled: true
     interval: 15s
@@ -94,6 +99,48 @@ batchWorker:
 config:
   general_settings:
     migration_mode: external
+    gateway_ingress_enabled: true
+    gateway_ingress_max_active: 100
+    gateway_ingress_max_waiters: 0
+    gateway_ingress_queue_timeout_ms: 10
+    gateway_ingress_max_body_bytes: 33554432
+    gateway_ingress_max_buffered_bytes: 67108864
+    gateway_ingress_body_timeout_seconds: 10
+    gateway_ingress_health_max_active: 4
+    gateway_ingress_control_max_active: 16
+    gateway_ingress_control_max_buffered_bytes: 67108864
+    gateway_preflight_capacity_enabled: true
+    gateway_preflight_global_max_parallel: 300
+    gateway_preflight_org_max_parallel: 100
+    gateway_preflight_lease_ttl_seconds: 30
+    redis_degraded_mode: fail_closed
+    spend_ingestion_worker_enabled: true
+    audit_ingestion_worker_enabled: true
+    audit_enabled: true
+    db_pool_size: 20
+    db_pool_timeout: 2
+    telemetry_db_pool_size: 5
+    telemetry_db_pool_timeout_seconds: 2
+    redis_critical_max_connections: 64
+    redis_bulk_max_connections: 16
+    redis_acquisition_timeout_seconds: 0.2
+    redis_socket_timeout_seconds: 1
+    redis_connect_timeout_seconds: 1
+    upstream_http_connect_timeout_seconds: 10
+    upstream_http_read_timeout_seconds: 300
+    upstream_http_write_timeout_seconds: 30
+    upstream_http_pool_timeout_seconds: 10
+    upstream_http_max_connections: 500
+    upstream_http_max_keepalive_connections: 100
+    upstream_http_keepalive_expiry_seconds: 60
+    readiness_probe_timeout_seconds: 1
+    readiness_cache_seconds: 1
+    lifecycle_withdrawal_seconds: 5
+    lifecycle_request_drain_seconds: 45
+    lifecycle_cancellation_seconds: 5
+    lifecycle_worker_drain_seconds: 20
+    lifecycle_close_seconds: 5
+    lifecycle_shutdown_seconds: 80
     # PR5 qualifies scope/reset parity; this is not an atomic monetary reservation.
     # Startup-only callback delivery and guardrail execution bounds.
     callback_max_pending: 128
@@ -190,3 +237,12 @@ dependencyCapacity:
   postgresqlReservedConnections: 100
   redisMaxClients: 5000
   redisReservedClients: 128
+  extended:
+    enabled: true
+    postgresqlMigrationConnections: 2
+    postgresqlOtherConnections: 0
+    redisOtherClients: 0
+    proxyPoolsPerClient: 0
+    auxiliaryHttpConnectionsPerProcess: 2048
+    # Supply actual providerDomains in the operator overlay. No invented quotas.
+    providerDomains: {}

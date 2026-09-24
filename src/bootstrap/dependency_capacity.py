@@ -13,6 +13,7 @@ from src.spend_operation_settings import SpendOperationAllocation
 from src.database_settings import DatabaseAllocationSettings
 from src.db.allocation_config import resolve_allocation_settings
 from src.redis_runtime import RedisLimits, startup_setting
+from src.bootstrap.capacity_contract import DeploymentCapacityContract
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class DependencyAllocationSnapshot:
     control_connections: int
     telemetry_connections: int
     spend_operations: SpendOperationAllocation
+    deployment: DeploymentCapacityContract | None = None
 
     @classmethod
     def build(cls, config: AppConfig, settings: Settings) -> Self:
@@ -44,7 +46,21 @@ class DependencyAllocationSnapshot:
             spend_operations=SpendOperationAllocation.resolve(
                 general, settings, telemetry_connections=telemetry.pool_size if telemetry else 0
             ),
+            deployment=DeploymentCapacityContract.load(config, settings),
         )
+
+    def validate_deployment(self, config: AppConfig, settings: Settings) -> None:
+        if self.deployment is not None:
+            database = self.control_connections + self.database.db_foreground_pool_size
+            if self.telemetry_connections:
+                database += self.telemetry_connections + self.database.telemetry_worker_db_pool_size
+            self.deployment.validate(
+                config,
+                settings,
+                database=database,
+                critical=self.redis.critical_max_connections,
+                cache=self.redis.cache_max_connections + self.redis.bulk_max_connections,
+            )
 
     def validate_effective(self, config: AppConfig, settings: Settings) -> None:
         if self != self.build(config, settings):
@@ -52,3 +68,4 @@ class DependencyAllocationSnapshot:
             raise RuntimeError(
                 "Dependency allocation settings must match startup file/environment configuration"
             )
+        self.validate_deployment(config, settings)

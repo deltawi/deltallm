@@ -467,6 +467,10 @@ ingress:
 
 ## High availability
 
+The production overlay requires checked downstream/provider declarations and a
+working custom metrics adapter. Follow the [saturation autoscaling and capacity
+preflight runbook](saturation-autoscaling.md) before enabling its HPA.
+
 Use the production profile as the base:
 
 ```bash

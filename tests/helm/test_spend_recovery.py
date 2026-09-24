@@ -21,13 +21,19 @@ def test_invalid_spend_recovery_allocation_is_rejected(override):
 
 
 def test_reserved_pool_does_not_increase_peak_connection_budget():
+    # Compare optional recovery allocations in a development profile; production
+    # now requires intents. Settlement stays inside the same five DB connections.
     before = capacity(
         _render(
             "-f",
             str(HELM_CHART_DIR / "values-production.yaml"),
             "--set",
             "config.general_settings.spend_operation_intents_enabled=false",
+            "--set",
+            "managedLifecycle.production=false",
         )
     )
     after = capacity(_render("-f", str(HELM_CHART_DIR / "values-production.yaml")))
-    assert before == after
+    assert {k: v for k, v in before.items() if k != "report.json"} == {
+        k: v for k, v in after.items() if k != "report.json"
+    }

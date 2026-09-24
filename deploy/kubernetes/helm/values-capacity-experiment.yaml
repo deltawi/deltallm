@@ -1,0 +1,26 @@
+# Apply after values-production.yaml and an operator/local-mock quota overlay.
+# Unqualified test allocations. Vary replicaCount=2,3,4 with HPA disabled first.
+replicaCount: 2
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+autoscaling:
+  # Low-load functional scale signal for 30–50 held streams on a local test node.
+  # The 100/50 preflight limits cover only preflight, not whole stream lifetimes.
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  admittedInflight:
+    enabled: true
+    targetAverageValue: 10
+  scaleDownStabilizationSeconds: 300
+podDisruptionBudget:
+  minAvailable: 1
+config:
+  general_settings:
+    gateway_preflight_global_max_parallel: 100
+    gateway_preflight_org_max_parallel: 50

@@ -32,6 +32,9 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
+        {{- if .Values.dependencyCapacity.extended.enabled }}
+        checksum/capacity: {{ include "deltallm.capacityReport" . | sha256sum }}
+        {{- end }}
         checksum/config: {{ include "deltallm.apiConfigYaml" . | sha256sum }}
         {{- if $hasGeneratedAppSecret }}
         checksum/app-secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
@@ -89,6 +92,11 @@ spec:
 {{ $envFrom | nindent 10 }}
           {{- end }}
           volumeMounts:
+            {{- if .Values.dependencyCapacity.extended.enabled }}
+            - name: capacity
+              mountPath: /app/capacity
+              readOnly: true
+            {{- end }}
             - name: scratch
               mountPath: /tmp
             - name: config
@@ -101,6 +109,14 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        {{- if .Values.dependencyCapacity.extended.enabled }}
+        - name: capacity
+          configMap:
+            name: {{ include "deltallm.fullname" . }}-dependency-capacity
+            items:
+              - key: report.json
+                path: report.json
+        {{- end }}
         - name: scratch
           emptyDir:
             sizeLimit: 512Mi

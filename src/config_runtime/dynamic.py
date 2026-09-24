@@ -4,6 +4,8 @@ from src.database_settings import DATABASE_ALLOCATION_FIELDS
 from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import RequestWorkSettings
 from src.lifecycle_settings import LifecycleSettings
+from src.deployment_capacity_settings import DeploymentCapacitySettings
+from src.capacity_runtime_policy import CapacityRuntimePolicy
 from src.telemetry.lifecycle import WorkerHealth, WorkerState, stop_tasks_before_deadline
 from src.shutdown import cleanup_deadline
 
@@ -63,6 +65,7 @@ _STARTUP_ONLY_GENERAL_SETTINGS = (
     DATABASE_ALLOCATION_FIELDS
     | frozenset(RequestWorkSettings.model_fields)
     | frozenset(LifecycleSettings.model_fields)
+    | frozenset(DeploymentCapacitySettings.model_fields)
     | frozenset(
         {
             "spend_ingestion_worker_enabled",
@@ -530,9 +533,14 @@ class DynamicConfigManager:
     def _reject_startup_only_changes(self, next_app_config: AppConfig) -> None:
         current = self._config.general_settings
         candidate = next_app_config.general_settings
+        governed = (
+            frozenset(CapacityRuntimePolicy.model_fields)
+            if current.deployment_capacity_path
+            else frozenset()
+        )
         changed = sorted(
             field_name
-            for field_name in _STARTUP_ONLY_GENERAL_SETTINGS
+            for field_name in _STARTUP_ONLY_GENERAL_SETTINGS | governed
             if getattr(current, field_name) != getattr(candidate, field_name)
             or (
                 (
@@ -541,6 +549,7 @@ class DynamicConfigManager:
                     or field_name in SpendOperationSettings.model_fields
                     or field_name in RequestWorkSettings.model_fields
                     or field_name in LifecycleSettings.model_fields
+                    or field_name in DeploymentCapacitySettings.model_fields
                     or field_name == "spend_ingestion_worker_enabled"
                 )
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)

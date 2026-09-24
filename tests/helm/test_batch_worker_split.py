@@ -31,6 +31,8 @@ def _render(*args: str) -> list[dict[str, Any]]:
         "secret.values.masterKey=sk-testmasterkey1234567890A1",
         "--set",
         "secret.values.saltKey=test-salt-key-1234567890",
+        "-f",
+        str(HELM_CHART_DIR / "values-capacity-fixture.yaml"),
         *args,
     ]
     result = subprocess.run(command, cwd=REPO_ROOT, check=True, capture_output=True, text=True)
@@ -51,6 +53,8 @@ def _render_error(*args: str) -> str:
         "secret.values.masterKey=sk-testmasterkey1234567890A1",
         "--set",
         "secret.values.saltKey=test-salt-key-1234567890",
+        "-f",
+        str(HELM_CHART_DIR / "values-capacity-fixture.yaml"),
         *args,
     ]
     result = subprocess.run(command, cwd=REPO_ROOT, check=False, capture_output=True, text=True)

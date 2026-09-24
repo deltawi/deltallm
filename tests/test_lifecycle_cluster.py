@@ -7,9 +7,35 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+import yaml
 
 from tests.performance.lifecycle_cluster import LifecycleCluster
+from tests.performance.lifecycle_fixtures import chart_values
 from tests.performance import lifecycle_recovery
+
+
+def test_event_timeline_fields_cannot_be_overwritten(tmp_path):
+    cluster = LifecycleCluster(tmp_path)
+    try:
+        cluster.event("started", duration_seconds=1.5)
+        assert cluster.events[0]["event"] == "started"
+        assert cluster.events[0]["seconds"] >= 0
+        assert cluster.events[0]["duration_seconds"] == 1.5
+        with pytest.raises(ValueError, match="reserved fields"):
+            cluster.event("invalid", seconds=1.5)
+    finally:
+        cluster.directory.cleanup()
+
+
+def test_pr8_lifecycle_fixture_does_not_inherit_pr9_capacity_path(tmp_path):
+    cluster = LifecycleCluster(tmp_path)
+    try:
+        values = yaml.safe_load(chart_values(cluster, "deltallm:test").read_text())
+        assert values["managedLifecycle"]["production"] is False
+        assert values["dependencyCapacity"]["extended"]["enabled"] is False
+        assert values["config"]["general_settings"]["gateway_ingress_enabled"] is False
+    finally:
+        cluster.directory.cleanup()
 
 
 @pytest.fixture

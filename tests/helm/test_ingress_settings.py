@@ -25,6 +25,8 @@ def render(*args: str) -> subprocess.CompletedProcess[str]:
             "secret.values.masterKey=sk-testmasterkey1234567890A1",
             "--set",
             "secret.values.saltKey=test-salt-key-1234567890",
+            "-f",
+            str(CHART / "values-capacity-fixture.yaml"),
             *args,
         ],
         capture_output=True,

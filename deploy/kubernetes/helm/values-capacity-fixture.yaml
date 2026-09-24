@@ -1,0 +1,18 @@
+# CI/local mock ONLY. These synthetic quotas do not describe a real provider.
+# Production operators must supply measured allocations from their provider.
+dependencyCapacity:
+  extended:
+    auxiliaryHttpConnectionsPerProcess: 2048
+    providerDomains:
+      local-mock:
+        modelIds: [fixed-one-token]
+        rpm: 1000000
+        tpm: 1000000000
+        concurrency: 100000
+        apiRpmPerProcess: 600
+        workerRpmPerProcess: 60
+        tokensPerAttempt: 32
+        attemptsPerRequest: 3
+        reservedRpm: 100
+        reservedTpm: 1000
+        reservedConcurrency: 10

@@ -28,7 +28,8 @@
         "postgresqlMaxConnections",
         "postgresqlReservedConnections",
         "redisMaxClients",
-        "redisReservedClients"
+        "redisReservedClients",
+        "extended"
       ],
       "properties": {
         "apiProcessesPerPod": {
@@ -65,10 +66,222 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 10000000
+        },
+        "extended": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "postgresqlMigrationConnections",
+            "postgresqlOtherConnections",
+            "redisOtherClients",
+            "proxyPoolsPerClient",
+            "auxiliaryHttpConnectionsPerProcess",
+            "cacheRedis",
+            "fileDescriptors",
+            "providerDomains"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "postgresqlMigrationConnections": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "postgresqlOtherConnections": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "redisOtherClients": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            "proxyPoolsPerClient": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "auxiliaryHttpConnectionsPerProcess": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "cacheRedis": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "separate",
+                "maxClients",
+                "reservedClients"
+              ],
+              "properties": {
+                "separate": {
+                  "type": "boolean"
+                },
+                "maxClients": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                },
+                "reservedClients": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                }
+              }
+            },
+            "fileDescriptors": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "processLimit",
+                "engineLimit",
+                "inboundConnectionsPerProcess",
+                "otherPerProcess",
+                "headroomPerProcess",
+                "maxPodsPerNode",
+                "nodeLimit",
+                "nodeReserved"
+              ],
+              "properties": {
+                "processLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "engineLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "inboundConnectionsPerProcess": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "otherPerProcess": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "headroomPerProcess": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "maxPodsPerNode": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "nodeLimit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                },
+                "nodeReserved": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000000
+                }
+              }
+            },
+            "providerDomains": {
+              "type": "object",
+              "maxProperties": 64,
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "rpm",
+                  "tpm",
+                  "concurrency",
+                  "apiRpmPerProcess",
+                  "workerRpmPerProcess",
+                  "tokensPerAttempt",
+                  "attemptsPerRequest",
+                  "reservedRpm",
+                  "reservedTpm",
+                  "reservedConcurrency",
+                  "modelIds"
+                ],
+                "properties": {
+                  "rpm": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "tpm": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "concurrency": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "apiRpmPerProcess": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "workerRpmPerProcess": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "tokensPerAttempt": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "attemptsPerRequest": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "reservedRpm": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000000
+                  },
+                  "reservedTpm": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000000
+                  },
+                  "reservedConcurrency": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000000
+                  },
+                  "modelIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1024,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
-    "replicaCount": { "type": "integer", "minimum": 1 },
+    "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
     "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
     "minReadySeconds": { "type": "integer", "minimum": 0 },
     "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
@@ -146,10 +359,32 @@
       "properties": {
         "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
         "enabled": { "type": "boolean" },
-        "minReplicas": { "type": "integer", "minimum": 1 },
-        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "minReplicas": { "type": "integer", "minimum": 1,
+  "maximum": 10000
+},
+        "maxReplicas": { "type": "integer", "minimum": 1,
+  "maximum": 10000
+},
         "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+        "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "admittedInflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "targetAverageValue"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "targetAverageValue": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            }
+          }
+        }
       }
     },
     "podDisruptionBudget": {
@@ -175,53 +410,7 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "general_settings": {
-              "type": "object",
-              "properties": {
-                "db_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_pool_size"
-                },
-                "db_foreground_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_foreground_pool_size"
-                },
-                "telemetry_db_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/telemetry_db_pool_size"
-                },
-                "telemetry_worker_db_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/telemetry_worker_db_pool_size"
-                },
-                "redis_critical_max_connections": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/redis_critical_max_connections"
-                },
-                "redis_cache_max_connections": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/redis_cache_max_connections"
-                },
-                "redis_bulk_max_connections": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/redis_bulk_max_connections"
-                },
-                "db_acquisition_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_acquisition_timeout_seconds"
-                },
-                "db_lock_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_lock_timeout_seconds"
-                },
-                "db_statement_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_statement_timeout_seconds"
-                },
-                "db_transaction_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_transaction_timeout_seconds"
-                },
-                "db_background_lock_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_background_lock_timeout_seconds"
-                },
-                "db_background_statement_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_background_statement_timeout_seconds"
-                },
-                "db_background_transaction_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_background_transaction_timeout_seconds"
-                }
-              }
-            }
+            "general_settings": {"$ref": "#/properties/config/properties/general_settings"}
           }
         }
       }
@@ -232,7 +421,7 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "allowUnsafeLocalStorage": { "type": "boolean" },
-        "replicaCount": { "type": "integer", "minimum": 1 },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
         "podAnnotations": { "type": "object" },
         "podLabels": { "type": "object" },
         "priorityClassName": { "type": "string" },
@@ -298,63 +487,7 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "general_settings": {
-              "type": "object",
-              "properties": {
-                "db_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_pool_size"
-                },
-                "db_foreground_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_foreground_pool_size"
-                },
-                "telemetry_db_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/telemetry_db_pool_size"
-                },
-                "telemetry_worker_db_pool_size": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/telemetry_worker_db_pool_size"
-                },
-                "redis_critical_max_connections": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/redis_critical_max_connections"
-                },
-                "redis_cache_max_connections": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/redis_cache_max_connections"
-                },
-                "redis_bulk_max_connections": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/redis_bulk_max_connections"
-                },
-                "db_acquisition_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_acquisition_timeout_seconds"
-                },
-                "db_lock_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_lock_timeout_seconds"
-                },
-                "db_statement_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_statement_timeout_seconds"
-                },
-                "db_transaction_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_transaction_timeout_seconds"
-                },
-                "db_background_lock_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_background_lock_timeout_seconds"
-                },
-                "db_background_statement_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_background_statement_timeout_seconds"
-                },
-                "db_background_transaction_timeout_seconds": {
-                  "$ref": "#/properties/config/properties/general_settings/properties/db_background_transaction_timeout_seconds"
-                },
-                "readiness_probe_timeout_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/readiness_probe_timeout_seconds"},
-                "readiness_cache_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/readiness_cache_seconds"},
-                "lifecycle_withdrawal_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_withdrawal_seconds"},
-                "lifecycle_request_drain_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_request_drain_seconds"},
-                "lifecycle_cancellation_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_cancellation_seconds"},
-                "lifecycle_worker_drain_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_worker_drain_seconds"},
-                "lifecycle_close_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_close_seconds"},
-                "lifecycle_shutdown_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/lifecycle_shutdown_seconds"},
-                "migration_mode": {"$ref": "#/properties/config/properties/general_settings/properties/migration_mode"},
-                "migration_verify_timeout_seconds": {"$ref": "#/properties/config/properties/general_settings/properties/migration_verify_timeout_seconds"}
-              }
-            }
+            "general_settings": {"$ref": "#/properties/config/properties/general_settings"}
           }
         }
       }
@@ -461,7 +594,7 @@
             "db_background_lock_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 60, "default": 1.0},
             "db_background_transaction_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 120, "default": 10.0},
             "redis_cache_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 16},
-            "db_pool_size": {"type": "integer", "minimum": 1},
+            "db_pool_size": {"type": "integer", "minimum": 1, "maximum": 10000},
             "db_pool_timeout": {"type": "integer", "minimum": 0},
             "redis_critical_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000},
             "redis_bulk_max_connections": {"type": "integer", "minimum": 1, "maximum": 10000},
@@ -475,8 +608,8 @@
             "upstream_http_read_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "upstream_http_write_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "upstream_http_pool_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
-            "upstream_http_max_connections": { "type": "integer", "minimum": 1 },
-            "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0 },
+            "upstream_http_max_connections": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0, "maximum": 100000 },
             "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 },
             "prompt_singleflight_max_keys": { "type": "integer", "minimum": 1, "maximum": 10000 },
             "prompt_singleflight_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 30 },
@@ -709,7 +842,29 @@
             "lifecycle_close_seconds": {"type": "number", "maximum": 30, "exclusiveMinimum": 0},
             "lifecycle_shutdown_seconds": {"type": "number", "maximum": 750, "exclusiveMinimum": 0},
             "migration_mode": {"type": "string", "enum": ["startup", "external"]},
-            "migration_verify_timeout_seconds": {"type": "number", "maximum": 60, "exclusiveMinimum": 0}
+            "migration_verify_timeout_seconds": {"type": "number", "maximum": 60, "exclusiveMinimum": 0},
+            "redis_degraded_mode": {
+              "type": "string",
+              "enum": [
+                "fail_open",
+                "fail_closed"
+              ]
+            },
+            "deployment_capacity_path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "deployment_capacity_role": {
+              "type": "string",
+              "enum": [
+                "api",
+                "batchWorker"
+              ]
+            }
           }
         }
       }
@@ -756,6 +911,18 @@
             "interval": { "type": "string" },
             "scrapeTimeout": { "type": "string" },
             "labels": { "type": "object" }
+          }
+        },
+        "customMetrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
           }
         }
       }

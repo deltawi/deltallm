@@ -30,11 +30,18 @@ LOAD_KEY = "sk-concurrency-pr8-local-only-000000000000"
 
 
 class LifecycleCluster:
-    def __init__(self, output: Path, *, kind: str = "kind") -> None:
+    def __init__(
+        self, output: Path, *, kind: str = "kind", purpose: str = "pr8", nodes: int = 1
+    ) -> None:
         self.output = output.resolve()
         self.output.mkdir(parents=True, exist_ok=True)
         self.kind = kind
-        self.name = "deltallm-pr8-" + uuid4().hex[:8]
+        if nodes not in (1, 2):
+            raise ValueError("Lifecycle fixtures support one or two owned kind nodes")
+        self.nodes = nodes
+        if not re.fullmatch(r"[a-z0-9-]{1,24}", purpose):
+            raise ValueError("Invalid owned test cluster purpose")
+        self.name = "deltallm-" + purpose + "-" + uuid4().hex[:8]
         self.directory = tempfile.TemporaryDirectory(prefix="deltallm-pr8-")
         self.kubeconfig = str(Path(self.directory.name) / "kubeconfig")
         self.sequence = 0
@@ -45,6 +52,8 @@ class LifecycleCluster:
     def event(self, name: str, **details: object) -> None:
         if len(self.events) >= 256:
             raise RuntimeError("lifecycle event allocation exceeded")
+        if {"event", "seconds"} & details.keys():
+            raise ValueError("Lifecycle event details cannot replace reserved fields")
         self.events.append({"event": name, "seconds": time.monotonic() - self.started, **details})
         (self.output / "events.json").write_text(json.dumps(self.events, indent=2) + "\n")
 
@@ -94,7 +103,7 @@ class LifecycleCluster:
         if (
             metadata["namespace"] != NAMESPACE
             or metadata["labels"].get("app.kubernetes.io/instance") != "gateway"
-            or node != self.name + "-control-plane"
+            or node not in self.node_names
             or len(statuses) != 1
         ):
             raise ValueError("Pod loss requires one application container on the owned kind node")
@@ -119,12 +128,32 @@ class LifecycleCluster:
         )
         return container_id
 
+    @property
+    def node_names(self) -> set[str]:
+        names = {self.name + "-control-plane"}
+        if self.nodes == 2:
+            names.add(self.name + "-worker")
+        return names
+
     @contextmanager
     def owned(self, image: str):
         version = self.run(self.kind, "version").stdout
         if KIND_VERSION not in version:
             raise ValueError(f"Acceptance requires kind {KIND_VERSION}")
         try:
+            extra: tuple[str, ...] = ()
+            if self.nodes == 2:
+                config = Path(self.directory.name) / "kind-config.yaml"
+                config.write_text(
+                    yaml.safe_dump(
+                        {
+                            "kind": "Cluster",
+                            "apiVersion": "kind.x-k8s.io/v1alpha4",
+                            "nodes": [{"role": "control-plane"}, {"role": "worker"}],
+                        }
+                    )
+                )
+                extra = ("--config", str(config))
             self.run(
                 self.kind,
                 "create",
@@ -135,6 +164,7 @@ class LifecycleCluster:
                 self.kubeconfig,
                 "--image",
                 NODE_IMAGE,
+                *extra,
                 "--wait",
                 "180s",
                 timeout=600,
@@ -145,13 +175,39 @@ class LifecycleCluster:
             self.kubectl(
                 "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=120s"
             )
+            if self.nodes == 2:
+                # Capacity acceptance needs both owned nodes for the fixed pod
+                # requests and the rolling-update surge. kind taints its control
+                # plane by default, which otherwise leaves only one 4-CPU worker
+                # on a standard GitHub runner.
+                self.kubectl(
+                    "taint",
+                    "nodes",
+                    self.name + "-control-plane",
+                    "node-role.kubernetes.io/control-plane-",
+                    timeout=30,
+                )
             self.run(self.kind, "load", "docker-image", image, "--name", self.name, timeout=600)
             self.kubectl("create", "namespace", NAMESPACE)
-            self.event("cluster_created", image=image, node_image=NODE_IMAGE)
+            self.event("cluster_created", image=image, node_image=NODE_IMAGE, nodes=self.nodes)
             yield self
         finally:
             try:
                 self.kubectl("get", "pods,jobs,deployments", "-o", "json", check=False, timeout=30)
+                if self.name.startswith("deltallm-pr9-capacity-"):
+                    self.kubectl(
+                        "get", "events", "--sort-by=.lastTimestamp", check=False, timeout=20
+                    )
+                    self.run(
+                        "docker",
+                        "exec",
+                        self.name + "-control-plane",
+                        "sh",
+                        "-c",
+                        "crictl ps --name kube-apiserver -q | head -n 1 | xargs -r crictl logs --tail=100",
+                        check=False,
+                        timeout=20,
+                    )
                 self.kubectl(
                     "logs",
                     "-l",

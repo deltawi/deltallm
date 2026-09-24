@@ -112,6 +112,7 @@ async def _init_infrastructure_runtime(
 
     database_settings = resolve_database_settings(cfg, settings)
     startup_allocations = DependencyAllocationSnapshot.build(cfg, settings)
+    startup_allocations.validate_deployment(cfg, settings)
     database_allocations = startup_allocations.database
     if database_settings is None:
         raise RuntimeError("Database allocations require an explicit database URL")

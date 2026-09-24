@@ -211,8 +211,9 @@ generations and one process per pod: 37 peak processes. With both outboxes enabl
 this is `37 × (20 + 8 + 5 + 5) = 1406` PostgreSQL connections and
 `37 × (64 + 16 + 16) = 3552` Redis connections before reserves. Enabling two fixed
 batch-worker pods adds seven peak processes: 266 PostgreSQL and 672 Redis connections.
-Including the example reserves, the API-only totals are 1506 PostgreSQL and 3680 Redis;
-the split-role totals are 1772 PostgreSQL and 4352 Redis.
+Including the production example's 100 operating and two migration connections,
+the API-only totals are 1508 PostgreSQL and 3680 Redis; the split-role totals are
+1774 PostgreSQL and 4352 Redis. Additional clients must be declared separately.
 Both worker and API telemetry jobs share their process allocations. A batch-worker
 Deployment is not a distinct telemetry-only process role.
 
@@ -235,8 +236,11 @@ PostgreSQL `max_connections` or Redis `maxclients`, and not proof those connecti
 are available. Replace them with the actual allocation supplied by the service owner,
 including operating headroom, before deployment. The Redis ceiling conservatively
 sums all allocations even with separate servers; also check each server's own
-critical/cache connection totals. File descriptors, provider quotas/transports,
-autoscaling signals and measured N−1 traffic capacity need their own qualification.
+critical/cache connection totals. The extended report also checks declared FD,
+proxy transport and provider envelopes. Follow the
+[saturation autoscaling preflight](saturation-autoscaling.md) to compare those
+declarations with physical limits and the custom metrics API. Measured N−1 traffic
+capacity remains a separate qualification.
 
 ## Rollout, rollback and evidence
 
