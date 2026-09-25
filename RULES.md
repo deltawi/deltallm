@@ -59,6 +59,7 @@ Redis or process memory MUST NOT be the sole durable copy of billing, audit, ide
 - Do not weaken a test, lint rule, security check, timeout, or production default merely to make a change pass.
 - Do not edit or weaken `RULES.md` merely to make a feature compliant. A rule change is its own explicit design decision with rationale and reviewable consequences.
 - `RULES.md` is canonical. Any agent/tool-specific instruction file SHOULD point here and stay thin; it MUST NOT fork these rules into a divergent copy.
+- Write plans, issues, and pull request content in simplified language that an average developer or anyone trying to understand the work can follow.
 
 ### Ask only when necessary
 

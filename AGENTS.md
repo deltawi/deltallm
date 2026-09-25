@@ -14,3 +14,4 @@ If `RULES.md` is missing or cannot be read completely, stop and report the probl
 - More local `AGENTS.md` or `AGENTS.override.md` files may add context or tighten requirements for their subtree, but must not weaken or contradict `RULES.md`.
 - Keep this file as a small discovery/bootstrap pointer. Do not duplicate the engineering rules here.
 - Do not edit `AGENTS.md` or `RULES.md` merely to make another change easier. Governance changes require explicit scope, rationale, and review.
+- Write plans, issues, and pull request content in simplified language that an average developer or anyone trying to understand the work can follow.
