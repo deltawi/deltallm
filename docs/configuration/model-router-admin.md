@@ -55,8 +55,8 @@ Switch or remove published selector references before deleting their deployment
 or making its metadata incompatible, including for temporarily disabled groups.
 
 All APIs and Batch workers must run the independent-selector release before
-publishing an external reference. See the
-[rollout decision](../project/model-router-independent-selector.md#rollout-and-rollback).
+you publish an external reference. Follow your deployment's rollout and rollback
+procedure when you enable it.
 
 ## Disable, import/export, canary and rollback
 
@@ -227,4 +227,4 @@ individually rather than in upstream microbatches; see the
 Whole-feature production quality and savings still require representative operator evidence.
 
 PR 5 adds no settings, migrations, pools or deployment topology. Architectural
-ownership and capacity notes are in the [admin design](../project/model-router-admin-design.md).
+ownership and capacity must be reviewed before the policy is published.

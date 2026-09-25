@@ -1,6 +1,8 @@
-# Upstream HTTP Tuning
+# Provider connection tuning reference
 
 DeltaLLM uses a shared async HTTP client for outbound provider calls. Explicit pool limits make gateway behavior predictable under streaming load and prevent local connection pressure from being mistaken for provider slowness.
+
+For a practical tuning process, start with [Tune provider connections](../guides/provider-connections.md).
 
 Authentication, SSO, and email-provider HTTP calls use a separate smaller control-plane client. This keeps login, JWKS refresh, and transactional email delivery from sharing the provider traffic pool.
 

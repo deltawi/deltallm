@@ -1,7 +1,9 @@
-# Upgrades and Rollbacks
+# Upgrade and rollback behavior
 
 Treat an upgrade as a coordinated change to application code, database schema, configuration,
 workers, and external integrations. A Helm rollback alone cannot reverse a schema or data change.
+
+For the operator checklist, start with [Upgrade or roll back](../guides/deployment-workflow.md).
 
 ## Before the maintenance window
 

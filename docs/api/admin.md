@@ -195,7 +195,7 @@ compatibility endpoints for single-segment names. URL-encoding a slash is insuff
 those endpoints because servers decode paths before routing. New integrations should use
 the ID endpoints below. Unknown or deleted IDs return 404 and cannot select a new group
 created with the same key. IDs are never interpreted as keys.
-See the [addressing design](../project/route-group-addressing.md) for compatibility and rollback details.
+Keep the legacy identifier during a staged rollout when older clients still depend on it.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|

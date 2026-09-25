@@ -1,6 +1,17 @@
-# Batch Scheduler Rollout Runbook
+---
+title: Batch scheduler rollout
+description: Release-specific steps for enabling the embeddings batch scheduler.
+status: stable
+audience: operators
+applies_to: Releases whose notes explicitly link this runbook.
+---
+
+# Batch scheduler rollout
 
 This runbook covers the embeddings batch scheduler rollout modes and the checks operators should use before advancing or rolling back.
+
+!!! warning "Check your release notes"
+    Use this runbook only when the release notes for your target version link to it. Do not assume it applies to every upgrade.
 
 ## Prerequisites
 

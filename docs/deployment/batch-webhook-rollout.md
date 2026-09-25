@@ -1,6 +1,17 @@
-# Batch Webhook Rollout Runbook
+---
+title: Batch webhook rollout
+description: Release-specific steps for enabling durable terminal batch webhooks.
+status: stable
+audience: operators
+applies_to: Releases whose notes explicitly link this runbook.
+---
+
+# Batch webhook rollout
 
 Terminal batch webhooks are opt-in and disabled by default. Delivery state is durable in Postgres, and delivery workers can run separately from API pods.
+
+!!! warning "Check your release notes"
+    Use this runbook only when the release notes for your target version link to it. Do not assume it applies to every upgrade.
 
 ## Prerequisites
 

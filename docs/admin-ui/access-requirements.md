@@ -1,50 +1,49 @@
-# Admin UI Access Requirements
+# Sign in and get the right access
 
-The UI uses access flags calculated by the server from the current authentication mode, platform
-role, organization/team memberships, and effective permissions. The API remains authoritative:
-seeing a page or button does not grant access to another tenant or bypass an endpoint permission.
+What you can see and change in the Admin UI depends on your account and the organizations or teams
+you belong to.
 
-The master-key session has platform-admin access and should be reserved for bootstrap or break-
-glass work. Normal operators should use named accounts and the narrowest suitable membership.
+## Sign in
 
-## Page access matrix
+Open the address that matches your setup:
 
-| Page | Minimum visibility rule | Important mutation boundary | Reference |
-| --- | --- | --- | --- |
-| Dashboard | Platform admin or `spend.read` | Read-only summary follows authorized spend data | [Spend API](../api/admin.md#spend) |
-| Models | Any authenticated account | Create/edit/delete is platform admin | [Model deployments](../configuration/models.md) |
-| Tiers | Platform admin | All tier/version/pool/assignment actions are platform admin | [Tier API](../api/admin.md#organization-tiers) |
-| Named Credentials | Platform admin | Secrets remain write-only/redacted | [Named credential API](../api/admin.md#named-credentials) |
-| Route Groups | Platform admin | Group/member/policy publication is platform admin | [Route-group API](../api/admin.md#route-groups) |
-| Prompt Registry | Platform admin | Template/version/label/binding mutation is platform admin | [Admin API](../api/admin.md) |
-| MCP Servers | Platform admin or `key.read` | Server/binding/policy mutation requires `org.update`; approvals require `key.update` | [MCP API](../api/mcp.md) |
-| API Keys | `key.read`, `key.update`, or eligible `key.create_self` | Scope and ownership filter every action; self-service policy can narrow creation | [Authentication](../features/authentication.md) |
-| Organizations | Platform admin or `org.read` | Starting/restoring deletion is platform admin; organization owners/admins can waive an existing job's recovery window with `org.delete.expedite` | [Tenancy](../concepts/tenancy-and-access.md) |
-| Teams | Platform admin or `team.read` | Create/edit requires platform or applicable organization/team update capability | [Tenancy](../concepts/tenancy-and-access.md) |
-| People & Access | Platform admin | Account, invite, and membership administration is platform-wide | [Authentication](../features/authentication.md) |
-| Usage & Spend | Platform admin or enabled spend-read scope | Server filters platform, organization, team, or self views | [Budgets and spend](../features/budgets.md) |
-| Audit Logs | Platform admin or `audit.read` | Results are filtered to authorized scope | [Audit log](../features/audit-log.md) |
-| Batch Jobs | Platform admin or `key.read` | Cancel/retry/replay requires update permission in the batch's tenant scope | [Batch API](../features/batching.md) |
-| Guardrails | Platform admin | Definition and scoped-assignment mutations are platform admin in the UI | [Guardrails](../features/guardrails.md) |
-| Playground | Any authenticated account | Each request also needs a valid API key allowed to call the selected target | [Playground](playground.md) |
-| Settings | Platform admin | Global config/theme writes are platform-wide | [General settings](../configuration/general.md) |
+- Docker quickstart: `http://localhost:4002`
+- Local development: `http://localhost:5000`
 
-## Scope behavior
+Use an administrator email and password or your company sign-in provider. During initial local
+setup, you can also use the master key. Reserve the master key for setup and emergency recovery;
+use a named account for normal work.
 
-Permissions are accumulated from the platform role and current organization/team memberships, but
-resource capabilities are recalculated for the actual organization, team, key, or batch. For
-example, `org.update` in one organization does not authorize editing another organization.
+## If a page is missing
 
-The UI may omit an action, render it read-only, or redirect from an inaccessible route. Treat a
-server `403` as the final decision and investigate membership/scope rather than trying a broader
-credential. See [Tenancy and access](../concepts/tenancy-and-access.md) for the role model.
+DeltaLLM hides pages that your account cannot use. Ask a platform administrator to check:
 
-## Procedure author checklist
+1. your platform role
+2. your organization membership
+3. your team membership
+4. the permissions attached to those memberships
 
-Every Admin UI procedure should state:
+For example, access to one organization does not give you access to every organization.
 
-- the page and minimum role/permission;
-- the organization/team/key scope affected;
-- whether the change is global, inherited, or narrowing;
-- the API/config contract that persists the change; and
-- a success check plus an intentional denied check when authorization changes.
+## If an action is unavailable
+
+A page may be visible even when its create, edit, or delete actions are unavailable. This normally
+means you have permission to view the information but not change it.
+
+Do not switch to the master key simply to avoid a permission error. Ask for the narrowest role that
+supports the task you need to complete.
+
+## If you receive a 403 error
+
+A `403` response means the server rejected the action. Check that you selected the intended
+organization, team, key, or batch and that your membership covers it. The server makes the final
+access decision even if a page or button is visible.
+
+Administrators can use the [access and permission matrix](../reference/admin-access.md) to find the
+permission required by each page.
+
+## Related pages
+
+- [People and permissions](people-and-access.md)
+- [Set up sign-in and SSO](../guides/admin-authentication.md)
+- [Accounts, teams, and access](../concepts/tenancy-and-access.md)

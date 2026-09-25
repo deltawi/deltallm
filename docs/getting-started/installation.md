@@ -68,12 +68,13 @@ Create an empty PostgreSQL database first, then export the variables DeltaLLM ne
 
 ```bash
 export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/deltallm"
-export DELTALLM_MASTER_KEY="sk-local-1234567890abcdefghijklmnop"
-export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
 export OPENAI_API_KEY="sk-your-provider-key"
 export PLATFORM_BOOTSTRAP_ADMIN_EMAIL="admin@example.com"
-export PLATFORM_BOOTSTRAP_ADMIN_PASSWORD="ChangeMe123!"
+export PLATFORM_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
 ```
+
+Keep the generated `DELTALLM_MASTER_KEY` and `DELTALLM_SALT_KEY` from the previous command. Replace
+the database address, provider key, email, and password with your own values.
 
 `OPENAI_API_KEY` is used by the sample model in `config.example.yaml`. If you plan to use a different provider, update `config.yaml` in the next step to match that provider's credentials and base URL.
 
@@ -98,25 +99,12 @@ The example config is ready for a quick local start:
 
 - It defines a sample `gpt-4o-mini` deployment
 - It reads secrets from environment variables instead of hardcoding them
-- It uses `model_deployment_source: db_only`, which is the recommended steady-state mode
+- It adds the sample model to the database on the first start
+- It uses `model_deployment_source: db_only`, so later changes come from the Admin UI or API
 - It keeps advanced features such as email, SSO, and governance notifications commented until you need them
 
-### Choose how to load your first models
-
-For the getting-started flow, model bootstrap is optional:
-
-- Recommended for the quickest first request: set `model_deployment_bootstrap_from_config: true` so DeltaLLM seeds the sample `model_list` into the database on first startup.
-- Recommended for steady-state operations: leave it at `false` and create model deployments later from the Admin UI or API.
-
-If you want the quickest path, update `config.yaml` before starting:
-
-```yaml
-general_settings:
-  model_deployment_source: db_only
-  model_deployment_bootstrap_from_config: true
-```
-
-After your first successful startup, you can set `model_deployment_bootstrap_from_config` back to `false`.
+After the first successful start, set `model_deployment_bootstrap_from_config` to `false` in
+`config.yaml`. This prevents later restarts from trying to import the sample again.
 
 If you want to route to a different model or provider, edit `config.yaml` now. See the [model configuration guide](../configuration/models.md) for the full reference.
 
@@ -185,23 +173,10 @@ curl http://localhost:8000/v1/models \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
 ```
 
-If this list is empty, you likely skipped model bootstrap. Either enable `model_deployment_bootstrap_from_config: true` and restart once, or create a deployment from the Admin UI before sending chat requests.
+If this list is empty, confirm that `model_deployment_bootstrap_from_config` was `true` for the
+first start. You can also create a deployment from the Admin UI.
 
-For complete usage examples after a model is available, continue to [Quick Start](quickstart.md).
-
-Send a test chat completion:
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [
-      {"role": "user", "content": "Hello from DeltaLLM"}
-    ]
-  }'
-```
+After a model is available, continue to [Send your first request](quickstart.md).
 
 ## Optional: serve the built UI from the backend
 
@@ -218,7 +193,7 @@ In this mode, the backend serves both the API and the built frontend on `http://
 
 ## Next steps
 
-- [Quick Start](quickstart.md)
+- [Send your first request](quickstart.md)
 - [Configure models and providers](../configuration/models.md)
 - [General settings reference](../configuration/general.md)
 - [Authentication and SSO](../features/authentication.md)

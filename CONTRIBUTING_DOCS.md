@@ -88,6 +88,9 @@ not edit generated Markdown or JSON by hand.
 ## Writing and review rules
 
 - Start with the user outcome and prerequisites.
+- Write for a person who knows the task but may not know DeltaLLM terminology. Prefer common words,
+  short sentences, and direct instructions. Explain an unavoidable technical term the first time it
+  appears.
 - Use tested commands and realistic placeholders; never use real credentials.
 - State whether guidance is for evaluation, development, or production.
 - Document authentication, tenant scope, failure behavior, and restart requirements
@@ -97,6 +100,11 @@ not edit generated Markdown or JSON by hand.
 - Preserve public URLs when moving pages, or add an explicit redirect.
 - Use descriptive link text and meaningful image alternative text.
 - Update related API, configuration, UI, deployment, and release surfaces together.
+
+Keep public navigation organized around the six user journeys in `mkdocs.yml`: get started, build,
+administer, deploy and operate, understand the system, and reference. Do not add a new top-level
+section for one feature. Place internal implementation plans, readiness records, and benchmark
+evidence under `docs/internal/`, where they are excluded from the public site.
 
 Choose one primary page type: tutorial, task guide, reference, concept/explanation, or runbook. Split
 the material when one page tries to serve several reader intents or grows beyond roughly 500 lines.
@@ -124,3 +132,23 @@ The public [documentation governance policy](docs/project/documentation-governan
 ownership, product-change prompts, health metrics, and the quarterly review cadence. The [versioning
 and compatibility policy](docs/project/versioning-and-compatibility.md) defines release channels,
 deprecation, and upgrade documentation requirements.
+
+## Deployment documentation for maintainers
+
+Instructions for changing deployment artifacts belong in contributor documentation, not in the
+public deployment journey.
+
+When changing the Helm chart locally, clone the repository, run `helm dependency build
+deploy/kubernetes/helm`, render every supported values profile, and run the chart checks used by CI.
+The public Kubernetes guide should use a released chart unless it is explicitly teaching chart
+development.
+
+Before merging a migration-sensitive change, run `scripts/verify_migration_paths.py` against
+disposable databases. The verifier checks a fresh install and supported upgrade paths, then removes
+the disposable databases. Use `MIGRATION_TEST_BASE_REF` only when deliberately testing a specific
+supported release floor.
+
+Railway template publishing is maintained by the release workflow. It updates the existing reviewed
+template using the repository's Railway secret and template variables. Do not create a template from
+a live smoke-test project, because that can copy test-only variables or infrastructure settings.
+After publishing, confirm that the public deployment button still opens the intended template.

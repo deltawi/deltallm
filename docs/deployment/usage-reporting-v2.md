@@ -1,6 +1,17 @@
-# Scoped Usage Reporting Rollout
+---
+title: Scoped usage reporting rollout
+description: Release-specific steps for enabling owner-based usage views.
+status: stable
+audience: operators
+applies_to: Releases whose notes explicitly link this runbook.
+---
+
+# Scoped usage reporting rollout
 
 Team and personal usage views depend on immutable API-key owner snapshots. They are disabled by default so schema changes and every ownership writer can be deployed safely before users rely on them.
+
+!!! warning "Check your release notes"
+    Use this runbook only when the release notes for your target version link to it. Do not assume its migration names apply to another release.
 
 ## Rollout
 

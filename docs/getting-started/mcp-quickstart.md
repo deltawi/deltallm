@@ -1,14 +1,15 @@
-# MCP Quick Start
+# Connect your first MCP server
 
-Use this guide when DeltaLLM is already running and you want your first successful MCP-backed tool call as quickly as possible.
+MCP lets an AI model use tools provided by another service. Use this guide after normal model
+requests are working and you have an MCP server to connect.
 
 This path assumes:
 
 - DeltaLLM is reachable on `http://localhost:4002` or `http://localhost:8000`
-- you already have a compatible MCP server that speaks JSON-RPC over `streamable_http`
+- you already have an MCP server that supports the `streamable_http` connection type
 - you have either the DeltaLLM master key or admin UI access
 
-## What You Will Set Up
+## What you will set up
 
 In about five minutes you will:
 
@@ -18,7 +19,7 @@ In about five minutes you will:
 4. run a direct `tools/call`
 5. let a chat model use the same tool through the OpenAI-compatible chat API
 
-## 1. Pick the Right Base URL
+## 1. Choose the DeltaLLM address
 
 Use the DeltaLLM URL that matches your setup:
 
@@ -37,7 +38,7 @@ export BASE="http://localhost:4002"
 export MASTER_KEY="YOUR_MASTER_KEY"
 ```
 
-## 2. Register an MCP Server
+## 2. Add the MCP server
 
 Create one server record in DeltaLLM. Replace `base_url` with your real MCP endpoint.
 
@@ -63,7 +64,7 @@ Important fields:
 
 Save the returned `mcp_server_id`.
 
-## 3. Refresh Capabilities and Run a Health Check
+## 3. Load the tool list and check the connection
 
 ```bash
 export SERVER_ID="mcp-server-id-from-create"
@@ -80,7 +81,7 @@ What success looks like:
 - refresh returns a `tools` array
 - health check returns `health.status: "healthy"`
 
-## 4. Make the Server Visible to a Caller
+## 4. Choose who can use the tools
 
 MCP tools are not globally visible to normal API keys. You must bind the server to a scope.
 
@@ -111,7 +112,7 @@ The master key is still useful for operator setup, but it bypasses normal MCP vi
 
 If you do not already have a scoped key in that scope, create one first from the [Admin UI: API Keys](../admin-ui/api-keys.md) page or the `/ui/api/keys` admin API.
 
-## 5. Add a Tool Policy
+## 5. Set a tool policy
 
 For the first test, keep the policy simple:
 
@@ -136,7 +137,7 @@ Later you can add:
 - `result_cache_ttl_seconds`
 - `max_total_execution_time_ms`
 
-## 6. Verify the MCP Gateway Directly
+## 6. Test the MCP connection
 
 List visible tools:
 
@@ -166,7 +167,7 @@ curl "$BASE/mcp" \
 
 DeltaLLM namespaces tools as `server_key.tool_name`, so a tool named `search` on server `docs` becomes `docs.search`.
 
-## 7. Use the Same Tool from Chat
+## 7. Let a model use the tool
 
 Once direct MCP works, let the model call the tool through the chat API.
 
@@ -200,7 +201,7 @@ Notes:
 - choose a model/provider combination that supports OpenAI-style tool calling reliably
 - MCP tools are currently supported only on non-streaming chat and responses requests
 
-## Fast Troubleshooting
+## Troubleshooting
 
 | Symptom | What to check first |
 | --- | --- |
@@ -210,7 +211,7 @@ Notes:
 | Chat request returns `manual approval` error | Manual approval is supported through `/mcp`, not through chat/responses auto-execution |
 | Chat request fails upstream during tool calling | Use a model that supports tool calling more reliably, and keep the prompt explicit |
 
-## Where to Go Next
+## Next steps
 
 - [MCP Gateway & Tools](../features/mcp.md)
 - [Admin UI: MCP Servers](../admin-ui/mcp.md)

@@ -1,13 +1,14 @@
-# MCP Gateway & Tools
+# MCP tools: details and limits
 
-DeltaLLM can act as an MCP gateway and as an MCP-to-chat bridge.
+MCP lets a model use tools provided by another service. DeltaLLM controls which MCP servers and
+tools an application can see and use.
 
 That gives you two ways to use the same approved tool catalog:
 
 - direct MCP access through `POST /mcp`
 - OpenAI-compatible chat or responses requests that include `tools: [{ "type": "mcp", ... }]`
 
-## Quick Path
+## Recommended first setup
 
 For the first successful rollout:
 
@@ -17,11 +18,11 @@ For the first successful rollout:
 4. add one enabled tool policy with `require_approval: never`
 5. verify the tool through `/mcp` before letting a model auto-call it
 
-If you want the shortest path, start with [MCP Quick Start](../getting-started/mcp-quickstart.md).
+For a guided setup, start with [Connect your first MCP server](../getting-started/mcp-quickstart.md).
 
-## What DeltaLLM Adds on Top of MCP
+## What DeltaLLM controls
 
-Raw MCP servers expose tools. DeltaLLM adds the control plane around them:
+An MCP server exposes tools. DeltaLLM adds the access and safety rules around them:
 
 - server registry with health and capability refresh
 - scoped visibility through bindings
@@ -31,7 +32,7 @@ Raw MCP servers expose tools. DeltaLLM adds the control plane around them:
 - audit logging and metrics
 - namespaced tool exposure into chat and responses APIs
 
-## How It Works
+## How it works
 
 ```text
 App or model
@@ -51,7 +52,7 @@ server_key.tool_name
 
 So a `search` tool on a server with key `docs` is exposed as `docs.search`.
 
-## Visibility and Scope Resolution
+## Choose who can see tools
 
 Normal API keys do not automatically see all MCP tools. DeltaLLM resolves visibility from bindings.
 
@@ -61,23 +62,23 @@ Supported binding scopes:
 - `team`
 - `api_key`
 
-Resolution precedence is:
+When more than one rule applies, DeltaLLM checks them in this order:
 
 ```text
 api_key -> team -> organization
 ```
 
-The most specific binding wins. If that winning binding has a `tool_allowlist`, only those tools are visible.
+The first matching rule wins. If it has a `tool_allowlist`, the caller can see only those tools.
 
-### Important Behaviors
+### Important behavior
 
 - a request-level `allowed_tools` list only narrows already visible tools
 - disabled tool policies hide the tool from normal callers
 - the master key bypasses normal binding and policy visibility, which is useful for testing
 
-## Tool Policies
+## Tool policies
 
-Policies are scoped the same way as bindings and use the same precedence:
+Tool policies use the same order:
 
 ```text
 api_key -> team -> organization
@@ -94,9 +95,9 @@ Each policy can control:
 
 Use manual approval when a tool can take irreversible or sensitive actions. Use `never` when you want low-friction retrieval and read-only integrations.
 
-## Direct MCP Gateway
+## Call a tool directly
 
-Use `POST /mcp` when you want deterministic tool access without relying on model tool selection.
+Use `POST /mcp` when your application should choose the tool instead of asking a model to choose it.
 
 Supported JSON-RPC methods:
 
@@ -114,7 +115,7 @@ This is the best first verification path because it isolates:
 
 See [API Reference: MCP Gateway & Tooling](../api/mcp.md) for examples.
 
-## Chat and Responses Bridge
+## Let a model call a tool
 
 DeltaLLM also lets OpenAI-compatible chat and responses requests reference MCP servers directly.
 
@@ -140,7 +141,7 @@ Example request shape:
 
 DeltaLLM translates the visible MCP tools into OpenAI-style function tools, executes any resulting tool calls, and feeds the tool result back into the model.
 
-### Current Limits
+### Current limits
 
 - MCP tools are not supported on streaming chat requests yet
 - MCP tools are not supported on streaming responses requests yet
@@ -149,7 +150,7 @@ DeltaLLM translates the visible MCP tools into OpenAI-style function tools, exec
 
 For early production rollouts, verify the provider and model combination with a real tool call path before enabling it broadly.
 
-## Upstream MCP Server Requirements
+## MCP server requirements
 
 DeltaLLM currently supports:
 
@@ -179,7 +180,7 @@ Example:
 x-deltallm-mcp-github-authorization: Bearer ...
 ```
 
-## Operations and Observability
+## Monitor MCP tools
 
 DeltaLLM records MCP activity in both audits and metrics.
 
@@ -202,8 +203,8 @@ For the day-to-day UI workflow, see [Admin UI: MCP Servers](../admin-ui/mcp.md).
 | `/mcp` works but chat fails | The provider/model may not support tool calling well enough, or the request is streaming |
 | Chat returns a manual approval error | Use `/mcp tools/call`, approve the request, and retry there |
 
-## Related Pages
+## Related pages
 
-- [MCP Quick Start](../getting-started/mcp-quickstart.md)
+- [Connect your first MCP server](../getting-started/mcp-quickstart.md)
 - [Admin UI: MCP Servers](../admin-ui/mcp.md)
 - [API Reference: MCP Gateway & Tooling](../api/mcp.md)

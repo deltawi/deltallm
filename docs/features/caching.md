@@ -2,7 +2,7 @@
 
 DeltaLLM can cache repeat requests to reduce latency and provider cost.
 
-## Quick Success Path
+## Try caching locally
 
 1. Turn caching on
 2. Start with the in-memory backend
@@ -17,7 +17,31 @@ general_settings:
   cache_max_size: 10000
 ```
 
-## What Gets Cached
+Restart DeltaLLM, then set the address and application key for your environment:
+
+```bash
+export BASE_URL="http://localhost:4002"
+export API_KEY="YOUR_APPLICATION_KEY"
+```
+
+Use `http://localhost:8000` for the manual development setup.
+
+Run this command twice:
+
+```bash
+curl -i "$BASE_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Reply with one word: hello"}]
+  }'
+```
+
+The first response should include `x-deltallm-cache-hit: false`. The second should include
+`x-deltallm-cache-hit: true`.
+
+## What gets cached
 
 The cache middleware is currently applied to these POST endpoints:
 
@@ -28,13 +52,12 @@ The cache middleware is currently applied to these POST endpoints:
 
 Streaming cache replay is currently supported only for `/v1/chat/completions`.
 
-## Choose a Backend
+## Choose a backend
 
 | Backend | Best for | Notes |
 |---------|----------|-------|
 | `memory` | Local development or a single instance | No external dependency |
 | `redis` | Shared cache across multiple instances | Best production default |
-| `s3` | Long-lived object-backed cache | Use when you need object storage instead of RAM or Redis |
 
 ### Memory
 
@@ -52,37 +75,7 @@ general_settings:
   redis_url: os.environ/REDIS_URL
 ```
 
-### S3
-
-```yaml
-general_settings:
-  cache_backend: s3
-```
-
-When you use `s3`, also configure the S3 callback settings under `deltallm_settings.callback_settings.s3`.
-
-## How Cache Keys Work
-
-DeltaLLM builds cache keys from:
-
-- the full request payload
-- the target model
-- relevant request parameters
-- an optional custom cache key
-- the authenticated request scope
-- the cache schema version and response mode (`json` or `stream`)
-
-This means two different API keys do not share cache entries by default, and a streaming response
-cannot be returned to a non-streaming request (or the reverse). Cache schema v2 intentionally treats
-older streaming entries as misses because they did not preserve the complete event stream.
-
-For chat streams, DeltaLLM stores each validated SSE data frame rather than rebuilding a response
-from content text. Cache hits therefore preserve reasoning fields, refusals, tool calls, provider
-extensions, finish reasons, and frame order. A provider usage frame is replayed only when the client
-requested `stream_options.include_usage`; `[DONE]` is emitted exactly once. Incomplete, cancelled,
-malformed, or over-limit streams are not cached.
-
-## Verify Cache Hits
+## Verify cache hits
 
 Cached responses include:
 
@@ -91,9 +84,9 @@ Cached responses include:
 | `x-deltallm-cache-hit` | `true` when the response came from cache |
 | `x-deltallm-cache-key` | The cache key used for this response |
 
-## Control Caching Per Request
+## Control caching for one request
 
-### Disable or Relax Caching Through Metadata
+### Use request metadata
 
 ```json
 {
@@ -115,7 +108,7 @@ Supported request-level controls:
 - `metadata.cache_ttl` overrides TTL
 - `metadata.cache_key` provides a custom logical key
 
-### Use HTTP Headers
+### Use HTTP headers
 
 The cache middleware also reads:
 
@@ -123,15 +116,8 @@ The cache middleware also reads:
 - `Cache-Control: no-store`
 - `Cache-TTL: <seconds>`
 
-## Advanced Notes
-
-- Cache accounting still updates request, usage, and spend metrics on cache hits
-- Budget enforcement and auth still happen before a cached response is returned
-- If caching is disabled globally, request-level cache metadata has no effect
-- `stream_cache_max_bytes` and `stream_cache_max_fragments` bound all retained SSE data frames, not
-  only content fragments
-
-## Related Pages
+## Learn more
 
 - [Observability](observability.md)
-- [Configuration Reference](../configuration/general.md)
+- [Caching details](../reference/caching.md)
+- [Configuration reference](../configuration/general.md)

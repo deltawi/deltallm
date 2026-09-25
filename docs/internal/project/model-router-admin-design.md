@@ -97,7 +97,7 @@ to `min(24, global limit 2) = 2` across the deployment. Surge/more processes
 increase transient admission attempts, not the global query cap. Workers do not
 serve these admin routes. PR 5 adds no connections or per-feature allocation to
 the existing pool budget; operators must still reserve headroom as documented in
-[general settings](../configuration/general.md).
+[general settings](../../configuration/general.md).
 
 The SQL page is materialized before two unique spend-event joins, with a maximum
 1,001 fetched rows including the continuation sentinel. Existing scope/time

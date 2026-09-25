@@ -1,6 +1,17 @@
-# Durable Telemetry Ingestion Rollout
+---
+title: Durable telemetry ingestion rollout
+description: Release-specific steps for moving audit and spend ingestion to durable outboxes.
+status: stable
+audience: operators
+applies_to: Releases whose notes explicitly link this runbook.
+---
+
+# Durable telemetry ingestion rollout
 
 Durable telemetry mode moves spend aggregation, audit persistence, and prompt-render logging onto bounded outboxes and a dedicated Prisma connection pool. Both ingestion modes default to `legacy` and are restart-bound. In legacy audit mode, required audit and prompt-render records are persisted synchronously and fail closed; only best-effort audit events use the bounded in-process queue.
+
+!!! warning "Check your release notes"
+    Use this runbook only when the release notes for your target version link to it. Do not assume its migration names or compatibility rules apply to another release.
 
 ## Preconditions
 
@@ -10,17 +21,6 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 4. Verify the server-owned spend event identity, Prisma transaction-client detection, blocked-event replay, and claim-token fencing tests before enabling spend producers.
 5. Set the pod termination grace period above both `telemetry_shutdown_drain_timeout_seconds` and, when email is enabled, `email_worker_shutdown_drain_timeout_seconds` (the Helm default is 30 seconds for both 20-second deadlines) so cancellation and connection cleanup can finish before `SIGKILL`.
 6. Keep both ingestion modes on `legacy` until every API and worker replica runs a version that acquires telemetry admission locks in a lock-only transaction statement and reads capacity or content policy in the following statement. An older waiter can retain a pre-lock PostgreSQL snapshot, so outbox mode is not safe during a mixed-version rollout.
-
-Before merging a migration-sensitive change, verify every supported database path. The verifier creates uniquely named disposable databases, checks a fresh install, seeds and upgrades the last release, upgrades the already-shared route-policy migration, and drops every database on exit:
-
-```bash
-MIGRATION_TEST_ADMIN_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres \
-  uv run python scripts/verify_migration_paths.py
-```
-
-CI runs the same command. The verifier selects the newest stable release tag reachable from
-`origin/main` and prints the selected upgrade base. Set `MIGRATION_TEST_BASE_REF` only when a
-specific supported release floor must be verified deliberately.
 
 ## Audit and prompt-render rollout
 

@@ -15,7 +15,7 @@ Use `/mcp` when you want deterministic tool execution. Use chat or responses whe
 4. call `tools/call` through `/mcp`
 5. only then move to chat or responses auto-execution
 
-For the shortest setup path, see [MCP Quick Start](../getting-started/mcp-quickstart.md).
+For a guided setup, see [Connect your first MCP server](../getting-started/mcp-quickstart.md).
 
 ## Direct MCP Gateway
 
@@ -294,6 +294,6 @@ Streamable HTTP servers may return either JSON or `text/event-stream` JSON-RPC r
 
 ## Related Pages
 
-- [MCP Quick Start](../getting-started/mcp-quickstart.md)
+- [Connect your first MCP server](../getting-started/mcp-quickstart.md)
 - [MCP Gateway & Tools](../features/mcp.md)
 - [Admin UI: MCP Servers](../admin-ui/mcp.md)

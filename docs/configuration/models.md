@@ -497,5 +497,5 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 ## Related Pages
 
 - [Router Settings](router.md)
-- [Quick Start](../getting-started/quickstart.md)
+- [Send your first request](../getting-started/quickstart.md)
 - [Models UI](../admin-ui/models.md)

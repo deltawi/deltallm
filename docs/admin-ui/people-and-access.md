@@ -1,6 +1,6 @@
 # People & Access
 
-People & Access is the RBAC and onboarding control surface for platform accounts, invitations, and memberships.
+Use People & Access to manage accounts, invitations, roles, and organization or team membership.
 
 ![People & Access](images/people-and-access.png)
 

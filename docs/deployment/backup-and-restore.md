@@ -19,11 +19,13 @@ configuration can also be part of the recovery scope. Name an owner for each sys
 
 ## PostgreSQL backup example
 
-Run the database vendor's supported backup tooling from an isolated operator environment. For a
-portable logical backup:
+Run the database vendor's supported backup tooling from an isolated operator environment. Configure
+a PostgreSQL service named `deltallm-production` and keep its password in a protected password file,
+not in the command or shell history. For a portable logical backup:
 
 ```bash
-pg_dump --format=custom --file=deltallm-<timestamp>.dump "$DATABASE_URL"
+PGSERVICE=deltallm-production \
+  pg_dump --format=custom --file=deltallm-<timestamp>.dump
 ```
 
 Encrypt the artifact, record its checksum and source database/version, and move it to access-
@@ -35,8 +37,8 @@ Restore into a new, isolated database—never over the active production databas
 
 ```bash
 createdb deltallm_restore_test
-pg_restore --exit-on-error --no-owner \
-  --dbname=postgresql://<isolated-restore-target>/deltallm_restore_test \
+PGSERVICE=deltallm-restore-test \
+  pg_restore --exit-on-error --no-owner --dbname=deltallm_restore_test \
   deltallm-<timestamp>.dump
 ```
 

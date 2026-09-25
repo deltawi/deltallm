@@ -1,4 +1,12 @@
-# Router Redis v1 Schema Cutover
+---
+title: Router Redis v1 schema cutover
+description: Release-specific steps for moving router state into the v1 Redis namespace.
+status: stable
+audience: operators
+applies_to: Releases whose notes explicitly link this runbook.
+---
+
+# Router Redis v1 schema cutover
 
 This release namespaces ephemeral router state as
 `deltallm:<app_env>:v1:<router-capability>:<identifiers>`. Earlier releases used unscoped keys such
@@ -11,6 +19,9 @@ release while `routerStateSchemaCutover.enabled=true` unless the operator acknow
 and selects the `Recreate` strategy. Later v1-to-v1 upgrades detect the marker and retain their
 configured strategy. The acknowledgement is a safety gate, not a drain mechanism; set it only
 after every old API and batch-worker pod has stopped.
+
+!!! warning "Check your release notes"
+    Use this runbook only when the release notes for your target version link to it. Old and new router schemas cannot safely run together.
 
 ## Forward cutover
 
