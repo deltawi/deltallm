@@ -1,13 +1,9 @@
-# Kubernetes Deployment
+# Kubernetes and Helm reference
 
-Use this guide to deploy DeltaLLM on Kubernetes with Helm.
+Use this reference for Helm settings, production topology, and advanced Kubernetes behavior. For a
+short installation path, start with [Deploy on Kubernetes](../guides/kubernetes-deployment.md).
 
-There are two install paths:
-
-- **Install from a released chart** if you want the simplest production or evaluation setup without cloning the repository.
-- **Install from the repo** if you are developing the chart itself or testing local chart changes before release.
-
-The rewritten chart supports three concrete deployment shapes:
+The released chart supports three deployment shapes:
 
 - evaluation with bundled PostgreSQL and Redis
 - standard production with external PostgreSQL and Redis
@@ -26,7 +22,7 @@ window.
 - Helm 3.10+
 - `kubectl` access to the target cluster
 
-## Option 1: Install From a Released Chart
+## Install from a released chart
 
 Published releases are available from the public Helm repository at `https://deltawi.github.io/deltallm`.
 
@@ -43,12 +39,13 @@ helm repo add deltallm https://deltawi.github.io/deltallm
 helm repo update
 ```
 
-Generate the required secrets first:
+Create two Kubernetes Secrets with your approved secret-management process before installing:
 
-```bash
-export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
-export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
-```
+- `deltallm-app-secrets` with `master-key` and `salt-key`
+- `deltallm-bootstrap-admin` with `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and
+  `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD`
+
+Use a unique administrator password. Do not pass secret values through Helm command arguments.
 
 Quick-start evaluation install:
 
@@ -58,12 +55,8 @@ helm install deltallm deltallm/deltallm \
   --namespace deltallm \
   --create-namespace \
   -f https://deltawi.github.io/deltallm/values-eval-<chart-version>.yaml \
-  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
-  --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
-  --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
-  --set-string env[0].value=admin@example.com \
-  --set-string env[1].name=PLATFORM_BOOTSTRAP_ADMIN_PASSWORD \
-  --set-string env[1].value='ChangeMe123!'
+  --set secret.existingSecret=deltallm-app-secrets \
+  --set-string envFrom[0].secretRef.name=deltallm-bootstrap-admin
 ```
 
 To use the Presidio-enabled image variant from the same release:
@@ -74,12 +67,8 @@ helm install deltallm deltallm/deltallm \
   --namespace deltallm \
   --create-namespace \
   -f https://deltawi.github.io/deltallm/values-eval-<chart-version>.yaml \
-  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
-  --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
-  --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
-  --set-string env[0].value=admin@example.com \
-  --set-string env[1].name=PLATFORM_BOOTSTRAP_ADMIN_PASSWORD \
-  --set-string env[1].value='ChangeMe123!' \
+  --set secret.existingSecret=deltallm-app-secrets \
+  --set-string envFrom[0].secretRef.name=deltallm-bootstrap-admin \
   --set image.tag=v<chart-version>-presidio
 ```
 
@@ -88,8 +77,8 @@ Use the latest GitHub Release version for `<chart-version>`. The exact pinned in
 After install:
 
 - `kubectl get pods -n deltallm` should show DeltaLLM plus bundled PostgreSQL and Redis pods
-- use `admin@example.com` and the bootstrap password to sign in to the Admin UI
-- use `DELTALLM_MASTER_KEY` for gateway and API requests
+- use the email and password stored in `deltallm-bootstrap-admin` to sign in to the Admin UI
+- retrieve the master key through your approved secret-access process for initial API checks
 
 For production, do not use the eval overlay. Start from the released production overlay instead:
 
@@ -116,104 +105,15 @@ helm install deltallm deltallm/deltallm \
 
 Use the eval overlay for the simplest first working install. Use the production overlay once you have external stateful services and secret-backed runtime configuration.
 
-## Option 2: Install From the Repo
-
-Use this path when you want to:
-
-- inspect the chart locally
-- test changes before opening a PR
-- install directly from `deploy/kubernetes/helm`
-
-Clone the repository first:
-
-```bash
-git clone https://github.com/deltawi/deltallm.git
-cd deltallm
-```
-
-### Fetch chart dependencies
-
-The chart uses Bitnami PostgreSQL and Redis as optional subcharts.
-
-```bash
-helm dependency build deploy/kubernetes/helm
-```
-
-### Chart profiles
-
-The chart now ships with three value layers:
-
-- `deploy/kubernetes/helm/values.yaml`: safe baseline
-- `deploy/kubernetes/helm/values-eval.yaml`: quick-start with bundled PostgreSQL and Redis
-- `deploy/kubernetes/helm/values-production.yaml`: HA-oriented production defaults
-
-By default, the app pod uses an init container to wait until the configured PostgreSQL and Redis endpoints accept TCP connections before DeltaLLM starts. This avoids the initial crash loop that can happen while bundled stateful dependencies are still coming up.
-
-### Quick start from the repo
-
-This path uses bundled PostgreSQL and Redis and generated control-plane secrets.
-
-!!! warning "Generate the master key and salt key before you install"
-    DeltaLLM will not start with placeholder values such as `change-me`.
-    Generate both values first, then pass them into Helm.
-
-    Copy and run:
-
-    ```bash
-    export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
-    export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
-    ```
-
-    `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
-    `DELTALLM_SALT_KEY` must be a real secret value and must not be `change-me`.
-
-```bash
-helm upgrade --install deltallm deploy/kubernetes/helm \
-  --namespace deltallm \
-  --create-namespace \
-  -f deploy/kubernetes/helm/values-eval.yaml \
-  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
-  --set secret.values.saltKey="$DELTALLM_SALT_KEY"
-```
-
-Access the service with port-forwarding:
-
-```bash
-kubectl port-forward -n deltallm svc/deltallm 4000:4000
-curl http://localhost:4000/health/liveliness
-```
-
-Open the admin UI at `http://localhost:4000`.
-
 ## Secret layout
 
-For production, keep secrets out of Helm values.
+For production, keep secrets out of Helm values and command arguments. Create them through your
+approved secret manager, GitOps controller, or another process that does not expose values in
+shell history or process listings.
 
-Generate the secrets first if you have not already:
-
-```bash
-export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
-export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
-```
-
-Create one secret for `master-key` and `salt-key`:
-
-```bash
-kubectl create secret generic deltallm-app-secrets \
-  --namespace deltallm \
-  --from-literal=master-key="$DELTALLM_MASTER_KEY" \
-  --from-literal=salt-key="$DELTALLM_SALT_KEY"
-```
-
-Create one secret for runtime environment variables:
-
-```bash
-kubectl create secret generic deltallm-runtime-secrets \
-  --namespace deltallm \
-  --from-literal=DATABASE_URL='postgresql://user:pass@postgres:5432/deltallm' \
-  --from-literal=REDIS_URL='redis://redis:6379/0' \
-  --from-literal=OPENAI_API_KEY='sk-...'
-```
+Use one secret for `master-key` and `salt-key`. Use a separate runtime secret for `DATABASE_URL`,
+`REDIS_URL`, provider keys, and integration credentials. The following values file contains only
+secret names and key names:
 
 Then reference them from the chart:
 
@@ -242,26 +142,9 @@ The chart will not emit empty database or Redis env vars, so `envFrom` works cle
 
 ### 1. Bundled PostgreSQL and Redis
 
-Use the eval profile or enable both subcharts explicitly:
-
-```yaml
-postgresql:
-  enabled: true
-  image:
-    tag: latest
-  auth:
-    username: deltallm
-    password: change-this
-    database: deltallm
-
-redis:
-  enabled: true
-  image:
-    tag: latest
-  auth:
-    enabled: true
-    password: strong-redis-password
-```
+Use the released evaluation profile. It enables both subcharts and supplies the connection
+settings DeltaLLM needs. Keep any subchart passwords in existing Kubernetes Secrets rather than a
+values file.
 
 If bundled Redis auth is enabled, the chart will generate the correct authenticated URL for DeltaLLM.
 
@@ -360,49 +243,8 @@ This covers provider API keys, bootstrap admin credentials, SSO client credentia
 
 ### 5. Model deployment lifecycle
 
-DeltaLLM stores model deployments in the database at runtime. On first install you can seed them from `config.model_list` using the bootstrap mechanism.
-
-#### Initial seed with config bootstrap
-
-Set `model_deployment_source: hybrid` and `model_deployment_bootstrap_from_config: true` (the base chart default):
-
-```yaml
-config:
-  model_list:
-    - model_name: gpt-4o
-      deltallm_params:
-        provider: openai
-        model: openai/gpt-4o
-        api_key: os.environ/OPENAI_API_KEY
-        api_base: https://api.openai.com/v1
-        timeout: 300
-      model_info:
-        mode: chat
-  general_settings:
-    model_deployment_source: hybrid
-    model_deployment_bootstrap_from_config: true
-```
-
-On startup, DeltaLLM checks whether the `deltallm_modeldeployment` table is empty. If it is, the entries from `model_list` are inserted as a one-time seed. If the table already has rows, the bootstrap is skipped — it is safe to leave enabled.
-
-In `hybrid` mode, DeltaLLM reads deployments from the database first. If the database is empty or unreachable, it falls back to `model_list` from the config file.
-
-#### Transition to database-only
-
-Once your models are in the database (seeded by bootstrap or created through the Admin UI), switch to the recommended steady-state:
-
-```yaml
-config:
-  general_settings:
-    model_deployment_source: db_only
-    model_deployment_bootstrap_from_config: false
-```
-
-In `db_only` mode, DeltaLLM reads deployments exclusively from the database and ignores `model_list` in the config. If the database is empty and no bootstrap happened, the instance starts with zero models.
-
-#### What the production profile sets
-
-The production values file (`values-production.yaml`) ships with production-appropriate defaults:
+The production profile stores model deployments in the database and does not seed them from a
+configuration file:
 
 ```yaml
 config:
@@ -412,31 +254,9 @@ config:
     model_deployment_bootstrap_from_config: false
 ```
 
-If you use `values-production.yaml`, model management is database-only from the start. To seed models on the first install, either:
-
-- temporarily override during the initial install:
-
-  ```bash
-  helm upgrade --install deltallm deploy/kubernetes/helm \
-    -f deploy/kubernetes/helm/values-production.yaml \
-    --set config.general_settings.model_deployment_source=hybrid \
-    --set config.general_settings.model_deployment_bootstrap_from_config=true
-  ```
-
-  then remove the overrides on the next upgrade
-
-- or create deployments through the Admin UI or Admin API after the first install
-
-#### Summary of modes
-
-| Setting combination | Behavior | When to use |
-|---|---|---|
-| `hybrid` + `bootstrap: true` | Seeds empty DB from config, then reads from DB with config fallback | First install, initial seeding |
-| `hybrid` + `bootstrap: false` | Reads from DB with config fallback, no seeding | Transitional if you want config as a safety net |
-| `db_only` + `bootstrap: false` | Database only, config ignored | Recommended production steady-state |
-| `db_only` + `bootstrap: true` | Seeds empty DB from config, then reads from DB only | One-time seed then database-only |
-
-See [Model Deployments](../configuration/models.md) and [General Settings](../configuration/general.md) for the full reference.
+Create the first model through the Admin UI or Admin API after installation. If you need to import
+models from a configuration file, see [Model deployments](../configuration/models.md) for the
+bootstrap modes and their safety rules.
 
 ## Service and ingress
 
@@ -470,10 +290,11 @@ ingress:
 Use the production profile as the base:
 
 ```bash
-helm upgrade --install deltallm deploy/kubernetes/helm \
+helm upgrade --install deltallm deltallm/deltallm \
+  --version <chart-version> \
   --namespace deltallm \
   --create-namespace \
-  -f deploy/kubernetes/helm/values-production.yaml \
+  -f values-production.yaml \
   -f values-custom.yaml
 ```
 
@@ -608,31 +429,6 @@ The chart includes:
 - config and generated-secret checksum rollouts
 
 If you enable `networkPolicy`, define ingress and egress rules that match your cluster and ingress-controller topology.
-
-## Validation
-
-Lint the chart before deploying:
-
-```bash
-helm lint deploy/kubernetes/helm -f deploy/kubernetes/helm/values-eval.yaml \
-  --set secret.values.masterKey=StrongMasterKey2026SecureValue99 \
-  --set secret.values.saltKey=unique-salt-2026
-
-helm lint deploy/kubernetes/helm -f deploy/kubernetes/helm/values-production.yaml \
-  --set secret.existingSecret=deltallm-app-secrets \
-  --set runtime.database.existingSecret.name=deltallm-runtime-secrets \
-  --set runtime.redis.existingSecret.name=deltallm-runtime-secrets \
-  --set ingress.enabled=true \
-  --set 'ingress.hosts[0].host=llm-gateway.example.com' \
-  --set 'ingress.hosts[0].paths[0].path=/' \
-  --set 'ingress.hosts[0].paths[0].pathType=Prefix'
-```
-
-If subchart dependencies are not present locally yet, run:
-
-```bash
-helm dependency build deploy/kubernetes/helm
-```
 
 ## Troubleshooting
 

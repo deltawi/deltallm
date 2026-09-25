@@ -30,8 +30,9 @@ Expose only routes required by each listener:
 ## Identity and authorization
 
 - Generate unique master and salt keys; never deploy example or placeholder values.
-- Reserve the master key for bootstrap and break-glass use. Create scoped keys for workloads with
-  model allowlists, expiration, rate limits, and budgets.
+- Reserve the master key for initial setup and emergency recovery. Create application keys for
+  normal workloads, then use organization, team, user, and key access rules to limit the public
+  model names and route groups they can call. Add expiration, rate limits, and budgets as needed.
 - Use SSO and MFA where supported for human administrators. Remove bootstrap passwords after
   enrollment and review role assignments regularly.
 - Separate organizations and teams according to real ownership boundaries. Test both allowed and

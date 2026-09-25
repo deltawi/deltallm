@@ -214,4 +214,4 @@ For shared gateway credentials, [Named Credentials](named-credentials.md) remain
 - [Named Credentials](named-credentials.md)
 - [Route Groups](route-groups.md)
 - [Model Deployments config reference](../configuration/models.md)
-- [Quick Start](../getting-started/quickstart.md)
+- [Send your first request](../getting-started/quickstart.md)

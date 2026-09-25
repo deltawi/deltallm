@@ -1,6 +1,17 @@
-# Organization Tiers Rollout Runbook
+---
+title: Organization tiers rollout
+description: Release-specific steps for enabling organization tiers and weighted capacity pools.
+status: stable
+audience: operators
+applies_to: Releases whose notes explicitly link this runbook.
+---
+
+# Organization tiers rollout
 
 This runbook covers the database migration, staged activation, monitoring, and rollback of organization tiers and weighted capacity pools.
+
+!!! warning "Check your release notes"
+    Use this runbook only when the release notes for your target version link to it. Do not assume it applies to every upgrade.
 
 ## Release and Migration Notes
 

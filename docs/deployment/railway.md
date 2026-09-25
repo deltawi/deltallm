@@ -179,27 +179,3 @@ After the app is running:
 5. Re-run `/v1/models` and a chat completion check.
 
 For production-oriented deployments with dedicated batch workers, shared artifact storage, custom domains, and stricter operational controls, create a separate template rather than extending this evaluation template.
-
-## Release Automation
-
-The release workflow can publish or update the Railway template marketplace metadata after a GitHub Release is published.
-
-Configure these repository settings so release automation can keep the published template metadata updated:
-
-| Setting | Type | Required | Notes |
-|---------|------|----------|-------|
-| `RAILWAY_API_TOKEN` | GitHub Actions secret | Yes | Railway account or workspace token with template publishing access |
-| `RAILWAY_TEMPLATE_ID` | GitHub Actions variable | Yes | `eb49f726-e90c-4a26-9e2c-b5a2ac431e0a` |
-| `RAILWAY_TEMPLATE_WORKSPACE` | GitHub Actions variable | Optional | Workspace ID or name, useful when the token can access multiple workspaces |
-| `RAILWAY_TEMPLATE_DEMO_PROJECT` | GitHub Actions variable | Optional | Public demo project ID to show on the template page |
-
-The release workflow intentionally updates an existing reviewed template. It does not create a fresh template from a live smoke-test project on every release because that can accidentally copy test-only variables, source settings, or one-off infrastructure state.
-
-Before the first automated publish:
-
-1. Create the Railway template from a clean project whose `deltallm` service is connected to a template-compatible public source, such as `deltallm/deltallm:latest`.
-2. Confirm the template has the service graph and variables documented above.
-3. Store the returned template ID in `RAILWAY_TEMPLATE_ID`.
-4. Add `RAILWAY_API_TOKEN` as a GitHub Actions secret.
-5. Run the next release workflow.
-6. Confirm the README button still points to `https://railway.com/deploy/deltallm`.

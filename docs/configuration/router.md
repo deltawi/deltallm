@@ -216,8 +216,8 @@ existing no-healthy-deployments `503` behavior remains. The filter adds no SQL, 
 calls; it operates on the in-memory policy snapshot and deployment metadata after the router's
 existing batched state reads.
 
-The ownership, migration, rollback, and latency decisions are recorded in the
-[context-capacity routing decision](../project/context-routing-design.md).
+Review ownership, migration, rollback, and latency before you enable
+context-capacity routing in production.
 
 ### Model-router policy contract
 
@@ -254,7 +254,7 @@ The classifier only needs capabilities/context for its bounded textual classific
 not the answer's streaming, tools or full context window. Only explicitly assigned answer
 members can answer. Shared selectors retain one physical deployment's health and capacity
 identity across groups and standalone traffic. Choosing a selector does not grant callers
-standalone access to it. See the [independent-selector rollout](../project/model-router-independent-selector.md).
+standalone access to it.
 
 For example, add this block alongside the `selector` and `members` in a policy:
 
@@ -330,7 +330,7 @@ checking classifier capacity, provider health, context/capability metadata and s
 investigate missing spend through the durable pending-reconciliation state, not synthetic zeroes.
 
 The complete design, bounds, compatibility behavior, rollout, and rollback order
-are documented in [Route-Group Model Router Design](../project/model-router-design.md).
+are part of the route-group model router contract.
 
 ## Fallback Configuration
 

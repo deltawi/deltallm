@@ -242,19 +242,27 @@ That means two users on the same platform can get different guardrail behavior d
 
 The [Guardrails](../admin-ui/guardrails.md) page is the easiest way to manage policy. It exposes built-in presets for the bundled Presidio and Lakera integrations, plus an advanced custom mode for raw class-path configuration. The same capability is available through the admin API and requires platform-admin access.
 
+Set the DeltaLLM address before using the API examples:
+
+```bash
+export BASE_URL="http://localhost:4002"
+```
+
+Use `http://localhost:8000` for the manual development setup.
+
 ![Guardrails Page](../admin-ui/images/guardrails.png)
 
 Read a scoped assignment:
 
 ```bash
-curl http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
+curl "$BASE_URL/ui/api/guardrails/scope/organization/org-123" \
   -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
 
 Set a scoped assignment:
 
 ```bash
-curl -X PUT http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
+curl -X PUT "$BASE_URL/ui/api/guardrails/scope/organization/org-123" \
   -H "Authorization: Bearer YOUR_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -269,7 +277,7 @@ curl -X PUT http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
 Remove a scoped assignment:
 
 ```bash
-curl -X DELETE http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
+curl -X DELETE "$BASE_URL/ui/api/guardrails/scope/organization/org-123" \
   -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
 

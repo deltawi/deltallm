@@ -67,9 +67,18 @@ an explicit audience/prerequisite where the task needs one.
 - **Explanation/concept:** mental model, boundaries, alternatives, and tradeoffs.
 - **Runbook:** trigger, safe diagnosis, containment, recovery, verification, and escalation.
 
+Public pages should work for readers who understand their goal but are new to DeltaLLM. Use a
+common word when it is accurate, keep sentences focused on one idea, and explain product-specific
+terms before relying on them. Navigation labels should describe an action or a clear subject rather
+than mirror an internal component name.
+
 Do not mix an exhaustive field catalog into a tutorial or bury production failure behavior in a UI
 caption. Split pages when one file serves multiple reader intents or exceeds roughly 500 lines; the
 health report flags size for review without failing solely on length.
+
+For every Admin UI procedure, state the page and required access, the organization or team affected,
+whether the change is shared or limited to one scope, and how the reader can confirm it worked. When
+access changes, include one intentional denied check where practical.
 
 ## Quality gates and metrics
 

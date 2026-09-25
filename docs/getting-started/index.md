@@ -1,24 +1,32 @@
-# Getting Started
+# Get started
 
-This section covers everything you need to get DeltaLLM up and running.
+This section takes you from an empty machine to your first request through DeltaLLM.
 
-!!! tip "Start here if you want the quickest setup"
-    Most developers should begin with [Docker Compose](docker.md). It brings up DeltaLLM, PostgreSQL, and Redis together with the fewest local prerequisites.
+## Recommended path
 
-## Choose Your Setup
+Most people should use Docker:
 
-| Method | Best For | Time |
-|--------|----------|------|
-| [Docker Compose](docker.md) | Fastest local setup, evaluation, demos | ~5 min |
-| [Installation](installation.md) | Local development, contributing, debugging | ~10 min |
-| [Quick Start](quickstart.md) | Using the gateway with curl, Python, and JavaScript | ~5 min |
-| [MCP Quick Start](mcp-quickstart.md) | Register an MCP server and test tool execution end to end | ~5 min |
+1. [Start DeltaLLM with Docker](docker.md).
+2. [Check or add your first model](first-model.md).
+3. [Send your first request](quickstart.md).
+4. [Create an application key](first-api-key.md).
 
-## Prerequisites
+Use the [development setup](installation.md) instead when you plan to change DeltaLLM itself.
 
-- **Docker + Docker Compose v2+** for the quickest path
-- **Python 3.11+** for local installation
-- **Node.js 20+** for the admin UI
-- **PostgreSQL** database for local installation
-- **Redis** for rate limiting and caching
-- At least one LLM provider API key (OpenAI, Anthropic, Groq, etc.)
+## What you need
+
+- Docker with Docker Compose v2 or later
+- Git
+- An OpenAI API key for the sample setup
+
+You do not need to install PostgreSQL or Redis when you use the Docker setup. Docker Compose starts
+them for you.
+
+To start with another provider, follow the Docker setup without the sample model, then
+[add a model for your provider](../guides/models-and-providers.md) in the Admin UI.
+
+## Other first steps
+
+- [Connect tools with MCP](mcp-quickstart.md) after normal model requests are working.
+- [Choose a production deployment](../deployment/index.md) when you are ready to move beyond local testing.
+- [Learn the main concepts](../concepts/index.md) if terms such as deployment, route group, or scoped key are new to you.

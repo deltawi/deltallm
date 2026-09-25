@@ -1,33 +1,31 @@
-# Docker Deployment
+# Start with Docker
 
-Run DeltaLLM with Docker for a quick, reproducible setup.
+Docker Compose starts DeltaLLM and the services it needs. This is the easiest way to try DeltaLLM
+on your computer.
 
-## Prerequisites
+## Before you start
 
-- Docker and Docker Compose v2+
-- A `config.yaml` file copied from `config.example.yaml`
+You need:
 
-## Using Docker Compose (Recommended)
+- Docker with Docker Compose v2 or later
+- Git
+- an OpenAI API key for the sample model
 
-The project includes a `docker-compose.yaml` with two evaluation profiles: **single** (one
-instance) and **ha** (two instances behind a load balancer on one host). Despite its profile
-name, `ha` is a multi-instance behavior test—not a production high-availability design.
+## 1. Download DeltaLLM
 
-## Before You Start
+```bash
+git clone https://github.com/deltawi/deltallm.git
+cd deltallm
+```
 
-Copy the starter config:
+## 2. Copy the starter configuration
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-`config.example.yaml` is the curated starter config used by the docs:
-
-- the active settings are the minimum recommended local/dev setup
-- secrets come from environment variables
-- advanced features such as email, SSO, and governance notifications stay commented until you need them
-
-For the quickest first successful request, enable one-time model bootstrap before starting:
+The starter configuration includes an OpenAI model named `gpt-4o-mini`. To add that model to the
+database the first time DeltaLLM starts, make sure `config.yaml` contains:
 
 ```yaml
 general_settings:
@@ -35,186 +33,76 @@ general_settings:
   model_deployment_bootstrap_from_config: true
 ```
 
-That seeds the sample `model_list` into the database on first startup. After the first successful boot, you can set `model_deployment_bootstrap_from_config` back to `false`.
+After the first successful start, you can change
+`model_deployment_bootstrap_from_config` back to `false`.
 
-## Environment Variables
+## 3. Add your secrets
 
-Create a `.env` file in the project root.
-
-!!! warning "Generate the master key and salt key before you start"
-    DeltaLLM will not start with placeholder values such as `change-me`.
-    You must generate both a unique `DELTALLM_MASTER_KEY` and a unique `DELTALLM_SALT_KEY`.
-
-    Copy and run:
-
-    ```bash
-    python3 -c 'import secrets; print("DELTALLM_MASTER_KEY=sk-" + secrets.token_hex(20) + "A1")'
-    python3 -c 'import secrets; print("DELTALLM_SALT_KEY=" + secrets.token_hex(32))'
-    ```
-
-    Then paste the generated values into your `.env` file.
-    `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
-    `DELTALLM_SALT_KEY` must be a real secret value and must not be `change-me`.
-
-Required for the starter `config.yaml`:
+Create a `.env` file in the repository root with these values:
 
 ```env
-DELTALLM_MASTER_KEY=sk-your-master-key
-DELTALLM_SALT_KEY=your-random-salt-key
-OPENAI_API_KEY=sk-your-openai-key
-```
-
-Recommended if you want to log into the Admin UI with an initial platform admin account:
-
-```env
+DELTALLM_MASTER_KEY=replace-with-a-generated-master-key
+DELTALLM_SALT_KEY=replace-with-a-generated-salt-key
+OPENAI_API_KEY=replace-with-your-openai-key
 PLATFORM_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-PLATFORM_BOOTSTRAP_ADMIN_PASSWORD=ChangeMe123!
+PLATFORM_BOOTSTRAP_ADMIN_PASSWORD=replace-with-a-strong-password
 ```
 
-Optional, only if you enable the related features in `config.yaml`:
-
-```env
-LAKERA_API_KEY=
-DELTALLM_S3_BUCKET=
-REDIS_PASSWORD=
-RESEND_API_KEY=
-SENDGRID_API_KEY=
-SSO_CLIENT_ID=
-SSO_CLIENT_SECRET=
-```
-
-The `docker-compose.yaml` automatically sets these for the bundled services:
-
-- `DATABASE_URL`
-- `REDIS_URL`
-
-You do not need to configure them manually for the default Compose setup.
-
-### Optional feature blocks in `config.yaml`
-
-The starter config keeps the common optional features commented out with guidance inline.
-
-- Email delivery: enable when you want invitation emails, password reset, admin test email, or governance notifications
-- Governance notifications: opt-in only, and intended to be enabled after email delivery is configured
-- SSO: requires Redis and identity-provider credentials
-- JWT auth: optional bearer-token validation for proxy traffic
-- Guardrails and S3 callbacks: enable only when the related provider credentials are configured
-
-The container applies strict Prisma migrations automatically on boot, so you do not need a
-separate schema initialization step for the local Compose profiles. Do not extend this
-per-container behavior to a multi-replica production rollout.
-
-## Single instance
-
-The fastest way to get everything running:
+Generate the master key and salt instead of writing them yourself:
 
 ```bash
-# Edit config.yaml with your API keys and settings
+python3 -c 'import secrets; print("DELTALLM_MASTER_KEY=sk-" + secrets.token_hex(20) + "A1")'
+python3 -c 'import secrets; print("DELTALLM_SALT_KEY=" + secrets.token_hex(32))'
+```
 
+Copy the generated values into `.env`. Keep this file private and do not commit it to source
+control.
+
+The admin email and password create the first account you can use to sign in to the Admin UI.
+
+## 4. Start DeltaLLM
+
+```bash
 docker compose --profile single up -d --build
 ```
 
-If you want the full Presidio engine for guardrails instead of the default regex fallback:
+The first start may take a few minutes while Docker downloads and builds the images. When it
+finishes, DeltaLLM is available at `http://localhost:4002`.
 
-```bash
-INSTALL_PRESIDIO=true docker compose --profile single up -d --build
-```
+Docker also starts PostgreSQL and Redis. You do not need to install or configure them separately.
 
-Run the command from the repository root so Compose can read the project `.env` file automatically.
+## 5. Check that it works
 
-On startup, the DeltaLLM container applies migrations with:
-
-```bash
-prisma migrate deploy --schema=./prisma/schema.prisma
-```
-
-Then it starts the API server.
-
-This starts:
-- DeltaLLM on port **4002** on the host (`4000` inside the container)
-- PostgreSQL 15 database
-- Redis 7 cache
-
-DeltaLLM is available at `http://localhost:4002`.
-
-Without `INSTALL_PRESIDIO=true`, Presidio guardrails still work, but DeltaLLM uses the built-in regex fallback for a smaller default image.
-
-Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
-
-## Multi-instance evaluation
-
-Run two DeltaLLM instances behind an Nginx load balancer:
-
-```bash
-docker compose --profile ha up -d --build
-```
-
-Each DeltaLLM container runs `prisma migrate deploy --schema=./prisma/schema.prisma` before
-starting the API. Concurrent startup is acceptable only for this evaluation profile. Production
-rollouts must run one coordinated migration job before starting replicas.
-
-This starts:
-- 2 DeltaLLM instances (load balanced)
-- Nginx reverse proxy on port 80
-- PostgreSQL database
-- Redis cache
-
-DeltaLLM is available at `http://localhost`.
-
-!!! warning "This profile is not highly available"
-    Nginx, PostgreSQL, Redis, storage, and both application containers share one host and one
-    failure domain. The profile does not provide production TLS, stateful-service redundancy,
-    coordinated migrations, or recovery automation. See [Docker and Compose
-    boundaries](../deployment/docker.md) before operating outside local evaluation.
-
-Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
-
-## Custom Config
-
-By default, Compose mounts `./config.yaml` into the container:
-
-```yaml
-volumes:
-  - ./config.yaml:/app/config/config.yaml:ro
-```
-
-## Using the Dockerfile Directly
-
-```bash
-docker build -t deltallm .
-docker run -p 4002:4000 \
-  -e DATABASE_URL="postgresql://..." \
-  -e DELTALLM_MASTER_KEY="sk-your-key" \
-  -e DELTALLM_SALT_KEY="your-salt-key" \
-  -v ./config.yaml:/app/config/config.yaml:ro \
-  deltallm
-```
-
-To build an image with the full Presidio engine:
-
-```bash
-docker build --build-arg INSTALL_PRESIDIO=true -t deltallm .
-```
-
-The image runs `prisma migrate deploy --schema=./prisma/schema.prisma` before starting `uvicorn`,
-so the target database must be reachable when the container starts. This direct command is for a
-single-container evaluation. In production, pin the image, run the release migration once, and
-override the application command so replicas do not run migration bootstrap. See [Database
-migrations](../deployment/database-migrations.md).
-
-## Health Check
-
-Verify the container is healthy:
+Check the service:
 
 ```bash
 curl http://localhost:4002/health/liveliness
 ```
 
-List the available models:
+You should receive:
 
-```bash
-curl http://localhost:4002/v1/models \
-  -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
+```json
+{
+  "status": "ok"
+}
 ```
 
-If this list is empty, enable one-time bootstrap in `config.yaml` and restart once, or create a deployment in the Admin UI before sending requests.
+Now continue to [Check or add your first model](first-model.md).
+
+## If DeltaLLM does not start
+
+View the container logs:
+
+```bash
+docker compose --profile single logs deltallm
+```
+
+Check that:
+
+- the values in `.env` are not placeholders
+- the master key is at least 32 characters and contains letters and numbers
+- the OpenAI API key is valid
+- port `4002` is not already in use
+
+For multi-instance testing, operational limits, and production guidance, see
+[Docker deployment](../deployment/docker.md).

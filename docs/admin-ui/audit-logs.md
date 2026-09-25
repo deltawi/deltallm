@@ -1,6 +1,6 @@
 # Audit Logs
 
-Audit Logs are the operator-facing record of control-plane and data-plane activity.
+Audit Logs record important administrative changes and selected application requests.
 
 ![Audit Logs](images/audit-logs.png)
 

@@ -23,7 +23,8 @@ Most developers should follow this order:
 4. Create scoped keys or manage runtime state through [Admin Endpoints](admin.md)
 5. Use [Health & Metrics](health.md) for readiness and monitoring
 
-For the first working `curl`, Python, and JavaScript examples, see [Quick Start](../getting-started/quickstart.md).
+For a first working `curl`, see [Send your first request](../getting-started/quickstart.md). For
+Python and JavaScript examples, see [Create a key for your application](../getting-started/first-api-key.md).
 
 ## Authentication
 

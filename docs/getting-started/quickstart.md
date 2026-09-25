@@ -1,55 +1,25 @@
-# Quick Start
+# Send your first request
 
-Use the gateway with `curl`, Python, or JavaScript once DeltaLLM is running and at least one model is available.
+Send one test request after DeltaLLM is running and a model is available.
 
-This page is the main "how do I call the gateway?" guide for first-time users.
+The commands use `http://localhost:4002`, the address for the Docker setup. If you used the
+[development setup](installation.md), replace it with `http://localhost:8000`.
 
-## 1. Start the Gateway
+This one local test uses the master key. Do not put the master key in an application.
 
-Complete the [Docker Compose setup](docker.md), including the `.env` file and initial
-model deployment. Compose starts the gateway, PostgreSQL, and Redis together; you do
-not need to start a second backend or Redis process.
-
-The examples below use the single-instance Compose address, `http://localhost:4002`.
-If you followed the [manual installation](installation.md), substitute
-`http://localhost:8000`. For the multi-instance Compose evaluation profile, use
-`http://localhost`.
-
-Replace `YOUR_MASTER_KEY` with the `DELTALLM_MASTER_KEY` value you configured. The
-master key is for this local evaluation; create a scoped virtual key in step 6 for
-your application.
-
-## 2. Verify It's Running
-
-```bash
-curl http://localhost:4002/health/liveliness
-```
-
-Expected response:
-
-```json
-{
-  "status": "ok"
-}
-```
-
-## 3. List Available Models
+## 1. Find your model name
 
 ```bash
 curl http://localhost:4002/v1/models \
   -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
 
-!!! note
-    If the response contains no models, either:
-    1. enable `general_settings.model_deployment_bootstrap_from_config: true` in `config.yaml` and restart once, or
-    2. create a model deployment from the Admin UI first.
+Replace `YOUR_MASTER_KEY` with the `DELTALLM_MASTER_KEY` value from `.env`.
 
-    The starter [`config.example.yaml`](https://github.com/deltawi/deltallm/blob/main/config.example.yaml) includes a sample `gpt-4o-mini` deployment for this bootstrap flow.
+The response lists the public names your requests can use. The Docker starter model is named
+`gpt-4o-mini`. If you chose a different public name, use that name in the next command.
 
-## 4. Make a Chat Request
-
-Use the standard OpenAI chat completions format:
+## 2. Send a chat request
 
 ```bash
 curl -X POST http://localhost:4002/v1/chat/completions \
@@ -63,72 +33,11 @@ curl -X POST http://localhost:4002/v1/chat/completions \
   }'
 ```
 
-## 5. Use with the OpenAI SDK
+Replace `gpt-4o-mini` if your model has a different public name.
 
-Point any OpenAI SDK client at DeltaLLM:
+A successful response contains the model's answer in `choices[0].message.content`.
 
-=== "Python"
+## Next step
 
-    ```python
-    from openai import OpenAI
-
-    client = OpenAI(
-        base_url="http://localhost:4002/v1",
-        api_key="YOUR_MASTER_KEY",
-    )
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "Hello!"}],
-    )
-    print(response.choices[0].message.content)
-    ```
-
-=== "JavaScript"
-
-    ```javascript
-    import OpenAI from "openai";
-
-    const client = new OpenAI({
-      baseURL: "http://localhost:4002/v1",
-      apiKey: "YOUR_MASTER_KEY",
-    });
-
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: "Hello!" }],
-    });
-    console.log(response.choices[0].message.content);
-    ```
-
-## 6. Create a Virtual API Key
-
-Instead of sharing the master key, create scoped virtual keys:
-
-```bash
-curl -X POST http://localhost:4002/ui/api/keys \
-  -H "Authorization: Bearer YOUR_MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "key_name": "my-app-key",
-    "max_budget": 10.00
-  }'
-```
-
-The response includes a `raw_key` — use this as the API key for your application.
-
-## 7. Next Admin Flows
-
-The current getting-started build also supports:
-
-- invitation-based onboarding from **People & Access**
-- password reset from the browser login page
-- SSO login with MFA-aware session enforcement when SSO is configured
-- opt-in governance notifications for budget thresholds and key lifecycle events when email delivery is enabled
-
-## Next Steps
-
-- [Try MCP tools through DeltaLLM](mcp-quickstart.md)
-- [Configure models and providers](../configuration/models.md)
-- [Set up authentication and SSO](../features/authentication.md)
-- [Explore the Admin UI](../admin-ui/index.md)
+[Create an application key](first-api-key.md) before connecting application code. An application
+key can be limited or revoked without affecting the rest of DeltaLLM.

@@ -13,7 +13,6 @@ Use this area when you need to:
 - register a new MCP server
 - refresh the tool catalog after the upstream server changes
 - run a health check before exposing the server to applications
-- bind a server to an organization, team, or API key
 - bind a server to an organization, team, API key, or user
 - set policy for a specific tool
 - review and decide manual approval requests
@@ -166,7 +165,7 @@ DeltaLLM strips the prefix and forwards only the allowlisted header names.
 
 ## Related Pages
 
-- [MCP Quick Start](../getting-started/mcp-quickstart.md)
+- [Connect your first MCP server](../getting-started/mcp-quickstart.md)
 - [MCP Gateway & Tools](../features/mcp.md)
 - [API Reference: MCP Gateway & Tooling](../api/mcp.md)
 - [Governance Rollout](../deployment/governance.md)

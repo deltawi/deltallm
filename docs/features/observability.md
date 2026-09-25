@@ -1,6 +1,6 @@
-# Observability
+# Metrics and monitoring reference
 
-DeltaLLM exposes health endpoints, Prometheus metrics, spend views, and callback integrations so you can monitor both gateway behavior and provider traffic.
+DeltaLLM exposes health endpoints, Prometheus metrics, spend views, and callback integrations so you can monitor both gateway behavior and provider traffic. For a short setup path, start with [Monitor DeltaLLM](../guides/monitoring.md).
 
 ## Quick Path
 

@@ -1,6 +1,17 @@
-# Governance Rollout
+---
+title: Governance rollout
+description: Release-specific steps for enabling scoped asset governance.
+status: stable
+audience: operators
+applies_to: Releases whose notes explicitly link this runbook.
+---
+
+# Governance rollout
 
 This guide covers the operator workflow for rolling out scoped asset governance in a running gateway.
+
+!!! warning "Check your release notes"
+    Use this runbook only when the release notes for your target version link to it. Do not assume it applies to every upgrade.
 
 ## What Is Runtime-Authoritative
 

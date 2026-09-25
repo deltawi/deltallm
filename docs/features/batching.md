@@ -4,6 +4,16 @@ Process large volumes of embedding or non-streaming chat completion requests asy
 
 This page is the main batch reference. It covers the public API, worker behavior, production configuration, scheduler sizing, monitoring, and troubleshooting.
 
+For a short first-time tutorial, use [Process work in batches](../guides/batching.md).
+
+The commands on this page use one base address:
+
+```bash
+export BASE_URL="http://localhost:4002"
+```
+
+Use `http://localhost:8000` for the manual development setup.
+
 ## Model selectors in chat batches
 
 Chat batches can use a Route Group's published model selector without another setup
@@ -51,7 +61,7 @@ tools and selectors for non-chat workloads remain unsupported.
 The throughput tradeoff is deliberate: selecting cheaper answers may save money,
 but selected items give up upstream microbatch packing and add one classifier call.
 Measure with your workload and reserve realtime provider headroom using existing
-Batch capacity settings. [The PR 6 design and verification record](../project/model-router-batch.md)
+Batch capacity settings. The internal design and verification record
 documents ownership, recovery, dependency budgets and reproducible local measurements.
 
 ### Selector Batch example
@@ -255,7 +265,7 @@ Chat completion example:
 Upload it:
 
 ```bash
-curl http://localhost:8000/v1/files \
+curl "$BASE_URL/v1/files" \
   -H "Authorization: Bearer $API_KEY" \
   -F "purpose=batch" \
   -F "file=@input.jsonl"
@@ -277,7 +287,7 @@ Response:
 ### 3. Create a batch
 
 ```bash
-curl http://localhost:8000/v1/batches \
+curl "$BASE_URL/v1/batches" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -294,7 +304,7 @@ DeltaLLM currently supports the OpenAI-compatible `24h` completion window. Missi
 When `batch_webhook_enabled=true`, a batch may include one HTTPS callback configuration. The URL and signing secret are write-only: DeltaLLM encrypts them at rest and returns only whether a webhook is configured.
 
 ```bash
-curl http://localhost:8000/v1/batches \
+curl "$BASE_URL/v1/batches" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -386,7 +396,7 @@ Retries preserve the event ID and exact body; signature timestamps and attempt h
 ### 4. Poll for completion
 
 ```bash
-curl http://localhost:8000/v1/batches/batch_xyz789 \
+curl "$BASE_URL/v1/batches/batch_xyz789" \
   -H "Authorization: Bearer $API_KEY"
 ```
 
@@ -422,7 +432,7 @@ Watch the `status` field and `request_counts` to track progress:
 ### 5. Download results
 
 ```bash
-curl http://localhost:8000/v1/files/file_out456/content \
+curl "$BASE_URL/v1/files/file_out456/content" \
   -H "Authorization: Bearer $API_KEY" \
   -o output.jsonl
 ```

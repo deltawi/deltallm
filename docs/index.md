@@ -1,94 +1,58 @@
 # DeltaLLM
 
-DeltaLLM is a self-hosted LLM gateway and control plane. Applications send
-OpenAI-compatible requests to one endpoint while operators manage provider credentials,
-model routing, scoped access, budgets, guardrails, batches, MCP tools, and usage from one
-place.
+DeltaLLM gives your applications one place to call AI models. It connects to providers such as
+OpenAI, Anthropic, Gemini, and Bedrock, while your team controls access, routing, spending, safety,
+and monitoring.
 
-[Get started with Docker](getting-started/docker.md){ .md-button .md-button--primary }
-[Understand the architecture](concepts/architecture.md){ .md-button }
+[Start with Docker](getting-started/docker.md){ .md-button .md-button--primary }
+[See how DeltaLLM works](concepts/architecture.md){ .md-button }
 
-## Send one request
+## Choose what you want to do
 
-After completing the [Docker setup](getting-started/docker.md), point an OpenAI-compatible
-client at DeltaLLM:
-
-=== "curl"
-
-    ```bash
-    curl http://localhost:4002/v1/chat/completions \
-      -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
-      -H "Content-Type: application/json" \
-      -d '{
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": "Hello from DeltaLLM"}]
-      }'
-    ```
-
-=== "Python"
-
-    ```python
-    from openai import OpenAI
-
-    client = OpenAI(
-        base_url="http://localhost:4002/v1",
-        api_key="YOUR_DELTALLM_KEY",
-    )
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "Hello from DeltaLLM"}],
-    )
-    print(response.choices[0].message.content)
-    ```
-
-For JavaScript, streaming, embeddings, images, audio, files, and batches, continue to the
-[gateway quick start](getting-started/quickstart.md).
-
-## What you can do
-
-| Outcome | Start here |
+| I want to… | Start here |
 | --- | --- |
-| Connect models and provider credentials | [Model deployments](configuration/models.md) |
-| Route requests across deployments and fail over safely | [Routing and failover](features/routing.md) |
-| Give applications scoped keys and limits | [Authentication and SSO](features/authentication.md) |
-| Enforce budgets and hierarchical rate limits | [Budgets](features/budgets.md) and [rate limiting](features/rate-limiting.md) |
-| Apply PII and prompt-injection controls | [Guardrails](features/guardrails.md) |
-| Run asynchronous embeddings and chat workloads | [Batch API](features/batching.md) |
-| Connect governed external tools | [MCP gateway](features/mcp.md) |
-| Operate the gateway through a browser | [Admin UI](admin-ui/index.md) |
-| Integrate directly with the HTTP surfaces | [API reference](api/index.md) |
+| Try DeltaLLM on my computer | [Get started](getting-started/index.md) |
+| Connect an application to AI models | [Build with DeltaLLM](features/index.md) |
+| Manage models, keys, teams, and spending | [Administer DeltaLLM](admin-ui/index.md) |
+| Run DeltaLLM in production | [Deploy and operate](deployment/index.md) |
+| Understand the main ideas | [Understand the system](concepts/index.md) |
+| Look up an API, setting, or provider | [Reference](reference/index.md) |
 
-## How DeltaLLM fits together
+## The shortest path to a working request
+
+1. [Start DeltaLLM with Docker](getting-started/docker.md).
+2. [Add a model](getting-started/first-model.md).
+3. [Send a test request](getting-started/quickstart.md).
+4. [Create a key for your application](getting-started/first-api-key.md).
+
+You can usually complete these steps in a few minutes if you already have a provider API key.
+
+## What DeltaLLM manages
 
 ```text
-Applications                  DeltaLLM                         External systems
-┌──────────────┐       ┌──────────────────────────┐       ┌──────────────────┐
-│ OpenAI SDKs  │──────▶│ Data plane               │──────▶│ LLM providers    │
-│ HTTP clients │◀──────│ auth · policy · routing  │◀──────│ MCP servers      │
-└──────────────┘       │ cache · usage · audit    │       │ webhooks         │
-                       ├──────────────────────────┤       └──────────────────┘
-┌──────────────┐       │ Control plane            │
-│ Operators    │──────▶│ Admin API and Admin UI   │
-└──────────────┘       └────────────┬─────────────┘
-                                   │
-                              PostgreSQL
-                         Redis coordination/cache
+Your applications             DeltaLLM                    AI services
+┌─────────────────┐      ┌─────────────────────┐      ┌─────────────────┐
+│ OpenAI SDKs     │─────▶│ Access and limits   │─────▶│ OpenAI          │
+│ HTTP clients    │◀─────│ Routing and safety  │◀─────│ Anthropic       │
+│ Agent tools     │      │ Cost and monitoring │      │ Gemini and more │
+└─────────────────┘      └──────────┬──────────┘      └─────────────────┘
+                                    │
+                         PostgreSQL and Redis
 ```
 
-Read [Architecture](concepts/architecture.md) for component ownership and deployment
-boundaries, or [Life of a request](concepts/request-lifecycle.md) for the policy and routing
-sequence.
+Applications call a public model name. DeltaLLM chooses the right provider deployment, applies
+your rules, sends the request, and records the result. Read [What happens to a
+request](concepts/request-lifecycle.md) when you need more detail.
 
 ## Before production
 
-Docker Compose is the local evaluation path, not a production high-availability design.
-Production deployments need externally managed durable storage, restricted network access,
-coordinated database migrations before application rollout, multiple replicas, and monitored
-failure behavior. Begin with the [deployment overview](deployment/index.md) and
-[Kubernetes guide](deployment/kubernetes.md).
+The Docker quickstart is for learning and testing. A production deployment also needs protected
+network access, reliable PostgreSQL and Redis services, backups, monitoring, and a safe upgrade
+process. Use the [production checklist](deployment/production-checklist.md) before serving real
+traffic.
 
-## Get help and contribute
+## Get help
 
-- Report defects in [GitHub Issues](https://github.com/deltawi/deltallm/issues).
-- Discuss features in [GitHub Discussions](https://github.com/deltawi/deltallm/discussions).
-- Follow the [documentation contribution guide](https://github.com/deltawi/deltallm/blob/main/CONTRIBUTING_DOCS.md) when updating this site.
+- Report a problem in [GitHub Issues](https://github.com/deltawi/deltallm/issues).
+- Ask questions in [GitHub Discussions](https://github.com/deltawi/deltallm/discussions).
+- Read the [documentation policy](project/documentation-governance.md) before updating these docs.

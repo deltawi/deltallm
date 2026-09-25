@@ -1,44 +1,27 @@
-# Guides
+# Build with DeltaLLM
 
-Use these task-oriented guides when DeltaLLM is already running and you want to
-configure or operate a capability. For system behavior and design boundaries, start with
-[Concepts](../concepts/index.md). For field and endpoint contracts, use the
-[Configuration](../configuration/index.md) and [API](../api/index.md) references.
+Use these guides after DeltaLLM is running. They explain how to connect models and tools, route
+traffic, and add safety and reliability features.
 
-For complete sequences that cross the Admin UI, API, configuration, and verification surfaces,
-start with [Operator Journeys](../guides/operator-journeys.md).
+## Common tasks
 
-## Start With the Outcome You Want
+| I want to… | Read this |
+| --- | --- |
+| Connect a model or provider | [Choose and connect a model](../guides/models-and-providers.md) |
+| Send traffic to several deployments | [Route traffic and handle failures](../guides/routing-and-failover.md) |
+| Reuse repeated responses | [Caching](caching.md) |
+| Process large jobs in the background | [Process work in batches](../guides/batching.md) |
+| Let models use external tools | [Connect your first MCP server](../getting-started/mcp-quickstart.md) |
+| Check or clean prompts and responses | [Add your first guardrail](../guides/guardrails.md) |
 
-| Goal | Read this |
-|------|-----------|
-| Protect access to the gateway | [Authentication & SSO](authentication.md) |
-| Connect external MCP tools and expose them safely | [MCP Gateway & Tools](mcp.md) |
-| Spread traffic across multiple deployments | [Routing & Failover](routing.md) |
-| Lower latency and cost for repeated requests | [Caching](caching.md) |
-| Block or sanitize unsafe content | [Guardrails](guardrails.md) |
-| Control request volume at each scope | [Rate Limiting](rate-limiting.md) |
-| Track or cap spend | [Budgets & Spend](budgets.md) |
-| Use the Batch API for async embeddings and non-streaming chat completions | [Batch API & Production Setup](batching.md) |
-| Export evidence for compliance or investigations | [Audit Log](audit-log.md) |
-| Safely remove an organization and its tenant configuration | [Organization Deletion](organization-deletion.md) |
-| Monitor health, latency, and request volume | [Observability](observability.md) |
+## A simple way to build
 
-## Quick Success Pattern
+1. Start with one model deployment and one test request.
+2. Create a separate application key instead of using the master key.
+3. Add routing, caching, limits, or guardrails only when the basic request works.
+4. Test failure cases before moving the application to production.
 
-Most feature pages in this section follow the same order:
+For tasks that cross the Admin UI and API, use the [complete build workflows](../guides/build-workflows.md).
 
-1. Turn the feature on with the smallest working configuration
-2. Verify it with one request, API call, or UI action
-3. Read the advanced options only if you need them
-
-If you are still trying to get DeltaLLM running for the first time, go back to [Getting Started](../getting-started/index.md) first.
-
-## Where Other Capabilities Live
-
-Some DeltaLLM capabilities are documented outside the Features section because they are primarily control-plane workflows:
-
-- [Model Deployments](../configuration/models.md) explains how runtime models are defined
-- [MCP Servers](../admin-ui/mcp.md) covers the operator workflow for server registration, bindings, policies, and approvals
-- [Admin UI](../admin-ui/index.md) covers operator workflows such as Models, Route Groups, Prompt Registry, Batch Jobs, and Settings
-- [API Reference](../api/index.md) documents the public proxy API and admin API endpoints
+Use [Reference](../reference/index.md) when you need every field or endpoint rather than a guided
+task.
