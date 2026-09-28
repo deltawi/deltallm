@@ -19,6 +19,7 @@ from src.config_runtime.dynamic import (
 from src.config_runtime.loader import deep_merge
 from src.config_runtime.models import ModelHotReloadManager
 from src.config_runtime.secrets import BaseSecretManager, SecretResolver
+from src.providers.base import map_standard_provider_status_error
 from src.db.repositories import ModelDeploymentRecord
 from src.db.route_groups import RouteGroupRuntimeSnapshot
 from src.router.selection.policy import RouteSelectorActivationState
@@ -1127,7 +1128,7 @@ async def test_dynamic_config_pubsub_failure_keeps_polling_and_records_metric(mo
 
 
 @pytest.mark.asyncio
-async def test_model_hot_reload_manager_updates_runtime_registries():
+async def test_dynamic_config_persists_fallbacks_and_updates_runtime_registries():
     settings = SimpleNamespace(
         openai_api_key="provider-key",
         openai_base_url="https://api.openai.com/v1",
@@ -1185,7 +1186,8 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
         )
     )
 
-    dynamic = DynamicConfigManager(db_client=FakeDB(), redis_client=None, file_config={})
+    db = FakeDB()
+    dynamic = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
     await dynamic.initialize()
 
     manager = ModelHotReloadManager(app=app, dynamic_config=dynamic)
@@ -1198,7 +1200,15 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
                     "model_name": "gpt-4.1-mini",
                     "deployment_id": "new-dep",
                     "deltallm_params": {"model": "openai/gpt-4.1-mini", "api_key": "provider-key"},
-                }
+                },
+                {
+                    "model_name": "general-fallback",
+                    "deployment_id": "fallback-dep",
+                    "deltallm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "fallback-key",
+                    },
+                },
             ],
             "router_settings": {"routing_strategy": "weighted", "num_retries": 2},
             "deltallm_settings": {
@@ -1213,13 +1223,9 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
         }
     )
 
-    await manager._on_config_change(
-        updated_cfg,
-        {
-            "added": [],
-            "removed": [],
-            "modified": ["model_list", "router_settings", "deltallm_settings"],
-        },
+    await dynamic.update_config(
+        updated_cfg.model_dump(mode="python"),
+        updated_by="admin_api",
     )
 
     assert "gpt-4.1-mini" in app.state.model_registry
@@ -1234,6 +1240,27 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     }
     assert app.state.platform_identity_service.totp_issuer == "Acme AI"
     assert app.state.router.deployment_registry["gpt-4.1-mini"][0].deployment_id == "new-dep"
+    assert db.config_value["deltallm_settings"]["fallbacks"] == [
+        {"gpt-4.1-mini": ["general-fallback"]}
+    ]
+
+    attempts: list[str] = []
+    primary = app.state.router.deployment_registry["gpt-4.1-mini"][0]
+
+    async def execute(deployment):  # noqa: ANN001, ANN202
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            raise map_standard_provider_status_error(422)
+        return "fallback-ok"
+
+    result = await app.state.failover_manager.execute_with_failover(
+        primary,
+        "gpt-4.1-mini",
+        execute,
+    )
+
+    assert result == "fallback-ok"
+    assert attempts == ["new-dep", "fallback-dep"]
 
     previous_app_config = app.state.app_config
     previous_registry = app.state.router.deployment_registry

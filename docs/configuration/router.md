@@ -361,8 +361,12 @@ its specialized chain first; an unclassified 5xx uses the general chain, and 429
 failure regardless of envelope text. A malformed JSON or response schema behind a nominally
 successful provider status is a health-affecting provider failure and may use the general
 `fallbacks` map; its upstream payload is never returned to the client. This includes empty chat
-choices, missing or mismatched embedding and rerank results, and empty speech audio. Unknown or
-malformed 4xx responses stop with a sanitized gateway error. Anthropic Messages responses classify
+choices, missing or mismatched embedding and rerank results, and empty speech audio. Unclassified
+provider client errors, such as `400`, `409`, or `422`, remain health-neutral, skip retrying the same
+deployment, and advance through the remaining eligible deployments and configured general fallback
+groups. If all candidates reject the request, DeltaLLM returns the final sanitized `400`. Known
+authentication, permission, missing-model, timeout, and rate-limit statuses retain their specialized
+behavior. Anthropic Messages responses classify
 `refusal` as content policy and `model_context_window_exceeded` as context window before returning a
 nominal success. Gemini accepts only documented success terminal reasons; policy terminals use the
 content-policy chain and unsupported, malformed, or unknown terminal reasons fail closed through

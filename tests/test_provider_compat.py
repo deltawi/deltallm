@@ -29,6 +29,7 @@ from src.providers.base import (
     map_standard_provider_status_error,
     parse_provider_json_response,
     read_streaming_provider_error_details,
+    sanitize_provider_proxy_error,
 )
 from src.providers.error_body import PROVIDER_ERROR_BODY_OPAQUE_EXTENSION
 from src.providers.gemini import GeminiAdapter
@@ -311,9 +312,24 @@ async def test_openai_adapter_sanitizes_unclassified_provider_error_message() ->
         mapped = adapter.map_error(exc)
         assert str(mapped) == "Provider rejected request"
         assert mapped.failure_classification is FailureClassification.GENERIC
+        assert mapped.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
         assert "tool_choice" not in str(mapped)
     finally:
         await adapter.http_client.aclose()
+
+
+@pytest.mark.parametrize("status_code", [400, 409, 422])
+def test_provider_client_error_keeps_next_deployment_action_after_sanitization(
+    status_code: int,
+) -> None:
+    mapped = map_standard_provider_status_error(status_code)
+
+    sanitized = sanitize_provider_proxy_error(mapped)
+
+    assert isinstance(sanitized, InvalidRequestError)
+    assert sanitized.affects_deployment_health is False
+    assert sanitized.failure_classification is FailureClassification.GENERIC
+    assert sanitized.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
 
 
 @pytest.mark.parametrize("status_code", [401, 403, 404])
@@ -345,6 +361,7 @@ def test_classified_provider_403_remains_a_terminal_request_failure() -> None:
     assert isinstance(mapped, InvalidRequestError)
     assert mapped.affects_deployment_health is False
     assert mapped.failure_classification is FailureClassification.CONTENT_POLICY
+    assert mapped.routing_failure_action is None
 
 
 @pytest.mark.asyncio
@@ -2286,6 +2303,7 @@ async def test_bedrock_adapter_translate_stream_raises_on_exception_event() -> N
             async for _ in adapter.translate_stream(_byte_stream([frame])):
                 pass
         assert error_info.value.failure_classification is FailureClassification.GENERIC
+        assert error_info.value.routing_failure_action is RoutingFailureAction.NEXT_DEPLOYMENT
     finally:
         await adapter.http_client.aclose()
 

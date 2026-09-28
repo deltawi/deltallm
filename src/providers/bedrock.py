@@ -13,6 +13,7 @@ from src.models.errors import (
     InvalidRequestError,
     ProxyError,
     RateLimitError,
+    RoutingFailureAction,
     ServiceUnavailableError,
 )
 from src.models.requests import ChatCompletionRequest
@@ -136,6 +137,9 @@ def _map_stream_error(exception_type: str, message: str) -> ProxyError:
             message="Provider rejected request",
             affects_deployment_health=False,
             failure_classification=classification or FailureClassification.GENERIC,
+            routing_failure_action=(
+                RoutingFailureAction.NEXT_DEPLOYMENT if classification is None else None
+            ),
         )
     return ServiceUnavailableError(
         message="Provider unavailable",

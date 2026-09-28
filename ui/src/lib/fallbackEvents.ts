@@ -7,6 +7,11 @@ export interface FallbackEvent {
   success: boolean;
 }
 
+export function fallbackTargetLabel(event: FallbackEvent): string {
+  if (event.to_deployment) return event.to_deployment;
+  return event.success ? 'No target selected' : 'Attempt failed';
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
