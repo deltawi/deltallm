@@ -1861,19 +1861,20 @@ async def test_chat_upstream_rate_limit_returns_429(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(client, test_app):
+async def test_chat_upstream_bad_request_uses_fallback_without_marking_primary_unhealthy(
+    client, test_app
+):
     registry_store = test_app.state.router.deployment_registry
     registry = list(registry_store["gpt-4o-mini"])
     deployment = registry[0]
     deployment.deltallm_params["api_key"] = "provider-key"
-    registry.append(
-        type(deployment)(
-            deployment_id="gpt-4o-mini-fallback",
-            model_name="gpt-4o-mini",
-            deltallm_params={"model": "openai/gpt-4o-mini", "api_key": "provider-key-fallback"},
-            model_info={},
-        )
+    fallback = type(deployment)(
+        deployment_id="gpt-4o-mini-fallback",
+        model_name="gpt-4o-mini",
+        deltallm_params={"model": "openai/gpt-4o-mini", "api_key": "provider-key-fallback"},
+        model_info={},
     )
+    registry.append(fallback)
     registry_store.replace({**registry_store.snapshot(), "gpt-4o-mini": registry})
 
     async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
@@ -1890,7 +1891,7 @@ async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(clie
         attempted_auths.append(headers.get("Authorization"))
         calls["count"] += 1
         if calls["count"] == 1:
-            return httpx.Response(400, json={"error": {"message": "bad input"}}, request=request)
+            return httpx.Response(422, json={"error": {"message": "bad input"}}, request=request)
         return httpx.Response(
             200,
             json={
@@ -1918,19 +1919,19 @@ async def test_chat_upstream_bad_request_does_not_mark_deployment_unhealthy(clie
         "stream": False,
     }
 
-    failure = await client.post("/v1/chat/completions", headers=headers, json=body)
-    assert failure.status_code == 400
-    assert attempted_auths == ["Bearer provider-key"]
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "ok"
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    assert attempted_auths == ["Bearer provider-key", "Bearer provider-key-fallback"]
 
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 0
     assert health.get("last_error") is None
     assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
-
-    success = await client.post("/v1/chat/completions", headers=headers, json=body)
-    assert success.status_code == 200
-    assert attempted_auths == ["Bearer provider-key", "Bearer provider-key"]
 
 
 @pytest.mark.asyncio
@@ -2394,6 +2395,55 @@ async def test_stream_retries_before_first_token_with_failover(client, test_app)
     assert calls["count"] == 2
     assert response.headers["x-deltallm-route-deployment"] == "gpt-4o-mini-fallback"
     assert response.headers["x-deltallm-route-fallback-used"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_stream_provider_bad_request_uses_fallback_without_cooling_primary(client, test_app):
+    primary, fallback = _configure_chat_fallback(test_app)
+    test_app.state.cooldown_manager.allowed_fails = 0
+    attempted_auths: list[str | None] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
+        del method, url, json, timeout
+        authorization = headers.get("Authorization")
+        attempted_auths.append(authorization)
+        if authorization == "Bearer provider-key":
+            return _StreamContext(
+                status_code=400,
+                lines=[],
+                body=b'{"error":{"message":"unsupported request"}}',
+            )
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-fallback","choices":[{"index":0,'
+                '"delta":{"content":"fallback ok"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-fallback","choices":[{"index":0,'
+                '"delta":{},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert '"content":"fallback ok"' in response.text
+    assert attempted_auths == ["Bearer provider-key", "Bearer provider-key-fallback"]
+    assert response.headers["x-deltallm-route-deployment"] == fallback.deployment_id
+    assert response.headers["x-deltallm-route-fallback-used"] == "true"
+    health = await test_app.state.router_state_backend.get_health(primary.deployment_id)
+    assert int(health.get("consecutive_failures", 0) or 0) == 0
+    assert health.get("last_error") is None
+    assert not await test_app.state.router_state_backend.is_cooled_down(primary.deployment_id)
 
 
 @pytest.mark.asyncio

@@ -336,6 +336,11 @@ def map_standard_provider_status_error(
         message="Provider rejected request",
         affects_deployment_health=False,
         failure_classification=resolved_classification,
+        routing_failure_action=(
+            RoutingFailureAction.NEXT_DEPLOYMENT
+            if 400 <= status_code < 500 and resolved_classification is FailureClassification.GENERIC
+            else None
+        ),
     )
 
 
@@ -379,6 +384,7 @@ def sanitize_provider_proxy_error(provider_error: ProxyError) -> ProxyError:
             message="Provider rejected request",
             affects_deployment_health=health_impact,
             failure_classification=classification,
+            routing_failure_action=provider_error.routing_failure_action,
         )
     retry_after = getattr(provider_error, "retry_after", None)
     return map_standard_provider_status_error(

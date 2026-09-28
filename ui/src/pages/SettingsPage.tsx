@@ -13,7 +13,11 @@ import { useThemeSettingsController } from '../components/settings/useThemeSetti
 import { useToast } from '../components/ToastProvider';
 import { normalizeBranding } from '../lib/branding';
 import { useBranding } from '../lib/brandingContext';
-import { parseFallbackEvents, type FallbackEvent } from '../lib/fallbackEvents';
+import {
+  fallbackTargetLabel,
+  parseFallbackEvents,
+  type FallbackEvent,
+} from '../lib/fallbackEvents';
 
 interface FallbackEntry {
   from: string;
@@ -581,7 +585,9 @@ export default function SettingsPage() {
                                       <span className="truncate max-w-[130px]">{evt.to_deployment}</span>
                                     </>
                                   ) : (
-                                    <span className="text-gray-300 italic">no target</span>
+                                    <span className="text-gray-400 italic">
+                                      {fallbackTargetLabel(evt)}
+                                    </span>
                                   )}
                                 </div>
                               </td>

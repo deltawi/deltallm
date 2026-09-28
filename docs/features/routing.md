@@ -480,8 +480,12 @@ a terminal request failure.
 Malformed JSON or response schemas behind a nominally successful provider status are also
 health-affecting general failures, and the upstream payload is never returned to the client. Empty
 chat choices, missing or mismatched embedding and rerank results, and empty speech audio are
-malformed successes. Other unknown or malformed provider 4xx responses stop immediately and return a
-sanitized, stable gateway error. Anthropic `refusal` and `model_context_window_exceeded` success
+malformed successes. An unclassified provider client error, such as `400`, `409`, or `422`, remains
+health-neutral, skips retrying the same deployment, and advances through the remaining eligible
+deployments and configured general fallback groups. If all candidates reject the request, DeltaLLM
+returns the final sanitized `400`. Known authentication, permission, missing-model, timeout, and
+rate-limit statuses retain their specialized behavior. Anthropic `refusal` and
+`model_context_window_exceeded` success
 stop reasons select the content-policy and context-window chains respectively. Gemini policy
 terminal reasons select the content-policy chain; unsupported, malformed, and unknown terminal
 reasons fail closed through the general chain instead of becoming successful empty responses.

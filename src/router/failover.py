@@ -343,6 +343,13 @@ class FailoverManager:
         return InvalidRequestError(
             message="Provider rejected request",
             affects_deployment_health=False,
+            routing_failure_action=(
+                RoutingFailureAction.NEXT_DEPLOYMENT
+                if status_code is not None
+                and 400 <= status_code < 500
+                and status_code not in {401, 403, 404, 408, 429}
+                else None
+            ),
         )
 
     def _normalize_execution_error(

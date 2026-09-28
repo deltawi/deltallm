@@ -23,11 +23,11 @@ from src.models.errors import (
 )
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.azure import AzureOpenAIAdapter
+from src.providers.base import invalid_provider_response_error, map_standard_provider_status_error
 from src.providers.bedrock import BedrockAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.healthcheck import HealthProbeResult, probe_provider_health
 from src.providers.openai import OpenAIAdapter
-from src.providers.base import invalid_provider_response_error
 from src.router import (
     AttemptCapacity,
     BackgroundHealthChecker,
@@ -1808,6 +1808,80 @@ async def test_failover_invalid_request_stops_after_first_deployment():
         )
 
     assert attempts == ["dep-a"]
+
+
+@pytest.mark.asyncio
+async def test_provider_bad_request_advances_to_configured_fallback_once():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    fallback = _deployment("dep-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            num_retries=3,
+            timeout=1.0,
+            fallbacks={"group-a": ["group-b"]},
+        ),
+        candidate_planner=_planner(
+            state,
+            {"group-a": [primary], "group-b": [fallback]},
+        ),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            raise map_standard_provider_status_error(400)
+        return "ok"
+
+    result = await manager.execute_with_failover(primary, "group-a", run)
+
+    assert result == "ok"
+    assert attempts == [primary.deployment_id, fallback.deployment_id]
+    assert not await state.is_cooled_down(primary.deployment_id)
+    health = await state.get_health(primary.deployment_id)
+    assert int(health.get("consecutive_failures", 0) or 0) == 0
+    assert health.get("last_error") is None
+    events = manager.get_recent_fallback_events()
+    assert [
+        (event["from_deployment"], event["to_deployment"], event["success"]) for event in events
+    ] == [
+        (primary.deployment_id, None, False),
+        (primary.deployment_id, fallback.deployment_id, True),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 409, 422])
+async def test_raw_provider_client_error_advances_to_next_deployment(status_code: int):
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-primary")
+    fallback = _deployment("dep-fallback")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=3, timeout=1.0),
+        candidate_planner=_planner(state, {"group-a": [primary, fallback]}),
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment is primary:
+            raise httpx.HTTPStatusError(
+                "bad request",
+                request=httpx.Request("POST", "https://example.com/v1/embeddings"),
+                response=httpx.Response(status_code),
+            )
+        return "ok"
+
+    result = await manager.execute_with_failover(primary, "group-a", run)
+
+    assert result == "ok"
+    assert attempts == [primary.deployment_id, fallback.deployment_id]
+    assert not await state.is_cooled_down(primary.deployment_id)
 
 
 @pytest.mark.asyncio
