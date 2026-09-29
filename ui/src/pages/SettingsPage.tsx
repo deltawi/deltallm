@@ -14,6 +14,7 @@ import { useToast } from '../components/ToastProvider';
 import { normalizeBranding } from '../lib/branding';
 import { useBranding } from '../lib/brandingContext';
 import {
+  fallbackStatusLabel,
   fallbackTargetLabel,
   parseFallbackEvents,
   type FallbackEvent,
@@ -540,7 +541,7 @@ export default function SettingsPage() {
                   </div>
                 </SettingsSection>
 
-                <SettingsSection title="Recent Fallback Events" description="Live feed of automatic failover activity" icon={AlertTriangle}>
+                <SettingsSection title="Recent Fallback Events" description="Each row is one deployment attempt. A failed attempt may be followed by a successful fallback." icon={AlertTriangle}>
                   <div className="flex items-center gap-3 mb-4">
                     <button onClick={loadFallbackEvents} disabled={loadingEvents} className="flex items-center gap-2 text-sm font-medium text-brand-secondary-ink hover:text-brand-secondary-ink-hover px-3 py-1.5 rounded-lg hover:bg-violet-50 transition-colors disabled:opacity-50">
                       <RefreshCw className={`w-4 h-4 ${loadingEvents ? 'animate-spin' : ''}`} />
@@ -558,7 +559,7 @@ export default function SettingsPage() {
                             <th className="text-left py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
                             <th className="text-left py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Model Group</th>
                             <th className="text-left py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wider">From / To</th>
-                            <th className="text-left py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Reason</th>
+                            <th className="text-left py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Classification</th>
                             <th className="text-left py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                           </tr>
                         </thead>
@@ -605,7 +606,7 @@ export default function SettingsPage() {
                               </td>
                               <td className="py-2.5 px-3">
                                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${evt.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                                  {evt.success ? 'Resolved' : 'Failed'}
+                                  {fallbackStatusLabel(evt)}
                                 </span>
                               </td>
                             </tr>

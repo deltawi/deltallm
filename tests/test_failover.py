@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
@@ -1811,7 +1812,10 @@ async def test_failover_invalid_request_stops_after_first_deployment():
 
 
 @pytest.mark.asyncio
-async def test_provider_bad_request_advances_to_configured_fallback_once():
+async def test_provider_bad_request_advances_to_configured_fallback_once(
+    caplog: pytest.LogCaptureFixture,
+):
+    caplog.set_level(logging.INFO, logger="src.router.failover")
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-primary")
     fallback = _deployment("dep-fallback")
@@ -1851,6 +1855,17 @@ async def test_provider_bad_request_advances_to_configured_fallback_once():
         (primary.deployment_id, None, False),
         (primary.deployment_id, fallback.deployment_id, True),
     ]
+    failover_logs = [record for record in caplog.records if record.name == "src.router.failover"]
+    assert any(
+        record.levelno == logging.WARNING
+        and record.getMessage().startswith("Inference attempt failed; continuing failover:")
+        for record in failover_logs
+    )
+    assert any(
+        record.levelno == logging.INFO and record.getMessage().startswith("Fallback succeeded:")
+        for record in failover_logs
+    )
+    assert not any(record.levelno >= logging.ERROR for record in failover_logs)
 
 
 @pytest.mark.asyncio
@@ -2085,7 +2100,10 @@ async def test_health_neutral_next_deployment_action_skips_retry_and_preserves_h
 
 
 @pytest.mark.asyncio
-async def test_health_neutral_next_deployment_action_exhausts_each_candidate_once():
+async def test_health_neutral_next_deployment_action_exhausts_each_candidate_once(
+    caplog: pytest.LogCaptureFixture,
+):
+    caplog.set_level(logging.INFO, logger="src.router.failover")
     state = RedisStateBackend(redis=None)
     deployments = [_deployment(f"dep-{suffix}") for suffix in ("a", "b", "c")]
     manager = FailoverManager(
@@ -2112,6 +2130,19 @@ async def test_health_neutral_next_deployment_action_exhausts_each_candidate_onc
         health = await state.get_health(deployment.deployment_id)
         assert int(health.get("consecutive_failures", 0) or 0) == 0
         assert health.get("last_error") is None
+    failover_logs = [record for record in caplog.records if record.name == "src.router.failover"]
+    assert sum(
+        record.levelno == logging.WARNING
+        and record.getMessage().startswith("Inference attempt failed; continuing failover:")
+        for record in failover_logs
+    ) == len(deployments)
+    exhausted = [
+        record
+        for record in failover_logs
+        if record.levelno == logging.ERROR and record.getMessage().startswith("Failover exhausted:")
+    ]
+    assert len(exhausted) == 1
+    assert "attempts=3" in exhausted[0].getMessage()
 
 
 @pytest.mark.asyncio
