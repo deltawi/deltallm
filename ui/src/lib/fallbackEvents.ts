@@ -9,7 +9,11 @@ export interface FallbackEvent {
 
 export function fallbackTargetLabel(event: FallbackEvent): string {
   if (event.to_deployment) return event.to_deployment;
-  return event.success ? 'No target selected' : 'Attempt failed';
+  return event.success ? 'No target selected' : 'No transition';
+}
+
+export function fallbackStatusLabel(event: FallbackEvent): string {
+  return event.success ? 'Fallback resolved' : 'Attempt failed';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

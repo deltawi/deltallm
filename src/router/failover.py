@@ -286,7 +286,7 @@ class FailoverManager:
             )
         else:
             logger.warning(
-                "Fallback attempt failed: model_group=%s deployment=%s classification=%s error=%s",
+                "Inference attempt failed; continuing failover: model_group=%s deployment=%s classification=%s error=%s",
                 model_group,
                 from_id,
                 classification,
@@ -662,6 +662,15 @@ class FailoverManager:
 
             if deployment_was_attempted:
                 previous_deployment_id = deployment.deployment_id
+
+        if last_error is not None:
+            logger.error(
+                "Failover exhausted: model_group=%s attempts=%s classification=%s error=%s",
+                model_group,
+                len(attempt_history),
+                _classify_failure(last_error),
+                str(last_error)[:200],
+            )
 
         if isinstance(last_error, ProxyError):
             attach_failover_attempt_context(
