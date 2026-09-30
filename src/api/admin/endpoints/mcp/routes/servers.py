@@ -4,20 +4,26 @@ from __future__ import annotations
 from dataclasses import asdict
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.api.admin.endpoints.common import (
+    AuthScope,
     emit_admin_mutation_audit,
     get_auth_scope,
     to_json_value,
 )
+from src.api.admin.endpoints.managed_assets import (
+    asset_principal_for_request,
+    parse_asset_access_input,
+)
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.mcp import MCPRepository
+from src.db.managed_assets import ManagedAssetAccessRepository
+from src.db.mcp import MCPRepository, MCPServerRecord
 from src.mcp.exceptions import MCPError
-from src.middleware.admin import require_admin_permission
-from src.middleware.platform_auth import get_platform_auth_context
+from src.middleware.admin import require_authenticated
 
 from src.api.admin.endpoints.mcp.dependencies import (
     _db_or_503,
@@ -38,6 +44,7 @@ from src.api.admin.endpoints.mcp.operations import (
     _request_timeout_ms,
 )
 from src.api.admin.endpoints.mcp.scope_visibility import (
+    MCPServerCapabilities,
     _resolve_server_create_owner_scope,
     _server_mutable_by_scope,
     _server_owned_by_scope,
@@ -65,11 +72,121 @@ from src.api.admin.endpoints.mcp.validators import (
     _validate_owner_scope_type,
     _validate_url,
 )
+from src.services.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetKind,
+    AssetPrincipal,
+    GovernanceSource,
+    ManagedAsset,
+    resolve_asset_capabilities,
+    revise_asset_access,
+    validate_grant_subject_for_principal,
+    namespace_creator_callable_key,
+)
 
 router = APIRouter(tags=["Admin MCP"])
 
 
-@router.get("/ui/api/mcp-servers", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
+def _access_repository(request: Request) -> ManagedAssetAccessRepository | None:
+    return getattr(request.app.state, "managed_asset_access_repository", None)
+
+
+def _server_not_found() -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
+
+
+async def _authorize_server(
+    request: Request,
+    server: MCPServerRecord,
+    scope: AuthScope,
+    *,
+    write: bool = False,
+    delete: bool = False,
+    operate: bool = False,
+) -> tuple[AssetPrincipal, AssetAccessPolicy | None, bool]:
+    """Use managed access when present and preserve platform-server compatibility."""
+
+    principal = asset_principal_for_request(request)
+    access_repository = _access_repository(request)
+    if access_repository is not None and server.managed_asset_id:
+        policy = await access_repository.get_policy_for_resource(
+            AssetKind.MCP_SERVER,
+            server.mcp_server_id,
+            principal=principal,
+        )
+        if policy is not None:
+            capabilities = resolve_asset_capabilities(policy, principal)
+            allowed = (
+                capabilities.can_delete
+                if delete
+                else capabilities.can_write
+                if write or operate
+                else capabilities.can_read
+            )
+            if not allowed:
+                raise _server_not_found()
+            return principal, policy, True
+
+        raw_policy = await access_repository.get_policy_for_resource(
+            AssetKind.MCP_SERVER,
+            server.mcp_server_id,
+        )
+        if (
+            raw_policy is not None
+            and raw_policy.asset.governance_source is GovernanceSource.CREATOR
+        ):
+            raise _server_not_found()
+    else:
+        raw_policy = None
+
+    if scope.is_platform_admin:
+        return principal, raw_policy, False
+    if operate:
+        is_visible = await _server_visible_to_scope(request, scope, server.mcp_server_id)
+        capabilities = _server_view_capabilities(
+            server,
+            manage_scope=scope,
+            is_visible=is_visible,
+        )
+        if not capabilities.can_operate:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+    elif write or delete:
+        if not _server_mutable_by_scope(server, scope):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+    elif not await _server_visible_to_scope(request, scope, server.mcp_server_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+    return principal, raw_policy, False
+
+
+def _view_capabilities(
+    server: MCPServerRecord,
+    *,
+    scope: AuthScope,
+    is_visible: bool,
+    policy: AssetAccessPolicy | None,
+    principal: AssetPrincipal,
+    managed_authority: bool,
+) -> MCPServerCapabilities:
+    if managed_authority and policy is not None:
+        access = resolve_asset_capabilities(policy, principal)
+        return MCPServerCapabilities(
+            can_mutate=access.can_write,
+            can_operate=access.can_write,
+            can_manage_scope_config=principal.is_platform_admin,
+        )
+    return _server_view_capabilities(server, manage_scope=scope, is_visible=is_visible)
+
+
+@router.get("/ui/api/mcp-servers", dependencies=[Depends(require_authenticated)])
 async def list_mcp_servers(
     request: Request,
     search: str | None = Query(default=None),
@@ -80,8 +197,22 @@ async def list_mcp_servers(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    legacy_scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.KEY_READ,
+    )
     manage_scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    principal = asset_principal_for_request(request)
+    access_repository = _access_repository(request)
+    policies = (
+        await access_repository.list_accessible_policies(AssetKind.MCP_SERVER, principal)
+        if access_repository is not None
+        else []
+    )
+    policy_by_id = {policy.asset.asset_id: policy for policy in policies}
     if scope.is_platform_admin:
         servers, total = await registry.list_servers(search=search, enabled=enabled, limit=limit, offset=offset)
         return {
@@ -89,13 +220,16 @@ async def list_mcp_servers(
                 _serialize_server(
                     server,
                     capabilities=_server_view_capabilities(server, manage_scope=manage_scope, is_visible=True),
+                    policy=policy_by_id.get(str(server.managed_asset_id or "")),
+                    principal=principal,
                 )
                 for server in servers
             ],
             "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
         }
 
-    if not scope.org_ids and not scope.team_ids:
+    accessible_asset_ids = list(policy_by_id)
+    if not legacy_scope.org_ids and not legacy_scope.team_ids and not accessible_asset_ids:
         return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
     db = _db_or_503(request)
@@ -109,11 +243,29 @@ async def list_mcp_servers(
     if enabled is not None:
         params.append(enabled)
         clauses.append(f"s.enabled = ${len(params)}")
-    clauses.append(_server_visibility_exists_clause("s", scope, params))
+    visibility_parts: list[str] = []
+    if accessible_asset_ids:
+        placeholders: list[str] = []
+        for asset_id in accessible_asset_ids:
+            params.append(asset_id)
+            placeholders.append(f"${len(params)}")
+        visibility_parts.append(f"s.managed_asset_id IN ({', '.join(placeholders)})")
+    if legacy_scope.org_ids or legacy_scope.team_ids:
+        legacy_visibility = _server_visibility_exists_clause("s", legacy_scope, params)
+        visibility_parts.append(
+            "((asset.governance_source IS NULL OR asset.governance_source <> 'creator') "
+            f"AND ({legacy_visibility}))"
+        )
+    clauses.append(f"({' OR '.join(visibility_parts)})")
     where_sql = f" WHERE {' AND '.join(clauses)}"
 
     count_rows = await db.query_raw(
-        f"SELECT COUNT(*)::int AS total FROM deltallm_mcpserver s {where_sql}",
+        f"""
+        SELECT COUNT(*)::int AS total
+        FROM deltallm_mcpserver s
+        LEFT JOIN deltallm_managedasset asset ON asset.asset_id = s.managed_asset_id
+        {where_sql}
+        """,
         *params,
     )
     total = int((count_rows[0] if count_rows else {}).get("total") or 0)
@@ -125,6 +277,7 @@ async def list_mcp_servers(
             s.mcp_server_id,
             s.server_key,
             s.name,
+            s.managed_asset_id,
             s.description,
             s.owner_scope_type,
             s.owner_scope_id,
@@ -147,6 +300,7 @@ async def list_mcp_servers(
             s.created_at,
             s.updated_at
         FROM deltallm_mcpserver s
+        LEFT JOIN deltallm_managedasset asset ON asset.asset_id = s.managed_asset_id
         {where_sql}
         ORDER BY s.created_at DESC, s.server_key ASC
         LIMIT ${len(page_params) - 1} OFFSET ${len(page_params)}
@@ -158,7 +312,16 @@ async def list_mcp_servers(
         "data": [
             _serialize_server(
                 server,
-                capabilities=_server_view_capabilities(server, manage_scope=manage_scope, is_visible=True),
+                capabilities=_view_capabilities(
+                    server,
+                    scope=manage_scope,
+                    is_visible=True,
+                    policy=policy_by_id.get(str(server.managed_asset_id or "")),
+                    principal=principal,
+                    managed_authority=str(server.managed_asset_id or "") in policy_by_id,
+                ),
+                policy=policy_by_id.get(str(server.managed_asset_id or "")),
+                principal=principal,
             )
             for server in servers
         ],
@@ -166,7 +329,7 @@ async def list_mcp_servers(
     }
 
 
-@router.post("/ui/api/mcp-servers", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+@router.post("/ui/api/mcp-servers", dependencies=[Depends(require_authenticated)])
 async def create_mcp_server(
     request: Request,
     payload: dict[str, Any],
@@ -176,9 +339,22 @@ async def create_mcp_server(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     _registry_or_503(request)  # Health check only
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    principal = asset_principal_for_request(request)
+    access_repository = _access_repository(request)
+    if access_repository is not None and not principal.is_platform_admin and principal.account_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated account is required",
+        )
 
     server_key = _normalize_server_key(payload.get("server_key"))
+    try:
+        server_key = _normalize_server_key(
+            namespace_creator_callable_key(server_key, principal)
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     name = str(payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
@@ -186,29 +362,134 @@ async def create_mcp_server(
     existing = await repository.get_server_by_key(server_key)
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An MCP server with this server_key already exists")
-    owner_scope_type, owner_scope_id = await _resolve_server_create_owner_scope(request, scope=scope, payload=payload)
+    if access_repository is None:
+        legacy_scope = get_auth_scope(
+            request,
+            authorization,
+            x_master_key,
+            required_permission=Permission.ORG_UPDATE,
+        )
+        owner_scope_type, owner_scope_id = await _resolve_server_create_owner_scope(
+            request,
+            scope=legacy_scope,
+            payload=payload,
+        )
+    elif principal.is_platform_admin:
+        owner_scope_type, owner_scope_id = await _resolve_server_create_owner_scope(
+            request,
+            scope=scope,
+            payload=payload,
+        )
+    else:
+        # Creator access is authoritative. The legacy field remains neutral metadata.
+        owner_scope_type, owner_scope_id = "global", None
 
-    created_by_account_id = getattr(get_platform_auth_context(request), "account_id", None)
-    created = await repository.create_server(
-        server_key=server_key,
-        name=name,
-        description=str(payload.get("description")).strip() if payload.get("description") is not None else None,
-        owner_scope_type=owner_scope_type,
-        owner_scope_id=owner_scope_id,
-        transport=_normalize_transport(payload.get("transport")),
-        base_url=_validate_url(payload.get("base_url")),
-        enabled=bool(payload.get("enabled", True)),
-        auth_mode=auth_mode,
-        auth_config=_validate_auth_config(auth_mode, payload.get("auth_config")),
-        forwarded_headers_allowlist=_normalize_allowlist(payload.get("forwarded_headers_allowlist")),
-        request_timeout_ms=_request_timeout_ms(payload, default=30000),
-        metadata=_normalize_metadata(payload.get("metadata")),
-        created_by_account_id=created_by_account_id,
-    )
+    create_kwargs = {
+        "server_key": server_key,
+        "name": name,
+        "description": str(payload.get("description")).strip()
+        if payload.get("description") is not None
+        else None,
+        "owner_scope_type": owner_scope_type,
+        "owner_scope_id": owner_scope_id,
+        "transport": _normalize_transport(payload.get("transport")),
+        "base_url": _validate_url(payload.get("base_url")),
+        "enabled": bool(payload.get("enabled", True)),
+        "auth_mode": auth_mode,
+        "auth_config": _validate_auth_config(auth_mode, payload.get("auth_config")),
+        "forwarded_headers_allowlist": _normalize_allowlist(
+            payload.get("forwarded_headers_allowlist")
+        ),
+        "request_timeout_ms": _request_timeout_ms(payload, default=30000),
+        "metadata": _normalize_metadata(payload.get("metadata")),
+        "created_by_account_id": principal.account_id,
+    }
+    policy: AssetAccessPolicy | None = None
+    managed_authority = False
+    if access_repository is None:
+        created = await repository.create_server(**create_kwargs)
+    else:
+        managed_asset_id = str(uuid4())
+        mcp_server_id = str(uuid4())
+        base_policy = AssetAccessPolicy(
+            asset=ManagedAsset(
+                asset_id=managed_asset_id,
+                asset_kind=AssetKind.MCP_SERVER,
+                governance_source=(
+                    GovernanceSource.PLATFORM
+                    if principal.is_platform_admin
+                    else GovernanceSource.CREATOR
+                ),
+                owner_account_id=None if principal.is_platform_admin else principal.account_id,
+            )
+        )
+        grants = parse_asset_access_input(payload, managed_asset_id=managed_asset_id)
+        try:
+            policy = revise_asset_access(
+                base_policy,
+                principal,
+                grants=grants,
+            )
+            validate_grant_subject_for_principal(policy, principal)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        async def _create_with(
+            mcp_repository: MCPRepository,
+            policy_repository: ManagedAssetAccessRepository,
+        ) -> tuple[MCPServerRecord, AssetAccessPolicy]:
+            stored_policy = await policy_repository.create_policy(
+                policy,
+                created_by_account_id=principal.account_id,
+            )
+            server = await mcp_repository.create_server(
+                **create_kwargs,
+                mcp_server_id=mcp_server_id,
+                managed_asset_id=managed_asset_id,
+            )
+            return server, stored_policy
+
+        database = getattr(access_repository, "prisma", None)
+        if (
+            database is not None
+            and database is getattr(repository, "prisma", None)
+            and hasattr(database, "tx")
+        ):
+            async with database.tx() as tx:
+                created, policy = await _create_with(
+                    repository.with_db(tx),
+                    access_repository.with_db(tx),
+                )
+        else:
+            policy = await access_repository.create_policy(
+                policy,
+                created_by_account_id=principal.account_id,
+            )
+            try:
+                created = await repository.create_server(
+                    **create_kwargs,
+                    mcp_server_id=mcp_server_id,
+                    managed_asset_id=managed_asset_id,
+                )
+            except Exception:
+                await access_repository.delete_policy(managed_asset_id)
+                raise
+        managed_authority = True
     await _reload_runtime_governance(request, invalidate_registry=False)
     response = _serialize_server(
         created,
-        capabilities=_server_view_capabilities(created, manage_scope=scope, is_visible=True),
+        capabilities=_view_capabilities(
+            created,
+            scope=scope,
+            is_visible=True,
+            policy=policy,
+            principal=principal,
+            managed_authority=managed_authority,
+        ),
+        policy=policy,
+        principal=principal,
     )
     await emit_admin_mutation_audit(
         request=request,
@@ -223,7 +504,7 @@ async def create_mcp_server(
     return response
 
 
-@router.get("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
+@router.get("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_authenticated)])
 async def get_mcp_server(
     request: Request,
     server_id: str,
@@ -232,16 +513,25 @@ async def get_mcp_server(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    legacy_scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.KEY_READ,
+    )
     manage_scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, server_id)
-    is_visible = await _server_visible_to_scope(request, scope, server_id)
-    if not is_visible:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    principal, policy, managed_authority = await _authorize_server(
+        request,
+        server,
+        legacy_scope,
+    )
+    query_scope = scope if managed_authority else legacy_scope
     enabled_only = not (scope.is_platform_admin and include_disabled)
     bindings, _ = await _list_scoped_bindings(
         request,
-        scope=scope,
+        scope=query_scope,
         server_id=server_id,
         enabled_only=enabled_only,
         limit=200,
@@ -249,7 +539,7 @@ async def get_mcp_server(
     )
     policies, _ = await _list_scoped_tool_policies(
         request,
-        scope=scope,
+        scope=query_scope,
         server_id=server_id,
         enabled_only=enabled_only,
         limit=200,
@@ -259,12 +549,22 @@ async def get_mcp_server(
         await registry.list_namespaced_tools(server),
         bindings=bindings,
         policies=policies,
-        include_all=_server_owned_by_scope(server, scope),
+        include_all=(managed_authority and not bindings)
+        or _server_owned_by_scope(server, legacy_scope),
     )
     return {
         "server": _serialize_server(
             server,
-            capabilities=_server_view_capabilities(server, manage_scope=manage_scope, is_visible=is_visible),
+            capabilities=_view_capabilities(
+                server,
+                scope=manage_scope,
+                is_visible=True,
+                policy=policy,
+                principal=principal,
+                managed_authority=managed_authority,
+            ),
+            policy=policy,
+            principal=principal,
         ),
         "tools": [to_json_value(asdict(item)) for item in tools],
         "bindings": [_serialize_binding(binding) for binding in bindings],
@@ -272,7 +572,7 @@ async def get_mcp_server(
     }
 
 
-@router.get("/ui/api/mcp-servers/{server_id}/operations", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
+@router.get("/ui/api/mcp-servers/{server_id}/operations", dependencies=[Depends(require_authenticated)])
 async def get_mcp_server_operations(
     request: Request,
     server_id: str,
@@ -283,10 +583,15 @@ async def get_mcp_server_operations(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     db = _db_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    legacy_scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.KEY_READ,
+    )
     server = await _load_server_or_404(request, server_id)
-    if not await _server_visible_to_scope(request, scope, server_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    await _authorize_server(request, server, legacy_scope)
 
     params: list[Any] = [AuditAction.MCP_TOOL_CALL.value, server.server_key, window_hours]
     scope_sql = ""
@@ -395,7 +700,7 @@ async def get_mcp_server_operations(
     }
 
 
-@router.patch("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+@router.patch("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_authenticated)])
 async def update_mcp_server(
     request: Request,
     server_id: str,
@@ -406,11 +711,21 @@ async def update_mcp_server(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    legacy_scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.ORG_UPDATE,
+    )
 
     existing = await _load_server_or_404(request, server_id)
-    if not _server_mutable_by_scope(existing, scope):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    principal, policy, managed_authority = await _authorize_server(
+        request,
+        existing,
+        legacy_scope,
+        write=True,
+    )
     if "owner_scope_type" in payload or "owner_scope_id" in payload:
         requested_owner_scope_type = _validate_owner_scope_type(payload.get("owner_scope_type", existing.owner_scope_type))
         requested_owner_scope_id = (
@@ -442,7 +757,16 @@ async def update_mcp_server(
     await _reload_runtime_governance(request, invalidate_registry=False)
     response = _serialize_server(
         updated,
-        capabilities=_server_view_capabilities(updated, manage_scope=scope, is_visible=True),
+        capabilities=_view_capabilities(
+            updated,
+            scope=legacy_scope,
+            is_visible=True,
+            policy=policy,
+            principal=principal,
+            managed_authority=managed_authority,
+        ),
+        policy=policy,
+        principal=principal,
     )
     await emit_admin_mutation_audit(
         request=request,
@@ -459,7 +783,7 @@ async def update_mcp_server(
     return response
 
 
-@router.delete("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+@router.delete("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_authenticated)])
 async def delete_mcp_server(
     request: Request,
     server_id: str,
@@ -469,12 +793,34 @@ async def delete_mcp_server(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    legacy_scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.ORG_UPDATE,
+    )
 
     server = await _load_server_or_404(request, server_id)
-    if not _server_mutable_by_scope(server, scope):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
-    deleted = await repository.delete_server(server_id)
+    await _authorize_server(request, server, legacy_scope, delete=True)
+    access_repository = _access_repository(request)
+    managed_asset_id = str(server.managed_asset_id or "").strip() or None
+    database = getattr(repository, "prisma", None)
+    if (
+        managed_asset_id
+        and access_repository is not None
+        and database is not None
+        and database is getattr(access_repository, "prisma", None)
+        and hasattr(database, "tx")
+    ):
+        async with database.tx() as tx:
+            deleted = await repository.with_db(tx).delete_server(server_id)
+            if deleted:
+                await access_repository.with_db(tx).delete_policy(managed_asset_id)
+    else:
+        deleted = await repository.delete_server(server_id)
+        if deleted and managed_asset_id and access_repository is not None:
+            await access_repository.delete_policy(managed_asset_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
     await registry.invalidate_server(server.server_key)
@@ -493,7 +839,7 @@ async def delete_mcp_server(
     return response
 
 
-@router.post("/ui/api/mcp-servers/{server_id}/refresh-capabilities", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+@router.post("/ui/api/mcp-servers/{server_id}/refresh-capabilities", dependencies=[Depends(require_authenticated)])
 async def refresh_mcp_server_capabilities(
     request: Request,
     server_id: str,
@@ -501,12 +847,20 @@ async def refresh_mcp_server_capabilities(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    legacy_scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.ORG_UPDATE,
+    )
     server = await _load_server_or_404(request, server_id)
-    is_visible = await _server_visible_to_scope(request, scope, server_id)
-    capabilities = _server_view_capabilities(server, manage_scope=scope, is_visible=is_visible)
-    if not capabilities.can_operate:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    principal, policy, managed_authority = await _authorize_server(
+        request,
+        server,
+        legacy_scope,
+        operate=True,
+    )
     try:
         updated, tools = await _capability_refresh(request, server)
     except MCPError as exc:
@@ -514,7 +868,16 @@ async def refresh_mcp_server_capabilities(
     response = {
         "server": _serialize_server(
             updated,
-            capabilities=_server_view_capabilities(updated, manage_scope=scope, is_visible=True),
+            capabilities=_view_capabilities(
+                updated,
+                scope=legacy_scope,
+                is_visible=True,
+                policy=policy,
+                principal=principal,
+                managed_authority=managed_authority,
+            ),
+            policy=policy,
+            principal=principal,
         ),
         "tools": tools,
     }
@@ -530,7 +893,7 @@ async def refresh_mcp_server_capabilities(
     return response
 
 
-@router.post("/ui/api/mcp-servers/{server_id}/health-check", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+@router.post("/ui/api/mcp-servers/{server_id}/health-check", dependencies=[Depends(require_authenticated)])
 async def health_check_mcp_server(
     request: Request,
     server_id: str,
@@ -538,12 +901,20 @@ async def health_check_mcp_server(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key)
+    legacy_scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.ORG_UPDATE,
+    )
     server = await _load_server_or_404(request, server_id)
-    is_visible = await _server_visible_to_scope(request, scope, server_id)
-    capabilities = _server_view_capabilities(server, manage_scope=scope, is_visible=is_visible)
-    if not capabilities.can_operate:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    principal, policy, managed_authority = await _authorize_server(
+        request,
+        server,
+        legacy_scope,
+        operate=True,
+    )
     probe = _health_probe_or_503(request)
     try:
         result = await probe.check_server(server)
@@ -553,7 +924,16 @@ async def health_check_mcp_server(
     response = {
         "server": _serialize_server(
             refreshed,
-            capabilities=_server_view_capabilities(refreshed, manage_scope=scope, is_visible=True),
+            capabilities=_view_capabilities(
+                refreshed,
+                scope=legacy_scope,
+                is_visible=True,
+                policy=policy,
+                principal=principal,
+                managed_authority=managed_authority,
+            ),
+            policy=policy,
+            principal=principal,
         ),
         "health": {"status": result.status, "latency_ms": result.latency_ms, "error": result.error},
     }

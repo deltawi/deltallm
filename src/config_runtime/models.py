@@ -151,6 +151,11 @@ class ModelHotReloadManager:
                 ModelDeploymentRecord(
                     deployment_id=deployment_id,
                     model_name=str(deployment["model_name"]),
+                    model_id=(
+                        str(deployment.get("model_id")).strip() or None
+                        if deployment.get("model_id") is not None
+                        else None
+                    ),
                     named_credential_id=(
                         str(deployment.get("named_credential_id")).strip() or None
                         if deployment.get("named_credential_id") is not None
@@ -158,6 +163,21 @@ class ModelHotReloadManager:
                     ),
                     deltallm_params=dict(deployment["deltallm_params"]),
                     model_info=dict(deployment.get("model_info", {})),
+                    credential_binding_mode=(
+                        str(deployment.get("credential_binding_mode")).strip() or None
+                        if deployment.get("credential_binding_mode") is not None
+                        else None
+                    ),
+                    credential_binding_state=(
+                        str(deployment.get("credential_binding_state")).strip() or None
+                        if deployment.get("credential_binding_state") is not None
+                        else None
+                    ),
+                    credential_bound_by_account_id=(
+                        str(deployment.get("credential_bound_by_account_id")).strip() or None
+                        if deployment.get("credential_bound_by_account_id") is not None
+                        else None
+                    ),
                 )
             )
             warnings = await self._refresh_committed_model_runtime()
@@ -171,6 +191,10 @@ class ModelHotReloadManager:
         self._validate_model_config(deployment)
 
         if self.model_repository is None:
+            # This is a repository operation hint, not part of the persisted model
+            # contract. File-backed deployments replace the full entry, so the null
+            # binding fields already express the same clear operation.
+            deployment.pop("clear_credential_binding", None)
             current = self.dynamic_config.get_config()
             model_list = list(current.get("model_list", []))
             updated = False
@@ -499,6 +523,21 @@ class ModelHotReloadManager:
             model_registry=model_registry,
             route_groups=route_groups,
             callable_target_catalog=callable_target_catalog,
+            creator_model_access_snapshot=getattr(
+                self.app.state, "creator_model_access_service", None
+            ).snapshot()
+            if getattr(self.app.state, "creator_model_access_service", None) is not None
+            else None,
+            creator_route_group_access_snapshot=getattr(
+                self.app.state, "creator_route_group_access_service", None
+            ).snapshot()
+            if getattr(self.app.state, "creator_route_group_access_service", None) is not None
+            else None,
+            creator_prompt_access_snapshot=getattr(
+                self.app.state, "creator_prompt_access_service", None
+            ).snapshot()
+            if getattr(self.app.state, "creator_prompt_access_service", None) is not None
+            else None,
             deployment_registry=deployment_registry,
             strategy=router.strategy,
             router_config=router_config,
@@ -658,6 +697,26 @@ class ModelHotReloadManager:
             while self._applied_route_reload < self._requested_route_reload:
                 requested = self._requested_route_reload
                 await self._invalidate_route_group_cache()
+                creator_model_access = getattr(
+                    self.app.state, "creator_model_access_service", None
+                )
+                if creator_model_access is not None:
+                    await creator_model_access.reload()
+                creator_route_group_access = getattr(
+                    self.app.state, "creator_route_group_access_service", None
+                )
+                if creator_route_group_access is not None:
+                    await creator_route_group_access.reload()
+                creator_prompt_access = getattr(
+                    self.app.state, "creator_prompt_access_service", None
+                )
+                if creator_prompt_access is not None:
+                    await creator_prompt_access.reload()
+                creator_mcp_access = getattr(
+                    self.app.state, "creator_mcp_access_service", None
+                )
+                if creator_mcp_access is not None:
+                    await creator_mcp_access.reload()
                 app_config = self.dynamic_config.get_app_config()
                 try:
                     generation = await self._load_complete_routing_generation(
@@ -739,11 +798,18 @@ class ModelHotReloadManager:
     def _repository_update_kwargs(repository: Any, deployment: dict[str, Any]) -> dict[str, Any]:
         kwargs = {
             "model_name": str(deployment["model_name"]),
+            "display_name": str(deployment.get("display_name") or "").strip() or None,
             "named_credential_id": str(deployment.get("named_credential_id")).strip() or None
             if deployment.get("named_credential_id") is not None
             else None,
             "deltallm_params": dict(deployment["deltallm_params"]),
             "model_info": dict(deployment.get("model_info", {})),
+            "credential_binding_mode": deployment.get("credential_binding_mode"),
+            "credential_binding_state": deployment.get("credential_binding_state"),
+            "credential_bound_by_account_id": deployment.get(
+                "credential_bound_by_account_id"
+            ),
+            "clear_credential_binding": bool(deployment.get("clear_credential_binding", False)),
         }
         signature = inspect.signature(repository.update)
         return {key: value for key, value in kwargs.items() if key in signature.parameters}

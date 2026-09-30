@@ -160,6 +160,10 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             request.app.state, "callable_target_grant_service", None
         ),
         callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
+        creator_model_access_snapshot=routing_runtime.creator_model_access_snapshot,
+        creator_route_group_access_snapshot=(
+            routing_runtime.creator_route_group_access_snapshot
+        ),
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),

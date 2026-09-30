@@ -1,11 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
-import { type NamedCredential, type ProviderPreset } from '../lib/api';
+import { useMemo, useState } from 'react';
+import {
+  managedAssetAccessInput,
+  type ManagedAssetAccessInput,
+  type ManagedAssetGrantInput,
+  type NamedCredential,
+  type ProviderPreset,
+} from '../lib/api';
 import {
   DEFAULT_CUSTOM_AUTH_HEADER_FORMAT,
   DEFAULT_CUSTOM_AUTH_HEADER_NAME,
   providerDisplayName,
   supportsCustomUpstreamAuthProvider,
 } from '../lib/providers';
+import ManagedAssetAccessFields from './ManagedAssetAccessFields';
+import ManagedAssetAccessPanel from './ManagedAssetAccessPanel';
 
 type SecretField = 'api_key' | 'aws_access_key_id' | 'aws_secret_access_key' | 'aws_session_token';
 
@@ -21,32 +29,49 @@ type NamedCredentialFormValues = {
   aws_access_key_id: string;
   aws_secret_access_key: string;
   aws_session_token: string;
+  grants: ManagedAssetGrantInput[];
   clearedSecrets: Partial<Record<SecretField, boolean>>;
   existingSecrets: Partial<Record<SecretField, boolean>>;
 };
 
-type NamedCredentialPayload = {
+export type NamedCredentialPayload = {
   name: string;
   provider: string;
   connection_config: Record<string, unknown>;
+  access: ManagedAssetAccessInput;
 };
+
+export type NamedCredentialAudienceOption = { id: string; label: string };
 
 interface NamedCredentialFormProps {
   initialCredential?: NamedCredential | null;
+  initialProvider?: string;
+  initialAccess?: ManagedAssetAccessInput;
+  lockProvider?: boolean;
   providerPresets: ProviderPreset[];
   saving?: boolean;
   error?: string | null;
+  teamOptions?: NamedCredentialAudienceOption[];
+  organizationOptions?: NamedCredentialAudienceOption[];
+  allowPublic?: boolean;
+  audiencesLoading?: boolean;
+  audiencesError?: string | null;
+  onRetryAudiences?: () => void;
   onSave: (payload: NamedCredentialPayload) => Promise<void>;
+  onAccessSaved?: () => void | Promise<void>;
   onCancel: () => void;
 }
 
 const MASK = '***REDACTED***';
 const inputClass = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary';
 
-function emptyForm(): NamedCredentialFormValues {
+function emptyForm(
+  initialProvider = '',
+  initialGrants: ManagedAssetGrantInput[] = [],
+): NamedCredentialFormValues {
   return {
     name: '',
-    provider: '',
+    provider: initialProvider,
     api_key: '',
     api_base: '',
     api_version: '',
@@ -56,6 +81,7 @@ function emptyForm(): NamedCredentialFormValues {
     aws_access_key_id: '',
     aws_secret_access_key: '',
     aws_session_token: '',
+    grants: initialGrants,
     clearedSecrets: {},
     existingSecrets: {},
   };
@@ -75,8 +101,14 @@ function secretPresence(credential: NamedCredential | null | undefined): Partial
   };
 }
 
-function formFromCredential(credential: NamedCredential | null | undefined): NamedCredentialFormValues {
-  if (!credential) return emptyForm();
+function formFromCredential(
+  credential: NamedCredential | null | undefined,
+  initialProvider = '',
+  initialGrants: ManagedAssetGrantInput[] = [],
+): NamedCredentialFormValues {
+  if (!credential) {
+    return emptyForm(initialProvider, initialGrants);
+  }
   const config = credential.connection_config || {};
   return {
     name: credential.name || '',
@@ -90,6 +122,7 @@ function formFromCredential(credential: NamedCredential | null | undefined): Nam
     aws_access_key_id: '',
     aws_secret_access_key: '',
     aws_session_token: '',
+    grants: credential.access?.grants || [],
     clearedSecrets: {},
     existingSecrets: secretPresence(credential),
   };
@@ -145,26 +178,42 @@ function buildPayload(values: NamedCredentialFormValues, initialCredential?: Nam
     name: trim(values.name),
     provider: trim(values.provider),
     connection_config: connectionConfig,
+    access: managedAssetAccessInput(
+      values.grants,
+      initialCredential?.access?.policy_version,
+    ),
   };
 }
 
 export default function NamedCredentialForm({
   initialCredential = null,
+  initialProvider = '',
+  initialAccess,
+  lockProvider = false,
   providerPresets,
   saving = false,
   error = null,
+  teamOptions = [],
+  organizationOptions = [],
+  allowPublic = false,
+  audiencesLoading = false,
+  audiencesError = null,
+  onRetryAudiences,
   onSave,
+  onAccessSaved,
   onCancel,
 }: NamedCredentialFormProps) {
-  const [form, setForm] = useState<NamedCredentialFormValues>(() => formFromCredential(initialCredential));
+  const [form, setForm] = useState<NamedCredentialFormValues>(() => formFromCredential(
+    initialCredential,
+    initialProvider,
+    initialAccess?.grants,
+  ));
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [accessDirty, setAccessDirty] = useState(false);
   const editing = Boolean(initialCredential);
   const supportsCustomAuth = supportsCustomUpstreamAuthProvider(form.provider);
-
-  useEffect(() => {
-    setForm(formFromCredential(initialCredential));
-    setValidationError(null);
-  }, [initialCredential]);
+  const accessValidationError = validationError?.startsWith('Select a ') ? validationError : null;
+  const formValidationError = accessValidationError ? null : validationError;
 
   const selectedPreset = useMemo(
     () => providerPresets.find((preset) => preset.provider === form.provider) || null,
@@ -196,6 +245,10 @@ export default function NamedCredentialForm({
     }
     if (!provider) {
       setValidationError('Provider is required.');
+      return;
+    }
+    if (editing && accessDirty) {
+      setValidationError('Save or discard the access change before saving credential settings.');
       return;
     }
     setValidationError(null);
@@ -238,9 +291,9 @@ export default function NamedCredentialForm({
 
   return (
     <div className="space-y-4">
-      {(validationError || error) ? (
+      {(formValidationError || error) ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {validationError || error}
+          {formValidationError || error}
         </div>
       ) : null}
 
@@ -261,7 +314,7 @@ export default function NamedCredentialForm({
             value={form.provider}
             onChange={(e) => setForm((current) => ({ ...current, provider: e.target.value }))}
             className={inputClass}
-            disabled={editing}
+            disabled={editing || lockProvider}
           >
             <option value="">Select provider</option>
             {providerPresets.map((preset) => (
@@ -270,7 +323,11 @@ export default function NamedCredentialForm({
               </option>
             ))}
           </select>
-          {editing ? <p className="mt-1 text-xs text-gray-400">Provider cannot be changed after creation.</p> : null}
+          {editing || lockProvider ? (
+            <p className="mt-1 text-xs text-gray-400">
+              {editing ? 'Provider cannot be changed after creation.' : 'Provider is matched to the model.'}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -355,11 +412,44 @@ export default function NamedCredentialForm({
         </>
       )}
 
+      {editing && initialCredential?.access ? (
+        <ManagedAssetAccessPanel
+          access={initialCredential.access}
+          assetLabel="Named credential"
+          teamOptions={teamOptions}
+          organizationOptions={organizationOptions}
+          allowPublic={allowPublic}
+          audiencesLoading={audiencesLoading}
+          audiencesError={audiencesError}
+          onRetryAudiences={onRetryAudiences}
+          onSaved={() => onAccessSaved?.()}
+          onDirtyChange={setAccessDirty}
+          className="bg-gray-50 shadow-none"
+        />
+      ) : (
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+          <ManagedAssetAccessFields
+            grants={form.grants}
+            teamOptions={teamOptions}
+            organizationOptions={organizationOptions}
+            allowPublic={allowPublic}
+            audiencesLoading={audiencesLoading}
+            audiencesError={audiencesError}
+            onRetryAudiences={onRetryAudiences}
+            error={accessValidationError}
+            onChange={(grants) => {
+              setForm((current) => ({ ...current, grants }));
+              if (validationError?.startsWith('Select a ')) setValidationError(null);
+            }}
+          />
+        </div>
+      )}
+
       <div className="flex justify-end gap-2 pt-2">
         <button
           type="button"
           onClick={onCancel}
-          disabled={saving}
+          disabled={saving || accessDirty}
           className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
         >
           Cancel
@@ -367,12 +457,15 @@ export default function NamedCredentialForm({
         <button
           type="button"
           onClick={() => { void handleSave(); }}
-          disabled={saving}
+          disabled={saving || accessDirty}
           className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
-          {saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Credential'}
+          {saving ? 'Saving...' : editing ? 'Save credential settings' : 'Create credential'}
         </button>
       </div>
+      {editing && accessDirty ? (
+        <p className="text-right text-xs text-amber-700">Save or discard the access change before saving credential settings.</p>
+      ) : null}
     </div>
   );
 }

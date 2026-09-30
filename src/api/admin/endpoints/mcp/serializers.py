@@ -13,6 +13,11 @@ from src.db.mcp import (
 )
 from src.db.mcp_scope_policies import MCPScopePolicyRecord
 from src.mcp.capabilities import extract_tool_schemas
+from src.services.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetPrincipal,
+    serialize_asset_access,
+)
 
 from src.api.admin.endpoints.mcp.scope_visibility import MCPServerCapabilities
 from src.api.admin.endpoints.mcp.validators import _credentials_present
@@ -22,6 +27,8 @@ def _serialize_server(
     server: MCPServerRecord,
     *,
     capabilities: MCPServerCapabilities | None = None,
+    policy: AssetAccessPolicy | None = None,
+    principal: AssetPrincipal | None = None,
 ) -> dict[str, Any]:
     payload = to_json_value(asdict(server))
     payload.pop("auth_config", None)
@@ -29,6 +36,8 @@ def _serialize_server(
     payload["auth_credentials_present"] = _credentials_present(server.auth_mode, server.auth_config)
     if capabilities is not None:
         payload["capabilities"] = to_json_value(asdict(capabilities))
+    if policy is not None and principal is not None:
+        payload["access"] = serialize_asset_access(policy, principal)
     return payload
 
 

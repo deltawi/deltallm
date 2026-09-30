@@ -11,6 +11,7 @@ interface PromptHistoryCardProps {
   diffLeftVersion: string;
   diffRightVersion: string;
   publishingVersion: number | null;
+  canPublish?: boolean;
   onDiffLeftChange: (value: string) => void;
   onDiffRightChange: (value: string) => void;
   onPublishVersion: (version: number) => void;
@@ -21,6 +22,7 @@ export default function PromptHistoryCard({
   diffLeftVersion,
   diffRightVersion,
   publishingVersion,
+  canPublish = true,
   onDiffLeftChange,
   onDiffRightChange,
   onPublishVersion,
@@ -75,14 +77,16 @@ export default function PromptHistoryCard({
                   </td>
                   <td className="px-3 py-2">{version.published_by || '—'}</td>
                   <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() => onPublishVersion(version.version)}
-                      disabled={publishingVersion === version.version}
-                      className="rounded border border-gray-200 px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
-                    >
-                      {publishingVersion === version.version ? 'Publishing...' : 'Publish'}
-                    </button>
+                    {canPublish ? (
+                      <button
+                        type="button"
+                        onClick={() => onPublishVersion(version.version)}
+                        disabled={publishingVersion === version.version}
+                        className="rounded border border-gray-200 px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        {publishingVersion === version.version ? 'Publishing...' : 'Publish'}
+                      </button>
+                    ) : <span className="text-xs text-gray-400">Read only</span>}
                   </td>
                 </tr>
               ))}

@@ -172,3 +172,48 @@ async def test_readiness_tracks_organization_lifecycle_tasks(client, test_app) -
 
     assert stale.status_code == 503
     assert stale.json()["checks"]["organization_lifecycle_refresher"] is False
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_managed_asset_link_health(client, test_app) -> None:
+    class _Reconciliation:
+        def __init__(self, *, ready: bool) -> None:
+            self.ready = ready
+
+        def health_snapshot(self):  # noqa: ANN201
+            return type(
+                "Health",
+                (),
+                {
+                    "ready": self.ready,
+                    "state": "ready" if self.ready else "degraded",
+                    "missing_links": 0 if self.ready else 2,
+                    "kind_mismatches": 0,
+                    "orphaned_policies": 1,
+                    "last_repaired": 3,
+                    "last_checked_at": None,
+                    "detail": None if self.ready else "2 missing links remain",
+                },
+            )()
+
+    reconciliation = _Reconciliation(ready=False)
+    test_app.state.managed_asset_reconciliation_service = reconciliation
+
+    degraded = await client.get("/health/readiness")
+
+    assert degraded.status_code == 503
+    assert degraded.json()["checks"]["managed_asset_links"] is False
+    assert degraded.json()["details"]["managed_asset_links"] == {
+        "state": "degraded",
+        "missing_links": "2",
+        "kind_mismatches": "0",
+        "orphaned_policies": "1",
+        "last_repaired": "3",
+        "detail": "2 missing links remain",
+    }
+
+    reconciliation.ready = True
+    recovered = await client.get("/health/readiness")
+
+    assert recovered.status_code == 200
+    assert recovered.json()["checks"]["managed_asset_links"] is True

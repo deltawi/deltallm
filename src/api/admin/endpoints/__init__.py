@@ -9,6 +9,7 @@ from src.api.admin.endpoints.email_feedback import router as email_feedback_rout
 from src.api.admin.endpoints.guardrails import router as guardrails_router
 from src.api.admin.endpoints.invitations import router as invitations_router
 from src.api.admin.endpoints.keys import router as keys_router
+from src.api.admin.endpoints.managed_assets import router as managed_assets_router
 from src.api.admin.endpoints.mcp import router as mcp_router
 from src.api.admin.endpoints.models import router as models_router
 from src.api.admin.endpoints.named_credentials import router as named_credentials_router
@@ -43,6 +44,7 @@ __all__ = [
     "guardrails_router",
     "invitations_router",
     "keys_router",
+    "managed_assets_router",
     "mcp_router",
     "models_router",
     "named_credentials_router",

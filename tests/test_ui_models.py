@@ -362,12 +362,20 @@ async def test_update_model_normalizes_access_groups(client, test_app):
 @pytest.mark.asyncio
 async def test_update_model_clears_old_connection_fields_when_provider_changes(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
+    existing = test_app.state.model_registry["gpt-4o-mini"][0]
+    existing.update(
+        named_credential_id="credential-old",
+        credential_binding_mode="platform_override",
+        credential_binding_state="active",
+        credential_bound_by_account_id="admin-old",
+    )
 
     response = await client.put(
         "/ui/api/models/gpt-4o-mini-0",
         headers={"Authorization": "Bearer mk-test"},
         json={
             "model_name": "gpt-4o-mini",
+            "named_credential_id": None,
             "deltallm_params": {
                 "provider": "anthropic",
                 "model": "anthropic/claude-sonnet-4-20250514",
@@ -382,6 +390,11 @@ async def test_update_model_clears_old_connection_fields_when_provider_changes(c
     assert payload["deltallm_params"]["provider"] == "anthropic"
     assert payload["deltallm_params"]["api_base"] == "https://api.anthropic.com/v1"
     assert "api_key" not in payload["deltallm_params"]
+    stored = test_app.state.model_registry["gpt-4o-mini"][0]
+    assert stored["named_credential_id"] is None
+    assert stored["credential_binding_mode"] is None
+    assert stored["credential_binding_state"] is None
+    assert "clear_credential_binding" not in stored
 
 
 @pytest.mark.asyncio

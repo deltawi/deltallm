@@ -258,11 +258,16 @@ async def test_route_group_reload_invalidates_replica_cache_before_rebuild(monke
     object_marker = object()
     manager.routing_authorization_reconciler = None
     manager.dynamic_config = SimpleNamespace(get_app_config=lambda: AppConfig.model_validate({}))
+    class CreatorMCPReloader:
+        async def reload(self) -> None:
+            calls.append("mcp")
+
     manager.app = SimpleNamespace(
         state=SimpleNamespace(
             model_registry={},
             router=SimpleNamespace(deployment_registry={}),
             settings=SimpleNamespace(),
+            creator_mcp_access_service=CreatorMCPReloader(),
         )
     )
 
@@ -293,7 +298,7 @@ async def test_route_group_reload_invalidates_replica_cache_before_rebuild(monke
     monkeypatch.setattr(manager, "_cleanup_replaced_deployment_health", cleanup)
     await manager.reload_route_groups()
 
-    assert calls == ["invalidate", "build", "publish"]
+    assert calls == ["invalidate", "mcp", "build", "publish"]
 
 
 @pytest.mark.asyncio

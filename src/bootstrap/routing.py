@@ -229,6 +229,21 @@ async def init_routing_runtime(
         model_registry=app.state.model_registry,
         route_groups=app.state.route_groups,
         callable_target_catalog=app.state.callable_target_catalog,
+        creator_model_access_snapshot=(
+            getattr(app.state, "creator_model_access_service", None).snapshot()
+            if getattr(app.state, "creator_model_access_service", None) is not None
+            else None
+        ),
+        creator_route_group_access_snapshot=(
+            getattr(app.state, "creator_route_group_access_service", None).snapshot()
+            if getattr(app.state, "creator_route_group_access_service", None) is not None
+            else None
+        ),
+        creator_prompt_access_snapshot=(
+            getattr(app.state, "creator_prompt_access_service", None).snapshot()
+            if getattr(app.state, "creator_prompt_access_service", None) is not None
+            else None
+        ),
         deployment_registry=app.state.router.deployment_registry,
         strategy=app.state.router.strategy,
         router_config=router_config,

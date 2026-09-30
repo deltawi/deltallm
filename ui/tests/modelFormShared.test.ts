@@ -6,6 +6,7 @@ import {
   buildModelPayload,
   formFromModel,
   parseOptionalPositiveInteger,
+  suggestApiModelSlug,
   validateContextCapacityFields,
   type ModelFormValues,
 } from '../src/components/modelFormShared';
@@ -28,6 +29,41 @@ function chatForm(overrides: Partial<ModelFormValues> = {}): ModelFormValues {
     ...overrides,
   };
 }
+
+test('model identity keeps the friendly name separate from the callable API id', () => {
+  assert.equal(suggestApiModelSlug('Customer Support — Arabic'), 'customer-support-arabic');
+
+  const payload = buildModelPayload(chatForm({
+    model_name: 'Customer Support — Arabic',
+    api_namespace: 'ale-smi-k7m4q',
+    api_model_slug: 'customer-support-arabic',
+    api_model_id: 'ale-smi-k7m4q/customer-support-arabic',
+  }), []);
+
+  assert.equal(payload.display_name, 'Customer Support — Arabic');
+  assert.equal(payload.model_name, 'ale-smi-k7m4q/customer-support-arabic');
+  assert.equal(payload.api_model_id, 'ale-smi-k7m4q/customer-support-arabic');
+  assert.equal(payload.api_namespace, 'ale-smi-k7m4q');
+  assert.equal(payload.api_model_slug, 'customer-support-arabic');
+});
+
+test('model edit form displays the friendly name and retains the immutable API id', () => {
+  const { form } = formFromModel({
+    deployment_id: 'deployment-1',
+    model_name: 'ale-smi-k7m4q/customer-support',
+    api_model_id: 'ale-smi-k7m4q/customer-support',
+    display_name: 'Customer Support',
+    provider: 'openai',
+    deltallm_params: { provider: 'openai', model: 'gpt-4o-mini' },
+    model_info: { mode: 'chat' },
+  });
+
+  assert.equal(form.model_name, 'Customer Support');
+  assert.equal(form.api_model_id, 'ale-smi-k7m4q/customer-support');
+  assert.equal(form.api_namespace, 'ale-smi-k7m4q');
+  assert.equal(form.api_model_slug, 'customer-support');
+  assert.equal(form.api_namespace_locked, true);
+});
 
 for (const provider of ['deepseek', 'zai', 'qwen', 'tencent', 'minimax']) {
   test(`${provider} model edits retain the named credential and upstream model ID`, () => {
@@ -303,6 +339,34 @@ test('legacy digit-string context capacity is normalized on edit', () => {
   assert.equal(form.max_input_tokens, '8000');
   assert.equal(payload.model_info.max_tokens, 8192);
   assert.equal(payload.model_info.max_input_tokens, 8000);
+});
+
+test('opaque owner-managed credential is retained unless an editor replaces it', () => {
+  const existingModel = {
+    deployment_id: 'dep-shared',
+    model_name: 'owner/shared-model',
+    provider: 'openai',
+    credential_source: 'named',
+    named_credential_id: null,
+    named_credential_name: null,
+    credential_binding: {
+      state: 'active',
+      mode: null,
+      credential_access: 'opaque',
+      can_replace: true,
+    },
+    deltallm_params: {
+      provider: 'openai',
+      model: 'openai/gpt-4o-mini',
+    },
+    model_info: { mode: 'chat' },
+  } as ModelDeploymentDetail;
+
+  const { form, defaultParams } = formFromModel(existingModel);
+  const payload = buildModelPayload(form, defaultParams, existingModel.model_info);
+
+  assert.equal(form.keep_existing_named_credential, true);
+  assert.equal('named_credential_id' in payload, false);
 });
 
 test('self-registration helpers require enabled SSO sandbox access', () => {

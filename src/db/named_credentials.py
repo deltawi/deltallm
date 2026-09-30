@@ -39,8 +39,10 @@ class NamedCredentialRecord:
     connection_config: dict[str, Any]
     metadata: dict[str, Any] | None = None
     created_by_account_id: str | None = None
+    managed_asset_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    name_scope: str = "platform"
 
 
 class NamedCredentialRepository:
@@ -63,7 +65,8 @@ class NamedCredentialRepository:
 
         rows = await self.prisma.query_raw(
             f"""
-            SELECT credential_id, name, provider, connection_config, metadata, created_by_account_id, created_at, updated_at
+            SELECT credential_id, name, name_scope, provider, connection_config, metadata,
+                   created_by_account_id, managed_asset_id, created_at, updated_at
             FROM deltallm_namedcredential
             {where_sql}
             ORDER BY name ASC
@@ -83,7 +86,8 @@ class NamedCredentialRepository:
         placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
         rows = await self.prisma.query_raw(
             f"""
-            SELECT credential_id, name, provider, connection_config, metadata, created_by_account_id, created_at, updated_at
+            SELECT credential_id, name, name_scope, provider, connection_config, metadata,
+                   created_by_account_id, managed_asset_id, created_at, updated_at
             FROM deltallm_namedcredential
             WHERE credential_id IN ({placeholders})
             """,
@@ -93,13 +97,45 @@ class NamedCredentialRepository:
             record.credential_id: record for record in (self._record_from_row(row) for row in rows)
         }
 
+    async def list_by_managed_asset_ids(
+        self,
+        managed_asset_ids: list[str],
+        *,
+        provider: str | None = None,
+    ) -> list[NamedCredentialRecord]:
+        if self.prisma is None or not managed_asset_ids:
+            return []
+
+        normalized_ids = [str(item).strip() for item in managed_asset_ids if str(item).strip()]
+        if not normalized_ids:
+            return []
+        params: list[Any] = list(normalized_ids)
+        placeholders = ", ".join(f"${index}" for index in range(1, len(params) + 1))
+        provider_sql = ""
+        if provider:
+            params.append(str(provider).strip().lower())
+            provider_sql = f"AND LOWER(provider) = ${len(params)}"
+        rows = await self.prisma.query_raw(
+            f"""
+            SELECT credential_id, name, name_scope, provider, connection_config, metadata,
+                   created_by_account_id, managed_asset_id, created_at, updated_at
+            FROM deltallm_namedcredential
+            WHERE managed_asset_id IN ({placeholders})
+              {provider_sql}
+            ORDER BY name ASC
+            """,
+            *params,
+        )
+        return [self._record_from_row(row) for row in rows]
+
     async def get_by_id(self, credential_id: str) -> NamedCredentialRecord | None:
         if self.prisma is None:
             return None
 
         rows = await self.prisma.query_raw(
             """
-            SELECT credential_id, name, provider, connection_config, metadata, created_by_account_id, created_at, updated_at
+            SELECT credential_id, name, name_scope, provider, connection_config, metadata,
+                   created_by_account_id, managed_asset_id, created_at, updated_at
             FROM deltallm_namedcredential
             WHERE credential_id = $1
             LIMIT 1
@@ -110,17 +146,21 @@ class NamedCredentialRepository:
             return None
         return self._record_from_row(rows[0])
 
-    async def get_by_name(self, name: str) -> NamedCredentialRecord | None:
+    async def get_by_name(
+        self, name: str, *, name_scope: str = "platform"
+    ) -> NamedCredentialRecord | None:
         if self.prisma is None:
             return None
 
         rows = await self.prisma.query_raw(
             """
-            SELECT credential_id, name, provider, connection_config, metadata, created_by_account_id, created_at, updated_at
+            SELECT credential_id, name, name_scope, provider, connection_config, metadata,
+                   created_by_account_id, managed_asset_id, created_at, updated_at
             FROM deltallm_namedcredential
-            WHERE name = $1
+            WHERE name_scope = $1 AND name = $2
             LIMIT 1
             """,
+            name_scope,
             name,
         )
         if not rows:
@@ -136,22 +176,27 @@ class NamedCredentialRepository:
             INSERT INTO deltallm_namedcredential (
                 credential_id,
                 name,
+                name_scope,
                 provider,
                 connection_config,
                 metadata,
                 created_by_account_id,
+                managed_asset_id,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, NOW(), NOW())
-            RETURNING credential_id, name, provider, connection_config, metadata, created_by_account_id, created_at, updated_at
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, NOW(), NOW())
+            RETURNING credential_id, name, name_scope, provider, connection_config, metadata,
+                      created_by_account_id, managed_asset_id, created_at, updated_at
             """,
             record.credential_id,
             record.name,
+            record.name_scope,
             record.provider,
             json.dumps(record.connection_config),
             json.dumps(record.metadata) if record.metadata is not None else None,
             record.created_by_account_id,
+            record.managed_asset_id,
         )
         return self._record_from_row(rows[0])
 
@@ -185,7 +230,8 @@ class NamedCredentialRepository:
                 metadata = $5::jsonb,
                 updated_at = NOW()
             WHERE credential_id = $1
-            RETURNING credential_id, name, provider, connection_config, metadata, created_by_account_id, created_at, updated_at
+            RETURNING credential_id, name, name_scope, provider, connection_config, metadata,
+                      created_by_account_id, managed_asset_id, created_at, updated_at
             """,
             credential_id,
             name,
@@ -227,17 +273,30 @@ class NamedCredentialRepository:
         )
         return int((rows[0] if rows else {}).get("count") or 0)
 
-    async def list_usage_counts(self) -> dict[str, int]:
+    async def list_usage_counts(
+        self,
+        credential_ids: list[str] | None = None,
+    ) -> dict[str, int]:
         if self.prisma is None:
             return {}
 
+        params: list[Any] = []
+        where_sql = "WHERE named_credential_id IS NOT NULL"
+        if credential_ids is not None:
+            normalized_ids = [str(item).strip() for item in credential_ids if str(item).strip()]
+            if not normalized_ids:
+                return {}
+            params.extend(normalized_ids)
+            placeholders = ", ".join(f"${index}" for index in range(1, len(params) + 1))
+            where_sql += f" AND named_credential_id IN ({placeholders})"
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT named_credential_id, COUNT(*)::int AS count
             FROM deltallm_modeldeployment
-            WHERE named_credential_id IS NOT NULL
+            {where_sql}
             GROUP BY named_credential_id
-            """
+            """,
+            *params,
         )
         return {
             str(row.get("named_credential_id") or ""): int(row.get("count") or 0)
@@ -275,11 +334,15 @@ class NamedCredentialRepository:
         return NamedCredentialRecord(
             credential_id=str(row.get("credential_id") or ""),
             name=str(row.get("name") or ""),
+            name_scope=str(row.get("name_scope") or "platform"),
             provider=str(row.get("provider") or ""),
             connection_config=_parse_json_object(row.get("connection_config")),
             metadata=_parse_json_object(row.get("metadata")) or None,
             created_by_account_id=str(row.get("created_by_account_id"))
             if row.get("created_by_account_id") is not None
+            else None,
+            managed_asset_id=str(row.get("managed_asset_id"))
+            if row.get("managed_asset_id") is not None
             else None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { models, type ModelDeploymentDetail } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { resolveUiAccess } from '../lib/authorization';
+import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
 import DataTable from '../components/DataTable';
 import ProviderBadge from '../components/ProviderBadge';
@@ -20,7 +20,8 @@ export default function Models() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const { session, authMode } = useAuth();
-  const canManageModels = resolveUiAccess(authMode, session).model_admin;
+  const canCreateModels = resolveUiAccess(authMode, session).model_admin;
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [modeFilter, setModeFilter] = useState<ModelFilterValue>('all');
@@ -87,8 +88,16 @@ export default function Models() {
     return row.mode || (typeof metadataMode === 'string' ? metadataMode : 'chat');
   };
 
+  const displayName = (row: ModelDeploymentDetail) => row.display_name || row.model_name;
+  const apiModelId = (row: ModelDeploymentDetail) => row.api_model_id || row.model_name;
+
   const columns = [
-    { key: 'model_name', header: 'Model Name', render: (r: ModelDeploymentDetail) => <span className="font-medium">{r.model_name}</span> },
+    { key: 'model_name', header: 'Model', render: (r: ModelDeploymentDetail) => (
+      <div className="min-w-0">
+        <div className="font-medium text-gray-900">{displayName(r)}</div>
+        <code className="block max-w-72 truncate text-xs text-gray-400">{apiModelId(r)}</code>
+      </div>
+    ) },
     { key: 'mode', header: 'Type', render: (r: ModelDeploymentDetail) => {
       const mode = rowMode(r);
       return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>{modeLabel(mode)}</span>;
@@ -104,10 +113,14 @@ export default function Models() {
     {
       key: 'actions', header: '', render: (r: ModelDeploymentDetail) => (
         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-          {canManageModels ? (
+          {isPlatformAdmin || r.access?.capabilities.write ? (
             <>
-              <button aria-label={`Edit ${r.model_name}`} onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
-              <button aria-label={`Delete ${r.model_name}`} onClick={() => setDeleteTarget(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
+              <button aria-label={`Edit ${displayName(r)}`} onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
+            </>
+          ) : null}
+          {isPlatformAdmin || r.access?.capabilities.delete ? (
+            <>
+              <button aria-label={`Delete ${displayName(r)}`} onClick={() => setDeleteTarget(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
             </>
           ) : null}
         </div>
@@ -121,7 +134,7 @@ export default function Models() {
       titleIcon={Box}
       count={pagination?.total ?? null}
       description="Manage model deployments and providers"
-      action={canManageModels ? (
+      action={canCreateModels ? (
         <button
           onClick={() => navigate('/models/new')}
           className="flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
@@ -181,7 +194,8 @@ export default function Models() {
           activeFilter={modeFilter}
           onFilterChange={handleModeFilterChange}
           emptyMessage="No models configured"
-          canManage={canManageModels}
+          canEdit={(row) => isPlatformAdmin || Boolean(row.access?.capabilities.write)}
+          canDelete={(row) => isPlatformAdmin || Boolean(row.access?.capabilities.delete)}
           onView={(id) => navigate(modelDetailPath(id))}
           onEdit={(id) => navigate(modelEditPath(id))}
           onDelete={setDeleteTarget}

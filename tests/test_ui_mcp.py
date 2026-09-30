@@ -21,6 +21,14 @@ from src.mcp.capabilities import extract_tool_schemas, namespace_tools
 from src.mcp.health import MCPHealthProbe
 from src.mcp.models import MCPToolSchema
 from src.models.platform_auth import PlatformAuthContext
+from src.services.creator_mcp_access import CreatorMCPAccessService
+from src.services.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetKind,
+    AssetPrincipal,
+    ManagedAsset,
+    resolve_asset_capabilities,
+)
 
 
 def _utcnow() -> datetime:
@@ -39,8 +47,19 @@ class _FakeMCPRepository(MCPRepository):
         self._policy_counter = 0
         self._approval_counter = 0
 
-    async def list_servers(self, *, search=None, enabled=None, limit=100, offset=0):  # noqa: ANN001, ANN201
+    async def list_servers(  # noqa: ANN001, ANN201
+        self,
+        *,
+        search=None,
+        enabled=None,
+        limit=100,
+        offset=0,
+        managed_asset_ids=None,
+    ):
         items = list(self.servers.values())
+        if managed_asset_ids is not None:
+            allowed = set(managed_asset_ids)
+            items = [item for item in items if item.managed_asset_id in allowed]
         if search:
             query = str(search).lower()
             items = [
@@ -63,9 +82,10 @@ class _FakeMCPRepository(MCPRepository):
         self._server_counter += 1
         now = _utcnow()
         record = MCPServerRecord(
-            mcp_server_id=f"mcp-{self._server_counter}",
+            mcp_server_id=kwargs.get("mcp_server_id") or f"mcp-{self._server_counter}",
             server_key=kwargs["server_key"],
             name=kwargs["name"],
+            managed_asset_id=kwargs.get("managed_asset_id"),
             description=kwargs.get("description"),
             owner_scope_type=kwargs.get("owner_scope_type", "global"),
             owner_scope_id=kwargs.get("owner_scope_id"),
@@ -330,6 +350,113 @@ class _FakeMCPRepository(MCPRepository):
         )
         self.approvals[approval_request_id] = updated
         return updated
+
+
+class _FakeManagedAssetAccessRepository:
+    prisma = None
+
+    def __init__(self, app) -> None:  # noqa: ANN001
+        self.app = app
+        self.policies: dict[str, AssetAccessPolicy] = {}
+
+    async def create_policy(  # noqa: ANN201
+        self,
+        policy: AssetAccessPolicy,
+        *,
+        created_by_account_id: str | None,
+    ):
+        del created_by_account_id
+        self.policies[policy.asset.asset_id] = policy
+        return policy
+
+    async def delete_policy(self, asset_id: str) -> bool:
+        return self.policies.pop(asset_id, None) is not None
+
+    async def get_policy_for_resource(
+        self,
+        asset_kind: AssetKind,
+        resource_id: str,
+        *,
+        principal: AssetPrincipal | None = None,
+    ) -> AssetAccessPolicy | None:
+        if asset_kind is not AssetKind.MCP_SERVER:
+            return None
+        repository = getattr(self.app.state, "mcp_repository", None)
+        record = getattr(repository, "servers", {}).get(resource_id)
+        if record is None or not record.managed_asset_id:
+            return None
+        policy = self.policies.get(record.managed_asset_id)
+        if policy is None or principal is None:
+            return policy
+        return policy if resolve_asset_capabilities(policy, principal).can_read else None
+
+    async def get_accessible_policy(
+        self,
+        asset_id: str,
+        principal: AssetPrincipal,
+    ) -> AssetAccessPolicy | None:
+        policy = self.policies.get(asset_id)
+        if policy is None or not resolve_asset_capabilities(policy, principal).can_read:
+            return None
+        return policy
+
+    async def list_accessible_policies(
+        self,
+        asset_kind: AssetKind,
+        principal: AssetPrincipal,
+    ) -> list[AssetAccessPolicy]:
+        return [
+            policy
+            for policy in self.policies.values()
+            if policy.asset.asset_kind is asset_kind
+            and resolve_asset_capabilities(policy, principal).can_read
+        ]
+
+    async def replace_grant(  # noqa: ANN201
+        self,
+        policy: AssetAccessPolicy,
+        *,
+        expected_policy_version: int,
+        changed_by_account_id: str | None,
+    ):
+        del changed_by_account_id
+        current = self.policies[policy.asset.asset_id]
+        if current.asset.policy_version != expected_policy_version:
+            from src.db.managed_assets import ManagedAssetPolicyConflictError
+
+            raise ManagedAssetPolicyConflictError("asset policy changed")
+        updated = AssetAccessPolicy(
+            asset=ManagedAsset(
+                asset_id=policy.asset.asset_id,
+                asset_kind=policy.asset.asset_kind,
+                governance_source=policy.asset.governance_source,
+                owner_account_id=policy.asset.owner_account_id,
+                policy_version=expected_policy_version + 1,
+                state=policy.asset.state,
+            ),
+            grant=policy.grant,
+        )
+        self.policies[policy.asset.asset_id] = updated
+        return updated
+
+
+class _IdentityService:
+    def __init__(self, context: PlatformAuthContext) -> None:
+        self.context = context
+
+    async def get_context_for_session(self, token: str) -> PlatformAuthContext | None:
+        return self.context if token == "mcp-asset-session" else None
+
+
+def _asset_user_context(account_id: str, *, team_ids: tuple[str, ...] = ()) -> PlatformAuthContext:
+    return PlatformAuthContext(
+        account_id=account_id,
+        email=f"{account_id}@example.com",
+        role="platform_user",
+        team_memberships=[
+            {"team_id": team_id, "role": "team_developer"} for team_id in team_ids
+        ],
+    )
 
 
 class _FakeMCPScopePolicyRepository:
@@ -1056,6 +1183,98 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     assert "deltallm_mcp_health_check_total" in metrics_text
     assert "deltallm_mcp_server_health_status" in metrics_text
     assert 'server_key="docs"' in metrics_text
+
+
+@pytest.mark.asyncio
+async def test_creator_mcp_reader_editor_owner_and_outsider_capabilities(
+    client,
+    test_app,
+) -> None:
+    repository = _FakeMCPRepository()
+    access_repository = _FakeManagedAssetAccessRepository(test_app)
+    registry = _FakeMCPRegistryService(repository)
+    query_client = _FakeBindingPolicyListQueryClient()
+    query_client.bindings = []
+    query_client.policies = []
+    test_app.state.mcp_repository = repository
+    test_app.state.managed_asset_access_repository = access_repository
+    test_app.state.creator_mcp_access_service = CreatorMCPAccessService(
+        access_repository,  # type: ignore[arg-type]
+        repository,
+    )
+    test_app.state.mcp_registry_service = registry
+    test_app.state.prisma_manager = type("PrismaManager", (), {"client": query_client})()
+    identity = _IdentityService(_asset_user_context("mcp-owner", team_ids=("team-ops",)))
+    test_app.state.platform_identity_service = identity
+    cookies = {"deltallm_session": "mcp-asset-session"}
+
+    created_response = await client.post(
+        "/ui/api/mcp-servers",
+        cookies=cookies,
+        json={
+            "server_key": "creator-docs",
+            "name": "Creator Docs",
+            "base_url": "https://creator-mcp.example.com",
+            "access": {
+                "visibility": "team",
+                "subject_id": "team-ops",
+                "access_role": "reader",
+            },
+        },
+    )
+
+    assert created_response.status_code == 200
+    created = created_response.json()
+    assert created["owner_scope_type"] == "global"
+    assert created["access"]["effective_role"] == "owner"
+    assert created["access"]["visibility"] == "team"
+    server_id = created["mcp_server_id"]
+    asset_id = created["access"]["managed_asset_id"]
+
+    identity.context = _asset_user_context("mcp-reader", team_ids=("team-ops",))
+    reader_detail = await client.get(f"/ui/api/mcp-servers/{server_id}", cookies=cookies)
+    assert reader_detail.status_code == 200
+    assert reader_detail.json()["server"]["access"]["effective_role"] == "reader"
+    assert reader_detail.json()["server"]["capabilities"]["can_mutate"] is False
+    reader_update = await client.patch(
+        f"/ui/api/mcp-servers/{server_id}",
+        cookies=cookies,
+        json={"name": "Reader cannot edit"},
+    )
+    assert reader_update.status_code == 404
+
+    identity.context = _asset_user_context("mcp-outsider")
+    outsider_detail = await client.get(f"/ui/api/mcp-servers/{server_id}", cookies=cookies)
+    assert outsider_detail.status_code == 404
+
+    identity.context = _asset_user_context("mcp-owner", team_ids=("team-ops",))
+    access_update = await client.put(
+        f"/ui/api/assets/{asset_id}/access",
+        cookies=cookies,
+        json={
+            "visibility": "team",
+            "subject_id": "team-ops",
+            "access_role": "editor",
+            "expected_policy_version": 1,
+        },
+    )
+    assert access_update.status_code == 200
+
+    identity.context = _asset_user_context("mcp-editor", team_ids=("team-ops",))
+    editor_update = await client.patch(
+        f"/ui/api/mcp-servers/{server_id}",
+        cookies=cookies,
+        json={"name": "Editor updated"},
+    )
+    assert editor_update.status_code == 200
+    assert editor_update.json()["access"]["effective_role"] == "editor"
+    editor_delete = await client.delete(f"/ui/api/mcp-servers/{server_id}", cookies=cookies)
+    assert editor_delete.status_code == 404
+
+    identity.context = _asset_user_context("mcp-owner", team_ids=("team-ops",))
+    owner_delete = await client.delete(f"/ui/api/mcp-servers/{server_id}", cookies=cookies)
+    assert owner_delete.status_code == 200
+    assert asset_id not in access_repository.policies
 
 
 @pytest.mark.asyncio

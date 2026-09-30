@@ -66,12 +66,12 @@ def build_ui_access(
     return {
         "dashboard": can_view_dashboard,
         "models": authenticated,
-        "model_admin": is_platform_admin,
-        "named_credentials": is_platform_admin,
+        "model_admin": authenticated,
+        "named_credentials": authenticated,
         "tiers": is_platform_admin,
-        "route_groups": is_platform_admin,
-        "prompts": is_platform_admin,
-        "mcp_servers": authenticated and (is_platform_admin or Permission.KEY_READ in permissions),
+        "route_groups": authenticated,
+        "prompts": authenticated,
+        "mcp_servers": authenticated,
         "mcp_approvals": authenticated
         and (is_platform_admin or Permission.KEY_UPDATE in permissions),
         "keys": authenticated and (is_platform_admin or can_read_keys),

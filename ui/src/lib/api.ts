@@ -1,5 +1,6 @@
 import type { Paginated, Pagination } from './api/pagination';
 import type { BatchItemError } from './api/batchContracts';
+import type { ManagedAssetAccess, ManagedAssetAccessInput } from './api/managedAssets';
 export type { Paginated, Pagination } from './api/pagination';
 import { apiFetch, withQuery } from './api/transport';
 import {
@@ -10,6 +11,15 @@ import {
 
 export { ApiError, structuredApiErrorDetail } from './api/transport';
 export type { StructuredApiErrorDetail } from './api/transport';
+export { managedAssetAccessInput, managedAssets } from './api/managedAssets';
+export type {
+  AssetAccessRole,
+  AssetSubjectType,
+  AssetVisibility,
+  ManagedAssetAccess,
+  ManagedAssetGrantInput,
+  ManagedAssetAccessInput,
+} from './api/managedAssets';
 export type {
   OrganizationCapabilities,
   OrganizationCreatePayload,
@@ -182,6 +192,7 @@ export interface ServiceAccount {
 
 export interface MCPServer {
   mcp_server_id: string;
+  managed_asset_id?: string | null;
   server_key: string;
   name: string;
   description?: string | null;
@@ -211,6 +222,7 @@ export interface MCPServer {
     can_operate: boolean;
     can_manage_scope_config: boolean;
   };
+  access?: ManagedAssetAccess;
 }
 
 export interface MCPNamespacedTool {
@@ -589,6 +601,7 @@ export interface NamedCredential {
   usage_count?: number;
   linked_deployments?: Array<{ deployment_id: string; model_name: string }>;
   warnings?: string[];
+  access?: ManagedAssetAccess;
 }
 
 export interface InlineCredentialGroup {
@@ -788,6 +801,7 @@ export const namedCredentials = {
     provider: string;
     connection_config: Record<string, unknown>;
     metadata?: Record<string, unknown>;
+    access?: ManagedAssetAccessInput;
   }) => apiFetch<NamedCredential>('/ui/api/named-credentials', { method: 'POST', json: payload }),
   update: (credentialId: string, payload: {
     name?: string;

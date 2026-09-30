@@ -345,7 +345,8 @@ async def test_auth_me_gates_scoped_usage_access(
     assert payload["ui_access"]["mcp_approvals"] is True
     assert payload["ui_access"]["audit"] is True
     assert payload["ui_access"]["playground"] is True
-    assert payload["ui_access"]["named_credentials"] is False
+    assert payload["ui_access"]["named_credentials"] is True
+    assert payload["ui_access"]["prompts"] is True
     assert payload["ui_access"]["people_access"] is False
     assert payload["ui_access"]["usage"] is expected_usage
     assert payload["ui_access"]["tiers"] is False

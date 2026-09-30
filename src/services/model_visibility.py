@@ -25,6 +25,8 @@ from src.services.tier_model_access import (
 if TYPE_CHECKING:
     from src.router.runtime_authorization import CallableTargetGrantSnapshot
     from src.services.callable_target_grants import CallableTargetGrantService
+    from src.services.creator_model_access import CreatorModelAccessSnapshot
+    from src.services.creator_route_group_access import CreatorRouteGroupAccessSnapshot
     from src.services.tier_policy_service import TierPolicyService
 
 logger = logging.getLogger(__name__)
@@ -194,13 +196,16 @@ def filter_visible_models(
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
     callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
+    creator_model_access_snapshot: CreatorModelAccessSnapshot | None = None,
+    creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
     tier_policy_missing_service_mode: str = "fail_open",
     emit_shadow_log: bool = False,
 ) -> list[str]:
-    allowed_models = resolve_effective_model_allowlist(
+    candidates = list(model_ids)
+    resolution = resolve_model_allowlist_resolution(
         auth,
         callable_target_grant_service=callable_target_grant_service,
         callable_target_grant_snapshot=callable_target_grant_snapshot,
@@ -210,9 +215,47 @@ def filter_visible_models(
         tier_policy_missing_service_mode=tier_policy_missing_service_mode,
         emit_shadow_log=emit_shadow_log,
     )
-    if allowed_models is None:
-        return list(model_ids)
-    return [model_id for model_id in model_ids if model_id in allowed_models]
+    creator_models = (
+        creator_model_access_snapshot.model_names
+        if creator_model_access_snapshot is not None
+        else frozenset()
+    )
+    visible: list[str] = []
+    for model_id in candidates:
+        if (
+            creator_route_group_access_snapshot is not None
+            and model_id in creator_route_group_access_snapshot.group_keys
+        ):
+            if _creator_route_group_allowed(
+                auth,
+                model_id,
+                creator_route_group_access_snapshot=creator_route_group_access_snapshot,
+                creator_model_access_snapshot=creator_model_access_snapshot,
+                callable_target_grant_service=callable_target_grant_service,
+                callable_target_grant_snapshot=callable_target_grant_snapshot,
+                tier_policy_service=tier_policy_service,
+                policy_mode=resolution.policy_mode,
+                policy_fallback_reason=resolution.policy_fallback_reason,
+                tier_policy_mode=tier_policy_mode,
+                tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+            ):
+                visible.append(model_id)
+            continue
+        if model_id in creator_models:
+            if _creator_model_allowed(
+                auth,
+                model_id,
+                creator_model_access_snapshot=creator_model_access_snapshot,
+                callable_target_grant_service=callable_target_grant_service,
+                callable_target_grant_snapshot=callable_target_grant_snapshot,
+                policy_mode=resolution.policy_mode,
+                policy_fallback_reason=resolution.policy_fallback_reason,
+            ):
+                visible.append(model_id)
+            continue
+        if resolution.effective_allowlist is None or model_id in resolution.effective_allowlist:
+            visible.append(model_id)
+    return visible
 
 
 def ensure_model_allowed(
@@ -221,12 +264,56 @@ def ensure_model_allowed(
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
     callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
+    creator_model_access_snapshot: CreatorModelAccessSnapshot | None = None,
+    creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
     tier_policy_missing_service_mode: str = "fail_open",
     emit_shadow_log: bool = False,
 ) -> None:
+    if (
+        creator_route_group_access_snapshot is not None
+        and model in creator_route_group_access_snapshot.group_keys
+    ):
+        policy_mode_normalized = normalize_callable_target_policy_mode(policy_mode)
+        policy_fallback_reason = (
+            None if callable_target_grant_service is not None else "grant_service_unavailable"
+        )
+        if _creator_route_group_allowed(
+            auth,
+            model,
+            creator_route_group_access_snapshot=creator_route_group_access_snapshot,
+            creator_model_access_snapshot=creator_model_access_snapshot,
+            callable_target_grant_service=callable_target_grant_service,
+            callable_target_grant_snapshot=callable_target_grant_snapshot,
+            tier_policy_service=tier_policy_service,
+            policy_mode=policy_mode_normalized,
+            policy_fallback_reason=policy_fallback_reason,
+            tier_policy_mode=tier_policy_mode,
+            tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+        ):
+            return
+        raise PermissionDeniedError(message=model_not_allowed_message(model))
+    if (
+        creator_model_access_snapshot is not None
+        and model in creator_model_access_snapshot.model_names
+    ):
+        policy_mode_normalized = normalize_callable_target_policy_mode(policy_mode)
+        policy_fallback_reason = (
+            None if callable_target_grant_service is not None else "grant_service_unavailable"
+        )
+        if _creator_model_allowed(
+            auth,
+            model,
+            creator_model_access_snapshot=creator_model_access_snapshot,
+            callable_target_grant_service=callable_target_grant_service,
+            callable_target_grant_snapshot=callable_target_grant_snapshot,
+            policy_mode=policy_mode_normalized,
+            policy_fallback_reason=policy_fallback_reason,
+        ):
+            return
+        raise PermissionDeniedError(message=model_not_allowed_message(model))
     resolution = resolve_model_allowlist_resolution(
         auth,
         callable_target_grant_service=callable_target_grant_service,
@@ -255,12 +342,62 @@ def ensure_batch_model_allowed(
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
     callable_target_grant_snapshot: CallableTargetGrantSnapshot | None = None,
+    creator_model_access_snapshot: CreatorModelAccessSnapshot | None = None,
+    creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot | None = None,
     tier_policy_service: TierPolicyService | None = None,
     policy_mode: CallableTargetPolicyMode | str = "enforce",
     tier_policy_mode: TierPolicyMode | str = "disabled",
     tier_policy_missing_service_mode: str = "fail_open",
     emit_shadow_log: bool = False,
 ) -> None:
+    if (
+        creator_route_group_access_snapshot is not None
+        and model in creator_route_group_access_snapshot.group_keys
+    ):
+        policy_mode_normalized = normalize_callable_target_policy_mode(policy_mode)
+        policy_fallback_reason = (
+            None if callable_target_grant_service is not None else "grant_service_unavailable"
+        )
+        if _creator_route_group_allowed(
+            auth,
+            model,
+            creator_route_group_access_snapshot=creator_route_group_access_snapshot,
+            creator_model_access_snapshot=creator_model_access_snapshot,
+            callable_target_grant_service=callable_target_grant_service,
+            callable_target_grant_snapshot=callable_target_grant_snapshot,
+            tier_policy_service=tier_policy_service,
+            policy_mode=policy_mode_normalized,
+            policy_fallback_reason=policy_fallback_reason,
+            tier_policy_mode=tier_policy_mode,
+            tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+        ):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=model_not_allowed_message(model),
+        )
+    if (
+        creator_model_access_snapshot is not None
+        and model in creator_model_access_snapshot.model_names
+    ):
+        policy_mode_normalized = normalize_callable_target_policy_mode(policy_mode)
+        policy_fallback_reason = (
+            None if callable_target_grant_service is not None else "grant_service_unavailable"
+        )
+        if _creator_model_allowed(
+            auth,
+            model,
+            creator_model_access_snapshot=creator_model_access_snapshot,
+            callable_target_grant_service=callable_target_grant_service,
+            callable_target_grant_snapshot=callable_target_grant_snapshot,
+            policy_mode=policy_mode_normalized,
+            policy_fallback_reason=policy_fallback_reason,
+        ):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=model_not_allowed_message(model),
+        )
     resolution = resolve_model_allowlist_resolution(
         auth,
         callable_target_grant_service=callable_target_grant_service,
@@ -390,6 +527,108 @@ def _resolve_direct_restrict_allowlist(
     if direct_restrict_allowlist is None:
         return None
     return frozenset(_normalize_allowlist(direct_restrict_allowlist))
+
+
+def _creator_model_allowed(
+    auth: UserAPIKeyAuth,
+    model: str,
+    *,
+    creator_model_access_snapshot: CreatorModelAccessSnapshot,
+    callable_target_grant_service: CallableTargetGrantService | None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None,
+    policy_mode: CallableTargetPolicyMode,
+    policy_fallback_reason: str | None,
+) -> bool:
+    scope_context = resolve_runtime_scope_context(auth)
+    if scope_context.is_master_key:
+        return True
+    if model not in creator_model_access_snapshot.visible_models(auth):
+        return False
+
+    # Explicit restrictive key/team/user scope policy can narrow creator visibility,
+    # but the organization tier never owns or expands the creator-model branch.
+    direct_restrict_allowlist = _resolve_direct_restrict_allowlist(
+        auth,
+        callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
+        policy_mode=policy_mode,
+        policy_fallback_reason=policy_fallback_reason,
+    )
+    return direct_restrict_allowlist is None or model in direct_restrict_allowlist
+
+
+def _creator_route_group_allowed(
+    auth: UserAPIKeyAuth,
+    group_key: str,
+    *,
+    creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot,
+    creator_model_access_snapshot: CreatorModelAccessSnapshot | None,
+    callable_target_grant_service: CallableTargetGrantService | None,
+    callable_target_grant_snapshot: CallableTargetGrantSnapshot | None,
+    tier_policy_service: TierPolicyService | None,
+    policy_mode: CallableTargetPolicyMode,
+    policy_fallback_reason: str | None,
+    tier_policy_mode: TierPolicyMode | str,
+    tier_policy_missing_service_mode: str,
+) -> bool:
+    scope_context = resolve_runtime_scope_context(auth)
+    if scope_context.is_master_key:
+        return True
+    if group_key not in creator_route_group_access_snapshot.visible_group_keys(auth):
+        return False
+
+    direct_restrict_allowlist = _resolve_direct_restrict_allowlist(
+        auth,
+        callable_target_grant_service=callable_target_grant_service,
+        callable_target_grant_snapshot=callable_target_grant_snapshot,
+        policy_mode=policy_mode,
+        policy_fallback_reason=policy_fallback_reason,
+    )
+    if direct_restrict_allowlist is not None and group_key not in direct_restrict_allowlist:
+        return False
+
+    return all(
+        _route_group_member_model_allowed(
+            auth,
+            member_model,
+            creator_model_access_snapshot=creator_model_access_snapshot,
+            tier_policy_service=tier_policy_service,
+            tier_policy_mode=tier_policy_mode,
+            tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+        )
+        for member_model in creator_route_group_access_snapshot.member_model_names_by_group.get(
+            group_key, ()
+        )
+    )
+
+
+def _route_group_member_model_allowed(
+    auth: UserAPIKeyAuth,
+    model_name: str,
+    *,
+    creator_model_access_snapshot: CreatorModelAccessSnapshot | None,
+    tier_policy_service: TierPolicyService | None,
+    tier_policy_mode: TierPolicyMode | str,
+    tier_policy_missing_service_mode: str,
+) -> bool:
+    if (
+        creator_model_access_snapshot is not None
+        and model_name in creator_model_access_snapshot.model_names
+    ):
+        return model_name in creator_model_access_snapshot.visible_models(auth)
+
+    tier_resolution = resolve_tier_model_access(
+        auth,
+        pre_tier_allowlist=None,
+        direct_restrict_allowlist=None,
+        tier_policy_service=tier_policy_service,
+        tier_policy_mode=tier_policy_mode,
+        tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+    )
+    return (
+        tier_resolution.effective_allowlist is None
+        or model_name in tier_resolution.effective_allowlist
+    )
 
 
 def _app_setting(app: Any, field_name: str, *, default: Any) -> Any:

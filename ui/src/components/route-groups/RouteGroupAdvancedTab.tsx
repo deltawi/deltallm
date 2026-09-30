@@ -120,6 +120,8 @@ interface RouteGroupAdvancedTabProps {
   simulationPolicyError: string | null;
   simulationPromptRef: Record<string, unknown> | null;
   canSimulate: boolean;
+  canWrite?: boolean;
+  canManageBindings?: boolean;
   policyText: string;
   policyMessage: string | null;
   policyError: string | null;
@@ -177,6 +179,8 @@ export default function RouteGroupAdvancedTab({
   simulationPolicyError,
   simulationPromptRef,
   canSimulate,
+  canWrite = true,
+  canManageBindings = true,
   policyText,
   policyMessage,
   policyError,
@@ -226,7 +230,7 @@ export default function RouteGroupAdvancedTab({
     <div className="space-y-3">
 
       {/* ── 1. Prompt Binding ── */}
-      <AccordionCard
+      {canManageBindings ? <AccordionCard
         id="prompt-binding"
         open={openSections.has('prompt-binding')}
         onToggle={() => toggle('prompt-binding')}
@@ -373,7 +377,7 @@ export default function RouteGroupAdvancedTab({
             </div>
           )}
         </div>
-      </AccordionCard>
+      </AccordionCard> : null}
 
       {/* ── 2. Routing Policy ── */}
       <AccordionCard
@@ -407,6 +411,7 @@ export default function RouteGroupAdvancedTab({
               <button
                 type="button"
                 onClick={() => showAdvancedJson && onToggleAdvancedJson()}
+                disabled={!canWrite}
                 className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${!showAdvancedJson ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 <ListChecks className="h-3.5 w-3.5" /> Guided
@@ -414,6 +419,7 @@ export default function RouteGroupAdvancedTab({
               <button
                 type="button"
                 onClick={() => !showAdvancedJson && onToggleAdvancedJson()}
+                disabled={!canWrite}
                 className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${showAdvancedJson ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 <Code2 className="h-3.5 w-3.5" /> Raw JSON
@@ -431,7 +437,7 @@ export default function RouteGroupAdvancedTab({
               <button
                 type="button"
                 onClick={onValidate}
-                disabled={isPolicyBusy || !hasMembers}
+                disabled={!canWrite || isPolicyBusy || !hasMembers}
                 className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 transition-colors"
               >
                 {policyAction === 'validate' ? 'Validating…' : 'Validate'}
@@ -439,13 +445,13 @@ export default function RouteGroupAdvancedTab({
               <button
                 type="button"
                 onClick={onSaveDraft}
-                disabled={isPolicyBusy || !hasMembers}
+                disabled={!canWrite || isPolicyBusy || !hasMembers}
                 className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 transition-colors"
               >
                 {policyAction === 'save-draft' ? 'Saving…' : 'Save Draft'}
               </button>
               <PolicyPublishControl policy={simulationPolicy} activePolicy={publishedPolicy?.policy_json ?? null}
-                busy={isPolicyBusy} disabled={!hasMembers || !canSimulate} onPublish={onPublish} />
+                busy={isPolicyBusy} disabled={!canWrite || !hasMembers || !canSimulate} onPublish={onPublish} />
             </div>
           </div>
 
@@ -463,7 +469,7 @@ export default function RouteGroupAdvancedTab({
 
           {/* Guided editor */}
           {!showAdvancedJson && (
-            <fieldset disabled={isPolicyBusy || !canSimulate}><PolicyGuidedEditor
+            <fieldset disabled={!canWrite || isPolicyBusy || !canSimulate}><PolicyGuidedEditor
               routeGroupId={routeGroupId}
               values={guidedPolicy}
               onChange={onGuidedPolicyChange}
@@ -482,6 +488,7 @@ export default function RouteGroupAdvancedTab({
               <textarea
                 aria-label="Policy JSON (import or export)"
                 value={policyText}
+                disabled={!canWrite}
                 onChange={(e) => onPolicyTextChange(e.target.value)}
                 rows={10}
                 spellCheck={false}
@@ -552,7 +559,7 @@ export default function RouteGroupAdvancedTab({
       >
         <div className="px-5 py-5">
           {/* Rollback controls */}
-          {canRollbackVersions.length > 0 && (
+          {canWrite && canRollbackVersions.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
               <p className="text-xs text-slate-500">
                 Rollback restores a previous version as the new published policy.
@@ -637,7 +644,7 @@ export default function RouteGroupAdvancedTab({
                       )}
                     </div>
                     <PolicySelectorSummary policy={policy.policy_json} label="Version selector" />
-                    {isNonPublished && (
+                    {canWrite && isNonPublished && (
                       <button
                         type="button"
                         onClick={() => onRollback(policy.version)}

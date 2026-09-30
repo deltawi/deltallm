@@ -24,6 +24,7 @@ from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
     get_auth_scope,
+    managed_asset_membership_transaction,
     optional_int,
     to_json_value,
     validate_runtime_user_scope,
@@ -2135,7 +2136,7 @@ async def remove_organization_member(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Organization membership mutation requires transaction support",
         )
-    async with db.tx() as tx:
+    async with managed_asset_membership_transaction(db) as tx:
         await require_active_organization_mutation(tx, organization_id)
         rows = await tx.query_raw(
             """

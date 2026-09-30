@@ -14,6 +14,7 @@ class RuntimeScopeContext:
     auth_source: AuthSource
     is_master_key: bool
     actor_id: str | None
+    owner_account_id: str | None
     api_key_scope_id: str | None
     user_id: str | None
     team_id: str | None
@@ -46,9 +47,11 @@ def resolve_runtime_scope_context(auth: UserAPIKeyAuth) -> RuntimeScopeContext:
     user_id = _normalize_optional(getattr(auth, "user_id", None))
     team_id = _normalize_optional(getattr(auth, "team_id", None))
     organization_id = _normalize_optional(getattr(auth, "organization_id", None))
+    owner_account_id = _normalize_optional(getattr(auth, "owner_account_id", None))
     is_master_key = bool(metadata.get("is_master_key")) or api_key == "master_key"
     auth_source = _normalize_auth_source(
-        metadata.get("auth_source") or _infer_auth_source(api_key, metadata, is_master_key=is_master_key)
+        metadata.get("auth_source")
+        or _infer_auth_source(api_key, metadata, is_master_key=is_master_key)
     )
     api_key_scope_id = _normalize_optional(metadata.get("api_key_scope_id"))
     if api_key_scope_id is None and auth_source == "api_key":
@@ -59,6 +62,7 @@ def resolve_runtime_scope_context(auth: UserAPIKeyAuth) -> RuntimeScopeContext:
         is_master_key=is_master_key,
         api_key=api_key,
         api_key_scope_id=api_key_scope_id,
+        owner_account_id=owner_account_id,
         user_id=user_id,
         team_id=team_id,
         organization_id=organization_id,
@@ -72,6 +76,7 @@ def _build_runtime_scope_context(
     is_master_key: bool,
     api_key: str | None,
     api_key_scope_id: str | None,
+    owner_account_id: str | None,
     user_id: str | None,
     team_id: str | None,
     organization_id: str | None,
@@ -97,6 +102,7 @@ def _build_runtime_scope_context(
         auth_source=auth_source,
         is_master_key=is_master_key,
         actor_id=user_id or api_key_scope_id or api_key,
+        owner_account_id=owner_account_id,
         api_key_scope_id=api_key_scope_id,
         user_id=user_id,
         team_id=team_id,

@@ -4,6 +4,8 @@ import { ArrowLeft, Trash2 } from 'lucide-react';
 import Card from '../components/Card';
 import ConfirmDialog from '../components/ConfirmDialog';
 import JourneyChecklist from '../components/JourneyChecklist';
+import ManagedAssetAccessPanel from '../components/ManagedAssetAccessPanel';
+import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
 import { promptRegistry } from '../lib/api';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
@@ -14,6 +16,9 @@ import PromptHistoryCard from '../components/prompt-registry/PromptHistoryCard';
 import { RecordDetailShell } from '../components/admin/shells';
 import { useBranding } from '../lib/brandingContext';
 import { DEFAULT_BRANDING } from '../lib/branding';
+import { useAuth } from '../lib/auth';
+import { isPlatformAdminSession } from '../lib/authorization';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 const DEFAULT_RENDER_VARIABLES = JSON.stringify({ product_name: DEFAULT_BRANDING.instance_name }, null, 2);
 
@@ -59,6 +64,12 @@ export default function PromptTemplateDetail() {
   const { templateKey } = useParams<{ templateKey: string }>();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const { session, authMode } = useAuth();
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions, loading: audiencesLoading, error: audiencesError, refetch: refetchAudiences } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
   const detail = useApi(() => promptRegistry.getTemplate(templateKey!), [templateKey]);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [creatingVersion, setCreatingVersion] = useState(false);
@@ -88,6 +99,8 @@ export default function PromptTemplateDetail() {
   const template = detail.data?.template;
   const versions = detail.data?.versions || [];
   const labels = detail.data?.labels || [];
+  const canWrite = !template?.access || Boolean(template.access.capabilities.write);
+  const canDelete = !template?.access || Boolean(template.access.capabilities.delete);
 
   useEffect(() => {
     setRenderForm((current) => current.variables === DEFAULT_RENDER_VARIABLES
@@ -139,7 +152,7 @@ export default function PromptTemplateDetail() {
       await promptRegistry.updateTemplate(template.template_key, {
         name: templateForm.name.trim(),
         description: templateForm.description.trim() || null,
-        owner_scope: templateForm.owner_scope.trim() || null,
+        ...(isPlatformAdmin ? { owner_scope: templateForm.owner_scope.trim() || null } : {}),
       });
       pushToast({ tone: 'success', title: 'Template updated', message: 'Template metadata was saved.' });
       detail.refetch();
@@ -257,6 +270,14 @@ export default function PromptTemplateDetail() {
             <p className="mt-1 text-sm text-gray-500">
               Template key: <code className="rounded bg-gray-100 px-1.5 py-0.5">{template.template_key}</code>
             </p>
+            {template.access ? (
+              <ManagedAssetAccessSummary
+                access={template.access}
+                teamOptions={teamOptions}
+                organizationOptions={organizationOptions}
+                className="mt-2"
+              />
+            ) : null}
           </div>
           <div className="grid gap-2 sm:grid-cols-3">
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -287,7 +308,7 @@ export default function PromptTemplateDetail() {
       <div className="space-y-5">
         <Card
           title="1. Template"
-          action={
+          action={canDelete ? (
             <button
               onClick={() => setConfirmDeleteTemplate(true)}
               className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50"
@@ -295,7 +316,7 @@ export default function PromptTemplateDetail() {
               <Trash2 className="h-4 w-4" />
               Delete
             </button>
-          }
+          ) : undefined}
         >
           <div className="space-y-4">
             <div>
@@ -308,6 +329,7 @@ export default function PromptTemplateDetail() {
                 <label className="mb-1 block text-sm font-medium text-gray-700">Name</label>
                 <input
                   value={templateForm.name}
+                  disabled={!canWrite}
                   onChange={(event) => setTemplateForm({ ...templateForm, name: event.target.value })}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
@@ -316,25 +338,44 @@ export default function PromptTemplateDetail() {
                 <label className="mb-1 block text-sm font-medium text-gray-700">Description</label>
                 <textarea
                   value={templateForm.description}
+                  disabled={!canWrite}
                   onChange={(event) => setTemplateForm({ ...templateForm, description: event.target.value })}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
             </div>
 
-            <details className="rounded-xl border border-slate-200 px-3 py-3">
-              <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Advanced metadata</summary>
-              <div className="mt-4">
-                <label className="mb-1 block text-sm font-medium text-gray-700">Owner Scope</label>
-                <input
-                  value={templateForm.owner_scope}
-                  onChange={(event) => setTemplateForm({ ...templateForm, owner_scope: event.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                />
-              </div>
-            </details>
+            {template.access ? (
+              <ManagedAssetAccessPanel
+                access={template.access}
+                assetLabel="Prompt"
+                teamOptions={teamOptions}
+                organizationOptions={organizationOptions}
+                allowPublic={isPlatformAdmin}
+                audiencesLoading={audiencesLoading}
+                audiencesError={audiencesError}
+                onRetryAudiences={refetchAudiences}
+                onSaved={() => detail.refetch()}
+                className="shadow-none"
+              />
+            ) : null}
 
-            <div className="flex justify-end">
+            {isPlatformAdmin ? (
+              <details className="rounded-xl border border-slate-200 px-3 py-3">
+                <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Legacy metadata</summary>
+                <div className="mt-4">
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Owner Scope</label>
+                  <input
+                    value={templateForm.owner_scope}
+                    disabled={!canWrite}
+                    onChange={(event) => setTemplateForm({ ...templateForm, owner_scope: event.target.value })}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                  />
+                </div>
+              </details>
+            ) : null}
+
+            {canWrite ? <div className="flex justify-end">
               <button
                 type="button"
                 onClick={handleUpdateTemplate}
@@ -343,17 +384,20 @@ export default function PromptTemplateDetail() {
               >
                 {savingTemplate ? 'Saving...' : 'Save Template'}
               </button>
-            </div>
+            </div> : (
+              <p className="text-sm text-slate-500">You have read-only access to this prompt.</p>
+            )}
           </div>
         </Card>
 
-        <PromptVersionComposerCard value={versionForm} creating={creatingVersion} onChange={setVersionForm} onCreate={handleCreateVersion} />
+        <PromptVersionComposerCard value={versionForm} creating={creatingVersion} disabled={!canWrite} onChange={setVersionForm} onCreate={handleCreateVersion} />
 
         <PromptRolloutCard
           versions={versions}
           labels={labels}
           labelForm={labelForm}
           assigningLabel={assigningLabel}
+          disabled={!canWrite}
           onLabelFormChange={setLabelForm}
           onAssignLabel={handleAssignLabel}
         />
@@ -372,6 +416,7 @@ export default function PromptTemplateDetail() {
           diffLeftVersion={diffLeftVersion}
           diffRightVersion={diffRightVersion}
           publishingVersion={publishingVersion}
+          canPublish={canWrite}
           onDiffLeftChange={setDiffLeftVersion}
           onDiffRightChange={setDiffRightVersion}
           onPublishVersion={handlePublishVersion}

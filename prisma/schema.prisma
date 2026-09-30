@@ -184,6 +184,7 @@ model DeltaLLM_TeamTable {
   members DeltaLLM_UserTable[]
   keys    DeltaLLM_VerificationToken[]
   service_accounts DeltaLLM_ServiceAccount[]
+  asset_grants     DeltaLLM_AssetGrant[] @relation("asset_grant_team")
 
   @@index([organization_id])
   @@map("deltallm_teamtable")
@@ -240,6 +241,7 @@ model DeltaLLM_OrganizationTable {
   updated_at        DateTime @updatedAt
 
   tier_assignments DeltaLLM_OrganizationTierAssignment[]
+  asset_grants     DeltaLLM_AssetGrant[] @relation("asset_grant_organization")
 
   @@index([lifecycle_state, updated_at], map: "deltallm_organizationtable_lifecycle_state_idx")
   @@map("deltallm_organizationtable")
@@ -386,6 +388,7 @@ model DeltaLLM_AuditPayload {
 model DeltaLLM_PlatformAccount {
   account_id          String   @id @default(uuid())
   email               String   @unique
+  api_namespace       String?
   password_hash       String?
   role                String   @default("org_user")
   is_active           Boolean  @default(true)
@@ -411,6 +414,10 @@ model DeltaLLM_PlatformAccount {
   created_email_tokens DeltaLLM_EmailToken[] @relation("email_token_creator")
   published_tier_versions DeltaLLM_TierVersion[] @relation("tier_version_publisher")
   created_tier_versions DeltaLLM_TierVersion[] @relation("tier_version_creator")
+  owned_managed_assets DeltaLLM_ManagedAsset[] @relation("managed_asset_owner")
+  created_managed_assets DeltaLLM_ManagedAsset[] @relation("managed_asset_creator")
+  created_asset_grants DeltaLLM_AssetGrant[] @relation("asset_grant_creator")
+  authorized_model_credential_bindings DeltaLLM_ModelDeployment[] @relation("model_credential_binding_authorizer")
 
   @@map("deltallm_platformaccount")
 }
@@ -885,36 +892,112 @@ model DeltaLLM_OrganizationTierAssignment {
 
 model DeltaLLM_NamedCredential {
   credential_id         String   @id @default(uuid())
-  name                  String   @unique
+  name                  String
+  name_scope            String   @default("platform")
   provider              String
   connection_config     Json
   metadata              Json?
   created_by_account_id String?
+  managed_asset_id      String?  @unique
   created_at            DateTime @default(now())
   updated_at            DateTime @updatedAt
 
-  deployments DeltaLLM_ModelDeployment[]
+  deployments  DeltaLLM_ModelDeployment[]
+  managed_asset DeltaLLM_ManagedAsset? @relation(fields: [managed_asset_id], references: [asset_id], onDelete: SetNull)
 
   @@index([provider], map: "deltallm_namedcredential_provider_idx")
   @@index([created_at], map: "deltallm_namedcredential_created_at_idx")
+  @@unique([name_scope, name], map: "deltallm_namedcredential_scope_name_key")
   @@map("deltallm_namedcredential")
+}
+
+model DeltaLLM_ManagedAsset {
+  asset_id              String   @id @default(uuid())
+  asset_kind            String
+  governance_source     String   @default("platform")
+  owner_account_id      String?
+  created_by_account_id String?
+  policy_version        BigInt   @default(1)
+  state                 String   @default("active")
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  owner_account      DeltaLLM_PlatformAccount? @relation("managed_asset_owner", fields: [owner_account_id], references: [account_id], onDelete: Restrict)
+  created_by_account DeltaLLM_PlatformAccount? @relation("managed_asset_creator", fields: [created_by_account_id], references: [account_id], onDelete: SetNull)
+  grants             DeltaLLM_AssetGrant[]
+  named_credential   DeltaLLM_NamedCredential?
+  model              DeltaLLM_Model?
+  route_group        DeltaLLM_RouteGroup?
+  mcp_server         DeltaLLM_MCPServer?
+  prompt_template    DeltaLLM_PromptTemplate?
+
+  @@index([owner_account_id, asset_kind, state], map: "deltallm_managedasset_owner_kind_state_idx")
+  @@index([asset_kind, governance_source, state], map: "deltallm_managedasset_kind_source_state_idx")
+  @@map("deltallm_managedasset")
+}
+
+model DeltaLLM_AssetGrant {
+  grant_id              String   @id @default(uuid())
+  managed_asset_id      String
+  subject_type          String
+  team_id               String?
+  organization_id       String?
+  access_role           String
+  created_by_account_id String?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  managed_asset     DeltaLLM_ManagedAsset       @relation(fields: [managed_asset_id], references: [asset_id], onDelete: Cascade)
+  team              DeltaLLM_TeamTable?         @relation("asset_grant_team", fields: [team_id], references: [team_id], onDelete: Restrict)
+  organization      DeltaLLM_OrganizationTable? @relation("asset_grant_organization", fields: [organization_id], references: [organization_id], onDelete: Restrict)
+  created_by_account DeltaLLM_PlatformAccount?  @relation("asset_grant_creator", fields: [created_by_account_id], references: [account_id], onDelete: SetNull)
+
+  @@index([team_id, access_role], map: "deltallm_assetgrant_team_role_idx")
+  @@index([organization_id, access_role], map: "deltallm_assetgrant_organization_role_idx")
+  @@index([subject_type, access_role], map: "deltallm_assetgrant_subject_role_idx")
+  @@index([managed_asset_id], map: "deltallm_assetgrant_managed_asset_idx")
+  @@map("deltallm_assetgrant")
+}
+
+model DeltaLLM_Model {
+  model_id          String   @id @default(uuid())
+  model_name        String   @unique
+  display_name      String?
+  managed_asset_id  String?  @unique
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  managed_asset DeltaLLM_ManagedAsset?     @relation(fields: [managed_asset_id], references: [asset_id], onDelete: SetNull)
+  deployments   DeltaLLM_ModelDeployment[]
+
+  @@map("deltallm_model")
 }
 
 model DeltaLLM_ModelDeployment {
   deployment_id        String   @id
   model_name           String
+  model_id             String?
   named_credential_id  String?
+  credential_binding_mode String?
+  credential_binding_state String?
+  credential_bound_by_account_id String?
+  credential_bound_at DateTime?
+  credential_revoked_at DateTime?
   deltallm_params      Json
   model_info           Json?
   created_at           DateTime @default(now())
   updated_at           DateTime @updatedAt
 
   named_credential DeltaLLM_NamedCredential? @relation(fields: [named_credential_id], references: [credential_id], onDelete: SetNull)
+  model            DeltaLLM_Model?           @relation(fields: [model_id], references: [model_id], onDelete: SetNull)
+  credential_bound_by_account DeltaLLM_PlatformAccount? @relation("model_credential_binding_authorizer", fields: [credential_bound_by_account_id], references: [account_id], onDelete: SetNull)
 
   route_group_members DeltaLLM_RouteGroupMember[]
 
   @@index([model_name], map: "deltallm_modeldeployment_model_name_idx")
+  @@index([model_id], map: "deltallm_modeldeployment_model_id_idx")
   @@index([named_credential_id], map: "deltallm_modeldeployment_named_credential_idx")
+  @@index([credential_binding_state, credential_binding_mode], map: "deltallm_modeldeployment_credential_binding_idx")
   @@map("deltallm_modeldeployment")
 }
 
@@ -926,12 +1009,14 @@ model DeltaLLM_RouteGroup {
   routing_strategy String?
   enabled        Boolean  @default(true)
   metadata       Json?
+  managed_asset_id String? @unique
   created_at     DateTime @default(now())
   updated_at     DateTime @updatedAt
 
   members  DeltaLLM_RouteGroupMember[]
   policies DeltaLLM_RoutePolicy[]
   bindings DeltaLLM_RouteGroupBinding[]
+  managed_asset DeltaLLM_ManagedAsset? @relation(fields: [managed_asset_id], references: [asset_id], onDelete: SetNull)
 
   @@index([enabled])
   @@map("deltallm_routegroup")
@@ -1024,12 +1109,14 @@ model DeltaLLM_MCPServer {
   last_health_latency_ms       Int?
   metadata                     Json?
   created_by_account_id        String?
+  managed_asset_id             String?  @unique
   created_at                   DateTime @default(now())
   updated_at                   DateTime @updatedAt
 
   bindings     DeltaLLM_MCPServerBinding[]
   tool_policies DeltaLLM_MCPToolPolicy[]
   approval_requests DeltaLLM_MCPApprovalRequest[]
+  managed_asset DeltaLLM_ManagedAsset? @relation(fields: [managed_asset_id], references: [asset_id], onDelete: SetNull)
 
   @@index([enabled], map: "deltallm_mcpserver_enabled_idx")
   @@index([created_at], map: "deltallm_mcpserver_created_at_idx")
@@ -1134,12 +1221,14 @@ model DeltaLLM_PromptTemplate {
   description        String?
   owner_scope        String?
   metadata           Json?
+  managed_asset_id   String?  @unique
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
 
   versions DeltaLLM_PromptVersion[]
   labels   DeltaLLM_PromptLabel[]
   bindings DeltaLLM_PromptBinding[]
+  managed_asset DeltaLLM_ManagedAsset? @relation(fields: [managed_asset_id], references: [asset_id], onDelete: SetNull)
 
   @@index([created_at], map: "deltallm_prompttemplate_created_at_idx")
   @@map("deltallm_prompttemplate")

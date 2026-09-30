@@ -27,6 +27,7 @@ from src.services.asset_scopes import (
     prompt_binding_resolution_chain,
     scope_lookup_candidates,
 )
+from src.services.creator_prompt_access import CreatorPromptAccessSnapshot
 from src.services.prompt_rendering import render_template_body, validate_variables_schema
 from src.services.prompt_singleflight import PromptSingleflight
 from src.services.runtime_scopes import RuntimeScopeContext
@@ -236,17 +237,23 @@ class PromptRegistryService:
         client_ip: str | None = None,
         user_agent: str | None = None,
         scope_context: RuntimeScopeContext | None = None,
+        creator_prompt_access_snapshot: CreatorPromptAccessSnapshot | None = None,
     ) -> PromptRenderOutput | None:
         await self._ensure_namespace_epoch()
         started = perf_counter()
         selected: tuple[PromptResolvedRecord, PromptProvenance, str] | None = None
 
         if explicit_reference is not None:
-            lookup = await self._resolve_prompt(
-                template_key=explicit_reference.template_key,
-                label=explicit_reference.label,
-                version=explicit_reference.version,
-            )
+            lookup = None
+            if creator_prompt_access_snapshot is None or creator_prompt_access_snapshot.can_use(
+                explicit_reference.template_key,
+                scope_context,
+            ):
+                lookup = await self._resolve_prompt(
+                    template_key=explicit_reference.template_key,
+                    label=explicit_reference.label,
+                    version=explicit_reference.version,
+                )
             if lookup is None:
                 await self._log_render(
                     request_id=request_id,
@@ -299,6 +306,7 @@ class PromptRegistryService:
                 team_id=team_id,
                 organization_id=organization_id,
                 route_group_key=route_group_key,
+                creator_prompt_access_snapshot=creator_prompt_access_snapshot,
             )
 
         if selected is None:
@@ -563,6 +571,7 @@ class PromptRegistryService:
         team_id: str | None,
         organization_id: str | None,
         route_group_key: str | None,
+        creator_prompt_access_snapshot: CreatorPromptAccessSnapshot | None = None,
     ) -> tuple[PromptResolvedRecord, PromptProvenance, str] | None:
         precedence = prompt_binding_resolution_chain(
             scope_context=scope_context,
@@ -575,6 +584,14 @@ class PromptRegistryService:
         bindings = await self._resolve_binding_chain(precedence)
         for binding in bindings:
             if binding is None:
+                continue
+            if (
+                creator_prompt_access_snapshot is not None
+                and not creator_prompt_access_snapshot.can_use(
+                    binding.template_key,
+                    scope_context,
+                )
+            ):
                 continue
             lookup = await self._resolve_prompt(
                 template_key=binding.template_key,
@@ -600,6 +617,14 @@ class PromptRegistryService:
         if route_group_key:
             default_prompt = await self._resolve_route_group_default(route_group_key)
             if default_prompt is not None:
+                if (
+                    creator_prompt_access_snapshot is not None
+                    and not creator_prompt_access_snapshot.can_use(
+                        default_prompt.template_key,
+                        scope_context,
+                    )
+                ):
+                    return None
                 lookup = await self._resolve_prompt(
                     template_key=default_prompt.template_key,
                     label=default_prompt.label,

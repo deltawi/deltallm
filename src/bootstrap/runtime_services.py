@@ -254,6 +254,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         policy_enforcer=MCPToolPolicyEnforcer(app.state.limit_counter),
         result_cache=MCPToolResultCache(getattr(app.state, "cache_backend", None)),
         approval_service=MCPApprovalService(app.state.mcp_repository),
+        creator_access_service=getattr(app.state, "creator_mcp_access_service", None),
     )
     app.state.governance_invalidation_service = GovernanceInvalidationService(
         redis_client=app.state.redis,
@@ -264,6 +265,16 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         mcp_registry_service=app.state.mcp_registry_service,
         mcp_governance_service=app.state.mcp_governance_service,
         prompt_registry_service=app.state.prompt_registry_service,
+        creator_model_access_service=getattr(app.state, "creator_model_access_service", None),
+        creator_prompt_access_service=getattr(
+            app.state, "creator_prompt_access_service", None
+        ),
+        creator_mcp_access_service=getattr(
+            app.state, "creator_mcp_access_service", None
+        ),
+        creator_route_group_access_service=getattr(
+            app.state, "creator_route_group_access_service", None
+        ),
         route_group_reload=getattr(
             getattr(app.state, "model_hot_reload_manager", None),
             "reload_route_groups",

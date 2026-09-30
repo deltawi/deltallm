@@ -31,6 +31,8 @@ type Pagination = {
 
 type ModelRow = {
   model_name?: string;
+  api_model_id?: string;
+  display_name?: string;
   mode?: string;
   model_info?: { mode?: string; rpm_limit?: number | null; tpm_limit?: number | null };
   provider?: string;
@@ -38,6 +40,12 @@ type ModelRow = {
   credential_source?: 'named' | 'inline' | string;
   deployment_id: string;
   healthy?: boolean;
+  access?: {
+    capabilities: {
+      write: boolean;
+      delete: boolean;
+    };
+  } | null;
 };
 
 export type ModelFilterValue = 'all' | 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
@@ -53,7 +61,8 @@ type Props = {
   activeFilter: ModelFilterValue;
   onFilterChange: (value: ModelFilterValue) => void;
   emptyMessage: string;
-  canManage: boolean;
+  canEdit: (row: ModelRow) => boolean;
+  canDelete: (row: ModelRow) => boolean;
   onView: (deploymentId: string) => void;
   onEdit: (deploymentId: string) => void;
   onDelete: (deploymentId: string) => void;
@@ -148,7 +157,8 @@ export default function ModelsMobileList({
   activeFilter,
   onFilterChange,
   emptyMessage,
-  canManage,
+  canEdit,
+  canDelete,
   onView,
   onEdit,
   onDelete,
@@ -231,7 +241,6 @@ export default function ModelsMobileList({
       window.removeEventListener('keydown', onKey);
       window.clearTimeout(focusTimer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actionSheetFor]);
 
   const sheetActions = useMemo(() => {
@@ -254,7 +263,7 @@ export default function ModelsMobileList({
         handleCopy(row.deployment_id);
       },
     });
-    if (canManage) {
+    if (canEdit(row)) {
       list.push({
         label: 'Edit',
         icon: Pencil,
@@ -263,6 +272,8 @@ export default function ModelsMobileList({
           onEdit(row.deployment_id);
         },
       });
+    }
+    if (canDelete(row)) {
       list.push({
         label: 'Delete',
         icon: Trash2,
@@ -275,7 +286,7 @@ export default function ModelsMobileList({
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actionSheetFor, canManage]);
+  }, [actionSheetFor, canDelete, canEdit]);
 
   return (
     <div className="relative">
@@ -371,20 +382,23 @@ export default function ModelsMobileList({
                     onView(model.deployment_id);
                   }
                 }}
-                aria-label={`View details for ${model.model_name || model.deployment_id}`}
+                aria-label={`View details for ${model.display_name || model.model_name || model.deployment_id}`}
               >
                 <div className="flex items-start gap-3">
                   <ProviderTile providerKey={providerKey} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <h3 className="font-semibold text-gray-900 text-sm truncate">
-                        {model.model_name || '(unnamed)'}
+                        {model.display_name || model.model_name || '(unnamed)'}
                       </h3>
                       <div
                         className={`w-2 h-2 rounded-full shrink-0 ${healthy ? 'bg-green-500' : 'bg-red-500'}`}
                         title={healthy ? 'Healthy' : 'Unhealthy'}
                         aria-label={healthy ? 'Healthy' : 'Unhealthy'}
                       />
+                    </div>
+                    <div className="truncate font-mono text-[10px] text-gray-400">
+                      {model.api_model_id || model.model_name}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${typeConfig.color}`}>
@@ -482,7 +496,7 @@ export default function ModelsMobileList({
           >
             <div className="px-3 pt-2 pb-3 border-b border-gray-100">
               <div id={sheetTitleId} className="text-sm font-semibold text-gray-900 truncate">
-                {actionSheetFor.model_name || '(unnamed)'}
+                {actionSheetFor.display_name || actionSheetFor.model_name || '(unnamed)'}
               </div>
               <div className="text-xs text-gray-500 font-mono mt-0.5 truncate">
                 {actionSheetFor.deployment_id}

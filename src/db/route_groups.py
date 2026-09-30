@@ -83,6 +83,7 @@ def _extract_default_prompt(metadata: dict[str, Any] | None) -> dict[str, str] |
 class RouteGroupRecord:
     route_group_id: str
     group_key: str
+    managed_asset_id: str | None = None
     name: str | None = None
     mode: str = "chat"
     routing_strategy: str | None = None
@@ -176,9 +177,16 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             raise RuntimeError(f"{operation} requires transaction support")
 
     async def list_groups(
-        self, *, search: str | None = None, limit: int = 100, offset: int = 0
+        self,
+        *,
+        search: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        managed_asset_ids: list[str] | None = None,
     ) -> tuple[list[RouteGroupRecord], int]:
         if self.prisma is None:
+            return [], 0
+        if managed_asset_ids is not None and not managed_asset_ids:
             return [], 0
 
         clauses: list[str] = []
@@ -188,6 +196,17 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             clauses.append(
                 f"(group_key ILIKE ${len(params)} OR COALESCE(name, '') ILIKE ${len(params)})"
             )
+        if managed_asset_ids is not None:
+            normalized_ids = [
+                str(item).strip() for item in managed_asset_ids if str(item).strip()
+            ]
+            if not normalized_ids:
+                return [], 0
+            placeholders: list[str] = []
+            for asset_id in normalized_ids:
+                params.append(asset_id)
+                placeholders.append(f"${len(params)}")
+            clauses.append(f"managed_asset_id IN ({', '.join(placeholders)})")
 
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         count_rows = await self.prisma.query_raw(
@@ -202,6 +221,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             SELECT
                 g.route_group_id,
                 g.group_key,
+                g.managed_asset_id,
                 g.name,
                 g.mode,
                 g.routing_strategy,
@@ -235,6 +255,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             SELECT
                 g.route_group_id,
                 g.group_key,
+                g.managed_asset_id,
                 g.name,
                 g.mode,
                 g.routing_strategy,
@@ -256,6 +277,88 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         if not rows:
             return None
         return self._to_group_record(rows[0])
+
+    async def list_by_managed_asset_ids(
+        self,
+        managed_asset_ids: list[str],
+    ) -> list[RouteGroupRecord]:
+        if self.prisma is None or not managed_asset_ids:
+            return []
+        normalized_ids = [str(item).strip() for item in managed_asset_ids if str(item).strip()]
+        if not normalized_ids:
+            return []
+        placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
+        rows = await self.prisma.query_raw(
+            f"""
+            SELECT
+                g.route_group_id,
+                g.group_key,
+                g.managed_asset_id,
+                g.name,
+                g.mode,
+                g.routing_strategy,
+                g.enabled,
+                g.metadata,
+                g.created_at,
+                g.updated_at,
+                0::int AS member_count
+            FROM deltallm_routegroup g
+            WHERE g.managed_asset_id IN ({placeholders})
+            ORDER BY g.group_key ASC
+            """,
+            *normalized_ids,
+        )
+        return [self._to_group_record(row) for row in rows]
+
+    async def list_member_model_names_by_group_ids(
+        self,
+        route_group_ids: list[str],
+    ) -> dict[str, frozenset[str]]:
+        if self.prisma is None or not route_group_ids:
+            return {}
+        normalized_ids = [str(item).strip() for item in route_group_ids if str(item).strip()]
+        if not normalized_ids:
+            return {}
+        placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
+        classifier_placeholders = ", ".join(
+            f"${index}"
+            for index in range(len(normalized_ids) + 1, (len(normalized_ids) * 2) + 1)
+        )
+        rows = await self.prisma.query_raw(
+            f"""
+            SELECT dependency.route_group_id, d.model_name
+            FROM (
+                SELECT m.route_group_id, m.deployment_id
+                FROM deltallm_routegroupmember m
+                WHERE m.route_group_id IN ({placeholders})
+                  AND m.enabled = TRUE
+
+                UNION
+
+                SELECT p.route_group_id,
+                       p.policy_json #>> '{{selector,classifier_deployment_id}}' AS deployment_id
+                FROM deltallm_routepolicy p
+                WHERE p.route_group_id IN ({classifier_placeholders})
+                  AND p.status = 'published'
+                  AND NULLIF(
+                      p.policy_json #>> '{{selector,classifier_deployment_id}}',
+                      ''
+                  ) IS NOT NULL
+            ) dependency
+            JOIN deltallm_modeldeployment d
+              ON d.deployment_id = dependency.deployment_id
+            ORDER BY dependency.route_group_id ASC, d.model_name ASC
+            """,
+            *normalized_ids,
+            *normalized_ids,
+        )
+        names: dict[str, set[str]] = {group_id: set() for group_id in normalized_ids}
+        for row in rows:
+            group_id = str(row.get("route_group_id") or "")
+            model_name = str(row.get("model_name") or "")
+            if group_id and model_name:
+                names.setdefault(group_id, set()).add(model_name)
+        return {group_id: frozenset(values) for group_id, values in names.items()}
 
     async def get_default_prompt(self, group_key: str) -> dict[str, str] | None:
         if self.prisma is None:
@@ -288,11 +391,14 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         routing_strategy: str | None,
         enabled: bool,
         metadata: dict[str, Any] | None,
+        route_group_id: str | None = None,
+        managed_asset_id: str | None = None,
     ) -> RouteGroupRecord:
         if self.prisma is None:
             return RouteGroupRecord(
-                route_group_id="",
+                route_group_id=route_group_id or "",
                 group_key=group_key,
+                managed_asset_id=managed_asset_id,
                 name=name,
                 mode=mode,
                 routing_strategy=routing_strategy,
@@ -309,15 +415,19 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                     routing_strategy=routing_strategy,
                     enabled=enabled,
                     metadata=metadata,
+                    route_group_id=route_group_id,
+                    managed_asset_id=managed_asset_id,
                 )
 
         rows = await self.prisma.query_raw(
             """
-            INSERT INTO deltallm_routegroup (route_group_id, group_key, name, mode, routing_strategy, enabled, metadata, created_at, updated_at)
-            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::jsonb, NOW(), NOW())
-            RETURNING route_group_id, group_key, name, mode, routing_strategy, enabled, metadata, created_at, updated_at, 0::int AS member_count
+            INSERT INTO deltallm_routegroup (route_group_id, group_key, managed_asset_id, name, mode, routing_strategy, enabled, metadata, created_at, updated_at)
+            VALUES (COALESCE($1, gen_random_uuid()::text), $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), NOW())
+            RETURNING route_group_id, group_key, managed_asset_id, name, mode, routing_strategy, enabled, metadata, created_at, updated_at, 0::int AS member_count
             """,
+            route_group_id,
             group_key,
+            managed_asset_id,
             name,
             mode,
             routing_strategy,
@@ -366,7 +476,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                 metadata = $6::jsonb,
                 updated_at = NOW()
             WHERE route_group_id = $1
-            RETURNING route_group_id, group_key, name, mode, routing_strategy, enabled, metadata, created_at, updated_at,
+            RETURNING route_group_id, group_key, managed_asset_id, name, mode, routing_strategy, enabled, metadata, created_at, updated_at,
                 (
                     SELECT COUNT(*)::int
                     FROM deltallm_routegroupmember m
@@ -687,6 +797,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
                 runtime.route_groups_initialized,
                 g.route_group_id,
                 g.group_key,
+                g.managed_asset_id,
                 g.mode,
                 g.enabled,
                 g.routing_strategy,
@@ -786,6 +897,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             runtime_groups.append(
                 {
                     "key": str(row.get("group_key") or ""),
+                    "managed_asset_id": str(row.get("managed_asset_id") or "") or None,
                     "mode": str(row.get("mode") or "chat"),
                     "enabled": bool(row.get("enabled", True)),
                     "strategy": strategy if isinstance(strategy, str) and strategy else None,
@@ -905,6 +1017,11 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         return RouteGroupRecord(
             route_group_id=str(row.get("route_group_id") or ""),
             group_key=str(row.get("group_key") or ""),
+            managed_asset_id=(
+                str(row.get("managed_asset_id"))
+                if row.get("managed_asset_id") is not None
+                else None
+            ),
             name=row.get("name"),
             mode=str(row.get("mode") or "chat"),
             routing_strategy=row.get("routing_strategy"),

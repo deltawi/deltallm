@@ -2,13 +2,25 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowRightLeft, KeyRound, Link2, Pencil, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
+import NamedCredentialCreateDialog from '../components/NamedCredentialCreateDialog';
 import NamedCredentialForm from '../components/NamedCredentialForm';
+import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import DataTable from '../components/DataTable';
-import { models, namedCredentials, type InlineCredentialGroup, type NamedCredential } from '../lib/api';
+import {
+  models,
+  namedCredentials,
+  type InlineCredentialGroup,
+  type ManagedAssetAccessInput,
+  type NamedCredential,
+} from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { isPlatformAdminSession } from '../lib/authorization';
 import { customUpstreamAuthHeaderLabel, providerDisplayName, supportsCustomUpstreamAuthProvider } from '../lib/providers';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
+import { matchingNamedCredentialDetail } from '../lib/namedCredentialEditing';
 
 function connectionSummary(credential: NamedCredential): string {
   const config = credential.connection_config || {};
@@ -33,6 +45,12 @@ function errorMessage(error: unknown, fallback: string): string {
 
 export default function NamedCredentials() {
   const { pushToast } = useToast();
+  const { session, authMode } = useAuth();
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions, loading: audiencesLoading, error: audiencesError, refetch: refetchAudiences } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
   const [providerFilter, setProviderFilter] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
@@ -52,12 +70,21 @@ export default function NamedCredentials() {
     [providerFilter],
   );
   const { data: inlineReportResponse, refetch: refetchInlineReport } = useApi(
-    () => namedCredentials.inlineReport(),
-    [],
+    () => (isPlatformAdmin ? namedCredentials.inlineReport() : Promise.resolve({ data: [] })),
+    [isPlatformAdmin],
   );
-  const { data: editingDetail } = useApi(
+  const {
+    data: editingDetail,
+    error: editingDetailError,
+    loading: editingDetailLoading,
+    refetch: refetchEditingDetail,
+  } = useApi(
     () => (editingCredential ? namedCredentials.get(editingCredential.credential_id) : Promise.resolve(null)),
     [editingCredential?.credential_id],
+  );
+  const matchingEditingDetail = matchingNamedCredentialDetail(
+    editingCredential,
+    editingDetail,
   );
 
   useEffect(() => {
@@ -82,28 +109,21 @@ export default function NamedCredentials() {
 
   const usageCount = filteredItems.reduce((total, item) => total + Number(item.usage_count || 0), 0);
 
-  const handleCreate = async (payload: { name: string; provider: string; connection_config: Record<string, unknown> }) => {
-    setSaving(true);
-    setFormError(null);
-    try {
-      await namedCredentials.create(payload);
-      pushToast({ tone: 'success', title: 'Credential created', message: `"${payload.name}" is ready to use.` });
-      setCreateOpen(false);
-      refetch();
-      refetchInlineReport();
-    } catch (error: unknown) {
-      setFormError(errorMessage(error, 'Failed to create named credential.'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleUpdate = async (payload: { name: string; provider: string; connection_config: Record<string, unknown> }) => {
+  const handleUpdate = async (payload: {
+    name: string;
+    provider: string;
+    connection_config: Record<string, unknown>;
+    access: ManagedAssetAccessInput;
+  }) => {
     if (!editingCredential) return;
     setSaving(true);
     setFormError(null);
     try {
-      const result = await namedCredentials.update(editingCredential.credential_id, payload);
+      const result = await namedCredentials.update(editingCredential.credential_id, {
+        name: payload.name,
+        provider: payload.provider,
+        connection_config: payload.connection_config,
+      });
       const warnings = result.warnings || [];
       pushToast({
         tone: warnings.length > 0 ? 'info' : 'success',
@@ -178,6 +198,19 @@ export default function NamedCredentials() {
   const columns = [
     { key: 'name', header: 'Name', render: (row: NamedCredential) => <span className="font-medium">{row.name}</span> },
     { key: 'provider', header: 'Provider', render: (row: NamedCredential) => providerDisplayName(row.provider) },
+    {
+      key: 'visibility',
+      header: 'Access',
+      render: (row: NamedCredential) => (
+        row.access ? (
+          <ManagedAssetAccessSummary
+            access={row.access}
+            teamOptions={teamOptions}
+            organizationOptions={organizationOptions}
+          />
+        ) : <span className="text-xs text-gray-500">Private</span>
+      ),
+    },
     { key: 'connection', header: 'Connection', render: (row: NamedCredential) => <span className="text-xs text-gray-600">{connectionSummary(row)}</span> },
     {
       key: 'credentials_present',
@@ -204,17 +237,21 @@ export default function NamedCredentials() {
       header: '',
       render: (row: NamedCredential) => (
         <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
-          <button onClick={() => { setFormError(null); setEditingCredential(row); }} className="rounded-lg p-1.5 hover:bg-gray-100">
-            <Pencil className="h-4 w-4 text-gray-500" />
-          </button>
-          <button
-            onClick={() => setDeleteTarget(row)}
-            disabled={Boolean(row.usage_count)}
-            className="rounded-lg p-1.5 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-            title={row.usage_count ? 'Credential is still linked to model deployments' : 'Delete credential'}
-          >
-            <Trash2 className="h-4 w-4 text-red-500" />
-          </button>
+          {row.access?.capabilities.write || isPlatformAdmin ? (
+            <button onClick={() => { setFormError(null); setEditingCredential(row); }} className="rounded-lg p-1.5 hover:bg-gray-100">
+              <Pencil className="h-4 w-4 text-gray-500" />
+            </button>
+          ) : null}
+          {row.access?.capabilities.delete || isPlatformAdmin ? (
+            <button
+              onClick={() => setDeleteTarget(row)}
+              disabled={Boolean(row.usage_count)}
+              className="rounded-lg p-1.5 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+              title={row.usage_count ? 'Credential is still linked to model deployments' : 'Delete credential'}
+            >
+              <Trash2 className="h-4 w-4 text-red-500" />
+            </button>
+          ) : null}
         </div>
       ),
     },
@@ -229,7 +266,7 @@ export default function NamedCredentials() {
       action={(
         <button
           type="button"
-          onClick={() => { setFormError(null); setCreateOpen(true); }}
+          onClick={() => setCreateOpen(true)}
           className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" />
@@ -273,11 +310,16 @@ export default function NamedCredentials() {
           data={filteredItems}
           loading={loading}
           emptyMessage="No named credentials configured"
-          onRowClick={(row) => { setFormError(null); setEditingCredential(row); }}
+          onRowClick={(row) => {
+            if (row.access?.capabilities.write || isPlatformAdmin) {
+              setFormError(null);
+              setEditingCredential(row);
+            }
+          }}
         />
       </ContentCard>
 
-      <div className="mt-6">
+      {isPlatformAdmin ? <div className="mt-6">
         <ContentCard>
           <div className="border-b border-gray-200 px-4 py-3">
             <h2 className="text-sm font-semibold text-gray-900">Inline Credential Conversion</h2>
@@ -321,33 +363,66 @@ export default function NamedCredentials() {
             emptyMessage="No inline credential groups available for conversion"
           />
         </ContentCard>
-      </div>
+      </div> : null}
 
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create Named Credential" wide>
-        <NamedCredentialForm
-          providerPresets={providerPresets}
-          saving={saving}
-          error={formError}
-          onSave={handleCreate}
-          onCancel={() => setCreateOpen(false)}
-        />
-      </Modal>
+      <NamedCredentialCreateDialog
+        open={createOpen}
+        providerPresets={providerPresets}
+        teamOptions={teamOptions}
+        organizationOptions={organizationOptions}
+        allowPublic={isPlatformAdmin}
+        audiencesLoading={audiencesLoading}
+        audiencesError={audiencesError}
+        onRetryAudiences={refetchAudiences}
+        onClose={() => setCreateOpen(false)}
+        onCreated={() => {
+          refetch();
+          refetchInlineReport();
+        }}
+      />
 
       <Modal open={editingCredential !== null} onClose={() => setEditingCredential(null)} title="Edit Named Credential" wide>
         <div className="space-y-5">
-          <NamedCredentialForm
-            initialCredential={editingDetail || editingCredential}
-            providerPresets={providerPresets}
-            saving={saving}
-            error={formError}
-            onSave={handleUpdate}
-            onCancel={() => setEditingCredential(null)}
-          />
-          {editingDetail?.linked_deployments && editingDetail.linked_deployments.length > 0 ? (
+          {!matchingEditingDetail && editingDetailLoading ? (
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+              Loading credential settings…
+            </div>
+          ) : null}
+          {!matchingEditingDetail && editingDetailError ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              <p>{errorMessage(editingDetailError, 'Failed to load named credential settings.')}</p>
+              <button
+                type="button"
+                onClick={refetchEditingDetail}
+                className="mt-3 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium hover:bg-red-100"
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
+          {matchingEditingDetail ? (
+            <NamedCredentialForm
+              key={matchingEditingDetail.credential_id}
+              initialCredential={matchingEditingDetail}
+              providerPresets={providerPresets}
+              saving={saving}
+              error={formError}
+              teamOptions={teamOptions}
+              organizationOptions={organizationOptions}
+              allowPublic={isPlatformAdmin}
+              audiencesLoading={audiencesLoading}
+              audiencesError={audiencesError}
+              onRetryAudiences={refetchAudiences}
+              onSave={handleUpdate}
+              onAccessSaved={() => Promise.all([refetch(), refetchEditingDetail()]).then(() => undefined)}
+              onCancel={() => setEditingCredential(null)}
+            />
+          ) : null}
+          {matchingEditingDetail?.linked_deployments && matchingEditingDetail.linked_deployments.length > 0 ? (
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
               <h3 className="mb-2 text-sm font-semibold text-gray-900">Linked Deployments</h3>
               <div className="space-y-1 text-sm text-gray-600">
-                {editingDetail.linked_deployments.map((deployment) => (
+                {matchingEditingDetail.linked_deployments.map((deployment) => (
                   <div key={deployment.deployment_id} className="flex items-center justify-between gap-3">
                     <span>{deployment.model_name}</span>
                     <code className="rounded bg-white px-2 py-0.5 text-xs text-gray-500">{deployment.deployment_id}</code>

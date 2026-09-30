@@ -8,6 +8,7 @@ from typing import Any, TypeVar
 
 from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
+from src.services.creator_mcp_access import CreatorMCPAccessService
 from src.services.runtime_scopes import resolve_runtime_scope_context
 
 from .approvals import MCPApprovalService
@@ -56,6 +57,7 @@ class MCPGatewayService:
         result_cache: MCPToolResultCache | None = None,
         approval_service: MCPApprovalService | None = None,
         governance_service: MCPGovernanceService | None = None,
+        creator_access_service: CreatorMCPAccessService | None = None,
     ) -> None:
         self.registry = registry
         self.transport_client = transport_client
@@ -63,6 +65,7 @@ class MCPGatewayService:
         self.result_cache = result_cache
         self.approval_service = approval_service
         self.governance_service = governance_service
+        self.creator_access_service = creator_access_service
 
     async def list_visible_tools(self, auth: UserAPIKeyAuth) -> list[NamespacedTool]:
         started = perf_counter()
@@ -326,8 +329,27 @@ class MCPGatewayService:
                 self._select_binding(server_bindings, scope_order=scope_context.scope_chain)
                 for server_bindings in grouped.values()
             ]
+        creator_snapshot = (
+            self.creator_access_service.snapshot()
+            if self.creator_access_service is not None
+            else None
+        )
+        creator_server_ids = (
+            creator_snapshot.server_ids if creator_snapshot is not None else frozenset()
+        )
+        visible_creator_server_ids = (
+            creator_snapshot.visible_server_ids(auth)
+            if creator_snapshot is not None
+            else frozenset()
+        )
+        bound_server_ids = {binding.server_id for binding in resolved_bindings}
         for binding in resolved_bindings:
             server_id = binding.server_id
+            if (
+                server_id in creator_server_ids
+                and server_id not in visible_creator_server_ids
+            ):
+                continue
             server = (
                 self.governance_service.get_server(server_id)
                 if self.governance_service is not None
@@ -341,6 +363,31 @@ class MCPGatewayService:
                 scope_type=binding.scope_type,
                 scope_id=binding.scope_id,
                 allowed_tool_names=binding.allowed_tool_names,
+            )
+            filtered_tools = await self._filtered_tools_for_binding(auth, server, binding)
+            if not filtered_tools:
+                continue
+            visible_servers.append(
+                VisibleMCPServer(
+                    server=server,
+                    binding=binding,
+                    tool_names=tuple(tool.original_name for tool in filtered_tools),
+                )
+            )
+        for server_id in sorted(visible_creator_server_ids - bound_server_ids):
+            server = (
+                self.governance_service.get_server(server_id)
+                if self.governance_service is not None
+                else await self.registry.get_server(server_id)
+            )
+            if server is None or not server.enabled:
+                continue
+            binding = MCPBindingResolution(
+                server_id=server_id,
+                server_key=server.server_key,
+                scope_type="managed_asset",
+                scope_id=creator_snapshot.asset_id_by_server_id.get(server_id, server_id),
+                allowed_tool_names=None,
             )
             filtered_tools = await self._filtered_tools_for_binding(auth, server, binding)
             if not filtered_tools:

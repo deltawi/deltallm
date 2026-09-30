@@ -12,6 +12,9 @@ from src.router.failover import FallbackConfig, FailoverManager
 from src.router.registry import DeploymentRegistryStore
 from src.router.router import Router, RouterConfig, RoutingStrategy
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
+from src.services.creator_model_access import CreatorModelAccessSnapshot
+from src.services.creator_prompt_access import CreatorPromptAccessSnapshot
+from src.services.creator_route_group_access import CreatorRouteGroupAccessSnapshot
 from src.router.routing_identity import build_runtime_routing_fingerprints
 from src.router.selection.qualification import QualifiedSelector, qualify_selector_groups
 from src.router.selection.reachability import selector_reachable_groups
@@ -28,6 +31,9 @@ class RoutingRuntimeGeneration:
     route_groups: tuple[dict[str, Any], ...]
     callable_target_catalog: Mapping[str, Any]
     authorization_snapshot: CallableTargetGrantSnapshot
+    creator_model_access_snapshot: CreatorModelAccessSnapshot
+    creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot
+    creator_prompt_access_snapshot: CreatorPromptAccessSnapshot
     deployment_registry: DeploymentRegistryStore
     strategy: RoutingStrategy
     router_config: RouterConfig
@@ -52,6 +58,9 @@ class RoutingRuntimeGeneration:
         route_groups: list[dict[str, Any]],
         callable_target_catalog: Mapping[str, Any],
         authorization_snapshot: CallableTargetGrantSnapshot | None = None,
+        creator_model_access_snapshot: CreatorModelAccessSnapshot | None = None,
+        creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot | None = None,
+        creator_prompt_access_snapshot: CreatorPromptAccessSnapshot | None = None,
         deployment_registry: DeploymentRegistryStore,
         strategy: RoutingStrategy,
         router_config: RouterConfig,
@@ -80,6 +89,15 @@ class RoutingRuntimeGeneration:
             route_groups=tuple(route_groups),
             callable_target_catalog=MappingProxyType(dict(callable_target_catalog)),
             authorization_snapshot=authorization_snapshot or CallableTargetGrantSnapshot.empty(),
+            creator_model_access_snapshot=(
+                creator_model_access_snapshot or CreatorModelAccessSnapshot.empty()
+            ),
+            creator_route_group_access_snapshot=(
+                creator_route_group_access_snapshot or CreatorRouteGroupAccessSnapshot.empty()
+            ),
+            creator_prompt_access_snapshot=(
+                creator_prompt_access_snapshot or CreatorPromptAccessSnapshot.empty()
+            ),
             deployment_registry=deployment_registry,
             strategy=strategy,
             router_config=router_config,
@@ -203,6 +221,45 @@ def with_authorization_snapshot(
     )
 
 
+def with_creator_model_access_snapshot(
+    generation: RoutingRuntimeGeneration,
+    snapshot: CreatorModelAccessSnapshot,
+) -> RoutingRuntimeGeneration:
+    """Return a new generation identity with refreshed creator-model authorization."""
+
+    return replace(
+        generation,
+        generation_id=uuid4().hex,
+        creator_model_access_snapshot=snapshot,
+    )
+
+
+def with_creator_prompt_access_snapshot(
+    generation: RoutingRuntimeGeneration,
+    snapshot: CreatorPromptAccessSnapshot,
+) -> RoutingRuntimeGeneration:
+    """Return a new generation identity with refreshed creator-prompt authorization."""
+
+    return replace(
+        generation,
+        generation_id=uuid4().hex,
+        creator_prompt_access_snapshot=snapshot,
+    )
+
+
+def with_creator_route_group_access_snapshot(
+    generation: RoutingRuntimeGeneration,
+    snapshot: CreatorRouteGroupAccessSnapshot,
+) -> RoutingRuntimeGeneration:
+    """Return a new generation identity with refreshed creator route-group authorization."""
+
+    return replace(
+        generation,
+        generation_id=uuid4().hex,
+        creator_route_group_access_snapshot=snapshot,
+    )
+
+
 def rebuild_routing_runtime_generation(
     current: RoutingRuntimeGeneration,
     *,
@@ -233,6 +290,9 @@ def rebuild_routing_runtime_generation(
         route_groups=route_groups,
         callable_target_catalog=callable_target_catalog,
         authorization_snapshot=current.authorization_snapshot,
+        creator_model_access_snapshot=current.creator_model_access_snapshot,
+        creator_route_group_access_snapshot=current.creator_route_group_access_snapshot,
+        creator_prompt_access_snapshot=current.creator_prompt_access_snapshot,
         deployment_registry=deployment_registry,
         strategy=current.strategy,
         router_config=current.router_config,

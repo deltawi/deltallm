@@ -16,11 +16,12 @@ import {
   Terminal,
   Trash2,
   TrendingUp,
+  Unplug,
   Zap,
 } from 'lucide-react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
-import { resolveUiAccess } from '../lib/authorization';
+import { isPlatformAdminSession } from '../lib/authorization';
 import { ApiError, models, type DeploymentHealth, type ModelDeploymentDetail } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
@@ -30,6 +31,8 @@ import { useBranding } from '../lib/brandingContext';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
+import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -221,12 +224,15 @@ function OverviewTab({ model }: { model: ModelDeploymentDetail }) {
   const customAuthSummary = connectionSummary.custom_auth_label || connectionSummary.auth_header_name || null;
   const credentialSource = model.credential_source === 'named' ? 'Named credential' : 'Inline credentials';
   const credentialDetail = model.credential_source === 'named'
-    ? (model.named_credential_name || 'Managed by named credential')
+    ? (model.credential_binding?.state === 'revoked'
+      ? 'Credential binding revoked — replacement required'
+      : (model.named_credential_name || 'Managed by named credential'))
     : (model.inline_credentials_present ? 'Stored inline credential' : 'No inline credential configured');
 
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Public Model Name"    value={model.model_name} />
+      <Field label="Model Name"           value={model.display_name || model.model_name} />
+      <Field label="API Model ID"         value={model.api_model_id || model.model_name} mono />
       <Field label="Deployment ID"        value={model.deployment_id} mono />
       <Field label="Provider"             value={<ProviderPill provider={model.provider} />} />
       <Field label="Provider Model"       value={lp.model || '—'} mono />
@@ -493,11 +499,21 @@ export default function ModelDetail() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const { session, authMode } = useAuth();
-  const canEdit = resolveUiAccess(authMode, session).model_admin;
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
 
   const { data: model, loading, refetch } = useApi(
     (signal) => models.get(deploymentId!, signal),
     [deploymentId],
+  );
+  const canEdit = isPlatformAdmin || Boolean(model?.access?.capabilities.write);
+  const canDelete = isPlatformAdmin || Boolean(model?.access?.capabilities.delete);
+  const canRevokeCredential = Boolean(
+    model?.credential_binding?.state === 'active'
+    && model.credential_binding.can_revoke,
   );
 
   const [activeTab, setActiveTab] = useState<TabId>('overview');
@@ -506,6 +522,8 @@ export default function ModelDetail() {
   const [healthActionError, setHealthActionError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [revokeCredentialOpen, setRevokeCredentialOpen] = useState(false);
+  const [revokingCredential, setRevokingCredential] = useState(false);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -545,6 +563,32 @@ export default function ModelDetail() {
       }
     } finally {
       setCheckingHealth(false);
+    }
+  };
+
+  const handleRevokeCredential = async () => {
+    setRevokingCredential(true);
+    try {
+      const result = await models.revokeCredentialBinding(deploymentId!);
+      const outcome = mutationOutcome(
+        'Credential access was revoked. This deployment will not route until an editor chooses a replacement.',
+        result.warnings,
+      );
+      pushToast({
+        tone: outcome.tone,
+        title: outcome.tone === 'info' ? 'Credential revoked with warning' : 'Credential revoked',
+        message: outcome.message,
+      });
+      setRevokeCredentialOpen(false);
+      refetch();
+    } catch (err: unknown) {
+      pushToast({
+        tone: 'error',
+        title: 'Credential revoke failed',
+        message: err instanceof Error ? err.message : 'Failed to revoke credential access',
+      });
+    } finally {
+      setRevokingCredential(false);
     }
   };
 
@@ -626,7 +670,8 @@ export default function ModelDetail() {
 
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <h1 className="break-words text-2xl font-bold text-gray-900">{model.model_name}</h1>
+                <h1 className="break-words text-2xl font-bold text-gray-900">{model.display_name || model.model_name}</h1>
+                <code className="mt-1 block break-all text-xs text-gray-400">{model.api_model_id || model.model_name}</code>
                 {lp.model && (
                   <p className="mt-0.5 text-sm text-gray-500">
                     Routes to{' '}
@@ -638,9 +683,30 @@ export default function ModelDetail() {
                     )}
                   </p>
                 )}
+                {model.access?.governance_source === 'creator' ? (
+                  <ManagedAssetAccessSummary
+                    access={model.access}
+                    teamOptions={teamOptions}
+                    organizationOptions={organizationOptions}
+                    className="mt-2"
+                  />
+                ) : model.access?.governance_source === 'platform' ? (
+                  <span className="mt-2 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                    Tier managed
+                  </span>
+                ) : null}
               </div>
 
               <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {canRevokeCredential ? (
+                  <button
+                    type="button"
+                    onClick={() => setRevokeCredentialOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition hover:bg-amber-50"
+                  >
+                    <Unplug className="h-4 w-4" /> Revoke Credential
+                  </button>
+                ) : null}
                 {canEdit && (
                   <button
                     type="button"
@@ -652,14 +718,15 @@ export default function ModelDetail() {
                     Check Health
                   </button>
                 )}
-                {canEdit && (
-                  <>
-                    <button
-                      onClick={() => navigate(modelEditPath(deploymentId!))}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary shadow-sm transition hover:bg-brand-primary-hover"
-                    >
-                      <Pencil className="h-4 w-4" /> Edit
-                    </button>
+                {canEdit ? (
+                  <button
+                    onClick={() => navigate(modelEditPath(deploymentId!))}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary shadow-sm transition hover:bg-brand-primary-hover"
+                  >
+                    <Pencil className="h-4 w-4" /> Edit
+                  </button>
+                ) : null}
+                {canDelete ? (
                     <button
                       aria-label="Delete model deployment"
                       onClick={() => setDeleteOpen(true)}
@@ -667,8 +734,7 @@ export default function ModelDetail() {
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
-                  </>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -732,15 +798,25 @@ export default function ModelDetail() {
             {activeTab === 'runtime' && <RuntimeTab model={model} />}
             {activeTab === 'routing' && <RoutingTab model={model} />}
             {activeTab === 'costs' && <CostsTab model={model} />}
-            {activeTab === 'usage' && <UsageTab modelName={model.model_name} mode={mode} />}
+            {activeTab === 'usage' && <UsageTab modelName={model.api_model_id || model.model_name} mode={mode} />}
           </PanelCard>
         </>
       )}
       />
       <ConfirmDialog
+        open={revokeCredentialOpen}
+        title="Revoke credential from this model"
+        description={`Stop "${model.display_name || model.model_name}" from using this credential? The model will remain visible, but requests will stop until an editor selects a replacement credential.`}
+        confirmLabel="Revoke Credential"
+        destructive
+        confirming={revokingCredential}
+        onConfirm={handleRevokeCredential}
+        onClose={() => { if (!revokingCredential) setRevokeCredentialOpen(false); }}
+      />
+      <ConfirmDialog
         open={deleteOpen}
         title="Delete model deployment"
-        description={`Delete "${model.model_name}"? This cannot be undone.`}
+        description={`Delete "${model.display_name || model.model_name}"? This cannot be undone.`}
         confirmLabel="Delete Model"
         destructive
         confirming={deleting}

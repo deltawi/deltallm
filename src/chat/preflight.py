@@ -106,6 +106,9 @@ async def run_text_preflight(
                 client_ip=request_client_ip(request),
                 user_agent=request.headers.get("user-agent"),
                 scope_context=getattr(request.state, "runtime_scope_context", None),
+                creator_prompt_access_snapshot=(
+                    routing_runtime.creator_prompt_access_snapshot
+                ),
             )
         except ValueError as exc:
             _observe_preflight_phase(
@@ -190,6 +193,10 @@ async def run_text_preflight(
                 request.app.state, "callable_target_grant_service", None
             ),
             callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
+            creator_model_access_snapshot=routing_runtime.creator_model_access_snapshot,
+            creator_route_group_access_snapshot=(
+                routing_runtime.creator_route_group_access_snapshot
+            ),
             tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
             policy_mode=get_callable_target_policy_mode_from_app(request.app),
             tier_policy_mode=get_tier_policy_mode_from_app(request.app),

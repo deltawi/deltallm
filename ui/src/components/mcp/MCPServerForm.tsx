@@ -58,6 +58,7 @@ interface MCPServerFormProps {
   disableOwnerScopeId?: boolean;
   preserveExistingCredentials?: boolean;
   credentialsConfigured?: boolean;
+  showOwnerScope?: boolean;
 }
 
 export function buildMCPServerPayload(
@@ -152,11 +153,12 @@ export default function MCPServerForm({
   disableOwnerScopeId = false,
   preserveExistingCredentials = false,
   credentialsConfigured = false,
+  showOwnerScope = true,
 }: MCPServerFormProps) {
   const inputDisabledClass = 'disabled:bg-gray-50 disabled:text-gray-500';
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
+      {showOwnerScope ? <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Server Key *</label>
           <input
@@ -179,7 +181,7 @@ export default function MCPServerForm({
             className={`${inputClass} ${inputDisabledClass}`}
           />
         </div>
-      </div>
+      </div> : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div>

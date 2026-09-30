@@ -16,15 +16,19 @@ import {
   Zap,
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
+import ManagedAssetAccessFields from '../components/ManagedAssetAccessFields';
 import IndexShell from '../components/admin/shells/IndexShell';
-import { routeGroups } from '../lib/api';
-import type { RouteGroup } from '../lib/api';
-import { routeGroupMutationOutcome, ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
+import { managedAssetAccessInput, routeGroups } from '../lib/api';
+import type { ManagedAssetGrantInput, RouteGroup } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { isPlatformAdminSession } from '../lib/authorization';
+import { groupKeySuffixFromName, routeGroupMutationOutcome, ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
 import { useApi } from '../lib/hooks';
 import { routeGroupDetailPath } from '../lib/routeGroupRoutes';
 import { useRouteGroupMutationScope } from '../lib/useRouteGroupMutationScope';
 import { useToast } from '../components/ToastProvider';
 import { useBranding } from '../lib/brandingContext';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 /* ─── Mode chip ─────────────────────────────────────────────────────────── */
 const MODE_ICONS: Record<string, React.ElementType> = {
@@ -112,10 +116,38 @@ interface CreateDrawerProps {
   setFormError: React.Dispatch<React.SetStateAction<string | null>>;
   creating: boolean;
   onCreate: () => void;
+  grants: ManagedAssetGrantInput[];
+  teamOptions: Array<{ id: string; label: string }>;
+  organizationOptions: Array<{ id: string; label: string }>;
+  audiencesLoading: boolean;
+  audiencesError: string | null;
+  onRetryAudiences: () => void;
+  allowPublic: boolean;
+  useGeneratedPrefix: boolean;
+  onGrantsChange: (grants: ManagedAssetGrantInput[]) => void;
 }
 
-function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, creating, onCreate }: CreateDrawerProps) {
+function CreateDrawer({
+  open,
+  onClose,
+  form,
+  setForm,
+  formError,
+  setFormError,
+  creating,
+  onCreate,
+  grants,
+  teamOptions,
+  organizationOptions,
+  audiencesLoading,
+  audiencesError,
+  onRetryAudiences,
+  allowPublic,
+  useGeneratedPrefix,
+  onGrantsChange,
+}: CreateDrawerProps) {
   if (!open) return null;
+  const generatedKeyPreview = groupKeySuffixFromName(form.name) || 'group-name';
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className="flex-1 bg-black/20" onClick={onClose} />
@@ -141,30 +173,56 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
             </div>
           </div>
 
-          {/* Group key */}
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">
-              Group Key <span className="text-red-500">*</span>
-            </label>
-            <input
-              value={form.group_key}
-              onChange={(e) => {
-                setForm({ ...form, group_key: e.target.value });
-                if (formError) setFormError(null);
-              }}
-              placeholder="prod-chat-primary"
-              data-autofocus="true"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-            />
-            <p className="mt-1 text-xs text-gray-400">Stable key used by clients, policies, and bindings.</p>
-          </div>
-
-          {formError && (
-            <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>
+          {useGeneratedPrefix ? (
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Group Key <span className="text-red-500">*</span>
+              </label>
+              <div className="flex rounded-lg border border-gray-300 focus-within:ring-2 focus-within:ring-brand-primary">
+                <span className="flex items-center rounded-l-lg border-r border-gray-200 bg-gray-50 px-3 font-mono text-xs text-gray-500">
+                  grp-XXXX-
+                </span>
+                <input
+                  value={form.name}
+                  onChange={(e) => {
+                    setForm({ ...form, name: e.target.value });
+                    if (formError) setFormError(null);
+                  }}
+                  placeholder="Customer Support"
+                  maxLength={64}
+                  data-autofocus="true"
+                  className="min-w-0 flex-1 rounded-r-lg px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-400">
+                Your exact entry is also the display name. Generated key:{' '}
+                <code>grp-XXXX-{generatedKeyPreview}</code>
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Group Key <span className="text-red-500">*</span>
+              </label>
+              <input
+                value={form.group_key}
+                onChange={(e) => {
+                  setForm({ ...form, group_key: e.target.value });
+                  if (formError) setFormError(null);
+                }}
+                placeholder="prod-chat-primary"
+                data-autofocus="true"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              />
+              <p className="mt-1 text-xs text-gray-400">Stable key used by clients, policies, and bindings.</p>
+            </div>
           )}
 
-          {/* Workload type + display name */}
-          <div className="grid grid-cols-2 gap-3">
+          {formError && !formError.startsWith('Select a ') ? (
+            <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>
+          ) : null}
+
+          <div className={`grid gap-3 ${useGeneratedPrefix ? 'grid-cols-1' : 'grid-cols-2'}`}>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Workload Type</label>
               <select
@@ -177,15 +235,31 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
                 ))}
               </select>
             </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
-              <input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Production Chat"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-              />
-            </div>
+            {!useGeneratedPrefix ? (
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="Production Chat"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-4">
+            <ManagedAssetAccessFields
+              grants={grants}
+              teamOptions={teamOptions}
+              organizationOptions={organizationOptions}
+              allowPublic={allowPublic}
+              audiencesLoading={audiencesLoading}
+              audiencesError={audiencesError}
+              onRetryAudiences={onRetryAudiences}
+              error={formError?.startsWith('Select a ') ? formError : null}
+              onChange={onGrantsChange}
+            />
           </div>
         </div>
 
@@ -213,6 +287,12 @@ export default function RouteGroups() {
   const { branding } = useBranding();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const { session, authMode } = useAuth();
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions, loading: audiencesLoading, error: audiencesError, refetch: refetchAudiences } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
 
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
@@ -223,6 +303,7 @@ export default function RouteGroups() {
   const [deleteTarget, setDeleteTarget] = useState<RouteGroup | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [form, setForm] = useState({ group_key: '', name: '', mode: 'chat' });
+  const [grants, setGrants] = useState<ManagedAssetGrantInput[]>([]);
 
   const pageSize = 20;
   const { data: result, loading, refetch } = useApi(
@@ -238,12 +319,26 @@ export default function RouteGroups() {
     return () => window.clearTimeout(timer);
   }, [searchInput]);
 
-  const resetForm = () => setForm({ group_key: '', name: '', mode: 'chat' });
+  const resetForm = () => {
+    setForm({ group_key: '', name: '', mode: 'chat' });
+    setGrants([]);
+  };
 
   const handleCreate = async () => {
-    const groupKey = form.group_key.trim();
-    if (!groupKey) {
+    const name = form.name.trim();
+    const groupKey = isPlatformAdmin
+      ? form.group_key.trim()
+      : groupKeySuffixFromName(name);
+    if (isPlatformAdmin && !groupKey) {
       setFormError('Group key is required.');
+      return;
+    }
+    if (!isPlatformAdmin && !name) {
+      setFormError('Group name is required.');
+      return;
+    }
+    if (!isPlatformAdmin && !groupKey) {
+      setFormError('Group name must contain at least one letter or number.');
       return;
     }
     setFormError(null);
@@ -253,8 +348,9 @@ export default function RouteGroups() {
     try {
       const created = await routeGroups.create({
         group_key: groupKey,
-        name: form.name.trim() || null,
+        name: name || null,
         mode: form.mode,
+        access: managedAssetAccessInput(grants),
       }, operation.signal);
       if (!mutations.isCurrent(operation)) return;
       setCreateOpen(false);
@@ -356,6 +452,15 @@ export default function RouteGroups() {
         setFormError={setFormError}
         creating={creating}
         onCreate={handleCreate}
+        grants={grants}
+        teamOptions={teamOptions}
+        organizationOptions={organizationOptions}
+        audiencesLoading={audiencesLoading}
+        audiencesError={audiencesError}
+        onRetryAudiences={refetchAudiences}
+        allowPublic={isPlatformAdmin}
+        useGeneratedPrefix={!isPlatformAdmin}
+        onGrantsChange={(nextGrants) => { setGrants(nextGrants); if (formError) setFormError(null); }}
       />
       <div className="space-y-3">
         {result === null && !loading && (
@@ -413,6 +518,9 @@ export default function RouteGroups() {
                       paused
                     </span>
                   )}
+                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold capitalize text-slate-600">
+                    {g.access?.visibility || 'platform'}
+                  </span>
                 </div>
                 <code className="text-[11px] text-gray-400 font-mono">{g.group_key}</code>
               </div>
@@ -441,14 +549,16 @@ export default function RouteGroups() {
 
               {/* Actions */}
               <div className="flex items-center justify-end gap-1 opacity-0 transition group-hover:opacity-100">
-                <button
-                  onClick={(e) => { e.stopPropagation(); setDeleteTarget(g); }}
-                  disabled={deletingKey === g.route_group_id}
-                  className="rounded-lg p-1 hover:bg-red-50 disabled:opacity-40"
-                  title="Delete group"
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                </button>
+                {(!g.access || g.access.capabilities.delete) ? (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(g); }}
+                    disabled={deletingKey === g.route_group_id}
+                    className="rounded-lg p-1 hover:bg-red-50 disabled:opacity-40"
+                    title="Delete group"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                  </button>
+                ) : null}
                 <ArrowRight className="h-3.5 w-3.5 text-gray-300" />
               </div>
             </div>

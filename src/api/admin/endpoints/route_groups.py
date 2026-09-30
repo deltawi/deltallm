@@ -5,6 +5,7 @@ import logging
 from time import perf_counter
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from src.auth.roles import Permission
@@ -20,6 +21,7 @@ from src.api.admin.endpoints.common import (
     model_entries,
     to_json_value,
 )
+from src.api.admin.endpoints.models import scoped_model_entries_for_principal
 from src.api.admin.route_group_contracts import (
     RouteGroupDeleteResponse,
     RouteGroupMemberMutationResponse,
@@ -42,10 +44,11 @@ from src.api.admin.route_group_dependencies import (
     route_group_repository as _repository_or_503,
 )
 from src.db.prompt_registry import PromptRegistryRepository
+from src.db.managed_assets import ManagedAssetAccessRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.db.route_groups import RouteGroupRepository
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
-from src.middleware.admin import require_admin_permission
+from src.middleware.admin import require_admin_permission, require_authenticated
 from src.router.policy_validation import (
     PolicyMemberInventoryItem,
     validate_route_policy,
@@ -80,6 +83,31 @@ from src.services.route_policy_publication import (
 )
 from src.services.route_group_refresh import refresh_route_group_runtime
 from src.services.route_group_mutations import RouteGroupMutationService
+from src.services.creator_route_group_access import (
+    refresh_creator_route_group_access_for_app,
+)
+from src.services.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetKind,
+    AssetPrincipal,
+    GovernanceSource,
+    ManagedAsset,
+    resolve_asset_capabilities,
+    revise_asset_access,
+    serialize_asset_access,
+    validate_grant_subject_for_principal,
+    namespace_creator_callable_key,
+)
+from src.services.model_identity import (
+    creator_route_group_key,
+    generate_compact_asset_code,
+    normalize_route_group_slug,
+    suggested_route_group_slug,
+)
+from src.api.admin.endpoints.managed_assets import (
+    asset_principal_for_request,
+    parse_asset_access_input,
+)
 from src.services.selector_inventory import policy_deployment_inventory
 from src.services.route_groups import RouteGroupRuntimeCache
 
@@ -91,6 +119,7 @@ policy_router = APIRouter(
 logger = logging.getLogger(__name__)
 
 _ALLOWED_BINDING_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user"}
+_ROUTE_GROUP_KEY_GENERATION_ATTEMPTS = 8
 
 
 def _mutation_service(request: Request) -> RouteGroupMutationService:
@@ -110,7 +139,96 @@ def _mutation_service(request: Request) -> RouteGroupMutationService:
             None,
         ),
         model_registry_getter=lambda: getattr(request.app.state, "model_registry", None),
+        managed_assets=getattr(
+            request.app.state,
+            "managed_asset_access_repository",
+            None,
+        ),
     )
+
+
+async def _creator_route_group_key_or_400(
+    request: Request,
+    *,
+    principal: AssetPrincipal,
+    requested_key: str,
+    name: str | None,
+) -> str:
+    """Resolve a compact random creator key while preserving platform keys."""
+
+    if principal.is_platform_admin:
+        return namespace_creator_callable_key(requested_key, principal)
+
+    try:
+        group_slug = normalize_route_group_slug(suggested_route_group_slug(name or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    repository = _repository_or_503(request)
+    for _ in range(_ROUTE_GROUP_KEY_GENERATION_ATTEMPTS):
+        candidate = creator_route_group_key(generate_compact_asset_code(), group_slug)
+        if await repository.get_group(candidate) is None:
+            return candidate
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Could not allocate a unique group key. Try again.",
+    )
+
+
+def _access_repository(request: Request) -> ManagedAssetAccessRepository | None:
+    repository = getattr(request.app.state, "managed_asset_access_repository", None)
+    return repository if isinstance(repository, ManagedAssetAccessRepository) else repository
+
+
+def _access_repository_or_503(request: Request) -> ManagedAssetAccessRepository:
+    repository = _access_repository(request)
+    if repository is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Managed asset access repository unavailable",
+        )
+    return repository
+
+
+def _route_group_not_found() -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+
+
+async def authorize_route_group_for_request(
+    request: Request,
+    group: Any,
+    *,
+    write: bool = False,
+    delete: bool = False,
+) -> tuple[AssetPrincipal, AssetAccessPolicy | None]:
+    """Authorize one group without revealing inaccessible managed resources."""
+
+    principal = asset_principal_for_request(request)
+    managed_asset_id = str(getattr(group, "managed_asset_id", None) or "").strip()
+    if not managed_asset_id:
+        if principal.is_platform_admin:
+            return principal, None
+        raise _route_group_not_found()
+    policy = await _access_repository_or_503(request).get_policy_for_resource(
+        AssetKind.ROUTE_GROUP,
+        str(group.route_group_id),
+        principal=principal,
+    )
+    if policy is None:
+        if principal.is_platform_admin:
+            return principal, None
+        raise _route_group_not_found()
+    capabilities = resolve_asset_capabilities(policy, principal)
+    allowed = (
+        capabilities.can_delete
+        if delete
+        else capabilities.can_write
+        if write
+        else capabilities.can_read
+    )
+    if not allowed:
+        raise _route_group_not_found()
+    return principal, policy
 
 
 def _raise_route_policy_conflict(exc: RoutePolicyStateConflictError) -> None:
@@ -158,6 +276,63 @@ def _validate_member_modes(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+async def _ensure_deployment_reference_allowed(
+    request: Request,
+    deployment_id: str,
+    principal: AssetPrincipal,
+    *,
+    visible_deployment_ids: set[str] | None = None,
+) -> None:
+    """Reject model references the editor cannot independently read or invoke."""
+
+    if principal.is_platform_admin:
+        return
+    normalized_id = str(deployment_id or "").strip()
+    allowed_ids = visible_deployment_ids
+    if allowed_ids is None:
+        allowed_ids = {
+            str(entry.get("deployment_id") or "")
+            for entry in await scoped_model_entries_for_principal(request, principal)
+            if str(entry.get("deployment_id") or "")
+        }
+    if normalized_id not in allowed_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="deployment_id is invalid or inaccessible",
+        )
+
+
+async def _ensure_policy_references_allowed(
+    request: Request,
+    policy_document: dict[str, Any],
+    principal: AssetPrincipal,
+) -> None:
+    members = policy_document.get("members", [])
+    member_documents = members if isinstance(members, list) else []
+    deployment_ids = {
+        str(item.get("deployment_id") or "").strip()
+        for item in member_documents
+        if isinstance(item, dict) and str(item.get("deployment_id") or "").strip()
+    }
+    selector = policy_document.get("selector")
+    if isinstance(selector, dict):
+        classifier_id = str(selector.get("classifier_deployment_id") or "").strip()
+        if classifier_id:
+            deployment_ids.add(classifier_id)
+    visible_deployment_ids = {
+        str(entry.get("deployment_id") or "")
+        for entry in await scoped_model_entries_for_principal(request, principal)
+        if str(entry.get("deployment_id") or "")
+    }
+    for deployment_id in sorted(deployment_ids):
+        await _ensure_deployment_reference_allowed(
+            request,
+            deployment_id,
+            principal,
+            visible_deployment_ids=visible_deployment_ids,
+        )
 
 
 def _validate_strategy(value: Any | None, *, field_name: str = "strategy") -> str | None:
@@ -345,10 +520,17 @@ def _validate_scope_id(value: Any, *, field_name: str = "scope_id") -> str:
     return scope_id
 
 
-def _group_response_payload(group: Any) -> dict[str, Any]:
+def _group_response_payload(
+    group: Any,
+    *,
+    policy: AssetAccessPolicy | None = None,
+    principal: AssetPrincipal | None = None,
+) -> dict[str, Any]:
     payload = to_json_value(asdict(group))
     if isinstance(payload, dict):
         payload["metadata"] = public_metadata_without_owner_scope(payload.get("metadata"))
+        if policy is not None and principal is not None:
+            payload["access"] = serialize_asset_access(policy, principal)
     return payload
 
 
@@ -357,7 +539,10 @@ def _binding_response_payload(binding: Any) -> dict[str, Any]:
 
 
 async def _validate_default_prompt(
-    request: Request, value: Any
+    request: Request,
+    value: Any,
+    *,
+    principal: AssetPrincipal,
 ) -> tuple[bool, dict[str, str] | None]:
     if value is ...:
         return False, None
@@ -383,6 +568,17 @@ async def _validate_default_prompt(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="default_prompt.template_key does not exist",
             )
+        if not principal.is_platform_admin:
+            policy = await _access_repository_or_503(request).get_policy_for_resource(
+                AssetKind.PROMPT_TEMPLATE,
+                str(template.prompt_template_id),
+                principal=principal,
+            )
+            if policy is None or not resolve_asset_capabilities(policy, principal).can_read:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="default_prompt.template_key is invalid or inaccessible",
+                )
     payload: dict[str, str] = {"template_key": template_key}
     if label:
         payload["label"] = label
@@ -397,12 +593,17 @@ async def _resolve_group_metadata(
     raw_default_prompt: Any,
     raw_owner_scope_type: Any = ...,
     raw_owner_scope_id: Any = ...,
+    principal: AssetPrincipal,
 ) -> dict[str, Any] | None:
     metadata = dict(existing_metadata or {})
     raw_metadata_value = _validated_metadata(raw_metadata)
     if raw_metadata_value is not None:
         metadata.update(raw_metadata_value)
-    has_default_prompt, default_prompt = await _validate_default_prompt(request, raw_default_prompt)
+    has_default_prompt, default_prompt = await _validate_default_prompt(
+        request,
+        raw_default_prompt,
+        principal=principal,
+    )
     if has_default_prompt:
         if default_prompt is None:
             metadata.pop("default_prompt", None)
@@ -476,6 +677,18 @@ async def _publish_route_group_policy_response(
     latest_draft: bool,
 ) -> dict[str, Any]:
     request_start = perf_counter()
+    repository = _repository_or_503(request)
+    group = await repository.get_group(group_key)
+    if group is None:
+        raise _route_group_not_found()
+    principal, _ = await authorize_route_group_for_request(request, group, write=True)
+    reference_document = payload
+    if latest_draft:
+        policies = await repository.list_policies(group_key)
+        draft = next((item for item in policies if item.status == "draft"), None)
+        if draft is not None:
+            reference_document = draft.policy_json
+    await _ensure_policy_references_allowed(request, reference_document, principal)
     service = _policy_publication_service(request)
     try:
         if latest_draft:
@@ -493,10 +706,17 @@ async def _publish_route_group_policy_response(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    access_warnings: tuple[str, ...] = ()
+    if group.managed_asset_id:
+        access_warnings = await refresh_creator_route_group_access_for_app(
+            request.app,
+            fail_closed_asset_id=group.managed_asset_id,
+            fail_closed_group_keys={group_key},
+        )
     response = {
         "group_key": group_key,
         "policy": _policy_response_payload(result.policy),
-        "warnings": list(result.warnings),
+        "warnings": [*result.warnings, *access_warnings],
     }
     await emit_admin_mutation_audit(
         request=request,
@@ -511,7 +731,7 @@ async def _publish_route_group_policy_response(
 
 
 @router.get(
-    "/ui/api/route-groups", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))]
+    "/ui/api/route-groups", dependencies=[Depends(require_authenticated)]
 )
 async def list_route_groups(
     request: Request,
@@ -520,8 +740,39 @@ async def list_route_groups(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
-    groups, total = await repository.list_groups(search=search, limit=limit, offset=offset)
-    data = [_group_response_payload(group) for group in groups]
+    principal = asset_principal_for_request(request)
+    access_repository = _access_repository(request)
+    if access_repository is None:
+        if not principal.is_platform_admin:
+            _access_repository_or_503(request)
+        policies: list[AssetAccessPolicy] = []
+    else:
+        policies = await access_repository.list_accessible_policies(
+            AssetKind.ROUTE_GROUP,
+            principal,
+        )
+    policy_by_id = {policy.asset.asset_id: policy for policy in policies}
+    if principal.is_platform_admin:
+        groups, total = await repository.list_groups(
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        groups, total = await repository.list_groups(
+            search=search,
+            limit=limit,
+            offset=offset,
+            managed_asset_ids=list(policy_by_id),
+        )
+    data = [
+        _group_response_payload(
+            group,
+            policy=policy_by_id.get(str(group.managed_asset_id or "")),
+            principal=principal,
+        )
+        for group in groups
+    ]
     return {
         "data": data,
         "pagination": {
@@ -535,21 +786,32 @@ async def list_route_groups(
 
 @router.get(
     "/ui/api/route-groups/{group_key}",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    principal, access_policy = await authorize_route_group_for_request(request, group)
 
     members = await repository.list_members(group_key)
-    policy = await repository.get_published_policy(group_key)
-    bindings, _ = await repository.list_bindings(group_key=group_key, limit=200, offset=0)
+    published_policy = await repository.get_published_policy(group_key)
+    bindings = []
+    if principal.is_platform_admin:
+        bindings, _ = await repository.list_bindings(group_key=group_key, limit=200, offset=0)
     return {
-        "group": _group_response_payload(group),
+        "group": _group_response_payload(
+            group,
+            policy=access_policy,
+            principal=principal,
+        ),
         "members": await _serialize_group_members(request, members),
-        "policy": _policy_response_payload(policy) if policy is not None else None,
+        "policy": (
+            _policy_response_payload(published_policy)
+            if published_policy is not None
+            else None
+        ),
         "bindings": [_binding_response_payload(binding) for binding in bindings],
     }
 
@@ -557,17 +819,34 @@ async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
 @router.post(
     "/ui/api/route-groups",
     response_model=RouteGroupMutationResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    if not principal.is_platform_admin and principal.account_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated account is required",
+        )
 
-    group_key = str(payload.get("group_key") or payload.get("key") or "").strip()
-    if not group_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="group_key is required")
-
+    requested_group_key = str(payload.get("group_key") or payload.get("key") or "").strip()
     name = str(payload.get("name")).strip() if payload.get("name") is not None else None
+    if principal.is_platform_admin and not requested_group_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="group_key is required")
+    if not principal.is_platform_admin and not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
+    try:
+        group_key = await _creator_route_group_key_or_400(
+            request,
+            principal=principal,
+            requested_key=requested_group_key,
+            name=name,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
     mode = _validate_mode(payload.get("mode"))
     strategy = _validate_strategy(payload.get("strategy"))
     enabled = _validate_bool(payload.get("enabled", True), field_name="enabled")
@@ -576,19 +855,95 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
         existing_metadata=None,
         raw_metadata=payload.get("metadata"),
         raw_default_prompt=payload.get("default_prompt", ...),
-        raw_owner_scope_type=payload.get("owner_scope_type", ...),
-        raw_owner_scope_id=payload.get("owner_scope_id", ...),
+        raw_owner_scope_type=(payload.get("owner_scope_type", ...) if principal.is_platform_admin else "global"),
+        raw_owner_scope_id=(payload.get("owner_scope_id", ...) if principal.is_platform_admin else None),
+        principal=principal,
     )
 
-    try:
-        created = await repository.create_group(
-            group_key=group_key,
-            name=name,
-            mode=mode,
-            routing_strategy=strategy,
-            enabled=enabled,
-            metadata=metadata,
+    access_repository = _access_repository(request)
+    if access_repository is None and not principal.is_platform_admin:
+        access_repository = _access_repository_or_503(request)
+    managed_asset_id = str(uuid4()) if access_repository is not None else None
+    route_group_id = str(uuid4())
+    policy: AssetAccessPolicy | None = None
+    if managed_asset_id is not None:
+        base_policy = AssetAccessPolicy(
+            asset=ManagedAsset(
+                asset_id=managed_asset_id,
+                asset_kind=AssetKind.ROUTE_GROUP,
+                governance_source=(
+                    GovernanceSource.PLATFORM
+                    if principal.is_platform_admin
+                    else GovernanceSource.CREATOR
+                ),
+                owner_account_id=None if principal.is_platform_admin else principal.account_id,
+            )
         )
+        grants = parse_asset_access_input(payload, managed_asset_id=managed_asset_id)
+        try:
+            policy = revise_asset_access(
+                base_policy,
+                principal,
+                grants=grants,
+            )
+            validate_grant_subject_for_principal(policy, principal)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
+        database = getattr(access_repository, "prisma", None)
+        if (
+            policy is not None
+            and database is not None
+            and database is getattr(repository, "prisma", None)
+            and hasattr(database, "tx")
+        ):
+            async with database.tx() as tx:
+                stored_policy = await access_repository.with_db(tx).create_policy(
+                    policy,
+                    created_by_account_id=principal.account_id,
+                )
+                created = await repository.with_db(tx).create_group(
+                    group_key=group_key,
+                    name=name,
+                    mode=mode,
+                    routing_strategy=strategy,
+                    enabled=enabled,
+                    metadata=metadata,
+                    route_group_id=route_group_id,
+                    managed_asset_id=managed_asset_id,
+                )
+            policy = stored_policy
+        elif policy is not None and access_repository is not None:
+            policy = await access_repository.create_policy(
+                policy,
+                created_by_account_id=principal.account_id,
+            )
+            try:
+                created = await repository.create_group(
+                    group_key=group_key,
+                    name=name,
+                    mode=mode,
+                    routing_strategy=strategy,
+                    enabled=enabled,
+                    metadata=metadata,
+                    route_group_id=route_group_id,
+                    managed_asset_id=managed_asset_id,
+                )
+            except Exception:
+                await access_repository.delete_policy(str(managed_asset_id))
+                raise
+        else:
+            created = await repository.create_group(
+                group_key=group_key,
+                name=name,
+                mode=mode,
+                routing_strategy=strategy,
+                enabled=enabled,
+                metadata=metadata,
+            )
     except Exception as exc:
         if "duplicate key" in str(exc).lower():
             raise HTTPException(
@@ -596,13 +951,21 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
             ) from exc
         raise
 
+    access_warnings: tuple[str, ...] = ()
+    if managed_asset_id is not None:
+        access_warnings = await refresh_creator_route_group_access_for_app(
+            request.app,
+            fail_closed_asset_id=managed_asset_id,
+            fail_closed_group_keys={created.group_key},
+        )
     refresh_warnings = await _refresh_route_group_runtime(
         request,
         prompt_group_key=created.group_key,
     )
-    response = _group_response_payload(created)
-    if refresh_warnings:
-        response["warnings"] = list(refresh_warnings)
+    response = _group_response_payload(created, policy=policy, principal=principal)
+    warnings = (*access_warnings, *refresh_warnings)
+    if warnings:
+        response["warnings"] = list(warnings)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -618,7 +981,7 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
 @router.put(
     "/ui/api/route-groups/{group_key}",
     response_model=RouteGroupMutationResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def update_route_group(
     request: Request, group_key: str, payload: dict[str, Any]
@@ -628,7 +991,12 @@ async def update_route_group(
 
     existing = await repository.get_group(group_key)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    principal, access_policy = await authorize_route_group_for_request(
+        request,
+        existing,
+        write=True,
+    )
 
     name = (
         str(payload.get("name")).strip()
@@ -643,8 +1011,13 @@ async def update_route_group(
         existing_metadata=existing.metadata,
         raw_metadata=payload.get("metadata"),
         raw_default_prompt=payload.get("default_prompt", ...),
-        raw_owner_scope_type=payload.get("owner_scope_type", ...),
-        raw_owner_scope_id=payload.get("owner_scope_id", ...),
+        raw_owner_scope_type=(
+            payload.get("owner_scope_type", ...) if principal.is_platform_admin else ...
+        ),
+        raw_owner_scope_id=(
+            payload.get("owner_scope_id", ...) if principal.is_platform_admin else ...
+        ),
+        principal=principal,
     )
     members = await repository.list_members(group_key)
     _validate_member_modes(
@@ -668,8 +1041,8 @@ async def update_route_group(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
-    before = _group_response_payload(existing)
-    after = _group_response_payload(updated)
+    before = _group_response_payload(existing, policy=access_policy, principal=principal)
+    after = _group_response_payload(updated, policy=access_policy, principal=principal)
     refresh_warnings = await _refresh_route_group_runtime(
         request,
         prompt_group_key=group_key,
@@ -693,20 +1066,40 @@ async def update_route_group(
 @router.delete(
     "/ui/api/route-groups/{group_key}",
     response_model=RouteGroupDeleteResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def delete_route_group(request: Request, group_key: str) -> dict[str, Any]:
     request_start = perf_counter()
-    deletion = await _mutation_service(request).delete_group(group_key)
+    repository = _repository_or_503(request)
+    group = await repository.get_group(group_key)
+    if group is None:
+        raise _route_group_not_found()
+    _, access_policy = await authorize_route_group_for_request(
+        request,
+        group,
+        delete=True,
+    )
+    managed_asset_id = access_policy.asset.asset_id if access_policy is not None else None
+    deletion = await _mutation_service(request).delete_group(
+        group_key,
+        managed_asset_id=managed_asset_id,
+    )
     if not deletion.deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
+    access_warnings: tuple[str, ...] = ()
+    if managed_asset_id is not None:
+        access_warnings = await refresh_creator_route_group_access_for_app(
+            request.app,
+            fail_closed_asset_id=managed_asset_id,
+            fail_closed_group_keys={group_key},
+        )
     refresh_warnings = await _refresh_route_group_runtime(
         request,
         prompt_group_key=group_key,
     )
     response: dict[str, Any] = {"deleted": True}
-    warnings = (*deletion.warnings, *refresh_warnings)
+    warnings = (*deletion.warnings, *access_warnings, *refresh_warnings)
     if warnings:
         response["warnings"] = list(warnings)
     await emit_admin_mutation_audit(
@@ -856,13 +1249,14 @@ async def delete_route_group_binding(request: Request, binding_id: str) -> dict[
 
 @router.get(
     "/ui/api/route-groups/{group_key}/members",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def list_route_group_members(request: Request, group_key: str) -> list[dict[str, Any]]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    await authorize_route_group_for_request(request, group)
     members = await repository.list_members(group_key)
     return [to_json_value(asdict(member)) for member in members]
 
@@ -870,7 +1264,7 @@ async def list_route_group_members(request: Request, group_key: str) -> list[dic
 @router.post(
     "/ui/api/route-groups/{group_key}/members",
     response_model=RouteGroupMemberMutationResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def upsert_route_group_member(
     request: Request, group_key: str, payload: dict[str, Any]
@@ -889,7 +1283,9 @@ async def upsert_route_group_member(
 
     group = await repository.get_group(group_key)
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    principal, _ = await authorize_route_group_for_request(request, group, write=True)
+    await _ensure_deployment_reference_allowed(request, deployment_id, principal)
     if enabled:
         _validate_member_modes(
             request,
@@ -917,10 +1313,18 @@ async def upsert_route_group_member(
     if member is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
+    access_warnings: tuple[str, ...] = ()
+    if group.managed_asset_id:
+        access_warnings = await refresh_creator_route_group_access_for_app(
+            request.app,
+            fail_closed_asset_id=group.managed_asset_id,
+            fail_closed_group_keys={group_key},
+        )
     refresh_warnings = await _refresh_route_group_runtime(request)
     response = to_json_value(asdict(member))
-    if refresh_warnings:
-        response["warnings"] = list(refresh_warnings)
+    warnings = (*access_warnings, *refresh_warnings)
+    if warnings:
+        response["warnings"] = list(warnings)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -936,13 +1340,17 @@ async def upsert_route_group_member(
 @router.delete(
     "/ui/api/route-groups/{group_key}/members/{deployment_id:path}",
     response_model=RouteGroupDeleteResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def delete_route_group_member(
     request: Request, group_key: str, deployment_id: str
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    group = await repository.get_group(group_key)
+    if group is None:
+        raise _route_group_not_found()
+    await authorize_route_group_for_request(request, group, write=True)
     try:
         removed = await repository.remove_member(group_key, deployment_id)
     except RoutePolicyStateConflictError as exc:
@@ -952,10 +1360,18 @@ async def delete_route_group_member(
             status_code=status.HTTP_404_NOT_FOUND, detail="Route group member not found"
         )
 
+    access_warnings: tuple[str, ...] = ()
+    if group.managed_asset_id:
+        access_warnings = await refresh_creator_route_group_access_for_app(
+            request.app,
+            fail_closed_asset_id=group.managed_asset_id,
+            fail_closed_group_keys={group_key},
+        )
     refresh_warnings = await _refresh_route_group_runtime(request)
     response: dict[str, Any] = {"deleted": True}
-    if refresh_warnings:
-        response["warnings"] = list(refresh_warnings)
+    warnings = (*access_warnings, *refresh_warnings)
+    if warnings:
+        response["warnings"] = list(warnings)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -970,13 +1386,14 @@ async def delete_route_group_member(
 @router.get(
     "/ui/api/route-groups/{group_key}/policy",
     response_model=RoutePolicyCurrentResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def get_route_group_policy(request: Request, group_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    await authorize_route_group_for_request(request, group)
     policy = await repository.get_published_policy(group_key)
     if policy is None:
         return {"group_key": group_key, "policy": None}
@@ -986,13 +1403,14 @@ async def get_route_group_policy(request: Request, group_key: str) -> dict[str, 
 @router.get(
     "/ui/api/route-groups/{group_key}/policies",
     response_model=RoutePolicyHistoryResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def list_route_group_policies(request: Request, group_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    await authorize_route_group_for_request(request, group)
 
     policies = await repository.list_policies(group_key)
     return {
@@ -1005,7 +1423,7 @@ async def list_route_group_policies(request: Request, group_key: str) -> dict[st
     "/ui/api/route-groups/{group_key}/policy/validate",
     response_model=RoutePolicyValidationResponse,
     response_model_exclude_unset=True,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def validate_route_group_policy(
     request: Request, group_key: str, payload: RoutePolicyDocumentRequest
@@ -1013,8 +1431,10 @@ async def validate_route_group_policy(
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    principal, _ = await authorize_route_group_for_request(request, group, write=True)
     document = payload.to_policy_document()
+    await _ensure_policy_references_allowed(request, document, principal)
     normalized, warnings = _validate_policy_payload(
         document,
         available_members=await _resolve_policy_members(request, repository, group_key),
@@ -1031,7 +1451,7 @@ async def validate_route_group_policy(
 @policy_router.post(
     "/ui/api/route-groups/{group_key}/policy/draft",
     response_model=RoutePolicyMutationResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def save_route_group_policy_draft(
     request: Request, group_key: str, payload: RoutePolicyDocumentRequest
@@ -1040,8 +1460,10 @@ async def save_route_group_policy_draft(
     repository = _repository_or_503(request)
     group = await repository.get_group(group_key)
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+        raise _route_group_not_found()
+    principal, _ = await authorize_route_group_for_request(request, group, write=True)
     document = payload.to_policy_document()
+    await _ensure_policy_references_allowed(request, document, principal)
     try:
         result = await repository.save_draft_policy(group_key, document)
     except RoutePolicyStateConflictError as exc:
@@ -1071,7 +1493,7 @@ async def save_route_group_policy_draft(
 @policy_router.post(
     "/ui/api/route-groups/{group_key}/policy/publish",
     response_model=RoutePolicyMutationResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def publish_route_group_policy_v2(
     request: Request,
@@ -1090,19 +1512,28 @@ async def publish_route_group_policy_v2(
 @router.post(
     "/ui/api/route-groups/{group_key}/policy/rollback",
     response_model=RoutePolicyRollbackResponse,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def rollback_route_group_policy(
     request: Request, group_key: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    group = await repository.get_group(group_key)
+    if group is None:
+        raise _route_group_not_found()
+    principal, _ = await authorize_route_group_for_request(request, group, write=True)
     if "version" not in payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="version is required")
 
     version = _validate_int_or_none(payload.get("version"), field_name="version")
     if version is None or version < 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="version must be >= 1")
+
+    policies = await repository.list_policies(group_key)
+    target = next((item for item in policies if item.version == version), None)
+    if target is not None:
+        await _ensure_policy_references_allowed(request, target.policy_json, principal)
 
     try:
         policy = await repository.rollback_policy(
@@ -1117,14 +1548,22 @@ async def rollback_route_group_policy(
             status_code=status.HTTP_404_NOT_FOUND, detail="Route group or policy version not found"
         )
 
+    access_warnings: tuple[str, ...] = ()
+    if group.managed_asset_id:
+        access_warnings = await refresh_creator_route_group_access_for_app(
+            request.app,
+            fail_closed_asset_id=group.managed_asset_id,
+            fail_closed_group_keys={group_key},
+        )
     refresh_warnings = await _refresh_route_group_runtime(request)
     response = {
         "group_key": group_key,
         "policy": _policy_response_payload(policy),
         "rolled_back_from_version": version,
     }
-    if refresh_warnings:
-        response["warnings"] = list(refresh_warnings)
+    warnings = (*access_warnings, *refresh_warnings)
+    if warnings:
+        response["warnings"] = list(warnings)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -1143,6 +1582,17 @@ async def simulate_route_group_policy(
     payload: RoutePolicySimulationRequest | None = None,
 ) -> RoutePolicySimulationResponse:
     simulation_request = payload or RoutePolicySimulationRequest()
+    repository = _repository_or_503(request)
+    group = await repository.get_group(group_key)
+    if group is None:
+        raise _route_group_not_found()
+    principal, _ = await authorize_route_group_for_request(request, group)
+    if simulation_request.policy is not None:
+        await _ensure_policy_references_allowed(
+            request,
+            simulation_request.policy,
+            principal,
+        )
 
     try:
         runtime = require_routing_runtime_generation(request.app.state)
@@ -1153,7 +1603,7 @@ async def simulate_route_group_policy(
         ) from exc
 
     service = RoutePolicySimulationService(
-        route_groups=_repository_or_503(request),
+        route_groups=repository,
         runtime=runtime,
         prompts=_prompt_resolution_repository(request),
     )
@@ -1176,7 +1626,7 @@ router.add_api_route(
     methods=["POST"],
     response_model=RoutePolicySimulationResponse,
     responses={400: {"description": "Invalid simulation request"}},
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
     route_class_override=BadRequestValidationRoute,
 )
 
@@ -1185,7 +1635,7 @@ router.add_api_route(
     "/ui/api/route-groups/{group_key}/policy",
     response_model=RoutePolicyMutationResponse,
     deprecated=True,
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def publish_route_group_policy(
     request: Request,

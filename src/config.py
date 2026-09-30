@@ -878,6 +878,17 @@ class GeneralSettings(BaseModel):
     tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
     tier_capacity_fair_share_enabled: bool = False
     tier_capacity_fair_share_active_ttl_seconds: int = Field(default=10, ge=1, le=300)
+    managed_asset_reconciliation_interval_seconds: float = Field(default=30.0, ge=1.0)
+    managed_asset_reconciliation_batch_size: int = Field(default=250, ge=1, le=10_000)
+    managed_asset_reconciliation_max_batches_per_run: int = Field(
+        default=20,
+        ge=1,
+        le=1_000,
+    )
+    managed_asset_snapshot_max_policies: int = Field(default=50_000, ge=1, le=50_000)
+    managed_asset_authorization_max_staleness_seconds: float = Field(
+        default=60.0, ge=1.0, le=3_600.0
+    )
     audit_enabled: bool = True
     audit_ingestion_mode: Literal["legacy", "outbox"] = "legacy"
     audit_ingestion_worker_enabled: bool = True
@@ -1167,6 +1178,17 @@ class Settings(BaseSettings):
     tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
     tier_capacity_fair_share_enabled: bool = False
     tier_capacity_fair_share_active_ttl_seconds: int = Field(default=10, ge=1, le=300)
+    managed_asset_reconciliation_interval_seconds: float = Field(default=30.0, ge=1.0)
+    managed_asset_reconciliation_batch_size: int = Field(default=250, ge=1, le=10_000)
+    managed_asset_reconciliation_max_batches_per_run: int = Field(
+        default=20,
+        ge=1,
+        le=1_000,
+    )
+    managed_asset_snapshot_max_policies: int = Field(default=50_000, ge=1, le=50_000)
+    managed_asset_authorization_max_staleness_seconds: float = Field(
+        default=60.0, ge=1.0, le=3_600.0
+    )
 
     @field_validator("master_key")
     @classmethod

@@ -17,6 +17,7 @@ from src.router.runtime_generation import (
 )
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.callable_targets import CallableTarget, build_callable_target_catalog
+from src.services.creator_model_access import CreatorModelAccessSnapshot
 from src.services.model_deployments import build_model_registry_from_config
 from src.services.model_visibility import (
     ensure_model_allowed,
@@ -30,6 +31,32 @@ from src.services.model_visibility import (
 from src.services.route_groups import route_groups_from_config
 
 _STRONG_TEST_MASTER_KEY = "StrongTestMasterKey2026SecureValue123"
+
+
+class _CreatorVisibilityGrantService:
+    def __init__(self, direct_restrict_allowlist: frozenset[str] | None = None) -> None:
+        self.direct_restrict_allowlist = direct_restrict_allowlist
+
+    def resolve_policy_allowlist(self, auth, *, snapshot=None):  # noqa: ANN001, ANN201
+        del auth, snapshot
+        return SimpleNamespace(
+            allowlist=frozenset({"platform-model"}),
+            authoritative=True,
+            fallback_reason=None,
+        )
+
+    def resolve_direct_restrict_allowlist(self, auth, *, snapshot=None):  # noqa: ANN001, ANN201
+        del auth, snapshot
+        return self.direct_restrict_allowlist
+
+
+class _PlatformOnlyTierService:
+    mode = "enforce"
+    snapshot_stale = False
+
+    def resolve_org_allowed_callable_keys(self, organization_id: str) -> frozenset[str]:
+        assert organization_id == "org-1"
+        return frozenset({"platform-model"})
 
 
 def _publish_test_grants(test_app) -> None:  # noqa: ANN001
@@ -110,6 +137,80 @@ def test_effective_model_allowlist_denies_when_no_explicit_grants_exist() -> Non
     )
 
     assert resolve_effective_model_allowlist(auth) == set()
+
+
+def test_creator_models_are_unioned_outside_tiers_but_keep_asset_visibility() -> None:
+    snapshot = CreatorModelAccessSnapshot.create(
+        model_names={"creator-org", "creator-private"},
+        public_models=set(),
+        models_by_owner={"owner-1": {"creator-private"}},
+        models_by_team={},
+        models_by_organization={"org-1": {"creator-org"}},
+        model_name_by_asset_id={
+            "asset-org": "creator-org",
+            "asset-private": "creator-private",
+        },
+    )
+    auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        owner_account_id="member-1",
+        organization_id="org-1",
+    )
+    grant_service = _CreatorVisibilityGrantService()
+    tier_service = _PlatformOnlyTierService()
+
+    assert filter_visible_models(
+        ["platform-model", "creator-org", "creator-private"],
+        auth,
+        callable_target_grant_service=grant_service,  # type: ignore[arg-type]
+        creator_model_access_snapshot=snapshot,
+        tier_policy_service=tier_service,  # type: ignore[arg-type]
+        tier_policy_mode="enforce",
+    ) == ["platform-model", "creator-org"]
+
+    ensure_model_allowed(
+        auth,
+        "creator-org",
+        callable_target_grant_service=grant_service,  # type: ignore[arg-type]
+        creator_model_access_snapshot=snapshot,
+        tier_policy_service=tier_service,  # type: ignore[arg-type]
+        tier_policy_mode="enforce",
+    )
+    with pytest.raises(PermissionDeniedError):
+        ensure_model_allowed(
+            auth,
+            "creator-private",
+            callable_target_grant_service=grant_service,  # type: ignore[arg-type]
+            creator_model_access_snapshot=snapshot,
+            tier_policy_service=tier_service,  # type: ignore[arg-type]
+            tier_policy_mode="enforce",
+        )
+
+
+def test_creator_model_explicit_key_allowlist_still_narrows_visibility() -> None:
+    snapshot = CreatorModelAccessSnapshot.create(
+        model_names={"creator-org"},
+        public_models=set(),
+        models_by_owner={},
+        models_by_team={},
+        models_by_organization={"org-1": {"creator-org"}},
+        model_name_by_asset_id={"asset-org": "creator-org"},
+    )
+    auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        owner_account_id="member-1",
+        organization_id="org-1",
+    )
+
+    with pytest.raises(PermissionDeniedError):
+        ensure_model_allowed(
+            auth,
+            "creator-org",
+            callable_target_grant_service=_CreatorVisibilityGrantService(
+                frozenset({"platform-model"})
+            ),  # type: ignore[arg-type]
+            creator_model_access_snapshot=snapshot,
+        )
 
 
 def test_effective_model_allowlist_denies_without_explicit_scope_bindings() -> None:

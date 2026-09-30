@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DataTable from '../components/DataTable';
+import ManagedAssetAccessPanel from '../components/ManagedAssetAccessPanel';
+import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
 import MCPApprovalTable from '../components/mcp/MCPApprovalTable';
 import MCPServerForm, {
   buildMCPServerPayload,
@@ -39,10 +41,11 @@ import {
   type MCPToolPolicy,
 } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { resolveUiAccess } from '../lib/authorization';
+import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { HeroTabbedDetailShell } from '../components/admin/shells';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 function fmtDate(value?: string | null) {
   if (!value) return '—';
@@ -155,12 +158,16 @@ export default function MCPServerDetail() {
   const { pushToast } = useToast();
 
   const uiAccess = resolveUiAccess(authMode, session);
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions, loading: audiencesLoading, error: audiencesError, refetch: refetchAudiences } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
   const canReviewApprovals = uiAccess.mcp_approvals;
   const orgIds = (session?.organization_memberships || [])
     .map((membership) => String(membership.organization_id || ''))
     .filter(Boolean);
   const ownerScopeOptions = orgIds.map((organizationId) => ({ value: organizationId, label: organizationId }));
-
   const [activeTab, setActiveTab] = useState<TabId>('Tools');
   const [toolFilter, setToolFilter] = useState<'All' | 'Read' | 'Write'>('All');
   const [copied, setCopied] = useState(false);
@@ -222,6 +229,7 @@ export default function MCPServerDetail() {
   const canMutateServer = Boolean(server?.capabilities?.can_mutate);
   const canOperateServer = Boolean(server?.capabilities?.can_operate);
   const canManageScopeConfig = Boolean(server?.capabilities?.can_manage_scope_config);
+  const canDeleteServer = server?.access?.capabilities.delete ?? canMutateServer;
 
   const toolOptions = useMemo(() => (data?.tools || []).map((tool) => tool.original_name), [data?.tools]);
 
@@ -281,7 +289,7 @@ export default function MCPServerDetail() {
   };
 
   const handleDelete = async () => {
-    if (!serverId || !server || !canMutateServer) return;
+    if (!serverId || !server || !canDeleteServer) return;
     setDeleting(true);
     try {
       await mcpServers.delete(serverId);
@@ -446,11 +454,15 @@ export default function MCPServerDetail() {
   const readTools = tools.filter((tool) => !isWriteTool(tool.original_name));
   const writeTools = tools.filter((tool) => isWriteTool(tool.original_name));
   const filteredTools = toolFilter === 'Read' ? readTools : toolFilter === 'Write' ? writeTools : tools;
-  const ownershipLabel = server.owner_scope_type === 'organization' ? `Organization · ${server.owner_scope_id || 'Unknown'}` : 'Global';
+  const ownershipLabel = server.access
+    ? `${server.access.effective_role || 'shared'} · ${server.access.visibility}`
+    : server.owner_scope_type === 'organization'
+      ? `Organization · ${server.owner_scope_id || 'Unknown'}`
+      : 'Global';
 
   const tabs: Array<{ id: TabId; label: string; count: number | null; icon: typeof Zap }> = [
     { id: 'Tools', label: 'Tools', icon: Zap, count: tools.length },
-    { id: 'Access', label: 'Access', icon: Users, count: bindings.length },
+    { id: 'Access', label: 'Access', icon: Users, count: server.access ? null : bindings.length },
     { id: 'Policies', label: 'Policies', icon: Lock, count: policies.length },
     { id: 'Activity', label: 'Activity', icon: Activity, count: null },
     { id: 'Settings', label: 'Settings', icon: Settings, count: null },
@@ -485,9 +497,17 @@ export default function MCPServerDetail() {
                   <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
                     Streamable HTTP
                   </span>
-                  <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-                    {ownershipLabel}
-                  </span>
+                  {server.access ? (
+                    <ManagedAssetAccessSummary
+                      access={server.access}
+                      teamOptions={teamOptions}
+                      organizationOptions={organizationOptions}
+                    />
+                  ) : (
+                    <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                      {ownershipLabel}
+                    </span>
+                  )}
                   {healthStatus === 'healthy' ? (
                     <div className="flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5">
                       <span className="relative flex h-2 w-2">
@@ -560,7 +580,6 @@ export default function MCPServerDetail() {
                 </>
               ) : null}
               {canMutateServer ? (
-                <>
                   <button
                     type="button"
                     onClick={() => setActiveTab('Settings')}
@@ -569,6 +588,8 @@ export default function MCPServerDetail() {
                     <Pencil className="h-3.5 w-3.5" />
                     Edit
                   </button>
+              ) : null}
+              {canDeleteServer ? (
                   <button
                     type="button"
                     onClick={() => setDeleteOpen(true)}
@@ -577,7 +598,6 @@ export default function MCPServerDetail() {
                     <Trash2 className="h-3.5 w-3.5" />
                     Remove
                   </button>
-                </>
               ) : null}
             </div>
           </div>
@@ -753,10 +773,31 @@ export default function MCPServerDetail() {
 
           {activeTab === 'Access' ? (
             <div className="space-y-5 p-6">
+              {server.access ? (
+                <ManagedAssetAccessPanel
+                  access={server.access}
+                  assetLabel="MCP server"
+                  teamOptions={teamOptions}
+                  organizationOptions={organizationOptions}
+                  allowPublic={isPlatformAdmin}
+                  audiencesLoading={audiencesLoading}
+                  audiencesError={audiencesError}
+                  onRetryAudiences={refetchAudiences}
+                  onSaved={() => refetch()}
+                  className="bg-gray-50 shadow-none"
+                />
+              ) : null}
+
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-900">Scope Bindings</h3>
-                  <p className="mt-0.5 text-xs text-gray-500">Control which organizations, teams, or API keys can access this server.</p>
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    {server.access ? 'Advanced platform bindings' : 'Scope Bindings'}
+                  </h3>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    {server.access
+                      ? 'Optional platform governance can further narrow tools for a runtime scope.'
+                      : 'Control which organizations, teams, or API keys can access this server.'}
+                  </p>
                 </div>
                 {canManageScopeConfig ? (
                   <button
@@ -780,7 +821,9 @@ export default function MCPServerDetail() {
 
               {!canManageScopeConfig ? (
                 <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-                  Read-only. Scope bindings are managed by the server owner or delegated administrators.
+                  {server.access
+                    ? 'Advanced bindings are managed by platform administrators. They can narrow tool access but cannot grant access beyond the visibility above.'
+                    : 'Read-only. Scope bindings are managed by the server owner or delegated administrators.'}
                 </div>
               ) : null}
 
@@ -848,8 +891,14 @@ export default function MCPServerDetail() {
               {bindings.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-gray-200 py-12 text-center text-gray-400">
                   <Users className="mx-auto mb-2 h-8 w-8 text-gray-200" />
-                  <p className="text-sm font-medium text-gray-500">No bindings yet</p>
-                  <p className="mt-1 text-sm">Add a binding to grant scope access to this server.</p>
+                  <p className="text-sm font-medium text-gray-500">
+                    {server.access ? 'No advanced bindings' : 'No bindings yet'}
+                  </p>
+                  <p className="mt-1 text-sm">
+                    {server.access
+                      ? 'The visibility policy above is the current access authority.'
+                      : 'Add a binding to grant scope access to this server.'}
+                  </p>
                 </div>
               ) : (
                 <div className="overflow-hidden rounded-xl border border-gray-200">
@@ -1217,7 +1266,7 @@ export default function MCPServerDetail() {
             <div className="space-y-5 p-6">
               {!canMutateServer ? (
                 <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-                  Read-only. Only the server owner can edit definition settings.
+                  Read-only. Your current asset role does not allow definition changes.
                 </div>
               ) : null}
               {canMutateServer ? (
@@ -1231,6 +1280,7 @@ export default function MCPServerDetail() {
                     disableOwnerScopeId
                     preserveExistingCredentials
                     credentialsConfigured={server.auth_credentials_present}
+                    showOwnerScope={isPlatformAdmin || !server.access}
                   />
                   <div className="flex justify-end pt-2">
                     <button
@@ -1252,7 +1302,14 @@ export default function MCPServerDetail() {
                   </div>
                   <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
                     <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Owner</p>
-                    <p className="mt-1 text-sm text-gray-900">{ownershipLabel}</p>
+                    {server.access ? (
+                      <ManagedAssetAccessSummary
+                        access={server.access}
+                        teamOptions={teamOptions}
+                        organizationOptions={organizationOptions}
+                        className="mt-2"
+                      />
+                    ) : <p className="mt-1 text-sm text-gray-900">{ownershipLabel}</p>}
                   </div>
                   <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
                     <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Auth Mode</p>

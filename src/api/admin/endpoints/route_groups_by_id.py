@@ -29,8 +29,7 @@ from src.api.admin.route_group_contracts import (
     RoutePolicyValidationResponse,
 )
 from src.api.admin.route_group_dependencies import resolve_route_group_id, route_group_repository
-from src.auth.roles import Permission
-from src.middleware.admin import require_admin_permission
+from src.middleware.admin import require_authenticated
 
 router = APIRouter(
     tags=["Admin Route Groups"],
@@ -48,8 +47,8 @@ router = APIRouter(
 policy_router = APIRouter(route_class=PolicyBadRequestValidationRoute)
 
 GroupKey = Annotated[str, Depends(resolve_route_group_id)]
-_READ = [Depends(require_admin_permission(Permission.CONFIG_READ))]
-_WRITE = [Depends(require_admin_permission(Permission.CONFIG_UPDATE))]
+_READ = [Depends(require_authenticated)]
+_WRITE = [Depends(require_authenticated)]
 _BASE = "/ui/api/route-groups/by-id/{route_group_id:uuid}"
 
 
@@ -64,6 +63,7 @@ async def resolve_route_group_key(
     group = await route_group_repository(request).get_group(group_key)
     if group is None:
         raise HTTPException(status_code=404, detail="Route group not found")
+    await operations.authorize_route_group_for_request(request, group)
     return RouteGroupResolutionResponse(
         route_group_id=group.route_group_id, group_key=group.group_key
     )

@@ -15,18 +15,25 @@ import {
   Building2,
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
+import ManagedAssetAccessFields from '../components/ManagedAssetAccessFields';
 import Modal from '../components/Modal';
 import MCPServerForm, {
   buildMCPServerPayload,
   EMPTY_MCP_SERVER_FORM,
   type MCPServerFormValues,
 } from '../components/mcp/MCPServerForm';
-import { mcpServers, type MCPServer } from '../lib/api';
+import {
+  mcpServers,
+  managedAssetAccessInput,
+  type ManagedAssetGrantInput,
+  type MCPServer,
+} from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { hasPermission, isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
+import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { IndexShell } from '../components/admin/shells';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 function HealthBadge({ server }: { server: MCPServer }) {
   const status = server.last_health_status;
@@ -63,6 +70,10 @@ function HealthBadge({ server }: { server: MCPServer }) {
 }
 
 function ownershipLabel(server: MCPServer) {
+  if (server.access) {
+    const role = server.access.effective_role || 'shared';
+    return `${role.charAt(0).toUpperCase()}${role.slice(1)} · ${server.access.visibility}`;
+  }
   return server.owner_scope_type === 'organization'
     ? `Organization · ${server.owner_scope_id || 'Unknown'}`
     : 'Global';
@@ -75,6 +86,10 @@ export default function MCPServers() {
 
   const uiAccess = resolveUiAccess(authMode, session);
   const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions, loading: audiencesLoading, error: audiencesError, refetch: refetchAudiences } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
   const orgMemberships = (session?.organization_memberships || [])
     .map((membership) => ({
       organization_id: String(membership.organization_id || ''),
@@ -85,9 +100,6 @@ export default function MCPServers() {
     () => orgMemberships.map((membership) => ({ value: membership.organization_id, label: membership.organization_id })),
     [orgMemberships]
   );
-  const canManageMcp = hasPermission(authMode, session, 'org.update');
-  const isOrgScopedOnly = canManageMcp && !isPlatformAdmin;
-
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [enabledFilter, setEnabledFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
@@ -95,8 +107,10 @@ export default function MCPServers() {
   const pageSize = 20;
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [accessError, setAccessError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<MCPServerFormValues>({ ...EMPTY_MCP_SERVER_FORM });
+  const [grants, setGrants] = useState<ManagedAssetGrantInput[]>([]);
 
   const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -123,17 +137,6 @@ export default function MCPServers() {
     return () => window.clearTimeout(timer);
   }, [searchInput]);
 
-  useEffect(() => {
-    if (!createOpen || !isOrgScopedOnly) {
-      return;
-    }
-    setForm((current) => ({
-      ...current,
-      owner_scope_type: 'organization',
-      owner_scope_id: current.owner_scope_id || ownerScopeOptions[0]?.value || '',
-    }));
-  }, [createOpen, isOrgScopedOnly, ownerScopeOptions]);
-
   const servers = result?.data || [];
   const pagination = result?.pagination;
   const totalPages = pagination ? Math.max(1, Math.ceil(pagination.total / pageSize)) : 1;
@@ -141,13 +144,21 @@ export default function MCPServers() {
 
   const healthyCount = servers.filter((server) => server.last_health_status === 'healthy').length;
   const totalTools = servers.reduce((acc, server) => acc + (server.tool_count || 0), 0);
-  const orgOwnedCount = servers.filter((server) => server.owner_scope_type === 'organization').length;
+  const sharedCount = servers.filter(
+    (server) => server.access && server.access.visibility !== 'private'
+  ).length;
 
   const handleCreate = async () => {
+    setAccessError(null);
+    setCreating(true);
     try {
-      const created = await mcpServers.create(buildMCPServerPayload(form));
+      const created = await mcpServers.create({
+        ...buildMCPServerPayload(form),
+        access: managedAssetAccessInput(grants),
+      });
       setCreateOpen(false);
       setForm({ ...EMPTY_MCP_SERVER_FORM });
+      setGrants([]);
       pushToast({
         tone: 'success',
         title: 'MCP server created',
@@ -215,7 +226,7 @@ export default function MCPServers() {
     { label: 'Total Servers', value: pagination?.total ?? servers.length, icon: Server, color: 'text-brand-primary-ink', bg: 'bg-blue-100' },
     { label: 'Healthy', value: healthyCount, icon: HeartPulse, color: 'text-emerald-600', bg: 'bg-emerald-100' },
     { label: 'Tools Exposed', value: totalTools, icon: Wrench, color: 'text-brand-secondary-ink', bg: 'bg-violet-100' },
-    { label: 'Org-Owned', value: orgOwnedCount, icon: Building2, color: 'text-amber-600', bg: 'bg-amber-100' },
+    { label: 'Shared', value: sharedCount, icon: Building2, color: 'text-amber-600', bg: 'bg-amber-100' },
   ];
 
   const accentColor = (server: MCPServer) => {
@@ -229,7 +240,7 @@ export default function MCPServers() {
       title="MCP Servers"
       count={pagination?.total ?? null}
       description="Connect and manage external tool servers for your AI models."
-      action={canManageMcp ? (
+      action={uiAccess.mcp_servers ? (
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
@@ -238,11 +249,6 @@ export default function MCPServers() {
           <Plus className="h-4 w-4" />
           Register server
         </button>
-      ) : null}
-      notice={uiAccess.mcp_servers && !canManageMcp ? (
-        <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-          Read-only. MCP registration requires organization or platform admin permissions.
-        </div>
       ) : null}
       summary={(
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -349,7 +355,8 @@ export default function MCPServers() {
                 ) : null}
                 {servers.map((server) => {
                   const canOperate = Boolean(server.capabilities?.can_operate);
-                  const canMutate = Boolean(server.capabilities?.can_mutate);
+                  const canDelete = server.access?.capabilities.delete
+                    ?? Boolean(server.capabilities?.can_mutate);
                   return (
                     <tr
                       key={server.mcp_server_id}
@@ -418,7 +425,7 @@ export default function MCPServers() {
                               </button>
                             </>
                           ) : null}
-                          {canMutate ? (
+                          {canDelete ? (
                             <button
                               type="button"
                               title="Delete server"
@@ -476,7 +483,7 @@ export default function MCPServers() {
           </div>
       </div>
 
-      <Modal open={createOpen && canManageMcp} onClose={() => setCreateOpen(false)} title="Register MCP Server" wide>
+      <Modal open={createOpen && uiAccess.mcp_servers} onClose={() => setCreateOpen(false)} title="Register MCP Server" wide>
         <div className="space-y-5">
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
             <div className="font-semibold">What happens next</div>
@@ -489,14 +496,29 @@ export default function MCPServers() {
             value={form}
             onChange={setForm}
             ownerScopeOptions={ownerScopeOptions}
-            lockOwnerScopeType={isOrgScopedOnly}
+            showOwnerScope={isPlatformAdmin}
           />
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <ManagedAssetAccessFields
+              grants={grants}
+              teamOptions={teamOptions}
+              organizationOptions={organizationOptions}
+              allowPublic={isPlatformAdmin}
+              audiencesLoading={audiencesLoading}
+              audiencesError={audiencesError}
+              onRetryAudiences={refetchAudiences}
+              error={accessError}
+              onChange={(nextGrants) => { setGrants(nextGrants); setAccessError(null); }}
+            />
+          </div>
           <div className="flex justify-end gap-2 pt-1">
             <button
               type="button"
               onClick={() => {
                 setCreateOpen(false);
                 setForm({ ...EMPTY_MCP_SERVER_FORM });
+                setGrants([]);
+                setAccessError(null);
               }}
               className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
             >
@@ -504,10 +526,7 @@ export default function MCPServers() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setCreating(true);
-                void handleCreate();
-              }}
+              onClick={() => { void handleCreate(); }}
               disabled={creating}
               className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >

@@ -141,6 +141,10 @@ async def run_batch_request_preflight(
             transformed_model,
             callable_target_grant_service=grant_service,
             callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
+            creator_model_access_snapshot=routing_runtime.creator_model_access_snapshot,
+            creator_route_group_access_snapshot=(
+                routing_runtime.creator_route_group_access_snapshot
+            ),
             tier_policy_service=getattr(app.state, "tier_policy_service", None),
             policy_mode=get_callable_target_policy_mode_from_app(app),
             tier_policy_mode=get_tier_policy_mode_from_app(app),

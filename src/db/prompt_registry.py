@@ -37,6 +37,7 @@ class PromptTemplateRecord:
     prompt_template_id: str
     template_key: str
     name: str
+    managed_asset_id: str | None = None
     description: str | None = None
     owner_scope: str | None = None
     metadata: dict[str, Any] | None = None
@@ -121,8 +122,11 @@ class PromptRegistryRepository:
         search: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        managed_asset_ids: list[str] | None = None,
     ) -> tuple[list[PromptTemplateRecord], int]:
         if self.prisma is None:
+            return [], 0
+        if managed_asset_ids is not None and not managed_asset_ids:
             return [], 0
 
         clauses: list[str] = []
@@ -132,6 +136,17 @@ class PromptRegistryRepository:
             clauses.append(
                 f"(t.template_key ILIKE ${len(params)} OR t.name ILIKE ${len(params)} OR COALESCE(t.description, '') ILIKE ${len(params)})"
             )
+        if managed_asset_ids is not None:
+            normalized_ids = [
+                str(item).strip() for item in managed_asset_ids if str(item).strip()
+            ]
+            if not normalized_ids:
+                return [], 0
+            placeholders: list[str] = []
+            for asset_id in normalized_ids:
+                params.append(asset_id)
+                placeholders.append(f"${len(params)}")
+            clauses.append(f"t.managed_asset_id IN ({', '.join(placeholders)})")
 
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         count_rows = await self.prisma.query_raw(
@@ -147,6 +162,7 @@ class PromptRegistryRepository:
                 t.prompt_template_id,
                 t.template_key,
                 t.name,
+                t.managed_asset_id,
                 t.description,
                 t.owner_scope,
                 t.metadata,
@@ -185,6 +201,7 @@ class PromptRegistryRepository:
                 t.prompt_template_id,
                 t.template_key,
                 t.name,
+                t.managed_asset_id,
                 t.description,
                 t.owner_scope,
                 t.metadata,
@@ -215,6 +232,39 @@ class PromptRegistryRepository:
             return None
         return self._to_template_record(rows[0])
 
+    async def list_by_managed_asset_ids(
+        self,
+        managed_asset_ids: list[str],
+    ) -> list[PromptTemplateRecord]:
+        if self.prisma is None or not managed_asset_ids:
+            return []
+        normalized_ids = [str(item).strip() for item in managed_asset_ids if str(item).strip()]
+        if not normalized_ids:
+            return []
+        placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
+        rows = await self.prisma.query_raw(
+            f"""
+            SELECT
+                t.prompt_template_id,
+                t.template_key,
+                t.name,
+                t.managed_asset_id,
+                t.description,
+                t.owner_scope,
+                t.metadata,
+                t.created_at,
+                t.updated_at,
+                0::int AS version_count,
+                0::int AS label_count,
+                0::int AS binding_count
+            FROM deltallm_prompttemplate t
+            WHERE t.managed_asset_id IN ({placeholders})
+            ORDER BY t.template_key ASC
+            """,
+            *normalized_ids,
+        )
+        return [self._to_template_record(row) for row in rows]
+
     async def create_template(
         self,
         *,
@@ -223,12 +273,15 @@ class PromptRegistryRepository:
         description: str | None,
         owner_scope: str | None,
         metadata: dict[str, Any] | None,
+        prompt_template_id: str | None = None,
+        managed_asset_id: str | None = None,
     ) -> PromptTemplateRecord:
         if self.prisma is None:
             return PromptTemplateRecord(
-                prompt_template_id="",
+                prompt_template_id=prompt_template_id or "",
                 template_key=template_key,
                 name=name,
+                managed_asset_id=managed_asset_id,
                 description=description,
                 owner_scope=owner_scope,
                 metadata=metadata,
@@ -236,14 +289,16 @@ class PromptRegistryRepository:
         rows = await self.prisma.query_raw(
             """
             INSERT INTO deltallm_prompttemplate (
-                prompt_template_id, template_key, name, description, owner_scope, metadata, created_at, updated_at
+                prompt_template_id, template_key, name, managed_asset_id, description, owner_scope, metadata, created_at, updated_at
             )
-            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5::jsonb, NOW(), NOW())
-            RETURNING prompt_template_id, template_key, name, description, owner_scope, metadata, created_at, updated_at,
+            VALUES (COALESCE($1, gen_random_uuid()::text), $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW())
+            RETURNING prompt_template_id, template_key, name, managed_asset_id, description, owner_scope, metadata, created_at, updated_at,
                 0::int AS version_count, 0::int AS label_count, 0::int AS binding_count
             """,
+            prompt_template_id,
             template_key,
             name,
+            managed_asset_id,
             description,
             owner_scope,
             json.dumps(metadata) if metadata is not None else None,
@@ -270,7 +325,7 @@ class PromptRegistryRepository:
                 metadata = $5::jsonb,
                 updated_at = NOW()
             WHERE template_key = $1
-            RETURNING prompt_template_id, template_key, name, description, owner_scope, metadata, created_at, updated_at,
+            RETURNING prompt_template_id, template_key, name, managed_asset_id, description, owner_scope, metadata, created_at, updated_at,
                 (
                     SELECT COUNT(*)::int
                     FROM deltallm_promptversion v
@@ -1059,6 +1114,11 @@ class PromptRegistryRepository:
             prompt_template_id=str(row.get("prompt_template_id") or ""),
             template_key=str(row.get("template_key") or ""),
             name=str(row.get("name") or ""),
+            managed_asset_id=(
+                str(row.get("managed_asset_id"))
+                if row.get("managed_asset_id") is not None
+                else None
+            ),
             description=str(row.get("description")) if row.get("description") is not None else None,
             owner_scope=owner_scope_value if owner_scope_value is not None else owner_scope_type,
             metadata=metadata,

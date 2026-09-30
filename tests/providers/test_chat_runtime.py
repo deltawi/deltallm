@@ -86,3 +86,87 @@ async def test_named_credentials_resolve_on_reload_for_both_registry_sources(
         assert resolved["api_base"] == contract["api_base"]
     assert snapshots[0]["direct-chat"][0]["deltallm_params"]["api_key"] == "first-key"
     assert credential.connection_config["api_key"] == "os.environ/PROVIDER_RELOAD_TEST_KEY"
+
+
+@pytest.mark.parametrize(
+    ("binding_state", "credential_available"),
+    [("revoked", True), ("active", False)],
+)
+async def test_creator_model_missing_or_revoked_credential_never_uses_platform_defaults(
+    binding_state: str,
+    credential_available: bool,
+) -> None:
+    settings = SimpleNamespace(
+        openai_api_key="platform-key-must-not-leak",
+        openai_base_url="https://platform-default.invalid/v1",
+    )
+    credential = NamedCredentialRecord(
+        credential_id="private-credential",
+        name="Private provider",
+        provider="openai",
+        connection_config={
+            "api_key": "owner-key",
+            "api_base": "https://owner.example/v1",
+        },
+    )
+    repository = FakeNamedCredentialRepository([credential] if credential_available else [])
+    record = ModelDeploymentRecord(
+        deployment_id="creator-deployment",
+        model_name="creator/model",
+        model_id="logical-model",
+        named_credential_id="private-credential",
+        credential_binding_mode="owner_delegated",
+        credential_binding_state=binding_state,
+        credential_bound_by_account_id="owner-account",
+        governance_source="creator",
+        deltallm_params={"provider": "openai", "model": "openai/gpt-4o-mini"},
+        model_info={"mode": "chat"},
+    )
+
+    registry = await build_model_registry_from_records(
+        [record],
+        settings,
+        named_credential_repository=repository,
+    )
+
+    assert registry == {}
+
+
+async def test_creator_model_with_unresolved_credential_secret_is_excluded(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MISSING_CREATOR_MODEL_KEY", raising=False)
+    settings = SimpleNamespace(
+        openai_api_key="platform-key-must-not-leak",
+        openai_base_url="https://platform-default.invalid/v1",
+    )
+    credential = NamedCredentialRecord(
+        credential_id="private-credential",
+        name="Private provider",
+        provider="openai",
+        connection_config={
+            "api_key": "os.environ/MISSING_CREATOR_MODEL_KEY",
+            "api_base": "https://owner.example/v1",
+        },
+    )
+    record = ModelDeploymentRecord(
+        deployment_id="creator-deployment",
+        model_name="creator/model",
+        model_id="logical-model",
+        named_credential_id=credential.credential_id,
+        credential_binding_mode="owner_delegated",
+        credential_binding_state="active",
+        credential_bound_by_account_id="owner-account",
+        governance_source="creator",
+        deltallm_params={"provider": "openai", "model": "openai/gpt-4o-mini"},
+        model_info={"mode": "chat"},
+    )
+
+    registry = await build_model_registry_from_records(
+        [record],
+        settings,
+        named_credential_repository=FakeNamedCredentialRepository([credential]),
+        secret_resolver=SecretResolver(),
+    )
+
+    assert registry == {}

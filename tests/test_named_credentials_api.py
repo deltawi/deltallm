@@ -4,6 +4,15 @@ from datetime import UTC, datetime
 
 import pytest
 from src.db.named_credentials import NamedCredentialRecord
+from src.models.platform_auth import PlatformAuthContext
+from src.services.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetKind,
+    AssetPrincipal,
+    GovernanceSource,
+    ManagedAsset,
+    resolve_asset_capabilities,
+)
 from src.services.named_credentials import connection_fingerprint
 
 
@@ -18,15 +27,41 @@ class _FakeNamedCredentialRepository:
             records = [record for record in records if record.provider == provider]
         return sorted(records, key=lambda item: item.name)
 
-    async def list_usage_counts(self) -> dict[str, int]:
-        return dict(self.usage_counts)
+    async def list_by_managed_asset_ids(
+        self,
+        managed_asset_ids: list[str],
+        *,
+        provider: str | None = None,
+    ) -> list[NamedCredentialRecord]:
+        records = [
+            record
+            for record in self.records.values()
+            if record.managed_asset_id in managed_asset_ids
+        ]
+        if provider:
+            records = [record for record in records if record.provider == provider]
+        return sorted(records, key=lambda item: item.name)
+
+    async def list_usage_counts(
+        self,
+        credential_ids: list[str] | None = None,
+    ) -> dict[str, int]:
+        if credential_ids is None:
+            return dict(self.usage_counts)
+        return {
+            credential_id: count
+            for credential_id, count in self.usage_counts.items()
+            if credential_id in credential_ids
+        }
 
     async def get_by_id(self, credential_id: str) -> NamedCredentialRecord | None:
         return self.records.get(credential_id)
 
-    async def get_by_name(self, name: str) -> NamedCredentialRecord | None:
+    async def get_by_name(
+        self, name: str, *, name_scope: str = "platform"
+    ) -> NamedCredentialRecord | None:
         for record in self.records.values():
-            if record.name == name:
+            if record.name == name and record.name_scope == name_scope:
                 return record
         return None
 
@@ -37,8 +72,10 @@ class _FakeNamedCredentialRepository:
             name=record.name,
             provider=record.provider,
             connection_config=dict(record.connection_config),
+            name_scope=record.name_scope,
             metadata=dict(record.metadata) if record.metadata is not None else None,
             created_by_account_id=record.created_by_account_id,
+            managed_asset_id=record.managed_asset_id,
             created_at=now,
             updated_at=now,
         )
@@ -62,8 +99,10 @@ class _FakeNamedCredentialRepository:
             name=name,
             provider=provider,
             connection_config=dict(connection_config),
+            name_scope=existing.name_scope,
             metadata=dict(metadata) if metadata is not None else None,
             created_by_account_id=existing.created_by_account_id,
+            managed_asset_id=existing.managed_asset_id,
             created_at=existing.created_at,
             updated_at=datetime.now(tz=UTC),
         )
@@ -83,6 +122,322 @@ class _FakeNamedCredentialRepository:
         if self.usage_counts.get(credential_id):
             return [{"deployment_id": "dep-1", "model_name": "gpt-4o-mini"}]
         return []
+
+
+class _FakeManagedAssetAccessRepository:
+    prisma = None
+
+    def __init__(self, app) -> None:  # noqa: ANN001
+        self.app = app
+        self.policies: dict[str, AssetAccessPolicy] = {}
+
+    async def create_policy(
+        self,
+        policy: AssetAccessPolicy,
+        *,
+        created_by_account_id: str | None,
+    ) -> AssetAccessPolicy:
+        del created_by_account_id
+        self.policies[policy.asset.asset_id] = policy
+        return policy
+
+    async def delete_policy(self, asset_id: str) -> bool:
+        return self.policies.pop(asset_id, None) is not None
+
+    async def get_policy(self, asset_id: str) -> AssetAccessPolicy | None:
+        return self.policies.get(asset_id)
+
+    async def get_accessible_policy(
+        self,
+        asset_id: str,
+        principal: AssetPrincipal,
+    ) -> AssetAccessPolicy | None:
+        policy = self.policies.get(asset_id)
+        if policy is None or not resolve_asset_capabilities(policy, principal).can_read:
+            return None
+        return policy
+
+    async def replace_grant(
+        self,
+        policy: AssetAccessPolicy,
+        *,
+        expected_policy_version: int,
+        changed_by_account_id: str | None,
+    ) -> AssetAccessPolicy:
+        del changed_by_account_id
+        current = self.policies[policy.asset.asset_id]
+        if current.asset.policy_version != expected_policy_version:
+            from src.db.managed_assets import ManagedAssetPolicyConflictError
+
+            raise ManagedAssetPolicyConflictError("asset policy changed")
+        updated = AssetAccessPolicy(
+            asset=ManagedAsset(
+                asset_id=policy.asset.asset_id,
+                asset_kind=policy.asset.asset_kind,
+                governance_source=policy.asset.governance_source,
+                owner_account_id=policy.asset.owner_account_id,
+                policy_version=expected_policy_version + 1,
+                state=policy.asset.state,
+            ),
+            grant=policy.grant,
+        )
+        self.policies[policy.asset.asset_id] = updated
+        return updated
+
+    def _legacy_policy(self, credential_id: str) -> AssetAccessPolicy | None:
+        named_repository = getattr(self.app.state, "named_credential_repository", None)
+        record = getattr(named_repository, "records", {}).get(credential_id)
+        if record is None:
+            return None
+        asset_id = record.managed_asset_id or f"legacy-{credential_id}"
+        return AssetAccessPolicy(
+            asset=ManagedAsset(
+                asset_id=asset_id,
+                asset_kind=AssetKind.NAMED_CREDENTIAL,
+                governance_source=GovernanceSource.PLATFORM,
+                owner_account_id=None,
+            )
+        )
+
+    async def get_policy_for_resource(
+        self,
+        asset_kind: AssetKind,
+        resource_id: str,
+        *,
+        principal: AssetPrincipal | None = None,
+    ) -> AssetAccessPolicy | None:
+        assert asset_kind is AssetKind.NAMED_CREDENTIAL
+        named_repository = getattr(self.app.state, "named_credential_repository", None)
+        record = getattr(named_repository, "records", {}).get(resource_id)
+        if record is None:
+            return None
+        if record.managed_asset_id in self.policies:
+            policy = self.policies[record.managed_asset_id]
+        else:
+            policy = self._legacy_policy(resource_id)
+        if policy is None or principal is None:
+            return policy
+        return policy if resolve_asset_capabilities(policy, principal).can_read else None
+
+    async def list_accessible_policies(
+        self,
+        asset_kind: AssetKind,
+        principal: AssetPrincipal,
+    ) -> list[AssetAccessPolicy]:
+        assert asset_kind is AssetKind.NAMED_CREDENTIAL
+        named_repository = getattr(self.app.state, "named_credential_repository", None)
+        policies: list[AssetAccessPolicy] = []
+        for credential_id, record in getattr(named_repository, "records", {}).items():
+            policy = self.policies.get(record.managed_asset_id or "")
+            policy = policy or self._legacy_policy(credential_id)
+            if policy is not None and resolve_asset_capabilities(policy, principal).can_read:
+                policies.append(policy)
+        return policies
+
+
+@pytest.fixture(autouse=True)
+def _managed_asset_access_repository(test_app):  # noqa: ANN001, ANN202
+    test_app.state.managed_asset_access_repository = _FakeManagedAssetAccessRepository(test_app)
+
+
+class _IdentityService:
+    def __init__(self, context: PlatformAuthContext) -> None:
+        self.context = context
+
+    async def get_context_for_session(self, token: str) -> PlatformAuthContext | None:
+        return self.context if token == "asset-session" else None
+
+
+def _user_context(
+    account_id: str,
+    *,
+    team_ids: tuple[str, ...] = (),
+    organization_ids: tuple[str, ...] = (),
+) -> PlatformAuthContext:
+    return PlatformAuthContext(
+        account_id=account_id,
+        email=f"{account_id}@example.com",
+        role="org_user",
+        organization_memberships=[
+            {"organization_id": organization_id, "role": "org_member"}
+            for organization_id in organization_ids
+        ],
+        team_memberships=[{"team_id": team_id, "role": "team_developer"} for team_id in team_ids],
+    )
+
+
+@pytest.mark.asyncio
+async def test_creator_owns_private_named_credential_and_sees_only_accessible_rows(
+    client,
+    test_app,
+):
+    repository = _FakeNamedCredentialRepository()
+    test_app.state.named_credential_repository = repository
+    identity = _IdentityService(_user_context("acct-owner"))
+    test_app.state.platform_identity_service = identity
+
+    created_response = await client.post(
+        "/ui/api/named-credentials",
+        cookies={"deltallm_session": "asset-session"},
+        json={
+            "name": "Creator OpenAI",
+            "provider": "openai",
+            "connection_config": {"api_key": "sk-secret"},
+        },
+    )
+
+    assert created_response.status_code == 200
+    created = created_response.json()
+    assert created["connection_config"]["api_key"] == "***REDACTED***"
+    assert created["access"]["governance_source"] == "creator"
+    assert created["access"]["visibility"] == "private"
+    assert created["access"]["effective_role"] == "owner"
+    assert created["access"]["capabilities"]["manage_access"] is True
+
+    identity.context = _user_context("acct-other")
+    other_list = await client.get(
+        "/ui/api/named-credentials",
+        cookies={"deltallm_session": "asset-session"},
+    )
+    assert other_list.status_code == 200
+    assert other_list.json()["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_creator_can_share_named_credential_with_multiple_teams(
+    client,
+    test_app,
+):
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository()
+    test_app.state.platform_identity_service = _IdentityService(
+        _user_context("acct-owner", team_ids=("team-1", "team-2"))
+    )
+
+    response = await client.post(
+        "/ui/api/named-credentials",
+        cookies={"deltallm_session": "asset-session"},
+        json={
+            "name": "Shared credential",
+            "provider": "openai",
+            "connection_config": {"api_key": "sk-secret"},
+            "access": {
+                "grants": [
+                    {
+                        "subject_type": "team",
+                        "subject_id": "team-1",
+                        "access_role": "reader",
+                    },
+                    {
+                        "subject_type": "team",
+                        "subject_id": "team-2",
+                        "access_role": "editor",
+                    },
+                ]
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["access"]["visibility"] == "team"
+    assert response.json()["access"]["subject_id"] is None
+    assert response.json()["access"]["grants"] == [
+        {"subject_type": "team", "subject_id": "team-1", "access_role": "reader"},
+        {"subject_type": "team", "subject_id": "team-2", "access_role": "editor"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_team_editor_can_update_but_cannot_delete_or_reshare_named_credential(
+    client,
+    test_app,
+):
+    repository = _FakeNamedCredentialRepository()
+    test_app.state.named_credential_repository = repository
+    identity = _IdentityService(_user_context("acct-owner", team_ids=("team-1",)))
+    test_app.state.platform_identity_service = identity
+
+    created_response = await client.post(
+        "/ui/api/named-credentials",
+        cookies={"deltallm_session": "asset-session"},
+        json={
+            "name": "Team OpenAI",
+            "provider": "openai",
+            "connection_config": {"api_key": "sk-secret"},
+            "access": {
+                "visibility": "team",
+                "subject_id": "team-1",
+                "access_role": "editor",
+            },
+        },
+    )
+    assert created_response.status_code == 200
+    created = created_response.json()
+
+    identity.context = _user_context("acct-editor", team_ids=("team-1",))
+    update_response = await client.put(
+        f"/ui/api/named-credentials/{created['credential_id']}",
+        cookies={"deltallm_session": "asset-session"},
+        json={
+            "name": "Team OpenAI Updated",
+            "provider": "openai",
+            "connection_config": {"api_key": "sk-rotated"},
+        },
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["access"]["effective_role"] == "editor"
+
+    delete_response = await client.delete(
+        f"/ui/api/named-credentials/{created['credential_id']}",
+        cookies={"deltallm_session": "asset-session"},
+    )
+    assert delete_response.status_code == 404
+
+    access_response = await client.put(
+        f"/ui/api/assets/{created['access']['managed_asset_id']}/access",
+        cookies={"deltallm_session": "asset-session"},
+        json={
+            "visibility": "private",
+            "expected_policy_version": created["access"]["policy_version"],
+        },
+    )
+    assert access_response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_creator_cannot_share_named_credential_outside_memberships_or_publicly(
+    client,
+    test_app,
+):
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository()
+    test_app.state.platform_identity_service = _IdentityService(
+        _user_context("acct-owner", team_ids=("team-1",))
+    )
+    base_payload = {
+        "name": "Invalid share",
+        "provider": "openai",
+        "connection_config": {"api_key": "sk-secret"},
+    }
+
+    unrelated_team = await client.post(
+        "/ui/api/named-credentials",
+        cookies={"deltallm_session": "asset-session"},
+        json={
+            **base_payload,
+            "access": {
+                "visibility": "team",
+                "subject_id": "team-other",
+                "access_role": "reader",
+            },
+        },
+    )
+    assert unrelated_team.status_code == 403
+
+    public = await client.post(
+        "/ui/api/named-credentials",
+        cookies={"deltallm_session": "asset-session"},
+        json={**base_payload, "access": {"visibility": "public"}},
+    )
+    assert public.status_code == 403
 
 
 class _FakeHotReloadManager:

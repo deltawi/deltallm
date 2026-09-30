@@ -1,4 +1,5 @@
 import { apiFetch, withQuery } from './transport';
+import type { ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
 
 export interface RouteGroup {
   route_group_id: string;
@@ -12,6 +13,7 @@ export interface RouteGroup {
   default_prompt?: { template_key: string; label?: string | null } | null;
   created_at?: string | null;
   updated_at?: string | null;
+  access?: ManagedAssetAccess | null;
 }
 
 export interface RouteGroupMember {
@@ -156,6 +158,7 @@ export interface RouteGroupWritePayload {
   default_prompt?: { template_key: string; label?: string | null } | null;
   owner_scope_type?: string | null;
   owner_scope_id?: string | null;
+  access?: ManagedAssetAccessInput;
 }
 
 export interface RouteGroupMemberWritePayload {

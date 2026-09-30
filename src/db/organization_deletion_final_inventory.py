@@ -124,6 +124,11 @@ inventory AS (
         EXISTS (
             SELECT 1 FROM ({_SCOPED_ACCESS_UNION_SQL}) scoped
             WHERE ({scope_predicate("scoped")})
+        ) OR EXISTS (
+            SELECT 1
+            FROM deltallm_assetgrant AS asset_grant
+            WHERE asset_grant.organization_id = $1
+               OR asset_grant.team_id IN (SELECT team_id FROM target_teams)
         ) AS scoped_access,
         EXISTS (
             SELECT 1 FROM deltallm_verificationtoken v

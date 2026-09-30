@@ -45,14 +45,32 @@ export const MODE_BADGE_COLORS: Record<string, string> = {
   rerank: 'bg-orange-100 text-orange-700',
 };
 
+export function suggestApiModelSlug(displayName: string): string {
+  const normalized = displayName
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 64)
+    .replace(/-$/g, '');
+  return normalized || 'model';
+}
+
 export interface ModelFormValues {
   mode: ModelMode;
   model_name: string;
+  api_model_id: string;
+  api_model_slug: string;
+  api_namespace: string;
+  api_namespace_locked: boolean;
   provider: string;
   model: string;
   credential_source: 'inline' | 'named';
   named_credential_id: string;
   named_credential_name: string;
+  keep_existing_named_credential: boolean;
   inline_credentials_present: boolean;
   clear_inline_api_key: boolean;
   api_key: string;
@@ -104,11 +122,16 @@ export type ModelPayload = ModelWritePayload;
 export const EMPTY_FORM: ModelFormValues = {
   mode: 'chat',
   model_name: '',
+  api_model_id: '',
+  api_model_slug: '',
+  api_namespace: '',
+  api_namespace_locked: false,
   provider: '',
   model: '',
   credential_source: 'inline',
   named_credential_id: '',
   named_credential_name: '',
+  keep_existing_named_credential: false,
   inline_credentials_present: false,
   clear_inline_api_key: false,
   api_key: '',
@@ -437,12 +460,21 @@ export function buildModelPayload(
   }
   model_info.default_params = Object.keys(defaultParamsPayload).length > 0 ? defaultParamsPayload : {};
 
-  return {
-    model_name: form.model_name.trim(),
-    named_credential_id: useNamedCredential ? form.named_credential_id.trim() || null : null,
+  const payload: ModelPayload = {
+    model_name: form.api_model_id.trim() || form.model_name.trim(),
+    api_model_id: form.api_model_id.trim() || undefined,
+    api_model_slug: form.api_model_slug.trim() || undefined,
+    api_namespace: form.api_namespace.trim() || undefined,
+    display_name: form.model_name.trim(),
     deltallm_params,
     model_info,
   };
+  if (!form.keep_existing_named_credential) {
+    payload.named_credential_id = useNamedCredential
+      ? form.named_credential_id.trim() || null
+      : null;
+  }
+  return payload;
 }
 
 export function formFromModel(
@@ -464,12 +496,21 @@ export function formFromModel(
 
   const form: ModelFormValues = {
     mode: toModelMode(mi.mode || model.mode),
-    model_name: model.model_name || '',
+    model_name: model.display_name || model.model_name || '',
+    api_model_id: model.api_model_id || model.model_name || '',
+    api_model_slug: (model.api_model_id || model.model_name || '').split('/').at(-1) || '',
+    api_namespace: (model.api_model_id || model.model_name || '').includes('/')
+      ? (model.api_model_id || model.model_name || '').split('/')[0]
+      : '',
+    api_namespace_locked: true,
     provider,
     model: normalizedModel,
     credential_source: model.credential_source || (model.named_credential_id ? 'named' : 'inline'),
     named_credential_id: strOrEmpty(model.named_credential_id),
     named_credential_name: strOrEmpty(model.named_credential_name),
+    keep_existing_named_credential:
+      model.credential_binding?.state === 'active'
+      && model.credential_binding.credential_access === 'opaque',
     inline_credentials_present: Boolean(model.inline_credentials_present),
     clear_inline_api_key: false,
     api_key: '',

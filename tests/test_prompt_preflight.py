@@ -7,7 +7,13 @@ import pytest
 from src.db.prompt_registry import PromptBindingRecord, PromptResolvedRecord
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_targets import CallableTarget
-from src.services.prompt_registry import PromptProvenance, PromptRegistryService, PromptRenderOutput
+from src.services.creator_prompt_access import CreatorPromptAccessSnapshot
+from src.services.prompt_registry import (
+    PromptProvenance,
+    PromptReference,
+    PromptRegistryService,
+    PromptRenderOutput,
+)
 from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
 
 
@@ -399,6 +405,88 @@ async def test_prompt_registry_user_binding_precedes_api_key_binding() -> None:
     assert resolved.provenance.binding_scope == "user"
     assert resolved.provenance.binding_scope_id == "user-1"
     assert resolved.messages[0]["content"] == "Support prompt active."
+
+
+@pytest.mark.asyncio
+async def test_explicit_creator_prompt_is_denied_before_prompt_lookup() -> None:
+    class _CountingPromptRepository(_PromptRepoWithoutBindings):
+        def __init__(self) -> None:
+            self.prompt_lookups = 0
+
+        async def resolve_prompt(
+            self, *, template_key: str, label: str | None = None, version: int | None = None
+        ):  # noqa: ANN201
+            self.prompt_lookups += 1
+            return await super().resolve_prompt(
+                template_key=template_key,
+                label=label,
+                version=version,
+            )
+
+    repository = _CountingPromptRepository()
+    service = PromptRegistryService(repository=repository)
+    snapshot = CreatorPromptAccessSnapshot.create(
+        template_keys={"support.prompt"},
+        public_templates=set(),
+        templates_by_owner={"owner-1": {"support.prompt"}},
+        templates_by_team={},
+        templates_by_organization={},
+        template_key_by_asset_id={"asset-1": "support.prompt"},
+    )
+    outsider = resolve_runtime_scope_context(UserAPIKeyAuth(api_key="sk-outsider"))
+
+    with pytest.raises(ValueError, match="Prompt reference could not be resolved"):
+        await service.resolve_and_render(
+            explicit_reference=PromptReference("support.prompt", label="production"),
+            variables={},
+            api_key="sk-outsider",
+            user_id=None,
+            team_id=None,
+            organization_id=None,
+            route_group_key=None,
+            model="gpt-4o-mini",
+            request_id="req-denied",
+            scope_context=outsider,
+            creator_prompt_access_snapshot=snapshot,
+        )
+
+    assert repository.prompt_lookups == 0
+
+
+@pytest.mark.asyncio
+async def test_inaccessible_creator_binding_falls_through_to_next_visible_prompt() -> None:
+    service = PromptRegistryService(repository=_PromptRepoWithScopedBindings())
+    auth = annotate_auth_metadata(
+        UserAPIKeyAuth(api_key="sk-test", user_id="user-1"),
+        auth_source="api_key",
+        api_key_scope_id="sk-test",
+    )
+    snapshot = CreatorPromptAccessSnapshot.create(
+        template_keys={"support.prompt"},
+        public_templates=set(),
+        templates_by_owner={"another-owner": {"support.prompt"}},
+        templates_by_team={},
+        templates_by_organization={},
+        template_key_by_asset_id={"asset-1": "support.prompt"},
+    )
+
+    resolved = await service.resolve_and_render(
+        explicit_reference=None,
+        variables={},
+        api_key=auth.api_key,
+        user_id=auth.user_id,
+        team_id=auth.team_id,
+        organization_id=auth.organization_id,
+        route_group_key=None,
+        model="gpt-4o-mini",
+        request_id="req-fallback",
+        scope_context=resolve_runtime_scope_context(auth),
+        creator_prompt_access_snapshot=snapshot,
+    )
+
+    assert resolved is not None
+    assert resolved.provenance.template_key == "key.prompt"
+    assert resolved.messages[0]["content"] == "Key prompt wins."
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from src.config import AppConfig
@@ -18,6 +19,17 @@ if TYPE_CHECKING:
     from src.config_runtime.secrets import SecretResolver
 
 
+logger = logging.getLogger(__name__)
+_SECRET_CONNECTION_FIELDS = frozenset(
+    {
+        "api_key",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+    }
+)
+
+
 def _deployment_id(model_name: str, index: int, value: str | None) -> str:
     if value:
         return str(value)
@@ -29,12 +41,30 @@ def resolve_runtime_deltallm_params(
     settings: Any,
     *,
     named_credential: NamedCredentialRecord | None = None,
+    allow_platform_defaults: bool = True,
 ) -> dict[str, Any]:
     resolved = merge_named_credential_params(params, named_credential)
     return resolve_provider_connection_defaults(
         resolved,
-        default_api_key=getattr(settings, "openai_api_key", None),
-        default_api_base=getattr(settings, "openai_base_url", None),
+        default_api_key=(
+            getattr(settings, "openai_api_key", None) if allow_platform_defaults else None
+        ),
+        default_api_base=(
+            getattr(settings, "openai_base_url", None) if allow_platform_defaults else None
+        ),
+    )
+
+
+def _credential_secret_resolution_failed(
+    raw: NamedCredentialRecord | None,
+    resolved: NamedCredentialRecord | None,
+) -> bool:
+    if raw is None or resolved is None:
+        return raw is not None
+    return any(
+        str(raw.connection_config.get(field) or "").strip()
+        and not str(resolved.connection_config.get(field) or "").strip()
+        for field in _SECRET_CONNECTION_FIELDS
     )
 
 
@@ -99,6 +129,7 @@ async def build_model_registry_from_config(
                 "deployment_id": _deployment_id(
                     entry.model_name, index, getattr(entry, "deployment_id", None)
                 ),
+                "model_id": None,
                 "deltallm_params": resolve_runtime_deltallm_params(
                     entry.deltallm_params.model_dump(exclude_none=True),
                     settings,
@@ -137,19 +168,34 @@ async def build_model_registry_from_records(
         named_credential = resolve_named_credential_record(
             raw_named_credential, secret_resolver=secret_resolver
         )
+        if record.governance_source == "creator" and (
+            record.credential_binding_state != "active"
+            or not record.named_credential_id
+            or named_credential is None
+            or _credential_secret_resolution_failed(raw_named_credential, named_credential)
+        ):
+            logger.warning(
+                "excluding creator deployment %s because its credential binding is unavailable",
+                record.deployment_id,
+            )
+            continue
         model_registry.setdefault(record.model_name, []).append(
             {
                 "deployment_id": record.deployment_id,
+                "model_id": record.model_id,
                 "named_credential_id": record.named_credential_id,
                 "named_credential_name": named_credential.name
                 if named_credential is not None
                 else None,
+                "credential_binding_mode": record.credential_binding_mode,
+                "credential_binding_state": record.credential_binding_state,
                 "routing_state_incarnation": record.routing_state_incarnation
                 or record.deployment_id,
                 "deltallm_params": resolve_runtime_deltallm_params(
                     record.deltallm_params,
                     settings,
                     named_credential=named_credential,
+                    allow_platform_defaults=record.governance_source != "creator",
                 ),
                 "model_info": dict(record.model_info or {}),
             }
