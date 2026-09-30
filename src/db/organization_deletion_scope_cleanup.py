@@ -212,7 +212,6 @@ class OrganizationDeletionScopeCleanup:
                           )
                         )
                       )
-                  )
                 RETURNING deployment.deployment_id
             ), revision_bump AS (
                 UPDATE deltallm_routeruntimestate

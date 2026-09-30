@@ -246,6 +246,14 @@ are not ordinary asset CRUD.
   and only the four explicitly configured Redis cases failing without their URL; those four then
   passed against an isolated Redis instance. All 266 UI unit tests, the production UI build, Ruff,
   changed-file ESLint, Prisma validation, and whitespace checks passed.
+- 2026-09-30: PR CI remediation removed an unmatched parenthesis from the organization-deletion
+  asset-grant cleanup query. The original PostgreSQL error left the deletion job pending; the later
+  test cleanup then surfaced the misleading `organization still has referenced teams` guard error.
+  The exact regression, all nine organization-deletion integration tests, and the complete CI
+  PostgreSQL selection passed afterward (323 tests; 5,355 deselected). The OpenAPI and complete
+  General Settings generated references were refreshed with the CI Python 3.12 environment. All
+  generated-reference checks, documentation health checks, nine documentation tests, strict MkDocs
+  build, public-artifact containment verification, Ruff, and whitespace validation passed.
 
 ### Remaining implementation sequence
 
