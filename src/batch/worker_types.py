@@ -13,6 +13,8 @@ from src.router.runtime_generation import RoutingRuntimeGenerationStore
 from src.router.router import Router
 from src.router.failover import FailoverManager
 from src.router.selection.reachability import selector_reachable_groups
+from src.services.creator_model_access import CreatorModelAccessSnapshot
+from src.services.creator_route_group_access import CreatorRouteGroupAccessSnapshot
 
 
 BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR = "artifact_validation_failed"
@@ -32,6 +34,8 @@ class BatchRoutingRuntime(Protocol):
     router: Any
     failover_manager: Any
     authorization_snapshot: CallableTargetGrantSnapshot | None
+    creator_model_access_snapshot: CreatorModelAccessSnapshot
+    creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot
     selector_reachable_groups: frozenset[str]
 
 
@@ -44,6 +48,8 @@ class _LegacyBatchRoutingRuntime:
     router: Any
     failover_manager: Any
     authorization_snapshot: CallableTargetGrantSnapshot | None
+    creator_model_access_snapshot: CreatorModelAccessSnapshot
+    creator_route_group_access_snapshot: CreatorRouteGroupAccessSnapshot
     selector_reachable_groups: frozenset[str] = frozenset()
 
 
@@ -71,6 +77,8 @@ def capture_batch_routing_runtime(app_state: Any) -> BatchRoutingRuntime:
         router=router,
         failover_manager=failover_manager,
         authorization_snapshot=authorization_snapshot,
+        creator_model_access_snapshot=CreatorModelAccessSnapshot.empty(),
+        creator_route_group_access_snapshot=CreatorRouteGroupAccessSnapshot.empty(),
         selector_reachable_groups=(
             selector_reachable_groups(
                 [

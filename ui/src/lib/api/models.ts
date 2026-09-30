@@ -1,9 +1,12 @@
 import { apiFetch, withQuery } from './transport';
+import type { ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
 
 export type ProviderHealthStatus = 'healthy' | 'degraded' | 'down';
 
 export interface ProviderHealthSummaryRow {
   provider: string;
+  routable?: boolean;
+  runtime_status?: 'active' | 'credential_unavailable' | 'runtime_unavailable';
   models: number;
   healthy_models: number;
   unhealthy_models: number;
@@ -120,12 +123,22 @@ export interface ModelInfo extends Record<string, unknown> {
 
 export interface ModelDeploymentDetail {
   deployment_id: string;
+  model_id?: string | null;
   model_name: string;
+  api_model_id?: string;
+  display_name?: string;
   provider: string;
   mode?: string;
   credential_source?: 'inline' | 'named';
   named_credential_id?: string | null;
   named_credential_name?: string | null;
+  credential_binding?: {
+    state?: 'active' | 'revoked' | null;
+    mode?: 'audience_scoped' | 'owner_delegated' | 'platform_override' | null;
+    credential_access: 'accessible' | 'opaque' | 'not_applicable';
+    can_replace: boolean;
+    can_revoke?: boolean;
+  } | null;
   inline_credentials_present?: boolean;
   connection_summary?: {
     api_base?: string | null;
@@ -138,13 +151,26 @@ export interface ModelDeploymentDetail {
   health?: DeploymentHealth;
   deltallm_params: ModelRuntimeParams;
   model_info: ModelInfo;
+  access?: ManagedAssetAccess | null;
 }
 
 export interface ModelWritePayload {
   model_name: string;
+  api_model_id?: string;
+  api_model_slug?: string;
+  api_namespace?: string;
+  display_name?: string;
   named_credential_id?: string | null;
   deltallm_params: Record<string, unknown>;
   model_info: Record<string, unknown>;
+  access?: ManagedAssetAccessInput;
+}
+
+export interface ModelIdentityResponse {
+  namespace_required: boolean;
+  api_namespace: string | null;
+  suggested_namespace: string | null;
+  namespace_locked: boolean;
 }
 
 export interface ModelMutationResponse extends ModelDeploymentDetail {
@@ -153,6 +179,12 @@ export interface ModelMutationResponse extends ModelDeploymentDetail {
 
 export interface ModelDeleteResponse {
   deleted: boolean;
+  warnings: string[];
+}
+
+export interface ModelCredentialBindingRevokeResponse {
+  deployment_id: string;
+  revoked: boolean;
   warnings: string[];
 }
 
@@ -167,6 +199,8 @@ export interface ModelListResponse {
 }
 
 export const models = {
+  identity: (signal?: AbortSignal) =>
+    apiFetch<ModelIdentityResponse>('/ui/api/models/identity', { signal }),
   list: (
     params?: {
       search?: string;
@@ -220,4 +254,12 @@ export const models = {
       method: 'DELETE',
       signal,
     }),
+  revokeCredentialBinding: (deploymentId: string, signal?: AbortSignal) =>
+    apiFetch<ModelCredentialBindingRevokeResponse>(
+      `/ui/api/models/${encodeURIComponent(deploymentId)}/credential-binding/revoke`,
+      {
+        method: 'POST',
+        signal,
+      },
+    ),
 };

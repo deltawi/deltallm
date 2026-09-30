@@ -2,6 +2,18 @@ import { applyGuidedSelector, readGuidedSelector, selectorDefaults, validateGuid
 
 export const ROUTE_GROUP_MODE_OPTIONS = ['chat', 'embedding', 'image_generation', 'audio_speech', 'audio_transcription', 'rerank'] as const;
 
+export function groupKeySuffixFromName(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 64)
+    .replace(/-$/g, '');
+}
+
 export const ROUTE_GROUP_STRATEGY_OPTIONS = [
   'simple-shuffle',
   'least-busy',
@@ -12,6 +24,31 @@ export const ROUTE_GROUP_STRATEGY_OPTIONS = [
   'weighted',
   'rate-limit-aware',
 ] as const;
+
+export const ROUTE_GROUP_MODE_COLORS: Record<string, string> = {
+  chat: 'bg-blue-100 text-blue-700',
+  embedding: 'bg-violet-100 text-violet-700',
+  audio_speech: 'bg-orange-100 text-orange-700',
+  audio_transcription: 'bg-orange-100 text-orange-700',
+  image_generation: 'bg-pink-100 text-pink-700',
+  rerank: 'bg-teal-100 text-teal-700',
+};
+
+const ROUTE_GROUP_STRATEGY_LABELS: Record<string, string> = {
+  'simple-shuffle': 'Shuffle',
+  weighted: 'Weighted',
+  'least-busy': 'Least Busy',
+  'latency-based-routing': 'Latency',
+  'cost-based-routing': 'Cost',
+  'usage-based-routing': 'Usage',
+  'tag-based-routing': 'Tag (Legacy)',
+  'priority-based-routing': 'Priority',
+  'rate-limit-aware': 'Rate Limit',
+};
+
+export function routeGroupStrategyLabel(strategy: string | null | undefined): string {
+  return strategy ? ROUTE_GROUP_STRATEGY_LABELS[strategy] || strategy : 'Shuffle';
+}
 
 export const LEGACY_TAG_ROUTING_STRATEGY = 'tag-based-routing';
 

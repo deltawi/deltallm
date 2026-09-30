@@ -4,14 +4,29 @@ import { Plus, Sparkles, Trash2 } from 'lucide-react';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { promptRegistry } from '../lib/api';
+import ManagedAssetAccessFields from '../components/ManagedAssetAccessFields';
+import {
+  promptRegistry,
+  managedAssetAccessInput,
+  type ManagedAssetGrantInput,
+  type PromptTemplate,
+} from '../lib/api';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { ContentCard, IndexShell } from '../components/admin/shells';
+import { useAuth } from '../lib/auth';
+import { isPlatformAdminSession } from '../lib/authorization';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 export default function PromptRegistry() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const { session, authMode } = useAuth();
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions, loading: audiencesLoading, error: audiencesError, refetch: refetchAudiences } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [pageOffset, setPageOffset] = useState(0);
@@ -20,6 +35,7 @@ export default function PromptRegistry() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [grants, setGrants] = useState<ManagedAssetGrantInput[]>([]);
   const [form, setForm] = useState({
     template_key: '',
     name: '',
@@ -41,7 +57,10 @@ export default function PromptRegistry() {
     return () => window.clearTimeout(timer);
   }, [searchInput]);
 
-  const resetForm = () => setForm({ template_key: '', name: '', description: '', owner_scope: '' });
+  const resetForm = () => {
+    setForm({ template_key: '', name: '', description: '', owner_scope: '' });
+    setGrants([]);
+  };
 
   const handleCreate = async () => {
     const templateKey = form.template_key.trim();
@@ -61,7 +80,8 @@ export default function PromptRegistry() {
         template_key: templateKey,
         name,
         description: form.description.trim() || null,
-        owner_scope: form.owner_scope.trim() || null,
+        ...(isPlatformAdmin ? { owner_scope: form.owner_scope.trim() || null } : {}),
+        access: managedAssetAccessInput(grants),
       });
       setCreateOpen(false);
       resetForm();
@@ -94,20 +114,27 @@ export default function PromptRegistry() {
     { key: 'name', header: 'Name' },
     { key: 'description', header: 'Description', render: (row: any) => row.description || <span className="text-gray-400">—</span> },
     { key: 'version_count', header: 'Versions' },
+    {
+      key: 'visibility',
+      header: 'Visibility',
+      render: (row: PromptTemplate) => row.access?.visibility || 'Platform',
+    },
     { key: 'label_count', header: 'Labels' },
     {
       key: 'actions',
       header: '',
-      render: (row: any) => (
+      render: (row: PromptTemplate) => (
         <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
-          <button
-            onClick={() => setDeleteTarget(row.template_key)}
-            disabled={deletingKey === row.template_key}
-            className="p-1.5 hover:bg-red-50 rounded-lg disabled:opacity-50"
-            title="Delete template"
-          >
-            <Trash2 className="w-4 h-4 text-red-500" />
-          </button>
+          {(!row.access || row.access.capabilities.delete) ? (
+            <button
+              onClick={() => setDeleteTarget(row.template_key)}
+              disabled={deletingKey === row.template_key}
+              className="p-1.5 hover:bg-red-50 rounded-lg disabled:opacity-50"
+              title="Delete template"
+            >
+              <Trash2 className="w-4 h-4 text-red-500" />
+            </button>
+          ) : null}
         </div>
       ),
     },
@@ -192,21 +219,35 @@ export default function PromptRegistry() {
               <p className="mt-1 text-xs text-slate-500">You only need a stable key and a human-friendly name.</p>
             </div>
 
-            {formError && <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>}
+            {formError && !formError.startsWith('Select a ') ? (
+              <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>
+            ) : null}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Template Key</label>
-              <input
-                value={form.template_key}
-                onChange={(event) => {
-                  setForm({ ...form, template_key: event.target.value });
-                  if (formError) setFormError(null);
-                }}
-                placeholder="support.reply"
-                data-autofocus="true"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-              />
-              <p className="mt-1 text-xs text-gray-500">Use a stable key that labels, bindings, and requests can reference.</p>
+              <div className="flex rounded-lg border border-gray-300 focus-within:ring-2 focus-within:ring-brand-primary">
+                {!isPlatformAdmin ? (
+                  <span className="flex items-center rounded-l-lg border-r border-gray-200 bg-gray-50 px-3 font-mono text-xs text-gray-500">
+                    prm-XXXX-
+                  </span>
+                ) : null}
+                <input
+                  value={form.template_key}
+                  onChange={(event) => {
+                    setForm({ ...form, template_key: event.target.value });
+                    if (formError) setFormError(null);
+                  }}
+                  placeholder="support.reply"
+                  maxLength={isPlatformAdmin ? 201 : 128}
+                  data-autofocus="true"
+                  className="min-w-0 flex-1 rounded-r-lg px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                {isPlatformAdmin
+                  ? 'Use a stable key that labels, bindings, and requests can reference.'
+                  : 'A random four-character code will make the complete prompt key unique.'}
+              </p>
             </div>
 
             <div>
@@ -218,6 +259,20 @@ export default function PromptRegistry() {
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-4">
+            <ManagedAssetAccessFields
+              grants={grants}
+              teamOptions={teamOptions}
+              organizationOptions={organizationOptions}
+              allowPublic={isPlatformAdmin}
+              audiencesLoading={audiencesLoading}
+              audiencesError={audiencesError}
+              onRetryAudiences={refetchAudiences}
+              error={formError?.startsWith('Select a ') ? formError : null}
+              onChange={(nextGrants) => { setGrants(nextGrants); if (formError) setFormError(null); }}
+            />
           </div>
 
           <details className="rounded-xl border border-slate-200 px-4 py-3">
@@ -232,15 +287,17 @@ export default function PromptRegistry() {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Owner Scope</label>
-                <input
-                  value={form.owner_scope}
-                  onChange={(event) => setForm({ ...form, owner_scope: event.target.value })}
-                  placeholder="platform / team:ops / org:acme"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                />
-              </div>
+              {isPlatformAdmin ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Owner Scope</label>
+                  <input
+                    value={form.owner_scope}
+                    onChange={(event) => setForm({ ...form, owner_scope: event.target.value })}
+                    placeholder="platform / team:ops / org:acme"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                  />
+                </div>
+              ) : null}
             </div>
           </details>
 

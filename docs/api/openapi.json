@@ -1,6 +1,15 @@
 {
   "components": {
     "schemas": {
+      "AssetSubjectType": {
+        "enum": [
+          "team",
+          "organization",
+          "public"
+        ],
+        "title": "AssetSubjectType",
+        "type": "string"
+      },
       "AssistantChatMessage": {
         "properties": {
           "content": {
@@ -1731,6 +1740,31 @@
         "title": "MasterKeyLoginRequest",
         "type": "object"
       },
+      "ModelCredentialBindingRevokeResponse": {
+        "properties": {
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "revoked": {
+            "title": "Revoked",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "revoked"
+        ],
+        "title": "ModelCredentialBindingRevokeResponse",
+        "type": "object"
+      },
       "ModelDeleteResponse": {
         "properties": {
           "deleted": {
@@ -1753,10 +1787,38 @@
       },
       "ModelMutationResponse": {
         "properties": {
+          "access": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access"
+          },
+          "api_model_id": {
+            "title": "Api Model Id",
+            "type": "string"
+          },
           "connection_summary": {
             "additionalProperties": true,
             "title": "Connection Summary",
             "type": "object"
+          },
+          "credential_binding": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Binding"
           },
           "credential_source": {
             "title": "Credential Source",
@@ -1771,6 +1833,10 @@
             "title": "Deployment Id",
             "type": "string"
           },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
           "inline_credentials_present": {
             "title": "Inline Credentials Present",
             "type": "boolean"
@@ -1778,6 +1844,17 @@
           "mode": {
             "title": "Mode",
             "type": "string"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
           },
           "model_info": {
             "additionalProperties": true,
@@ -1825,6 +1902,8 @@
         "required": [
           "deployment_id",
           "model_name",
+          "api_model_id",
+          "display_name",
           "provider",
           "mode",
           "credential_source",
@@ -4268,6 +4347,18 @@
       },
       "RouteGroupMutationResponse": {
         "properties": {
+          "access": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -4417,6 +4508,18 @@
       },
       "RouteGroupResponse": {
         "properties": {
+          "access": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -9271,6 +9374,279 @@
         "summary": "Serve Ui Root",
         "tags": [
           "UI"
+        ]
+      }
+    },
+    "/ui/api/assets/audience-options": {
+      "get": {
+        "operationId": "search_managed_asset_audience_options_ui_api_assets_audience_options_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subject_type",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AssetSubjectType"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 200,
+              "title": "Search",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "selected_id",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Selected Id",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "maximum": 20,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Search Managed Asset Audience Options Ui Api Assets Audience Options Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Managed Asset Audience Options",
+        "tags": [
+          "Managed Assets"
+        ]
+      }
+    },
+    "/ui/api/assets/{asset_id}/access": {
+      "get": {
+        "operationId": "get_managed_asset_access_ui_api_assets__asset_id__access_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Managed Asset Access Ui Api Assets  Asset Id  Access Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Managed Asset Access",
+        "tags": [
+          "Managed Assets"
+        ]
+      },
+      "put": {
+        "operationId": "update_managed_asset_access_ui_api_assets__asset_id__access_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Managed Asset Access Ui Api Assets  Asset Id  Access Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Managed Asset Access",
+        "tags": [
+          "Managed Assets"
         ]
       }
     },
@@ -18346,38 +18722,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -18442,38 +18786,6 @@
       "post": {
         "operationId": "create_mcp_server_ui_api_mcp_servers_post",
         "parameters": [
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
           {
             "in": "header",
             "name": "Authorization",
@@ -18563,38 +18875,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -18679,38 +18959,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -18782,38 +19030,6 @@
             "schema": {
               "title": "Server Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -18902,38 +19118,6 @@
             "schema": {
               "title": "Server Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -19049,38 +19233,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -19154,38 +19306,6 @@
             "schema": {
               "title": "Server Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -19861,6 +19981,73 @@
         ]
       }
     },
+    "/ui/api/models/identity": {
+      "get": {
+        "operationId": "get_model_identity_ui_api_models_identity_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Model Identity Ui Api Models Identity Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Model Identity",
+        "tags": [
+          "Models"
+        ]
+      }
+    },
     "/ui/api/models/provider-health-summary": {
       "get": {
         "operationId": "provider_health_summary_ui_api_models_provider_health_summary_get",
@@ -20160,9 +20347,10 @@
         ]
       }
     },
-    "/ui/api/models/{deployment_id}/health-check": {
+    "/ui/api/models/{deployment_id}/credential-binding/revoke": {
       "post": {
-        "operationId": "check_model_health_ui_api_models__deployment_id__health_check_post",
+        "description": "Let the credential owner withdraw delegated runtime use immediately.",
+        "operationId": "revoke_model_credential_binding_ui_api_models__deployment_id__credential_binding_revoke_post",
         "parameters": [
           {
             "in": "path",
@@ -20174,8 +20362,8 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
+            "in": "header",
+            "name": "Authorization",
             "required": false,
             "schema": {
               "anyOf": [
@@ -20186,12 +20374,12 @@
                   "type": "null"
                 }
               ],
-              "title": "Organization Id"
+              "title": "Authorization"
             }
           },
           {
-            "in": "query",
-            "name": "team_id",
+            "in": "header",
+            "name": "X-Master-Key",
             "required": false,
             "schema": {
               "anyOf": [
@@ -20202,7 +20390,49 @@
                   "type": "null"
                 }
               ],
-              "title": "Team Id"
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCredentialBindingRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Model Credential Binding",
+        "tags": [
+          "Models"
+        ]
+      }
+    },
+    "/ui/api/models/{deployment_id}/health-check": {
+      "post": {
+        "operationId": "check_model_health_ui_api_models__deployment_id__health_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
             }
           },
           {
@@ -20295,38 +20525,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -20391,38 +20589,6 @@
       "post": {
         "operationId": "create_named_credential_ui_api_named_credentials_post",
         "parameters": [
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
           {
             "in": "header",
             "name": "Authorization",
@@ -20722,38 +20888,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -20828,38 +20962,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -20931,38 +21033,6 @@
             "schema": {
               "title": "Credential Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -24493,38 +24563,6 @@
         "operationId": "dry_run_prompt_render_ui_api_prompt_registry_render_post",
         "parameters": [
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -24643,38 +24681,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -24739,38 +24745,6 @@
       "post": {
         "operationId": "create_prompt_template_ui_api_prompt_registry_templates_post",
         "parameters": [
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
           {
             "in": "header",
             "name": "Authorization",
@@ -24860,38 +24834,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -24929,9 +24871,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
+                  "additionalProperties": true,
                   "title": "Response Delete Prompt Template Ui Api Prompt Registry Templates  Template Key  Delete",
                   "type": "object"
                 }
@@ -24965,38 +24905,6 @@
             "schema": {
               "title": "Template Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -25071,38 +24979,6 @@
             "schema": {
               "title": "Template Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -25194,38 +25070,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -25300,38 +25144,6 @@
             "schema": {
               "title": "Template Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -25432,38 +25244,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -25539,38 +25319,6 @@
             "schema": {
               "title": "Template Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -25671,38 +25419,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -25769,38 +25485,6 @@
       "post": {
         "operationId": "discover_models_for_provider_ui_api_provider_models_discover_post",
         "parameters": [
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
           {
             "in": "header",
             "name": "Authorization",
@@ -27482,38 +27166,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -27578,38 +27230,6 @@
       "post": {
         "operationId": "create_route_group_ui_api_route_groups_post",
         "parameters": [
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
           {
             "in": "header",
             "name": "Authorization",
@@ -27695,38 +27315,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -27842,38 +27430,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -27983,38 +27539,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -28142,38 +27666,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -28287,38 +27779,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -28455,38 +27915,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -28598,38 +28026,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -28747,38 +28143,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -28890,38 +28254,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -29046,38 +28378,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -29212,38 +28512,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -29365,38 +28633,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -29528,38 +28764,6 @@
               "format": "uuid",
               "title": "Route Group Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -29740,38 +28944,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -29856,38 +29028,6 @@
               "minLength": 1,
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -30004,38 +29144,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -30105,38 +29213,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -30211,38 +29287,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -30332,38 +29376,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -30438,38 +29450,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -30568,38 +29548,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -30671,38 +29619,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -30780,38 +29696,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -30882,38 +29766,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -31004,38 +29856,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -31120,38 +29940,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -31249,38 +30037,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -31364,38 +30120,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {
@@ -31490,38 +30214,6 @@
             "schema": {
               "title": "Group Key",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "organization_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Organization Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "team_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
             }
           },
           {

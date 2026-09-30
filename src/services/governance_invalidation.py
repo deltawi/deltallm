@@ -12,7 +12,9 @@ from src.metrics import increment_config_reload
 logger = logging.getLogger(__name__)
 
 GOVERNANCE_INVALIDATION_CHANNEL = "governance_invalidation"
-_ALLOWED_TARGETS = frozenset({"callable_target", "mcp", "prompt", "route_groups", "tier_policy"})
+_ALLOWED_TARGETS = frozenset(
+    {"callable_target", "creator_model", "mcp", "prompt", "route_groups", "tier_policy"}
+)
 
 
 class RouteGroupRevisionSource(Protocol):
@@ -42,6 +44,10 @@ class GovernanceInvalidationService:
         mcp_registry_service: Any | None = None,
         mcp_governance_service: Any | None = None,
         prompt_registry_service: Any | None = None,
+        creator_model_access_service: Any | None = None,
+        creator_prompt_access_service: Any | None = None,
+        creator_mcp_access_service: Any | None = None,
+        creator_route_group_access_service: Any | None = None,
         route_group_reload: Any | None = None,
         route_group_revision_source: RouteGroupRevisionSource | None = None,
         route_group_applied_revision: Callable[[], int] | None = None,
@@ -57,6 +63,10 @@ class GovernanceInvalidationService:
         self.mcp_registry_service = mcp_registry_service
         self.mcp_governance_service = mcp_governance_service
         self.prompt_registry_service = prompt_registry_service
+        self.creator_model_access_service = creator_model_access_service
+        self.creator_prompt_access_service = creator_prompt_access_service
+        self.creator_mcp_access_service = creator_mcp_access_service
+        self.creator_route_group_access_service = creator_route_group_access_service
         self.route_group_reload = route_group_reload
         self.route_group_revision_source = route_group_revision_source
         self.route_group_applied_revision = route_group_applied_revision
@@ -283,6 +293,8 @@ class GovernanceInvalidationService:
 
     async def _apply_targets(self, targets: tuple[str, ...]) -> tuple[str, ...]:
         failed_targets: list[str] = []
+        if "route_groups" in targets:
+            _mark_reload_failed(getattr(self, "creator_route_group_access_service", None))
         routing_targets = tuple(
             target for target in ("callable_target", "route_groups") if target in targets
         )
@@ -317,8 +329,28 @@ class GovernanceInvalidationService:
                 except Exception as exc:
                     failed_targets.append("tier_policy")
                     logger.warning("failed applying tier policy invalidation: %s", exc)
+        if "creator_model" in targets:
+            _mark_reload_failed(self.creator_model_access_service)
+            try:
+                service = self.creator_model_access_service
+                if service is None or not callable(getattr(service, "reload", None)):
+                    raise RuntimeError("creator-model access service unavailable")
+                await service.reload()
+                if callable(self.route_group_reload):
+                    await self.route_group_reload()
+            except Exception as exc:
+                failed_targets.append("creator_model")
+                logger.warning("failed applying creator-model invalidation: %s", exc)
         if "mcp" in targets:
             target_failed = False
+            creator_access = self.creator_mcp_access_service
+            _mark_reload_failed(creator_access)
+            if creator_access is not None and callable(getattr(creator_access, "reload", None)):
+                try:
+                    await creator_access.reload()
+                except Exception as exc:
+                    target_failed = True
+                    logger.warning("failed applying creator MCP invalidation: %s", exc)
             registry = self.mcp_registry_service
             if registry is not None and callable(getattr(registry, "invalidate_all", None)):
                 try:
@@ -336,13 +368,30 @@ class GovernanceInvalidationService:
             if target_failed:
                 failed_targets.append("mcp")
         if "prompt" in targets:
+            target_failed = False
+            creator_access = self.creator_prompt_access_service
+            _mark_reload_failed(creator_access)
+            if callable(self.route_group_reload):
+                try:
+                    await self.route_group_reload()
+                except Exception as exc:
+                    target_failed = True
+                    logger.warning("failed applying creator-prompt invalidation: %s", exc)
+            elif creator_access is not None and callable(getattr(creator_access, "reload", None)):
+                try:
+                    await creator_access.reload()
+                except Exception as exc:
+                    target_failed = True
+                    logger.warning("failed applying creator-prompt invalidation: %s", exc)
             service = self.prompt_registry_service
             if service is not None and callable(getattr(service, "refresh_namespace_epoch", None)):
                 try:
                     await service.refresh_namespace_epoch()
                 except Exception as exc:
-                    failed_targets.append("prompt")
+                    target_failed = True
                     logger.warning("failed applying prompt invalidation: %s", exc)
+            if target_failed:
+                failed_targets.append("prompt")
         return tuple(failed_targets)
 
     @staticmethod
@@ -363,3 +412,9 @@ def _service_mode(service: Any | None) -> str | None:
         return None
     mode = str(getattr(service, "mode", "") or "").strip().lower()
     return mode or None
+
+
+def _mark_reload_failed(service: Any | None) -> None:
+    marker = getattr(service, "mark_reload_failed", None)
+    if callable(marker):
+        marker()

@@ -20,6 +20,7 @@ from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
     get_auth_scope,
+    managed_asset_membership_transaction,
     optional_int,
     to_json_value,
     validate_runtime_user_scope,
@@ -953,7 +954,7 @@ async def delete_team(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Team mutation requires transaction support",
         )
-    async with db.tx() as tx:
+    async with managed_asset_membership_transaction(db) as tx:
         locked_team = await _lock_team_for_mutation(request, scope, tx, team_id)
         organization_id = str(locked_team.get("organization_id") or "").strip()
         await require_active_organization_mutation(tx, organization_id)
@@ -967,6 +968,23 @@ async def delete_team(
                 detail=(
                     f"Cannot delete team: {key_count[0]['cnt']} API key(s) still assigned. "
                     "Reassign or revoke them first."
+                ),
+            )
+        asset_grants = await tx.query_raw(
+            """
+            SELECT COUNT(*)::int AS count
+            FROM deltallm_assetgrant
+            WHERE team_id = $1
+            """,
+            team_id,
+        )
+        asset_grant_count = int((asset_grants[0] if asset_grants else {}).get("count") or 0)
+        if asset_grant_count:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot delete team: it is used by {asset_grant_count} managed asset "
+                    "access grant(s). Remove this team from those assets' sharing settings first."
                 ),
             )
         await tx.execute_raw(
@@ -1014,7 +1032,7 @@ async def remove_team_member(
         )
     owned_key_rows: list[dict[str, Any]] = []
     revoked_keys = 0
-    async with db.tx() as tx:
+    async with managed_asset_membership_transaction(db) as tx:
         locked_team = await _lock_team_for_mutation(request, scope, tx, team_id)
         organization_id = str(locked_team.get("organization_id") or "").strip()
         await require_active_organization_mutation(tx, organization_id)

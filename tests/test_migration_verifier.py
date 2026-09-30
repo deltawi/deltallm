@@ -93,6 +93,9 @@ def test_upgrade_fixture_supports_already_applied_routing_invariants(
     assert "ELSE 'archived'" in sql
     assert "to_regclass('public.deltallm_routeruntimestate')" in sql
     assert "route_groups_initialized = TRUE" in sql
+    assert verify_migration_paths.UPGRADE_NAMED_CREDENTIAL_ID in sql
+    assert verify_migration_paths.UPGRADE_MCP_SERVER_ID in sql
+    assert verify_migration_paths.UPGRADE_PROMPT_TEMPLATE_ID in sql
 
 
 def test_default_base_ref_prefers_environment_override(

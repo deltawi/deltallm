@@ -6,6 +6,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 
+from src.db.managed_assets import ManagedAssetAudienceNotFoundError
 from src.middleware.errors import (
     anthropic_proxy_error_response,
     proxy_error_response,
@@ -101,3 +102,24 @@ async def test_non_messages_http_errors_keep_fastapi_contract() -> None:
     assert response.status_code == 418
     assert response.json() == {"detail": "ordinary detail"}
     assert response.headers["x-test"] == "yes"
+
+
+@pytest.mark.asyncio
+async def test_missing_managed_asset_audience_is_a_client_validation_error() -> None:
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.post("/access")
+    async def update_access():
+        raise ManagedAssetAudienceNotFoundError(
+            "Selected team audience does not exist: missing-team"
+        )
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/access")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Selected team audience does not exist: missing-team"
+    }

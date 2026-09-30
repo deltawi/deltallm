@@ -80,3 +80,31 @@ test('model mutations pass AbortSignal to the shared transport', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('credential binding revoke targets one encoded deployment and passes AbortSignal', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  let capturedMethod = '';
+  let capturedSignal: AbortSignal | null | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedMethod = String(init?.method || 'GET');
+    capturedSignal = init?.signal;
+    return new Response(JSON.stringify({
+      deployment_id: 'dep/one',
+      revoked: true,
+      warnings: [],
+    }), { headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+
+  try {
+    const controller = new AbortController();
+    const result = await models.revokeCredentialBinding('dep/one', controller.signal);
+    assert.match(capturedUrl, /\/ui\/api\/models\/dep%2Fone\/credential-binding\/revoke$/);
+    assert.equal(capturedMethod, 'POST');
+    assert.equal(capturedSignal, controller.signal);
+    assert.equal(result.revoked, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

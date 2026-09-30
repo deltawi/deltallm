@@ -15,6 +15,7 @@ def test_resolve_runtime_scope_context_for_api_key_auth() -> None:
             user_id="user-1",
             team_id="team-1",
             organization_id="org-1",
+            owner_account_id="account-1",
         ),
         auth_source="api_key",
         api_key_scope_id="hashed-key",
@@ -24,6 +25,7 @@ def test_resolve_runtime_scope_context_for_api_key_auth() -> None:
 
     assert context.auth_source == "api_key"
     assert context.actor_id == "user-1"
+    assert context.owner_account_id == "account-1"
     assert context.scope_chain == (
         ("user", "user-1"),
         ("api_key", "hashed-key"),
@@ -52,6 +54,7 @@ def test_resolve_runtime_scope_context_for_jwt_omits_api_key_scope() -> None:
 
     assert context.auth_source == "jwt"
     assert context.api_key_scope_id is None
+    assert context.owner_account_id is None
     assert context.scope_chain == (
         ("user", "user-1"),
         ("team", "team-1"),
@@ -92,6 +95,7 @@ async def test_auth_middleware_attaches_runtime_scope_context_for_jwt(test_app) 
             return {"user_id": "u-1", "team_id": "team-1", "organization_id": "org-1"}
 
     test_app.state.jwt_auth_handler = StubJWTHandler()
+
     async def _receive() -> dict[str, object]:
         return {"type": "http.request", "body": b"", "more_body": False}
 
@@ -118,6 +122,7 @@ async def test_auth_middleware_attaches_runtime_scope_context_for_jwt(test_app) 
 @pytest.mark.asyncio
 async def test_auth_middleware_attaches_runtime_scope_context_for_master_key(test_app) -> None:
     setattr(test_app.state.settings, "master_key", "mk-test")
+
     async def _receive() -> dict[str, object]:
         return {"type": "http.request", "body": b"", "more_body": False}
 

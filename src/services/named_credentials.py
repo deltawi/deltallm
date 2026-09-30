@@ -12,7 +12,11 @@ from src.upstream_auth import (
     validate_auth_header_format,
     validate_auth_header_name,
 )
-from src.providers.resolution import PROVIDER_PRESETS, is_openai_compatible_provider, resolve_provider
+from src.providers.resolution import (
+    PROVIDER_PRESETS,
+    is_openai_compatible_provider,
+    resolve_provider,
+)
 
 if TYPE_CHECKING:
     from src.config_runtime.secrets import SecretResolver
@@ -86,13 +90,18 @@ def normalize_named_credential_payload(
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
 
-    provider = canonicalize_named_credential_provider(payload.get("provider") or (existing.provider if existing is not None else ""))
+    provider = canonicalize_named_credential_provider(
+        payload.get("provider") or (existing.provider if existing is not None else "")
+    )
     if not provider:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider is required")
     if provider not in PROVIDER_PRESETS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider is invalid")
     if existing is not None and provider != existing.provider:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider cannot be changed once a named credential is created")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="provider cannot be changed once a named credential is created",
+        )
 
     raw_connection_config = payload.get("connection_config")
     if raw_connection_config is None:
@@ -103,19 +112,30 @@ def normalize_named_credential_payload(
             raw_connection_config,
         )
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="connection_config must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="connection_config must be an object"
+        )
 
     if not connection_config:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="connection_config must include at least one field")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="connection_config must include at least one field",
+        )
     _validate_connection_config(provider, connection_config)
 
     raw_metadata = payload.get("metadata")
     if raw_metadata is None:
-        metadata = dict(existing.metadata) if existing is not None and existing.metadata is not None else None
+        metadata = (
+            dict(existing.metadata)
+            if existing is not None and existing.metadata is not None
+            else None
+        )
     elif isinstance(raw_metadata, dict):
         metadata = dict(raw_metadata)
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object"
+        )
 
     return name, provider, connection_config, metadata
 
@@ -172,14 +192,18 @@ def _validate_connection_config(provider: str, connection_config: dict[str, Any]
             try:
                 validate_auth_header_name(str(auth_header_name))
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
 
         auth_header_format = connection_config.get("auth_header_format")
         if auth_header_format is not None:
             try:
                 validate_auth_header_format(str(auth_header_format))
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
 
 
 def _allowed_fields_for_provider(provider: str) -> set[str]:
@@ -227,8 +251,7 @@ def connection_fingerprint(provider: str, connection_config: dict[str, Any]) -> 
     payload = {
         "provider": provider,
         "connection_config": {
-            key: connection_config[key]
-            for key in sorted(connection_config.keys())
+            key: connection_config[key] for key in sorted(connection_config.keys())
         },
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -296,6 +319,7 @@ def resolve_named_credential_record(
     return NamedCredentialRecord(
         credential_id=named_credential.credential_id,
         name=named_credential.name,
+        name_scope=named_credential.name_scope,
         provider=named_credential.provider,
         connection_config=resolve_named_credential_connection_config(
             named_credential.connection_config,
@@ -303,6 +327,7 @@ def resolve_named_credential_record(
         ),
         metadata=dict(named_credential.metadata) if named_credential.metadata is not None else None,
         created_by_account_id=named_credential.created_by_account_id,
+        managed_asset_id=named_credential.managed_asset_id,
         created_at=named_credential.created_at,
         updated_at=named_credential.updated_at,
     )
@@ -319,7 +344,10 @@ def _redact_value(key: str, value: Any) -> Any:
     if lowered.endswith("_key") or lowered == "key":
         return _MASK
     if isinstance(value, dict):
-        return {str(child_key): _redact_value(str(child_key), child_value) for child_key, child_value in value.items()}
+        return {
+            str(child_key): _redact_value(str(child_key), child_value)
+            for child_key, child_value in value.items()
+        }
     if isinstance(value, list):
         return [_MASK if _has_meaningful_value(item) else item for item in value]
     return value

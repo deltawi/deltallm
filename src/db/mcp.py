@@ -42,6 +42,7 @@ class MCPServerRecord:
     mcp_server_id: str
     server_key: str
     name: str
+    managed_asset_id: str | None = None
     description: str | None = None
     owner_scope_type: str = "global"
     owner_scope_id: str | None = None
@@ -120,8 +121,12 @@ class MCPApprovalRequestRecord:
 
 
 class MCPRepository:
-    def __init__(self, prisma_client: Any | None = None) -> None:
+    def __init__(self, prisma_client: Any | None = None, *, use_transactions: bool = True) -> None:
         self.prisma = prisma_client
+        self._use_transactions = use_transactions
+
+    def with_db(self, prisma_client: Any) -> MCPRepository:
+        return MCPRepository(prisma_client, use_transactions=False)
 
     async def list_servers(
         self,
@@ -130,8 +135,11 @@ class MCPRepository:
         enabled: bool | None = None,
         limit: int = 100,
         offset: int = 0,
+        managed_asset_ids: list[str] | None = None,
     ) -> tuple[list[MCPServerRecord], int]:
         if self.prisma is None:
+            return [], 0
+        if managed_asset_ids is not None and not managed_asset_ids:
             return [], 0
 
         clauses: list[str] = []
@@ -144,6 +152,17 @@ class MCPRepository:
         if enabled is not None:
             params.append(enabled)
             clauses.append(f"s.enabled = ${len(params)}")
+        if managed_asset_ids is not None:
+            normalized_ids = [
+                str(item).strip() for item in managed_asset_ids if str(item).strip()
+            ]
+            if not normalized_ids:
+                return [], 0
+            placeholders: list[str] = []
+            for asset_id in normalized_ids:
+                params.append(asset_id)
+                placeholders.append(f"${len(params)}")
+            clauses.append(f"s.managed_asset_id IN ({', '.join(placeholders)})")
 
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         count_rows = await self.prisma.query_raw(
@@ -159,6 +178,7 @@ class MCPRepository:
                 s.mcp_server_id,
                 s.server_key,
                 s.name,
+                s.managed_asset_id,
                 s.description,
                 s.owner_scope_type,
                 s.owner_scope_id,
@@ -189,6 +209,20 @@ class MCPRepository:
         )
         return [self._to_server_record(row) for row in rows], total
 
+    async def list_by_managed_asset_ids(
+        self,
+        asset_ids: list[str],
+    ) -> list[MCPServerRecord]:
+        normalized_ids = [str(item).strip() for item in asset_ids if str(item).strip()]
+        if not normalized_ids:
+            return []
+        servers, _ = await self.list_servers(
+            managed_asset_ids=normalized_ids,
+            limit=len(normalized_ids),
+            offset=0,
+        )
+        return servers
+
     async def get_server(self, server_id: str) -> MCPServerRecord | None:
         if self.prisma is None:
             return None
@@ -198,6 +232,7 @@ class MCPRepository:
                 mcp_server_id,
                 server_key,
                 name,
+                managed_asset_id,
                 description,
                 owner_scope_type,
                 owner_scope_id,
@@ -236,6 +271,7 @@ class MCPRepository:
                 mcp_server_id,
                 server_key,
                 name,
+                managed_asset_id,
                 description,
                 owner_scope_type,
                 owner_scope_id,
@@ -282,12 +318,15 @@ class MCPRepository:
         request_timeout_ms: int,
         metadata: dict[str, Any] | None,
         created_by_account_id: str | None,
+        mcp_server_id: str | None = None,
+        managed_asset_id: str | None = None,
     ) -> MCPServerRecord:
         if self.prisma is None:
             return MCPServerRecord(
                 mcp_server_id="",
                 server_key=server_key,
                 name=name,
+                managed_asset_id=managed_asset_id,
                 description=description,
                 owner_scope_type=owner_scope_type,
                 owner_scope_id=owner_scope_id,
@@ -304,24 +343,26 @@ class MCPRepository:
         rows = await self.prisma.query_raw(
             """
             INSERT INTO deltallm_mcpserver (
-                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                mcp_server_id, server_key, name, managed_asset_id, description, owner_scope_type, owner_scope_id,
                 transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
                 request_timeout_ms, metadata, created_by_account_id, created_at, updated_at
             )
             VALUES (
-                gen_random_uuid()::text, $1, $2, $3, $4, $5,
-                $6, $7, $8, $9, $10::jsonb, $11::text[],
-                $12, $13::jsonb, $14, NOW(), NOW()
+                COALESCE($1, gen_random_uuid()::text), $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12::jsonb, $13::text[],
+                $14, $15::jsonb, $16, NOW(), NOW()
             )
             RETURNING
-                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                mcp_server_id, server_key, name, managed_asset_id, description, owner_scope_type, owner_scope_id,
                 transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
                 request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
                 last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
+            mcp_server_id,
             server_key,
             name,
+            managed_asset_id,
             description,
             owner_scope_type,
             owner_scope_id,
@@ -371,7 +412,7 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                mcp_server_id, server_key, name, managed_asset_id, description, owner_scope_type, owner_scope_id,
                 transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
                 request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
                 last_health_status, last_health_error, last_health_at, last_health_latency_ms,
@@ -423,7 +464,7 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                mcp_server_id, server_key, name, managed_asset_id, description, owner_scope_type, owner_scope_id,
                 transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
                 request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
                 last_health_status, last_health_error, last_health_at, last_health_latency_ms,
@@ -456,7 +497,7 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                mcp_server_id, server_key, name, managed_asset_id, description, owner_scope_type, owner_scope_id,
                 transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
                 request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
                 last_health_status, last_health_error, last_health_at, last_health_latency_ms,
@@ -1110,6 +1151,11 @@ class MCPRepository:
             mcp_server_id=str(row.get("mcp_server_id") or ""),
             server_key=str(row.get("server_key") or ""),
             name=str(row.get("name") or ""),
+            managed_asset_id=(
+                str(row.get("managed_asset_id"))
+                if row.get("managed_asset_id") is not None
+                else None
+            ),
             description=str(row.get("description")) if row.get("description") is not None else None,
             owner_scope_type=str(row.get("owner_scope_type") or "global"),
             owner_scope_id=str(row.get("owner_scope_id")) if row.get("owner_scope_id") is not None else None,

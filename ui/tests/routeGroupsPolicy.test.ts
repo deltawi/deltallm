@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildPolicyFromGuided,
   effectivePolicyMemberIds,
+  groupKeySuffixFromName,
   LEGACY_TAG_ROUTING_STRATEGY,
   reconcileGuidedPolicyMembers,
   restoreDraftPolicyTombstones,
@@ -21,6 +22,11 @@ const MEMBERS: PolicyMemberOption[] = [
   { deployment_id: 'dep-b', enabled: true, weight: 3, priority: 1 },
   { deployment_id: 'dep-off', enabled: false, weight: 4, priority: 2 },
 ];
+
+test('group key suffix is derived from the friendly group name', () => {
+  assert.equal(groupKeySuffixFromName('Customer Support — Arabic'), 'customer-support-arabic');
+  assert.equal(groupKeySuffixFromName('  Finance / EU  '), 'finance-eu');
+});
 
 test('deprecated tag routing is visible only for an existing legacy selection', () => {
   assert.equal(

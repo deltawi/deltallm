@@ -180,7 +180,7 @@ async def test_id_routes_authenticate_before_repository_lookup(
 
 
 @pytest.mark.asyncio
-async def test_scoped_user_cannot_resolve_or_mutate_groups(
+async def test_scoped_user_reaches_repository_boundary_for_groups(
     client: httpx.AsyncClient, test_app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context = PlatformAuthContext(
@@ -189,7 +189,10 @@ async def test_scoped_user_cannot_resolve_or_mutate_groups(
         role="org_user",
         organization_memberships=[{"organization_id": "org-a", "role": "org_owner"}],
     )
-    monkeypatch.setattr("src.middleware.admin.get_platform_auth_context", lambda request: context)
+    monkeypatch.setattr(
+        "src.middleware.platform_auth.get_platform_auth_context",
+        lambda request: context,
+    )
     test_app.state.route_group_repository = None
     for method, path in [
         ("GET", f"{BASE}/resolve/by-key?group_key=vendor%2Fmodel"),
@@ -198,7 +201,7 @@ async def test_scoped_user_cannot_resolve_or_mutate_groups(
         ("POST", f"{BASE}/by-id/{UUID(int=1)}/policy/publish"),
     ]:
         response = await client.request(method, path)
-        assert response.status_code == 403, response.text
+        assert response.status_code == 503, response.text
 
 
 @pytest.mark.asyncio

@@ -131,6 +131,62 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         async def on_config_change(self, cfg, changes) -> None:  # noqa: ANN001
             del cfg, changes
 
+    class FakeCreatorModelAccessService:
+        def __init__(self, access_repository, logical_model_repository, **kwargs) -> None:  # noqa: ANN001, ANN003
+            self.access_repository = access_repository
+            self.logical_model_repository = logical_model_repository
+            self.kwargs = kwargs
+            self.reloaded = False
+
+        async def reload(self) -> None:
+            self.reloaded = True
+
+    class FakeCreatorPromptAccessService:
+        def __init__(self, access_repository, prompt_repository, **kwargs) -> None:  # noqa: ANN001, ANN003
+            self.access_repository = access_repository
+            self.prompt_repository = prompt_repository
+            self.kwargs = kwargs
+            self.reloaded = False
+
+        async def reload(self) -> None:
+            self.reloaded = True
+
+    class FakeCreatorRouteGroupAccessService:
+        def __init__(self, access_repository, route_group_repository, **kwargs) -> None:  # noqa: ANN001, ANN003
+            self.access_repository = access_repository
+            self.route_group_repository = route_group_repository
+            self.kwargs = kwargs
+            self.reloaded = False
+
+        async def reload(self) -> None:
+            self.reloaded = True
+
+    class FakeCreatorMCPAccessService:
+        def __init__(self, access_repository, mcp_repository, **kwargs) -> None:  # noqa: ANN001, ANN003
+            self.access_repository = access_repository
+            self.mcp_repository = mcp_repository
+            self.kwargs = kwargs
+            self.reloaded = False
+
+        async def reload(self) -> None:
+            self.reloaded = True
+
+    class FakeManagedAssetReconciliationService:
+        def __init__(self, repository, **kwargs) -> None:  # noqa: ANN001
+            self.repository = repository
+            self.kwargs = kwargs
+            self.started = False
+            self.closed = False
+
+        async def start(self) -> None:
+            self.started = True
+
+        async def close(self) -> None:
+            self.closed = True
+
+        def health_snapshot(self):  # noqa: ANN201
+            return SimpleNamespace(ready=True, detail=None)
+
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.get_settings",
         lambda: SimpleNamespace(
@@ -168,6 +224,26 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.UIBrandingAssetService", FakeUIBrandingAssetService
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.CreatorModelAccessService",
+        FakeCreatorModelAccessService,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.CreatorPromptAccessService",
+        FakeCreatorPromptAccessService,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.CreatorRouteGroupAccessService",
+        FakeCreatorRouteGroupAccessService,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.CreatorMCPAccessService",
+        FakeCreatorMCPAccessService,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.ManagedAssetReconciliationService",
+        FakeManagedAssetReconciliationService,
     )
     monkeypatch.setattr("src.bootstrap.infrastructure.Redis", FakeRedis)
     monkeypatch.setattr("src.bootstrap.infrastructure.prisma_manager", FakePrismaManager())
@@ -263,9 +339,11 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         "db-client",
         {"webhook_max_attempts": 8},
     )
+    assert runtime.managed_asset_reconciliation_service.started is True
 
     await shutdown_infrastructure_runtime(runtime)
 
+    assert runtime.managed_asset_reconciliation_service.closed is True
     assert runtime.dynamic_config_manager.closed is True
     assert runtime.http_client.closed is True
     assert runtime.control_http_client.closed is True

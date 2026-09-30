@@ -206,6 +206,97 @@ async def test_governance_invalidation_service_can_apply_local_invalidations_wit
 
 
 @pytest.mark.asyncio
+async def test_mcp_invalidation_reloads_creator_access_with_runtime_state() -> None:
+    creator_mcp = _FakeReloadService()
+    mcp_registry = _FakeInvalidateService()
+    mcp_governance = _FakeReloadService()
+    service = GovernanceInvalidationService(
+        redis_client=None,
+        creator_mcp_access_service=creator_mcp,
+        mcp_registry_service=mcp_registry,
+        mcp_governance_service=mcp_governance,
+    )
+
+    await service.invalidate_local("mcp")
+
+    assert creator_mcp.reload_calls == 1
+    assert mcp_registry.invalidate_calls == 1
+    assert mcp_governance.reload_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_creator_model_invalidation_reloads_policy_before_routing_generation() -> None:
+    creator_models = _FakeReloadService()
+    events: list[str] = []
+
+    async def reload_routing() -> None:
+        events.append("routing")
+
+    original_reload = creator_models.reload
+
+    async def reload_creator_models() -> None:
+        await original_reload()
+        events.append("creator")
+
+    creator_models.reload = reload_creator_models  # type: ignore[method-assign]
+    service = GovernanceInvalidationService(
+        redis_client=None,
+        creator_model_access_service=creator_models,
+        route_group_reload=reload_routing,
+    )
+
+    await service.invalidate_local("creator_model")
+
+    assert events == ["creator", "routing"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_invalidation_reloads_creator_access_before_cache_standalone() -> None:
+    events: list[str] = []
+
+    class _CreatorPromptAccess:
+        async def reload(self) -> None:
+            events.append("creator")
+
+    class _PromptRegistry:
+        async def refresh_namespace_epoch(self) -> None:
+            events.append("cache")
+
+    service = GovernanceInvalidationService(
+        redis_client=None,
+        creator_prompt_access_service=_CreatorPromptAccess(),
+        prompt_registry_service=_PromptRegistry(),
+    )
+
+    await service.invalidate_local("prompt")
+
+    assert events == ["creator", "cache"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_invalidation_rebuilds_generation_before_cache() -> None:
+    events: list[str] = []
+
+    async def reload_routing() -> None:
+        events.append("routing")
+
+    class _PromptRegistry:
+        async def refresh_namespace_epoch(self) -> None:
+            events.append("cache")
+
+    service = GovernanceInvalidationService(
+        redis_client=None,
+        creator_prompt_access_service=_FakeReloadService(),
+        prompt_registry_service=_PromptRegistry(),
+        route_group_reload=reload_routing,
+    )
+
+    await service.invalidate_local("prompt")
+
+    assert events == ["routing", "cache"]
+
+
+@pytest.mark.asyncio
 async def test_governance_invalidation_service_applies_remaining_local_targets_after_failure() -> (
     None
 ):

@@ -24,22 +24,23 @@ def _filter_server_tools_for_scope(
     include_all: bool,
 ) -> list[Any]:
     if include_all:
-        return tools
-    if not bindings:
-        return []
+        filtered = list(tools)
+    else:
+        if not bindings:
+            return []
 
-    allowed_names: set[str] = set()
-    all_allowed = False
-    for binding in bindings:
-        if not binding.enabled:
-            continue
-        allowlist = tuple(binding.tool_allowlist or [])
-        if not allowlist:
-            all_allowed = True
-            break
-        allowed_names.update(str(name) for name in allowlist)
+        allowed_names: set[str] = set()
+        all_allowed = False
+        for binding in bindings:
+            if not binding.enabled:
+                continue
+            allowlist = tuple(binding.tool_allowlist or [])
+            if not allowlist:
+                all_allowed = True
+                break
+            allowed_names.update(str(name) for name in allowlist)
 
-    filtered = [tool for tool in tools if all_allowed or str(getattr(tool, "original_name", "")) in allowed_names]
+        filtered = [tool for tool in tools if all_allowed or str(getattr(tool, "original_name", "")) in allowed_names]
     precedence = {scope_type: index for index, scope_type in enumerate(_SCOPE_SPECIFICITY)}
     effective_policy_by_tool: dict[str, MCPToolPolicyRecord] = {}
     for policy in sorted(policies, key=lambda item: precedence.get(item.scope_type, 999)):

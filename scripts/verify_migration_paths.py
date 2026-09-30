@@ -35,6 +35,16 @@ UPGRADE_ROUTE_GROUP_ID = "migration-upgrade-route-group"
 UPGRADE_MODEL_DEPLOYMENT_ID = "migration-upgrade-model-deployment"
 UPGRADE_MODEL_DEPLOYMENT_SECOND_ID = "migration-upgrade-model-deployment-second"
 UPGRADE_MODEL_NAME = "migration-upgrade-model"
+UPGRADE_ACCOUNT_ID = "migration-upgrade-account"
+UPGRADE_NAMED_CREDENTIAL_ID = "migration-upgrade-named-credential"
+UPGRADE_MCP_SERVER_ID = "migration-upgrade-mcp-server"
+UPGRADE_PROMPT_TEMPLATE_ID = "migration-upgrade-prompt-template"
+ROLLING_MODEL_DEPLOYMENT_ID = "migration-rolling-model-deployment"
+ROLLING_MODEL_NAME = "migration-rolling-model"
+ROLLING_NAMED_CREDENTIAL_ID = "migration-rolling-named-credential"
+ROLLING_ROUTE_GROUP_ID = "migration-rolling-route-group"
+ROLLING_MCP_SERVER_ID = "migration-rolling-mcp-server"
+ROLLING_PROMPT_TEMPLATE_ID = "migration-rolling-prompt-template"
 STABLE_RELEASE_TAG_PATTERN = re.compile(r"\Av\d+\.\d+\.\d+\Z")
 SHARED_ROUTE_POLICY_MIGRATION_REF = "3372602bf7bff6107ee9595217b7f2fd75da61cd"
 SELECTOR_VALIDATION_MIGRATION = "20260910000100_batch_selector_checkpoint_validation"
@@ -233,6 +243,26 @@ INSERT INTO deltallm_modeldeployment
 VALUES
   ('{UPGRADE_MODEL_DEPLOYMENT_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb),
   ('{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb);
+
+INSERT INTO deltallm_platformaccount (account_id, email)
+VALUES ('{UPGRADE_ACCOUNT_ID}', 'migration-upgrade@example.com');
+
+INSERT INTO deltallm_namedcredential
+  (credential_id, name, provider, connection_config, created_by_account_id)
+VALUES
+  ('{UPGRADE_NAMED_CREDENTIAL_ID}', 'migration-upgrade-credential', 'openai',
+   '{{"api_key":"encrypted-placeholder"}}'::jsonb, '{UPGRADE_ACCOUNT_ID}');
+
+INSERT INTO deltallm_mcpserver
+  (mcp_server_id, server_key, name, base_url, created_by_account_id)
+VALUES
+  ('{UPGRADE_MCP_SERVER_ID}', 'migration-upgrade-mcp', 'Migration MCP',
+   'https://mcp.invalid.example', '{UPGRADE_ACCOUNT_ID}');
+
+INSERT INTO deltallm_prompttemplate
+  (prompt_template_id, template_key, name)
+VALUES
+  ('{UPGRADE_PROMPT_TEMPLATE_ID}', 'migration-upgrade-prompt', 'Migration prompt');
 
 INSERT INTO deltallm_routegroup
   (route_group_id, group_key, mode)
@@ -449,6 +479,27 @@ BEGIN
   ) <> 3 THEN
     RAISE EXCEPTION 'organization deletion expedite constraints are missing';
   END IF;
+  IF to_regclass('public.deltallm_managedasset') IS NULL
+     OR to_regclass('public.deltallm_assetgrant') IS NULL
+     OR to_regclass('public.deltallm_model') IS NULL THEN
+    RAISE EXCEPTION 'managed asset access foundation tables are missing';
+  END IF;
+  IF (
+    SELECT count(*)
+    FROM pg_constraint
+    WHERE conname IN (
+      'deltallm_managedasset_kind_chk',
+      'deltallm_managedasset_source_chk',
+      'deltallm_managedasset_creator_owner_chk',
+      'deltallm_managedasset_policy_version_chk',
+      'deltallm_managedasset_state_chk',
+      'deltallm_assetgrant_role_chk',
+      'deltallm_assetgrant_subject_chk',
+      'deltallm_assetgrant_public_reader_chk'
+    )
+  ) <> 8 THEN
+    RAISE EXCEPTION 'managed asset access constraints are missing';
+  END IF;
 END
 $migration_verify$;
 """,
@@ -622,6 +673,58 @@ BEGIN
   ) <> 5 THEN
     RAISE EXCEPTION 'organization deletion expedite upgrade columns are missing';
   END IF;
+
+  SELECT count(*) INTO fixture_count
+  FROM deltallm_modeldeployment AS deployment
+  JOIN deltallm_model AS model ON model.model_id = deployment.model_id
+  JOIN deltallm_managedasset AS asset ON asset.asset_id = model.managed_asset_id
+  WHERE deployment.deployment_id IN (
+      '{UPGRADE_MODEL_DEPLOYMENT_ID}',
+      '{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}'
+    )
+    AND model.model_name = '{UPGRADE_MODEL_NAME}'
+    AND asset.asset_kind = 'model'
+    AND asset.governance_source = 'platform'
+    AND asset.owner_account_id IS NULL;
+  IF fixture_count <> 2 THEN
+    RAISE EXCEPTION 'logical model managed-asset backfill is invalid';
+  END IF;
+
+  SELECT count(*) INTO fixture_count
+  FROM (
+    SELECT credential.managed_asset_id
+    FROM deltallm_namedcredential AS credential
+    JOIN deltallm_managedasset AS asset ON asset.asset_id = credential.managed_asset_id
+    WHERE credential.credential_id = '{UPGRADE_NAMED_CREDENTIAL_ID}'
+      AND asset.asset_kind = 'named_credential'
+      AND asset.created_by_account_id = '{UPGRADE_ACCOUNT_ID}'
+      AND asset.owner_account_id IS NULL
+    UNION ALL
+    SELECT server.managed_asset_id
+    FROM deltallm_mcpserver AS server
+    JOIN deltallm_managedasset AS asset ON asset.asset_id = server.managed_asset_id
+    WHERE server.mcp_server_id = '{UPGRADE_MCP_SERVER_ID}'
+      AND asset.asset_kind = 'mcp_server'
+      AND asset.created_by_account_id = '{UPGRADE_ACCOUNT_ID}'
+      AND asset.owner_account_id IS NULL
+    UNION ALL
+    SELECT prompt.managed_asset_id
+    FROM deltallm_prompttemplate AS prompt
+    JOIN deltallm_managedasset AS asset ON asset.asset_id = prompt.managed_asset_id
+    WHERE prompt.prompt_template_id = '{UPGRADE_PROMPT_TEMPLATE_ID}'
+      AND asset.asset_kind = 'prompt_template'
+      AND asset.owner_account_id IS NULL
+    UNION ALL
+    SELECT route_group.managed_asset_id
+    FROM deltallm_routegroup AS route_group
+    JOIN deltallm_managedasset AS asset ON asset.asset_id = route_group.managed_asset_id
+    WHERE route_group.route_group_id = '{UPGRADE_ROUTE_GROUP_ID}'
+      AND asset.asset_kind = 'route_group'
+      AND asset.owner_account_id IS NULL
+  ) AS backfilled_assets;
+  IF fixture_count <> 4 THEN
+    RAISE EXCEPTION 'managed asset legacy backfill is incomplete';
+  END IF;
 END
 $migration_verify$;
 """,
@@ -637,7 +740,53 @@ def _verify_shared_migration_database(prisma: str, database_url: str) -> None:
 INSERT INTO deltallm_modeldeployment
   (deployment_id, model_name, deltallm_params)
 VALUES
-  ('{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb);
+  ('{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}', '{UPGRADE_MODEL_NAME}', '{{}}'::jsonb),
+  ('{ROLLING_MODEL_DEPLOYMENT_ID}', '{ROLLING_MODEL_NAME}', '{{}}'::jsonb);
+
+INSERT INTO deltallm_namedcredential
+  (credential_id, name, provider, connection_config)
+VALUES
+  ('{ROLLING_NAMED_CREDENTIAL_ID}', 'migration-rolling-credential', 'openai', '{{}}'::jsonb);
+
+INSERT INTO deltallm_routegroup
+  (route_group_id, group_key, name)
+VALUES
+  ('{ROLLING_ROUTE_GROUP_ID}', 'migration-rolling-route-group', 'Rolling route group');
+
+INSERT INTO deltallm_mcpserver
+  (mcp_server_id, server_key, name, base_url)
+VALUES
+  ('{ROLLING_MCP_SERVER_ID}', 'migration-rolling-mcp', 'Rolling MCP',
+   'https://mcp.example.test');
+
+INSERT INTO deltallm_prompttemplate
+  (prompt_template_id, template_key, name)
+VALUES
+  ('{ROLLING_PROMPT_TEMPLATE_ID}', 'migration-rolling-prompt', 'Rolling prompt');
+
+-- Simulate an old application instance selecting and then clearing a named
+-- credential without writing any of the newer binding columns.
+UPDATE deltallm_modeldeployment
+SET named_credential_id = '{ROLLING_NAMED_CREDENTIAL_ID}'
+WHERE deployment_id = '{ROLLING_MODEL_DEPLOYMENT_ID}';
+
+DO $binding_adoption_verify$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM deltallm_modeldeployment
+    WHERE deployment_id = '{ROLLING_MODEL_DEPLOYMENT_ID}'
+      AND credential_binding_mode = 'platform_override'
+      AND credential_binding_state = 'active'
+  ) THEN
+    RAISE EXCEPTION 'old-writer named credential binding was not safely adopted';
+  END IF;
+END
+$binding_adoption_verify$;
+
+UPDATE deltallm_modeldeployment
+SET named_credential_id = NULL
+WHERE deployment_id = '{ROLLING_MODEL_DEPLOYMENT_ID}';
 
 DO $migration_verify$
 BEGIN
@@ -658,8 +807,71 @@ BEGIN
   IF to_regclass('public.deltallm_modeldeployment_model_name_idx') IS NULL THEN
     RAISE EXCEPTION 'shared-migration non-unique model-name index is missing';
   END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM deltallm_modeldeployment
+    WHERE deployment_id = '{ROLLING_MODEL_DEPLOYMENT_ID}'
+      AND (
+        credential_binding_mode IS NOT NULL
+        OR credential_binding_state IS NOT NULL
+        OR credential_bound_by_account_id IS NOT NULL
+        OR credential_bound_at IS NOT NULL
+        OR credential_revoked_at IS NOT NULL
+      )
+  ) THEN
+    RAISE EXCEPTION 'old-writer inline credential transition retained stale binding metadata';
+  END IF;
   IF to_regclass('public._deltallm_model_name_restore_20260823') IS NOT NULL THEN
     RAISE EXCEPTION 'shared-migration temporary model-name restore table was not removed';
+  END IF;
+  IF (
+    SELECT count(*)
+    FROM deltallm_modeldeployment AS deployment
+    JOIN deltallm_model AS model ON model.model_id = deployment.model_id
+    JOIN deltallm_managedasset AS asset ON asset.asset_id = model.managed_asset_id
+    WHERE deployment.deployment_id IN (
+        '{UPGRADE_MODEL_DEPLOYMENT_SECOND_ID}',
+        '{ROLLING_MODEL_DEPLOYMENT_ID}'
+      )
+      AND asset.asset_kind = 'model'
+      AND asset.governance_source = 'platform'
+      AND asset.owner_account_id IS NULL
+  ) <> 2 THEN
+    RAISE EXCEPTION 'rolling-deploy model writes were not safely adopted';
+  END IF;
+  IF (
+    SELECT count(*)
+    FROM (
+      SELECT credential.managed_asset_id
+      FROM deltallm_namedcredential AS credential
+      JOIN deltallm_managedasset AS asset ON asset.asset_id = credential.managed_asset_id
+      WHERE credential.credential_id = '{ROLLING_NAMED_CREDENTIAL_ID}'
+        AND asset.asset_kind = 'named_credential'
+        AND asset.governance_source = 'platform'
+      UNION ALL
+      SELECT route_group.managed_asset_id
+      FROM deltallm_routegroup AS route_group
+      JOIN deltallm_managedasset AS asset ON asset.asset_id = route_group.managed_asset_id
+      WHERE route_group.route_group_id = '{ROLLING_ROUTE_GROUP_ID}'
+        AND asset.asset_kind = 'route_group'
+        AND asset.governance_source = 'platform'
+      UNION ALL
+      SELECT server.managed_asset_id
+      FROM deltallm_mcpserver AS server
+      JOIN deltallm_managedasset AS asset ON asset.asset_id = server.managed_asset_id
+      WHERE server.mcp_server_id = '{ROLLING_MCP_SERVER_ID}'
+        AND asset.asset_kind = 'mcp_server'
+        AND asset.governance_source = 'platform'
+      UNION ALL
+      SELECT prompt.managed_asset_id
+      FROM deltallm_prompttemplate AS prompt
+      JOIN deltallm_managedasset AS asset ON asset.asset_id = prompt.managed_asset_id
+      WHERE prompt.prompt_template_id = '{ROLLING_PROMPT_TEMPLATE_ID}'
+        AND asset.asset_kind = 'prompt_template'
+        AND asset.governance_source = 'platform'
+    ) AS adopted_assets
+  ) <> 4 THEN
+    RAISE EXCEPTION 'rolling-deploy asset writes were not safely adopted';
   END IF;
 END
 $migration_verify$;

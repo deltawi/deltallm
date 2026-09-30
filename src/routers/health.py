@@ -179,6 +179,44 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
             and deletion_worker.is_ready()
         )
 
+    asset_reconciliation = getattr(
+        request.app.state,
+        "managed_asset_reconciliation_service",
+        None,
+    )
+    asset_health_getter = getattr(asset_reconciliation, "health_snapshot", None)
+    if callable(asset_health_getter):
+        asset_health = asset_health_getter()
+        checks["managed_asset_links"] = bool(asset_health.ready)
+        asset_details = {
+            "state": str(asset_health.state),
+            "missing_links": str(asset_health.missing_links),
+            "kind_mismatches": str(asset_health.kind_mismatches),
+            "orphaned_policies": str(asset_health.orphaned_policies),
+            "last_repaired": str(asset_health.last_repaired),
+        }
+        if asset_health.last_checked_at is not None:
+            asset_details["last_checked_at"] = asset_health.last_checked_at.isoformat()
+        if asset_health.detail:
+            asset_details["detail"] = str(asset_health.detail)
+        details["managed_asset_links"] = asset_details
+
+    authorization_services = (
+        "creator_model_access_service",
+        "creator_route_group_access_service",
+        "creator_prompt_access_service",
+        "creator_mcp_access_service",
+    )
+    authorization_ready = True
+    for state_name in authorization_services:
+        service = getattr(request.app.state, state_name, None)
+        ready_getter = getattr(service, "authorization_ready", None)
+        if callable(ready_getter) and not bool(ready_getter()):
+            authorization_ready = False
+            break
+    checks["creator_asset_authorization"] = authorization_ready
+    details["creator_asset_authorization"] = {"state": "ready" if authorization_ready else "stale"}
+
     status = "ok" if all(checks.values()) else "degraded"
     return {"status": status, "checks": checks, "details": details}
 

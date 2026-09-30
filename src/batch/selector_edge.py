@@ -65,6 +65,8 @@ def compose_batch_selector(
             target,
             callable_target_grant_service=grants,
             callable_target_grant_snapshot=runtime.authorization_snapshot,
+            creator_model_access_snapshot=runtime.creator_model_access_snapshot,
+            creator_route_group_access_snapshot=runtime.creator_route_group_access_snapshot,
             tier_policy_service=tiers,
             policy_mode=policy_mode,
             tier_policy_mode=tier_mode,

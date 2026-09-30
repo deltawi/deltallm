@@ -46,6 +46,9 @@ async def _reload_runtime_governance(request: Request, *, invalidate_registry: b
     governance = getattr(request.app.state, "mcp_governance_service", None)
     if governance is not None and callable(getattr(governance, "reload", None)):
         await governance.reload()
+    creator_access = getattr(request.app.state, "creator_mcp_access_service", None)
+    if creator_access is not None and callable(getattr(creator_access, "reload", None)):
+        await creator_access.reload()
 
 
 def _transport_or_503(request: Request) -> StreamableHTTPMCPClient:

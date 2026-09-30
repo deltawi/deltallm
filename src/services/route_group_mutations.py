@@ -9,6 +9,7 @@ from src.db.callable_key_locks import lock_callable_keys
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.repositories import ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
+from src.db.managed_assets import ManagedAssetAccessRepository
 
 logger = logging.getLogger(__name__)
 
@@ -38,24 +39,45 @@ class RouteGroupMutationService:
         callable_bindings: CallableBindingDeleteRepository | None,
         model_deployments: ModelDeploymentRepository | None = None,
         model_registry_getter: Callable[[], Mapping[str, Sequence[object]] | None] | None = None,
+        managed_assets: ManagedAssetAccessRepository | None = None,
     ) -> None:
         self.route_groups = route_groups
         self.callable_bindings = callable_bindings
         self.model_deployments = model_deployments
         self.model_registry_getter = model_registry_getter
+        self.managed_assets = managed_assets
 
-    async def delete_group(self, group_key: str) -> RouteGroupDeleteResult:
+    async def delete_group(
+        self,
+        group_key: str,
+        *,
+        managed_asset_id: str | None = None,
+    ) -> RouteGroupDeleteResult:
         route_groups = self.route_groups
         if isinstance(route_groups, RouteGroupRepository) and route_groups.supports_transactions():
-            return await self._delete_transactionally(route_groups, group_key)
+            return await self._delete_transactionally(
+                route_groups,
+                group_key,
+                managed_asset_id=managed_asset_id,
+            )
 
         # Reduced/in-memory configurations have no shared transaction owner.
         # Preserve their compatibility while classifying post-delete cleanup.
         deleted = await route_groups.delete_group(group_key)
         if not deleted:
             return RouteGroupDeleteResult(deleted=False)
+        warnings: list[str] = []
+        if managed_asset_id and self.managed_assets is not None:
+            try:
+                await self.managed_assets.delete_policy(managed_asset_id)
+            except Exception:
+                logger.warning(
+                    "managed asset cleanup failed after route-group deletion",
+                    exc_info=True,
+                )
+                warnings.append("Mutation committed, but managed access cleanup failed")
         if await self._has_replacement_model(group_key):
-            return RouteGroupDeleteResult(deleted=True)
+            return RouteGroupDeleteResult(deleted=True, warnings=tuple(warnings))
         try:
             bindings_deleted = await self._delete_callable_bindings(group_key)
         except Exception:
@@ -65,17 +87,22 @@ class RouteGroupMutationService:
             )
             return RouteGroupDeleteResult(
                 deleted=True,
-                warnings=("Mutation committed, but callable-target binding cleanup failed",),
+                warnings=tuple(
+                    [*warnings, "Mutation committed, but callable-target binding cleanup failed"]
+                ),
             )
         return RouteGroupDeleteResult(
             deleted=True,
             callable_bindings_deleted=bindings_deleted,
+            warnings=tuple(warnings),
         )
 
     async def _delete_transactionally(
         self,
         route_groups: RouteGroupRepository,
         group_key: str,
+        *,
+        managed_asset_id: str | None,
     ) -> RouteGroupDeleteResult:
         prisma = route_groups.prisma
         if prisma is None or not hasattr(prisma, "tx"):
@@ -91,6 +118,8 @@ class RouteGroupMutationService:
                 bindings_deleted = await CallableTargetBindingRepository(tx).delete_by_callable_key(
                     group_key
                 )
+            if managed_asset_id and self.managed_assets is not None:
+                await self.managed_assets.with_db(tx).delete_policy(managed_asset_id)
         return RouteGroupDeleteResult(
             deleted=True,
             callable_bindings_deleted=bindings_deleted,

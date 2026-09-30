@@ -2,7 +2,7 @@ import { Save } from 'lucide-react';
 import { ROUTE_GROUP_MODE_OPTIONS } from '../../lib/routeGroups';
 import ToggleSwitch from '../ToggleSwitch';
 
-interface GroupFormValues {
+export interface GroupFormValues {
   name: string;
   mode: string;
   enabled: boolean;
@@ -11,11 +11,12 @@ interface GroupFormValues {
 interface RouteGroupSettingsCardProps {
   form: GroupFormValues;
   saving: boolean;
+  disabled?: boolean;
   onChange: (next: GroupFormValues) => void;
   onSave: () => void;
 }
 
-export default function RouteGroupSettingsCard({ form, saving, onChange, onSave }: RouteGroupSettingsCardProps) {
+export default function RouteGroupSettingsCard({ form, saving, disabled = false, onChange, onSave }: RouteGroupSettingsCardProps) {
   return (
     <div className="space-y-5 max-w-lg">
       <div>
@@ -29,17 +30,19 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
           <label className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
           <input
             value={form.name}
+            disabled={disabled}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             placeholder="e.g. Production Chat"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100"
           />
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Workload Mode</label>
           <select
             value={form.mode}
+            disabled={disabled}
             onChange={(e) => onChange({ ...form, mode: e.target.value })}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100"
           >
             {ROUTE_GROUP_MODE_OPTIONS.map((m) => (
               <option key={m} value={m}>
@@ -63,6 +66,7 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
         </div>
         <ToggleSwitch
           checked={form.enabled}
+          disabled={disabled}
           onCheckedChange={(enabled) => onChange({ ...form, enabled })}
           aria-label="Toggle live traffic"
         />
@@ -73,7 +77,7 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
         <button
           type="button"
           onClick={onSave}
-          disabled={saving}
+          disabled={saving || disabled}
           className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
           <Save className="h-4 w-4" />

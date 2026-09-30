@@ -13,6 +13,7 @@ interface PromptRolloutCardProps {
   labels: PromptLabel[];
   labelForm: LabelForm;
   assigningLabel: boolean;
+  disabled?: boolean;
   onLabelFormChange: (next: LabelForm) => void;
   onAssignLabel: () => void;
 }
@@ -22,6 +23,7 @@ export default function PromptRolloutCard({
   labels,
   labelForm,
   assigningLabel,
+  disabled = false,
   onLabelFormChange,
   onAssignLabel,
 }: PromptRolloutCardProps) {
@@ -52,6 +54,7 @@ export default function PromptRolloutCard({
               <label className="mb-1 block text-sm font-medium text-gray-700">Label</label>
               <input
                 value={labelForm.label}
+                disabled={disabled}
                 onChange={(event) => onLabelFormChange({ ...labelForm, label: event.target.value })}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
@@ -61,7 +64,7 @@ export default function PromptRolloutCard({
               <select
                 value={labelForm.version}
                 onChange={(event) => onLabelFormChange({ ...labelForm, version: event.target.value })}
-                disabled={!hasVersions}
+                disabled={!hasVersions || disabled}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               >
                 <option value="">Select version</option>
@@ -78,6 +81,7 @@ export default function PromptRolloutCard({
             <input
               type="checkbox"
               checked={labelForm.require_approval}
+              disabled={disabled}
               onChange={(event) => onLabelFormChange({ ...labelForm, require_approval: event.target.checked })}
               className="mt-0.5 rounded border-gray-300"
             />
@@ -92,6 +96,7 @@ export default function PromptRolloutCard({
               <label className="mb-1 block text-sm font-medium text-gray-700">Approved By</label>
               <input
                 value={labelForm.approved_by}
+                disabled={disabled}
                 onChange={(event) => onLabelFormChange({ ...labelForm, approved_by: event.target.value })}
                 placeholder="name@company.com"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -103,7 +108,7 @@ export default function PromptRolloutCard({
             <button
               type="button"
               onClick={onAssignLabel}
-              disabled={assigningLabel || !hasVersions}
+              disabled={assigningLabel || !hasVersions || disabled}
               className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {assigningLabel ? 'Registering...' : 'Register Label'}

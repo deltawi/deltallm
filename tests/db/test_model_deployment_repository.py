@@ -29,8 +29,7 @@ class FakePrisma:
             row = self.rows.get(str(args[0]))
             return [{"model_name": row["model_name"]}] if row else []
         if (
-            "SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info"
-            in query
+            "SELECT deployment_id, model_name, model_id, named_credential_id" in query
             and "WHERE deployment_id = $1" not in query
         ):
             values = sorted(
@@ -40,12 +39,28 @@ class FakePrisma:
             return [dict(item) for item in values]
         if (
             "WHERE deployment_id = $1" in query
-            and "SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info"
-            in query
+            and "SELECT deployment_id, model_name, model_id, named_credential_id" in query
         ):
             deployment_id = str(args[0])
             row = self.rows.get(deployment_id)
             return [dict(row)] if row else []
+        if (
+            "UPDATE deltallm_modeldeployment" in query
+            and "credential_binding_state = 'revoked'" in query
+        ):
+            deployment_id = str(args[0])
+            expected_credential_id = str(args[1])
+            row = self.rows.get(deployment_id)
+            if (
+                row is None
+                or row.get("named_credential_id") != expected_credential_id
+                or row.get("credential_binding_state") != "active"
+            ):
+                return []
+            row["named_credential_id"] = None
+            row["credential_binding_state"] = "revoked"
+            row["credential_revoked_at"] = "now"
+            return [dict(row)]
         if "UPDATE deltallm_modeldeployment" in query:
             deployment_id = str(args[0])
             if deployment_id not in self.rows:
@@ -54,11 +69,34 @@ class FakePrisma:
             self.rows[deployment_id] = {
                 "deployment_id": deployment_id,
                 "model_name": str(args[1]),
+                "model_id": self.rows[deployment_id].get("model_id"),
                 "named_credential_id": str(args[2]) if args[2] is not None else None,
                 "deltallm_params": json.loads(str(args[3])),
                 "model_info": json.loads(str(args[4])) if args[4] is not None else None,
                 "routing_state_incarnation": incarnation,
+                "credential_binding_mode": (
+                    args[5]
+                    if len(args) > 5 and args[5] is not None
+                    else self.rows[deployment_id].get("credential_binding_mode")
+                ),
+                "credential_binding_state": (
+                    args[6]
+                    if len(args) > 6 and args[6] is not None
+                    else self.rows[deployment_id].get("credential_binding_state")
+                ),
+                "credential_bound_by_account_id": (
+                    args[7]
+                    if len(args) > 7 and args[7] is not None
+                    else self.rows[deployment_id].get("credential_bound_by_account_id")
+                ),
             }
+            if len(args) > 8 and args[8] is True:
+                self.rows[deployment_id].update(
+                    credential_binding_mode=None,
+                    credential_binding_state=None,
+                    credential_bound_by_account_id=None,
+                    credential_revoked_at=None,
+                )
             return [dict(self.rows[deployment_id])]
         if "DELETE FROM deltallm_modeldeployment" in query:
             deployment_id = str(args[0])
@@ -77,10 +115,15 @@ class FakePrisma:
             self.rows[deployment_id] = {
                 "deployment_id": deployment_id,
                 "model_name": str(args[1]),
-                "named_credential_id": str(args[2]) if args[2] is not None else None,
-                "deltallm_params": json.loads(str(args[3])),
-                "model_info": json.loads(str(args[4])) if args[4] is not None else None,
+                "model_id": str(args[2]) if args[2] is not None else None,
+                "named_credential_id": str(args[3]) if args[3] is not None else None,
+                "deltallm_params": json.loads(str(args[4])),
+                "model_info": json.loads(str(args[5])) if args[5] is not None else None,
                 "routing_state_incarnation": f"created-{deployment_id}",
+                "credential_binding_mode": args[6] if len(args) > 6 else None,
+                "credential_binding_state": args[7] if len(args) > 7 else None,
+                "credential_bound_by_account_id": args[8] if len(args) > 8 else None,
+                "credential_revoked_at": None,
             }
 
 
@@ -183,6 +226,40 @@ async def test_model_deployment_repository_crud_roundtrip():
 
 
 @pytest.mark.asyncio
+async def test_model_deployment_repository_explicitly_clears_named_binding_metadata():
+    prisma = FakePrisma()
+    repo = ModelDeploymentRepository(prisma, use_transactions=False)
+    await repo.create(
+        ModelDeploymentRecord(
+            deployment_id="dep-inline",
+            model_name="platform-model",
+            named_credential_id="cred-1",
+            credential_binding_mode="platform_override",
+            credential_binding_state="active",
+            credential_bound_by_account_id="admin-1",
+            deltallm_params={"model": "openai/gpt-4o-mini"},
+            model_info={"mode": "chat"},
+        )
+    )
+
+    updated = await repo.update(
+        "dep-inline",
+        model_name="platform-model",
+        named_credential_id=None,
+        deltallm_params={"model": "openai/gpt-4o-mini", "api_key": "inline"},
+        model_info={"mode": "chat"},
+        clear_credential_binding=True,
+    )
+
+    assert updated is not None
+    assert updated.named_credential_id is None
+    assert updated.credential_binding_mode is None
+    assert updated.credential_binding_state is None
+    assert updated.credential_bound_by_account_id is None
+    assert updated.credential_revoked_at is None
+
+
+@pytest.mark.asyncio
 async def test_model_deployment_repository_bulk_insert_if_empty_only_once():
     repo = ModelDeploymentRepository(FakePrisma())
     records = [
@@ -258,6 +335,42 @@ async def test_transaction_scoped_model_mutations_bump_full_routing_revision():
     await repo.delete("dep-1")
 
     assert prisma.runtime_revision == 3
+
+
+@pytest.mark.asyncio
+async def test_model_deployment_credential_owner_can_revoke_exact_live_binding():
+    prisma = FakePrisma()
+    repo = ModelDeploymentRepository(prisma, use_transactions=False)
+    await repo.create(
+        ModelDeploymentRecord(
+            deployment_id="dep-revoke",
+            model_name="shared-model",
+            named_credential_id="cred-owner",
+            credential_binding_mode="owner_delegated",
+            credential_binding_state="active",
+            credential_bound_by_account_id="credential-owner",
+            deltallm_params={"model": "openai/gpt-4o-mini"},
+            model_info={"mode": "chat"},
+        )
+    )
+
+    revoked = await repo.revoke_credential_binding(
+        "dep-revoke",
+        expected_credential_id="cred-owner",
+    )
+
+    assert revoked is not None
+    assert revoked.named_credential_id is None
+    assert revoked.credential_binding_state == "revoked"
+    assert revoked.credential_revoked_at is not None
+    assert prisma.runtime_revision == 2
+    assert (
+        await repo.revoke_credential_binding(
+            "dep-revoke",
+            expected_credential_id="cred-owner",
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

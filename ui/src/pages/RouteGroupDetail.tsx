@@ -19,8 +19,14 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../lib/auth';
-import { ApiError, models, promptRegistry, routeGroups, type PromptBinding } from '../lib/api';
-import { resolveUiAccess } from '../lib/authorization';
+import {
+  ApiError,
+  models,
+  promptRegistry,
+  routeGroups,
+  type PromptBinding,
+} from '../lib/api';
+import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import { useRouteGroupMutationScope } from '../lib/useRouteGroupMutationScope';
 import {
@@ -29,18 +35,22 @@ import {
   parsePolicyTextLoose,
   reconcileGuidedPolicyMembers,
   restoreDraftPolicyTombstones,
+  ROUTE_GROUP_MODE_COLORS,
   routeGroupMutationOutcome,
+  routeGroupStrategyLabel,
   toGuidedPolicy,
   validateGuidedPolicy,
   validatePolicyContextCompatibility,
   type PolicyAction,
   type PolicyGuidedValues,
 } from '../lib/routeGroups';
-import RouteGroupSettingsCard from '../components/route-groups/RouteGroupSettingsCard';
+import RouteGroupSettingsPanel from '../components/route-groups/RouteGroupSettingsPanel';
 import RouteGroupMembersCard from '../components/route-groups/RouteGroupMembersCard';
 import RouteGroupUsageCard from '../components/route-groups/RouteGroupUsageCard';
 import RouteGroupAdvancedTab from '../components/route-groups/RouteGroupAdvancedTab';
 import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
+import ManagedAssetAccessSummary from '../components/ManagedAssetAccessSummary';
+import { useManagedAssetAudienceOptions } from '../lib/useManagedAssetAudienceOptions';
 
 /* ─── Visual helpers ─────────────────────────────────────────────────────── */
 
@@ -51,27 +61,6 @@ const MODE_ICONS: Record<string, React.ElementType> = {
   audio_transcription: Mic,
   image_generation:    Layers,
   rerank:              GitBranch,
-};
-
-const MODE_COLORS: Record<string, string> = {
-  chat:                'bg-blue-100 text-blue-700',
-  embedding:           'bg-violet-100 text-violet-700',
-  audio_speech:        'bg-orange-100 text-orange-700',
-  audio_transcription: 'bg-orange-100 text-orange-700',
-  image_generation:    'bg-pink-100 text-pink-700',
-  rerank:              'bg-teal-100 text-teal-700',
-};
-
-const ROUTING_LABELS: Record<string, string> = {
-  'simple-shuffle':        'Shuffle',
-  weighted:                'Weighted',
-  'least-busy':            'Least Busy',
-  'latency-based-routing': 'Latency',
-  'cost-based-routing':    'Cost',
-  'usage-based-routing':   'Usage',
-  'tag-based-routing':     'Tag (Legacy)',
-  'priority-based-routing':'Priority',
-  'rate-limit-aware':      'Rate Limit',
 };
 
 /* ─── Tab definitions ────────────────────────────────────────────────────── */
@@ -105,9 +94,13 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const { authMode, session } = useAuth();
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
+  const { teamOptions, organizationOptions } = useManagedAssetAudienceOptions(
+    session,
+    isPlatformAdmin,
+  );
 
   const [activeTab, setActiveTab] = useState<TabId>('models');
-  const [savingGroup, setSavingGroup] = useState(false);
   const [deletingGroup, setDeletingGroup] = useState(false);
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState(false);
   const [addingMember, setAddingMember] = useState(false);
@@ -137,11 +130,14 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
     [routeGroupId],
   );
   const groupBindings = useApi(
-    (signal) => groupKey ? promptRegistry.listBindings({ scope_type: 'group', scope_id: groupKey, limit: 20, offset: 0 }, signal) : Promise.resolve(null),
-    [groupKey],
+    (signal) => isPlatformAdmin && groupKey ? promptRegistry.listBindings({ scope_type: 'group', scope_id: groupKey, limit: 20, offset: 0 }, signal) : Promise.resolve(null),
+    [groupKey, isPlatformAdmin],
   );
   const promptTemplates = useApi((signal) => promptRegistry.listTemplates({ limit: 100, offset: 0 }, signal), []);
-  const bindingPreview = useApi((signal) => groupKey ? promptRegistry.previewResolution({ route_group_key: groupKey }, signal) : Promise.resolve(null), [groupKey]);
+  const bindingPreview = useApi(
+    (signal) => isPlatformAdmin && groupKey ? promptRegistry.previewResolution({ route_group_key: groupKey }, signal) : Promise.resolve(null),
+    [groupKey, isPlatformAdmin],
+  );
   const deploymentCandidates = useApi(
     (signal) => models.list(
       { search: memberSearch, mode: form.mode, limit: 20, offset: 0 },
@@ -159,6 +155,9 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   const memberIds = useMemo(() => members.map((m) => m.deployment_id), [members]);
   const isPolicyBusy = policyAction !== null;
   const canSimulatePolicy = resolveUiAccess(authMode, session).route_groups;
+  const groupAccess = detail.data?.group.access;
+  const canWrite = isPlatformAdmin || !groupAccess || groupAccess.capabilities.write;
+  const canDelete = isPlatformAdmin || !groupAccess || groupAccess.capabilities.delete;
   const publishedPolicy = useMemo(() => policies.find((p) => p.status === 'published') || null, [policies]);
   const draftPolicy = useMemo(() => policies.find((p) => p.status === 'draft') || null, [policies]);
   const winningPrompt = bindingPreview.data?.winner || null;
@@ -294,25 +293,8 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
     return parsed;
   };
 
-  const handleSaveGroup = async () => {
-    const operation = mutations.begin();
-    if (!operation) return;
-    setSavingGroup(true);
-    try {
-      const result = await routeGroups.update(routeGroupId, { name: form.name.trim() || null, mode: form.mode, enabled: form.enabled }, operation.signal);
-      if (!mutations.isCurrent(operation)) return;
-      detail.refetch();
-      const outcome = routeGroupMutationOutcome('Route group settings were saved.', result.warnings);
-      pushToast({ tone: outcome.tone, title: 'Group updated', message: outcome.message });
-    } catch (error: unknown) {
-      if (!mutations.isCurrent(operation)) return;
-      pushToast({ tone: 'error', title: 'Update failed', message: mutationErrorMessage(error, 'Failed to update route group.') });
-    } finally {
-      if (mutations.finish(operation)) setSavingGroup(false);
-    }
-  };
-
   const handleDeleteGroup = async () => {
+    if (!canDelete) return;
     const operation = mutations.begin();
     if (!operation) return;
     setDeletingGroup(true);
@@ -332,6 +314,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handleAddMember = async () => {
+    if (!canWrite) return;
     if (!memberForm.deployment_id.trim()) {
       pushToast({ tone: 'error', title: 'Missing deployment', message: 'Select or enter a deployment ID before adding.' });
       return;
@@ -366,6 +349,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handleSaveBinding = async () => {
+    if (!isPlatformAdmin) return;
     if (!bindingForm.template_key.trim()) {
       pushToast({ tone: 'error', title: 'Missing prompt', message: 'Select a prompt before saving the binding.' });
       return;
@@ -395,6 +379,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handleDeleteBinding = async (binding: PromptBinding) => {
+    if (!isPlatformAdmin) return;
     const operation = mutations.begin();
     if (!operation) return;
     setDeletingBinding(binding.prompt_binding_id);
@@ -413,6 +398,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handleRemoveMember = async () => {
+    if (!canWrite) return;
     if (!memberToRemove) return;
     const operation = mutations.begin();
     if (!operation) return;
@@ -433,6 +419,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handleValidatePolicy = async () => {
+    if (!canWrite) return;
     const parsed = parsePolicy();
     if (!parsed) return;
     const operation = mutations.begin();
@@ -456,6 +443,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handleSaveDraft = async () => {
+    if (!canWrite) return;
     const parsed = parsePolicy();
     if (!parsed) return;
     const operation = mutations.begin();
@@ -479,6 +467,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handlePublish = async () => {
+    if (!canWrite) return;
     const parsed = parsePolicy();
     if (!parsed) return;
     const operation = mutations.begin();
@@ -506,6 +495,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
   };
 
   const handleRollback = async (version = selectedRollbackVersion) => {
+    if (!canWrite) return;
     if (!version) return;
     const operation = mutations.begin();
     if (!operation) return;
@@ -585,10 +575,8 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
 
   const group = detail.data.group;
   const ModeIcon = MODE_ICONS[group.mode] || Layers;
-  const modeColor = MODE_COLORS[group.mode] || 'bg-gray-100 text-gray-700';
-  const routingLabel = group.routing_strategy
-    ? (ROUTING_LABELS[group.routing_strategy] || group.routing_strategy)
-    : 'Shuffle';
+  const modeColor = ROUTE_GROUP_MODE_COLORS[group.mode] || 'bg-gray-100 text-gray-700';
+  const routingLabel = routeGroupStrategyLabel(group.routing_strategy);
   const RoutingIcon = !group.routing_strategy || group.routing_strategy === 'simple-shuffle' ? Shuffle : GitBranch;
 
   return (
@@ -620,6 +608,13 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
                 <RoutingIcon className="h-3.5 w-3.5" />
                 {publishedPolicy ? `Override v${publishedPolicy.version}` : `${routingLabel} routing`}
               </span>
+              {group.access ? (
+                <ManagedAssetAccessSummary
+                  access={group.access}
+                  teamOptions={teamOptions}
+                  organizationOptions={organizationOptions}
+                />
+              ) : null}
             </div>
 
             <div className="flex items-start justify-between gap-4">
@@ -631,19 +626,23 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
                 </p>
               </div>
               <div className="flex shrink-0 gap-2">
-                <button
-                  onClick={() => setActiveTab('settings')}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50"
-                >
-                  <Pencil className="h-4 w-4" /> Edit
-                </button>
-                <button
-                  onClick={() => setConfirmDeleteGroup(true)}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50"
-                  title="Delete group"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {canWrite ? (
+                  <button
+                    onClick={() => setActiveTab('settings')}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50"
+                  >
+                    <Pencil className="h-4 w-4" /> Edit
+                  </button>
+                ) : null}
+                {canDelete ? (
+                  <button
+                    onClick={() => setConfirmDeleteGroup(true)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50"
+                    title="Delete group"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -690,6 +689,7 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
               onMemberSearchChange={setMemberSearchInput}
               onAddMember={handleAddMember}
               onRequestRemoveMember={setMemberToRemove}
+              canWrite={canWrite}
             />
           ) : activeTab === 'advanced' ? (
             <RouteGroupAdvancedTab
@@ -715,6 +715,8 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
                 ...(promptSummary.label ? { label: promptSummary.label } : {}),
               } : null}
               canSimulate={canSimulatePolicy}
+              canWrite={canWrite}
+              canManageBindings={isPlatformAdmin}
               policyText={policyText}
               policyMessage={policyMessage}
               policyError={policyError}
@@ -754,7 +756,14 @@ export default function RouteGroupDetail({ routeGroupId }: { routeGroupId: strin
                 />
               )}
               {activeTab === 'settings' && (
-                <RouteGroupSettingsCard form={form} saving={savingGroup} onChange={setForm} onSave={handleSaveGroup} />
+                <RouteGroupSettingsPanel
+                  routeGroupId={routeGroupId}
+                  group={group}
+                  form={form}
+                  onChange={setForm}
+                  onSaved={detail.refetch}
+                  mutations={mutations}
+                />
               )}
             </PanelCard>
           )}

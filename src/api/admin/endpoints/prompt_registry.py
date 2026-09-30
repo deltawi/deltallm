@@ -4,27 +4,52 @@ from dataclasses import asdict
 from time import perf_counter
 import re
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, to_json_value
+from src.api.admin.endpoints.managed_assets import (
+    asset_principal_for_request,
+    parse_asset_access_input,
+)
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
+from src.db.managed_assets import ManagedAssetAccessRepository
 from src.db.prompt_registry import PromptRegistryRepository
-from src.middleware.admin import require_admin_permission
+from src.middleware.admin import require_admin_permission, require_authenticated
 from src.services.asset_ownership import (
     apply_owner_scope_to_metadata,
     normalize_owner_scope_type,
     public_metadata_without_owner_scope,
 )
 from src.services.asset_scopes import normalize_scope_type
+from src.services.creator_prompt_access import refresh_creator_prompt_access_for_app
+from src.services.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetKind,
+    AssetPrincipal,
+    GovernanceSource,
+    ManagedAsset,
+    resolve_asset_capabilities,
+    revise_asset_access,
+    serialize_asset_access,
+    validate_grant_subject_for_principal,
+    namespace_creator_callable_key,
+)
+from src.services.model_identity import (
+    creator_prompt_template_key,
+    generate_compact_asset_code,
+)
 from src.services.prompt_registry import PromptRegistryService, normalize_route_preferences
 from src.services.prompt_rendering import detect_secret_like_content
 
 router = APIRouter(tags=["Admin Prompt Registry"])
 
-_TEMPLATE_KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,127}$")
+_TEMPLATE_KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,200}$")
+_USER_TEMPLATE_KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,127}$")
 _ALLOWED_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user", "group"}
+_PROMPT_KEY_GENERATION_ATTEMPTS = 8
 
 
 def _repository_or_503(request: Request) -> PromptRegistryRepository:
@@ -33,6 +58,16 @@ def _repository_or_503(request: Request) -> PromptRegistryRepository:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Prompt registry repository unavailable",
+        )
+    return repository
+
+
+def _access_repository_or_503(request: Request) -> ManagedAssetAccessRepository:
+    repository = getattr(request.app.state, "managed_asset_access_repository", None)
+    if repository is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Managed asset access repository unavailable",
         )
     return repository
 
@@ -53,9 +88,47 @@ def _validate_template_key(value: Any) -> str:
     if not _TEMPLATE_KEY_RE.match(template_key):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="template_key must match ^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,127}$",
+            detail="template_key must be 2-201 characters using letters, numbers, . _ : or -",
         )
     return template_key
+
+
+def _validate_user_template_key(value: Any) -> str:
+    template_key = str(value or "").strip()
+    if not template_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="template_key is required"
+        )
+    if not _USER_TEMPLATE_KEY_RE.match(template_key):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="template_key must be 2-128 characters using letters, numbers, . _ : or -",
+        )
+    return template_key
+
+
+async def _creator_prompt_key_or_400(
+    repository: PromptRegistryRepository,
+    *,
+    principal: AssetPrincipal,
+    requested_key: str,
+) -> str:
+    if principal.is_platform_admin:
+        try:
+            return _validate_template_key(namespace_creator_callable_key(requested_key, principal))
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    for _ in range(_PROMPT_KEY_GENERATION_ATTEMPTS):
+        candidate = _validate_template_key(
+            creator_prompt_template_key(generate_compact_asset_code(), requested_key)
+        )
+        if await repository.get_template(candidate) is None:
+            return candidate
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Could not allocate a unique prompt key. Try again.",
+    )
 
 
 def _validate_label(value: Any) -> str:
@@ -124,12 +197,18 @@ def _validate_template_body(value: Any) -> dict[str, Any]:
     return value
 
 
-async def _invalidate_template_cache(request: Request, template_key: str) -> None:
+async def _invalidate_template_cache(
+    request: Request,
+    template_key: str,
+    *,
+    notify: bool = True,
+) -> None:
     service = _service(request)
     if service is None:
         return
     await service.invalidate_template(template_key)
-    await _notify_prompt_invalidation(request)
+    if notify:
+        await _notify_prompt_invalidation(request)
 
 
 async def _invalidate_scope_cache(request: Request, *, scope_type: str, scope_id: str) -> None:
@@ -169,11 +248,60 @@ def _validated_metadata(value: Any) -> dict[str, Any] | None:
     return dict(value)
 
 
-def _template_response_payload(template: Any) -> dict[str, Any]:
+def _template_response_payload(
+    template: Any,
+    *,
+    policy: AssetAccessPolicy | None = None,
+    principal: AssetPrincipal | None = None,
+) -> dict[str, Any]:
     payload = to_json_value(asdict(template))
     if isinstance(payload, dict):
         payload["metadata"] = public_metadata_without_owner_scope(payload.get("metadata"))
+        if policy is not None and principal is not None:
+            payload["access"] = serialize_asset_access(policy, principal)
     return payload
+
+
+def _not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Prompt template not found",
+    )
+
+
+async def _template_policy_or_404(
+    request: Request,
+    template: Any,
+    principal: AssetPrincipal,
+    *,
+    write: bool = False,
+    delete: bool = False,
+) -> AssetAccessPolicy | None:
+    managed_asset_id = str(getattr(template, "managed_asset_id", None) or "").strip()
+    if not managed_asset_id:
+        if principal.is_platform_admin:
+            return None
+        raise _not_found()
+    policy = await _access_repository_or_503(request).get_policy_for_resource(
+        AssetKind.PROMPT_TEMPLATE,
+        str(template.prompt_template_id),
+        principal=principal,
+    )
+    if policy is None:
+        if principal.is_platform_admin:
+            return None
+        raise _not_found()
+    capabilities = resolve_asset_capabilities(policy, principal)
+    allowed = (
+        capabilities.can_delete
+        if delete
+        else capabilities.can_write
+        if write
+        else capabilities.can_read
+    )
+    if not allowed:
+        raise _not_found()
+    return policy
 
 
 def _resolve_owner_scope_inputs(
@@ -232,7 +360,7 @@ def _resolve_template_metadata(
 
 @router.get(
     "/ui/api/prompt-registry/templates",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def list_prompt_templates(
     request: Request,
@@ -241,8 +369,27 @@ async def list_prompt_templates(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
-    items, total = await repository.list_templates(search=search, limit=limit, offset=offset)
-    data = [_template_response_payload(item) for item in items]
+    access_repository = _access_repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    policies = await access_repository.list_accessible_policies(
+        AssetKind.PROMPT_TEMPLATE,
+        principal,
+    )
+    policy_by_id = {policy.asset.asset_id: policy for policy in policies}
+    items, total = await repository.list_templates(
+        search=search,
+        limit=limit,
+        offset=offset,
+        managed_asset_ids=None if principal.is_platform_admin else list(policy_by_id),
+    )
+    data = [
+        _template_response_payload(
+            item,
+            policy=policy_by_id.get(str(item.managed_asset_id or "")),
+            principal=principal,
+        )
+        for item in items
+    ]
     return {
         "data": data,
         "pagination": {
@@ -256,20 +403,30 @@ async def list_prompt_templates(
 
 @router.get(
     "/ui/api/prompt-registry/templates/{template_key}",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def get_prompt_template(request: Request, template_key: str) -> dict[str, Any]:
     repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
     template = await repository.get_template(template_key)
     if template is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
-        )
+        raise _not_found()
+    policy = await _template_policy_or_404(request, template, principal)
     versions = await repository.list_versions(template_key)
     labels = await repository.list_labels(template_key)
-    bindings, _ = await repository.list_bindings(template_key=template_key, limit=200, offset=0)
+    bindings = []
+    if principal.is_platform_admin:
+        bindings, _ = await repository.list_bindings(
+            template_key=template_key,
+            limit=200,
+            offset=0,
+        )
     return {
-        "template": _template_response_payload(template),
+        "template": _template_response_payload(
+            template,
+            policy=policy,
+            principal=principal,
+        ),
         "versions": [to_json_value(asdict(item)) for item in versions],
         "labels": [to_json_value(asdict(item)) for item in labels],
         "bindings": [to_json_value(_normalize_binding_payload(asdict(item))) for item in bindings],
@@ -278,19 +435,35 @@ async def get_prompt_template(request: Request, template_key: str) -> dict[str, 
 
 @router.post(
     "/ui/api/prompt-registry/templates",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def create_prompt_template(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    template_key = _validate_template_key(payload.get("template_key") or payload.get("key"))
+    access_repository = _access_repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    if not principal.is_platform_admin and principal.account_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated account is required",
+        )
+    requested_template_key = _validate_user_template_key(
+        payload.get("template_key") or payload.get("key")
+    )
+    template_key = await _creator_prompt_key_or_400(
+        repository,
+        principal=principal,
+        requested_key=requested_template_key,
+    )
     name = str(payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     description = (
         str(payload.get("description")).strip() if payload.get("description") is not None else None
     )
-    owner_scope_type, owner_scope_id = _resolve_owner_scope_inputs(payload)
+    owner_scope_type, owner_scope_id = (
+        _resolve_owner_scope_inputs(payload) if principal.is_platform_admin else ("global", None)
+    )
     metadata = _resolve_template_metadata(
         existing_metadata=None,
         raw_metadata=payload.get("metadata"),
@@ -298,14 +471,82 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
         owner_scope_id=owner_scope_id,
     )
 
+    managed_asset_id = str(uuid4())
+    prompt_template_id = str(uuid4())
+    base_policy = AssetAccessPolicy(
+        asset=ManagedAsset(
+            asset_id=managed_asset_id,
+            asset_kind=AssetKind.PROMPT_TEMPLATE,
+            governance_source=(
+                GovernanceSource.PLATFORM
+                if principal.is_platform_admin
+                else GovernanceSource.CREATOR
+            ),
+            owner_account_id=None if principal.is_platform_admin else principal.account_id,
+        )
+    )
+    grants = parse_asset_access_input(payload, managed_asset_id=managed_asset_id)
     try:
-        created = await repository.create_template(
+        policy = revise_asset_access(
+            base_policy,
+            principal,
+            grants=grants,
+        )
+        validate_grant_subject_for_principal(policy, principal)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    async def _create_with(
+        prompt_repository: PromptRegistryRepository,
+        policy_repository: ManagedAssetAccessRepository,
+    ):  # noqa: ANN202
+        stored_policy = await policy_repository.create_policy(
+            policy,
+            created_by_account_id=principal.account_id,
+        )
+        created_template = await prompt_repository.create_template(
             template_key=template_key,
             name=name,
             description=description,
             owner_scope=owner_scope_type,
             metadata=metadata,
+            prompt_template_id=prompt_template_id,
+            managed_asset_id=managed_asset_id,
         )
+        return created_template, stored_policy
+
+    database = getattr(access_repository, "prisma", None)
+    try:
+        if (
+            database is not None
+            and database is getattr(repository, "prisma", None)
+            and hasattr(database, "tx")
+        ):
+            async with database.tx() as tx:
+                created, policy = await _create_with(
+                    repository.with_db(tx),
+                    access_repository.with_db(tx),
+                )
+        else:
+            policy = await access_repository.create_policy(
+                policy,
+                created_by_account_id=principal.account_id,
+            )
+            try:
+                created = await repository.create_template(
+                    template_key=template_key,
+                    name=name,
+                    description=description,
+                    owner_scope=owner_scope_type,
+                    metadata=metadata,
+                    prompt_template_id=prompt_template_id,
+                    managed_asset_id=managed_asset_id,
+                )
+            except Exception:
+                await access_repository.delete_policy(managed_asset_id)
+                raise
     except Exception as exc:
         if "duplicate key" in str(exc).lower():
             raise HTTPException(
@@ -313,7 +554,15 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
             ) from exc
         raise
 
-    response = _template_response_payload(created)
+    await _invalidate_template_cache(request, template_key, notify=False)
+    warnings = await refresh_creator_prompt_access_for_app(
+        request.app,
+        fail_closed_asset_id=managed_asset_id,
+        fail_closed_template_keys={template_key},
+    )
+    response = _template_response_payload(created, policy=policy, principal=principal)
+    if warnings:
+        response["warnings"] = list(warnings)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -328,18 +577,18 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
 
 @router.put(
     "/ui/api/prompt-registry/templates/{template_key}",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def update_prompt_template(
     request: Request, template_key: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
     existing = await repository.get_template(template_key)
     if existing is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
-        )
+        raise _not_found()
+    policy = await _template_policy_or_404(request, existing, principal, write=True)
 
     name = str(payload.get("name") or existing.name).strip()
     if not name:
@@ -349,10 +598,14 @@ async def update_prompt_template(
         if "description" in payload and payload.get("description") is not None
         else existing.description
     )
-    owner_scope_type, owner_scope_id = _resolve_owner_scope_inputs(
-        payload,
-        existing_scope_type=existing.owner_scope_type,
-        existing_scope_id=existing.owner_scope_id,
+    owner_scope_type, owner_scope_id = (
+        _resolve_owner_scope_inputs(
+            payload,
+            existing_scope_type=existing.owner_scope_type,
+            existing_scope_id=existing.owner_scope_id,
+        )
+        if principal.is_platform_admin
+        else (existing.owner_scope_type, existing.owner_scope_id)
     )
     metadata = _resolve_template_metadata(
         existing_metadata=existing.metadata,
@@ -380,7 +633,7 @@ async def update_prompt_template(
             status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
         )
 
-    response = _template_response_payload(updated)
+    response = _template_response_payload(updated, policy=policy, principal=principal)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -389,7 +642,7 @@ async def update_prompt_template(
         resource_id=template_key,
         request_payload=payload,
         response_payload=response,
-        before=_template_response_payload(existing),
+        before=_template_response_payload(existing, policy=policy, principal=principal),
         after=response,
     )
     return response
@@ -397,18 +650,46 @@ async def update_prompt_template(
 
 @router.delete(
     "/ui/api/prompt-registry/templates/{template_key}",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
-async def delete_prompt_template(request: Request, template_key: str) -> dict[str, bool]:
+async def delete_prompt_template(request: Request, template_key: str) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    deleted = await repository.delete_template(template_key)
+    access_repository = _access_repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    existing = await repository.get_template(template_key)
+    if existing is None:
+        raise _not_found()
+    policy = await _template_policy_or_404(request, existing, principal, delete=True)
+    managed_asset_id = policy.asset.asset_id if policy is not None else None
+    database = getattr(access_repository, "prisma", None)
+    if (
+        managed_asset_id is not None
+        and database is not None
+        and database is getattr(repository, "prisma", None)
+        and hasattr(database, "tx")
+    ):
+        async with database.tx() as tx:
+            deleted = await repository.with_db(tx).delete_template(template_key)
+            if deleted:
+                await access_repository.with_db(tx).delete_policy(managed_asset_id)
+    else:
+        deleted = await repository.delete_template(template_key)
+        if deleted and managed_asset_id is not None:
+            await access_repository.delete_policy(managed_asset_id)
     if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
-        )
-    await _invalidate_all_cache(request)
-    response = {"deleted": True}
+        raise _not_found()
+    service = _service(request)
+    if service is not None:
+        await service.invalidate_all()
+    warnings = await refresh_creator_prompt_access_for_app(
+        request.app,
+        fail_closed_asset_id=managed_asset_id,
+        fail_closed_template_keys={template_key},
+    )
+    response: dict[str, Any] = {"deleted": True}
+    if warnings:
+        response["warnings"] = list(warnings)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -422,17 +703,18 @@ async def delete_prompt_template(request: Request, template_key: str) -> dict[st
 
 @router.post(
     "/ui/api/prompt-registry/templates/{template_key}/versions",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def create_prompt_version(
     request: Request, template_key: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    if await repository.get_template(template_key) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found"
-        )
+    principal = asset_principal_for_request(request)
+    template = await repository.get_template(template_key)
+    if template is None:
+        raise _not_found()
+    await _template_policy_or_404(request, template, principal, write=True)
 
     template_body = _validate_template_body(payload.get("template_body"))
     variables_schema = payload.get("variables_schema")
@@ -466,7 +748,9 @@ async def create_prompt_version(
 
     if bool(payload.get("publish")):
         published = await repository.publish_version(
-            template_key, version=created.version, published_by="admin_api"
+            template_key,
+            version=created.version,
+            published_by=principal.account_id or "admin_api",
         )
         if published is not None:
             created = published
@@ -487,16 +771,23 @@ async def create_prompt_version(
 
 @router.post(
     "/ui/api/prompt-registry/templates/{template_key}/versions/{version}/publish",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def publish_prompt_version(
     request: Request, template_key: str, version: int
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    template = await repository.get_template(template_key)
+    if template is None:
+        raise _not_found()
+    await _template_policy_or_404(request, template, principal, write=True)
     parsed_version = _validate_version(version)
     published = await repository.publish_version(
-        template_key, version=parsed_version, published_by="admin_api"
+        template_key,
+        version=parsed_version,
+        published_by=principal.account_id or "admin_api",
     )
     if published is None:
         raise HTTPException(
@@ -517,23 +808,33 @@ async def publish_prompt_version(
 
 @router.get(
     "/ui/api/prompt-registry/templates/{template_key}/labels",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def list_prompt_labels(request: Request, template_key: str) -> list[dict[str, Any]]:
     repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    template = await repository.get_template(template_key)
+    if template is None:
+        raise _not_found()
+    await _template_policy_or_404(request, template, principal)
     labels = await repository.list_labels(template_key)
     return [to_json_value(asdict(item)) for item in labels]
 
 
 @router.post(
     "/ui/api/prompt-registry/templates/{template_key}/labels",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def assign_prompt_label(
     request: Request, template_key: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    template = await repository.get_template(template_key)
+    if template is None:
+        raise _not_found()
+    await _template_policy_or_404(request, template, principal, write=True)
     label = _validate_label(payload.get("label"))
     version = _validate_version(payload.get("version"))
     require_approval = bool(payload.get("require_approval", False))
@@ -570,11 +871,16 @@ async def assign_prompt_label(
 
 @router.delete(
     "/ui/api/prompt-registry/templates/{template_key}/labels/{label}",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def delete_prompt_label(request: Request, template_key: str, label: str) -> dict[str, bool]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    template = await repository.get_template(template_key)
+    if template is None:
+        raise _not_found()
+    await _template_policy_or_404(request, template, principal, write=True)
     removed = await repository.delete_label(template_key, label)
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt label not found")
@@ -704,7 +1010,7 @@ async def delete_prompt_binding(request: Request, binding_id: str) -> dict[str, 
 
 @router.post(
     "/ui/api/prompt-registry/render",
-    dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))],
+    dependencies=[Depends(require_authenticated)],
 )
 async def dry_run_prompt_render(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     service = _service(request)
@@ -715,6 +1021,12 @@ async def dry_run_prompt_render(request: Request, payload: dict[str, Any]) -> di
         )
 
     template_key = _validate_template_key(payload.get("template_key"))
+    repository = _repository_or_503(request)
+    principal = asset_principal_for_request(request)
+    template = await repository.get_template(template_key)
+    if template is None:
+        raise _not_found()
+    await _template_policy_or_404(request, template, principal)
     label = str(payload.get("label")).strip() if payload.get("label") is not None else None
     version = (
         _validate_version(payload.get("version")) if payload.get("version") is not None else None

@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.db.managed_assets import ManagedAssetAudienceNotFoundError
 from src.guardrails.exceptions import GuardrailViolationError
 from src.models.errors import ApprovalRequiredError, InvalidRequestError, ProxyError, RateLimitError
 from src.telemetry.request_failures import (
@@ -144,6 +145,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         if _uses_anthropic_error_dialect(request):
             return anthropic_proxy_error_response(InvalidRequestError(message="Invalid request"))
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
+    @app.exception_handler(ManagedAssetAudienceNotFoundError)
+    async def managed_asset_audience_error_handler(
+        _request: Request, exc: ManagedAssetAudienceNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:

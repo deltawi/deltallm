@@ -44,15 +44,26 @@ async def test_operator_actions_deny_before_lookup(
     monkeypatch.setattr(
         "src.api.admin.endpoints.models._find_runtime_deployment", deployment_lookup
     )
-    for path, body in [
-        (
+    responses = [
+        await client.post(
             "/ui/api/provider-models/discover",
-            {"provider": "deepseek", "api_base": base, "named_credential_id": identifier},
+            json={"provider": "deepseek", "api_base": base, "named_credential_id": identifier},
+            cookies={"deltallm_session": "session-token"},
         ),
-        (f"/ui/api/models/{identifier}/health-check", {}),
-    ]:
-        response = await client.post(path, json=body, cookies={"deltallm_session": "session-token"})
-        assert response.status_code == (401 if role is None else 403)
+        await client.post(
+            f"/ui/api/models/{identifier}/health-check",
+            json={},
+            cookies={"deltallm_session": "session-token"},
+        ),
+    ]
+    if role is None:
+        assert [response.status_code for response in responses] == [401, 401]
+    elif role == "platform_admin":
+        assert [response.status_code for response in responses] == [403, 403]
+    else:
+        # Creators may operate their own models, but inline discovery settings are
+        # rejected and unknown/inaccessible deployments stay hidden.
+        assert [response.status_code for response in responses] == [400, 404]
     lookup.assert_not_called()
     deployment_lookup.assert_not_called()
 

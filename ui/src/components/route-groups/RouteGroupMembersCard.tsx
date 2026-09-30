@@ -46,6 +46,7 @@ interface RouteGroupMembersCardProps {
   onMemberSearchChange: (value: string) => void;
   onAddMember: () => void;
   onRequestRemoveMember: (deploymentId: string) => void;
+  canWrite?: boolean;
 }
 
 export default function RouteGroupMembersCard({
@@ -63,6 +64,7 @@ export default function RouteGroupMembersCard({
   onMemberSearchChange,
   onAddMember,
   onRequestRemoveMember,
+  canWrite = true,
 }: RouteGroupMembersCardProps) {
   const navigate = useNavigate();
   const [showAddForm, setShowAddForm] = useState(false);
@@ -95,7 +97,7 @@ export default function RouteGroupMembersCard({
         </p>
       </div>
 
-      {showAddForm && (
+      {canWrite && showAddForm && (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
           <h4 className="mb-3 text-sm font-semibold text-blue-900">
             Add a deployment — must be compatible with <strong>{mode}</strong> traffic
@@ -242,17 +244,19 @@ export default function RouteGroupMembersCard({
           <h3 className="text-sm font-semibold text-gray-900">
             All Models {members.length > 0 && `(${members.length})`}
           </h3>
-          <button
-            type="button"
-            onClick={() => setShowAddForm((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
-          >
-            {showAddForm ? (
-              <><ChevronUp className="h-3.5 w-3.5" /> Cancel</>
-            ) : (
-              <><Plus className="h-3.5 w-3.5" /> Add Model</>
-            )}
-          </button>
+          {canWrite ? (
+            <button
+              type="button"
+              onClick={() => setShowAddForm((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
+            >
+              {showAddForm ? (
+                <><ChevronUp className="h-3.5 w-3.5" /> Cancel</>
+              ) : (
+                <><Plus className="h-3.5 w-3.5" /> Add Model</>
+              )}
+            </button>
+          ) : null}
         </div>
         <table className="w-full text-sm">
           <thead>
@@ -273,14 +277,18 @@ export default function RouteGroupMembersCard({
                   colSpan={totalWeight > 0 ? 5 : 4}
                   className="px-5 py-12 text-center text-sm text-gray-400"
                 >
-                  No models yet.{' '}
-                  <button
-                    type="button"
-                    onClick={() => setShowAddForm(true)}
-                    className="text-brand-primary-ink hover:underline"
-                  >
-                    Add the first one
-                  </button>
+                  No models yet.{canWrite ? (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        onClick={() => setShowAddForm(true)}
+                        className="text-brand-primary-ink hover:underline"
+                      >
+                        Add the first one
+                      </button>
+                    </>
+                  ) : null}
                 </td>
               </tr>
             ) : (
@@ -345,14 +353,16 @@ export default function RouteGroupMembersCard({
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        onClick={() => onRequestRemoveMember(m.deployment_id)}
-                        className="rounded-lg p-1.5 text-gray-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
-                        aria-label={`Remove ${m.deployment_id}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      {canWrite ? (
+                        <button
+                          type="button"
+                          onClick={() => onRequestRemoveMember(m.deployment_id)}
+                          className="rounded-lg p-1.5 text-gray-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                          aria-label={`Remove ${m.deployment_id}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 );

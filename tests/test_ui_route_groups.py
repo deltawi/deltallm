@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -33,9 +34,18 @@ from src.router.selection.policy import (
     RouteSelectorActivationUnsupportedError,
     ensure_selector_activation_supported,
 )
+from src.models.platform_auth import PlatformAuthContext
+from src.services.creator_route_group_access import CreatorRouteGroupAccessService
 from src.services.asset_ownership import owner_scope_from_metadata
 from src.services.asset_scopes import normalize_scope_type
 from src.services.callable_targets import build_callable_target_catalog
+from src.services.managed_asset_access import (
+    AssetAccessPolicy,
+    AssetKind,
+    AssetPrincipal,
+    ManagedAsset,
+    resolve_asset_capabilities,
+)
 
 
 def _extract_default_prompt(metadata: dict[str, Any] | None) -> dict[str, str] | None:
@@ -140,6 +150,8 @@ def test_published_model_registry_shares_one_deployment_store(test_app: FastAPI)
 
 
 class _FakeRouteGroupRepository:
+    prisma = None
+
     def __init__(self) -> None:
         self.groups: dict[str, RouteGroupRecord] = {}
         self.members: dict[str, list[RouteGroupMemberRecord]] = {}
@@ -150,20 +162,42 @@ class _FakeRouteGroupRepository:
         self._binding_counter = 0
         self._policy_counter = 0
 
-    async def list_groups(self, *, search=None, limit=100, offset=0):  # noqa: ANN001, ANN201
+    async def list_groups(  # noqa: ANN001, ANN201
+        self,
+        *,
+        search=None,
+        limit=100,
+        offset=0,
+        managed_asset_ids=None,
+    ):
         del search
-        items = list(self.groups.values())[offset : offset + limit]
-        return items, len(self.groups)
+        items = list(self.groups.values())
+        if managed_asset_ids is not None:
+            allowed = set(managed_asset_ids)
+            items = [item for item in items if item.managed_asset_id in allowed]
+        return items[offset : offset + limit], len(items)
 
     async def get_group(self, group_key: str):  # noqa: ANN201
         return self.groups.get(group_key)
 
-    async def create_group(self, *, group_key, name, mode, routing_strategy, enabled, metadata):  # noqa: ANN001, ANN201
+    async def create_group(  # noqa: ANN001, ANN201
+        self,
+        *,
+        group_key,
+        name,
+        mode,
+        routing_strategy,
+        enabled,
+        metadata,
+        route_group_id=None,
+        managed_asset_id=None,
+    ):
         self._group_counter += 1
         owner_scope = owner_scope_from_metadata(metadata)
         record = RouteGroupRecord(
-            route_group_id=f"rg-{self._group_counter}",
+            route_group_id=route_group_id or f"rg-{self._group_counter}",
             group_key=group_key,
+            managed_asset_id=managed_asset_id,
             name=name,
             mode=mode,
             routing_strategy=routing_strategy,
@@ -175,6 +209,16 @@ class _FakeRouteGroupRepository:
         )
         self.groups[group_key] = record
         return record
+
+    async def list_by_managed_asset_ids(self, managed_asset_ids):  # noqa: ANN001, ANN201
+        allowed = set(managed_asset_ids)
+        return [item for item in self.groups.values() if item.managed_asset_id in allowed]
+
+    async def list_member_model_names_by_group_ids(  # noqa: ANN001, ANN201
+        self,
+        route_group_ids,
+    ):
+        return {str(group_id): frozenset() for group_id in route_group_ids}
 
     async def update_group(
         self, group_key: str, *, name, mode, routing_strategy, enabled, metadata
@@ -564,6 +608,283 @@ class _FakeRouteGroupRuntimeCache:
 
     async def invalidate(self) -> None:
         self.invalidate_calls += 1
+
+
+class _FakeManagedAssetAccessRepository:
+    prisma = None
+
+    def __init__(self, app) -> None:  # noqa: ANN001
+        self.app = app
+        self.policies: dict[str, AssetAccessPolicy] = {}
+
+    async def create_policy(  # noqa: ANN201
+        self,
+        policy: AssetAccessPolicy,
+        *,
+        created_by_account_id: str | None,
+    ):
+        del created_by_account_id
+        self.policies[policy.asset.asset_id] = policy
+        return policy
+
+    async def delete_policy(self, asset_id: str) -> bool:
+        return self.policies.pop(asset_id, None) is not None
+
+    async def get_policy(self, asset_id: str) -> AssetAccessPolicy | None:
+        return self.policies.get(asset_id)
+
+    async def get_accessible_policy(
+        self,
+        asset_id: str,
+        principal: AssetPrincipal,
+    ) -> AssetAccessPolicy | None:
+        policy = self.policies.get(asset_id)
+        if policy is None or not resolve_asset_capabilities(policy, principal).can_read:
+            return None
+        return policy
+
+    async def get_policy_for_resource(
+        self,
+        asset_kind: AssetKind,
+        resource_id: str,
+        *,
+        principal: AssetPrincipal | None = None,
+    ) -> AssetAccessPolicy | None:
+        if asset_kind is not AssetKind.ROUTE_GROUP:
+            return None
+        repository = self.app.state.route_group_repository
+        record = next(
+            (item for item in repository.groups.values() if item.route_group_id == resource_id),
+            None,
+        )
+        if record is None or not record.managed_asset_id:
+            return None
+        policy = self.policies.get(record.managed_asset_id)
+        if policy is None or principal is None:
+            return policy
+        return policy if resolve_asset_capabilities(policy, principal).can_read else None
+
+    async def list_accessible_policies(
+        self,
+        asset_kind: AssetKind,
+        principal: AssetPrincipal,
+    ) -> list[AssetAccessPolicy]:
+        return [
+            policy
+            for policy in self.policies.values()
+            if policy.asset.asset_kind is asset_kind
+            and resolve_asset_capabilities(policy, principal).can_read
+        ]
+
+    async def replace_grant(  # noqa: ANN201
+        self,
+        policy: AssetAccessPolicy,
+        *,
+        expected_policy_version: int,
+        changed_by_account_id: str | None,
+    ):
+        del changed_by_account_id
+        current = self.policies[policy.asset.asset_id]
+        if current.asset.policy_version != expected_policy_version:
+            from src.db.managed_assets import ManagedAssetPolicyConflictError
+
+            raise ManagedAssetPolicyConflictError("asset policy changed")
+        updated = AssetAccessPolicy(
+            asset=ManagedAsset(
+                asset_id=policy.asset.asset_id,
+                asset_kind=policy.asset.asset_kind,
+                governance_source=policy.asset.governance_source,
+                owner_account_id=policy.asset.owner_account_id,
+                policy_version=expected_policy_version + 1,
+                state=policy.asset.state,
+            ),
+            grant=policy.grant,
+        )
+        self.policies[policy.asset.asset_id] = updated
+        return updated
+
+
+class _IdentityService:
+    def __init__(self, context: PlatformAuthContext) -> None:
+        self.context = context
+
+    async def get_context_for_session(self, token: str) -> PlatformAuthContext | None:
+        return self.context if token == "route-group-session" else None
+
+
+def _user_context(account_id: str, *, team_ids: tuple[str, ...] = ()) -> PlatformAuthContext:
+    return PlatformAuthContext(
+        account_id=account_id,
+        email=f"{account_id}@example.com",
+        role="org_user",
+        team_memberships=[{"team_id": team_id, "role": "team_developer"} for team_id in team_ids],
+    )
+
+
+class _FakeLogicalModelRepository:
+    async def get_by_deployment_id(self, deployment_id: str):  # noqa: ANN201
+        del deployment_id
+        return None
+
+
+@pytest.mark.asyncio
+async def test_creator_route_group_reader_editor_owner_and_outsider_capabilities(
+    client,
+    test_app,
+):
+    repository = _FakeRouteGroupRepository()
+    access_repository = _FakeManagedAssetAccessRepository(test_app)
+    test_app.state.route_group_repository = repository
+    test_app.state.managed_asset_access_repository = access_repository
+    test_app.state.creator_route_group_access_service = CreatorRouteGroupAccessService(
+        access_repository,
+        repository,
+    )
+    test_app.state.logical_model_repository = _FakeLogicalModelRepository()
+    test_app.state.route_group_mutation_service = None
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    identity = _IdentityService(_user_context("group-owner", team_ids=("team-1",)))
+    test_app.state.platform_identity_service = identity
+    cookies = {"deltallm_session": "route-group-session"}
+
+    created = await client.post(
+        "/ui/api/route-groups",
+        cookies=cookies,
+        json={
+            "group_key": "creator-route",
+            "name": "Creator Route",
+            "mode": "chat",
+            "access": {
+                "visibility": "team",
+                "subject_id": "team-1",
+                "access_role": "reader",
+            },
+        },
+    )
+
+    assert created.status_code == 200
+    created_payload = created.json()
+    assert created_payload["access"]["effective_role"] == "owner"
+    assert created_payload["access"]["visibility"] == "team"
+    assert re.fullmatch(r"grp-[0-9a-hjkmnp-tv-z]{4}-creator-route", created_payload["group_key"])
+    assert not created_payload["group_key"].startswith("creator-")
+    asset_id = created_payload["access"]["managed_asset_id"]
+    group_key = created_payload["group_key"]
+
+    identity.context = _user_context("group-reader", team_ids=("team-1",))
+    listed = await client.get("/ui/api/route-groups", cookies=cookies)
+    assert [item["group_key"] for item in listed.json()["data"]] == [group_key]
+    assert listed.json()["data"][0]["access"]["effective_role"] == "reader"
+    detail = await client.get(f"/ui/api/route-groups/{group_key}", cookies=cookies)
+    assert detail.status_code == 200
+    assert detail.json()["bindings"] == []
+    reader_update = await client.put(
+        f"/ui/api/route-groups/{group_key}",
+        cookies=cookies,
+        json={"name": "Reader cannot edit"},
+    )
+    assert reader_update.status_code == 404
+
+    identity.context = _user_context("group-owner", team_ids=("team-1",))
+    promoted = await client.put(
+        f"/ui/api/assets/{asset_id}/access",
+        cookies=cookies,
+        json={
+            "access": {
+                "visibility": "team",
+                "subject_id": "team-1",
+                "access_role": "editor",
+                "expected_policy_version": 1,
+            }
+        },
+    )
+    assert promoted.status_code == 200
+
+    identity.context = _user_context("group-editor", team_ids=("team-1",))
+    editor_update = await client.put(
+        f"/ui/api/route-groups/{group_key}",
+        cookies=cookies,
+        json={"name": "Team-edited Route"},
+    )
+    assert editor_update.status_code == 200
+    assert editor_update.json()["name"] == "Team-edited Route"
+    assert editor_update.json()["access"]["effective_role"] == "editor"
+    member = await client.post(
+        f"/ui/api/route-groups/{group_key}/members",
+        cookies=cookies,
+        json={"deployment_id": "gpt-4o-mini-0"},
+    )
+    assert member.status_code == 200
+    draft = await client.post(
+        f"/ui/api/route-groups/{group_key}/policy/draft",
+        cookies=cookies,
+        json={"strategy": "weighted"},
+    )
+    assert draft.status_code == 200
+    editor_delete = await client.delete(
+        f"/ui/api/route-groups/{group_key}",
+        cookies=cookies,
+    )
+    assert editor_delete.status_code == 404
+
+    identity.context = _user_context("group-outsider")
+    outsider_list = await client.get("/ui/api/route-groups", cookies=cookies)
+    assert outsider_list.status_code == 200
+    assert outsider_list.json()["data"] == []
+    outsider_detail = await client.get(
+        f"/ui/api/route-groups/{group_key}",
+        cookies=cookies,
+    )
+    assert outsider_detail.status_code == 404
+
+    identity.context = _user_context("group-owner", team_ids=("team-1",))
+    deleted = await client.delete(
+        f"/ui/api/route-groups/{group_key}",
+        cookies=cookies,
+    )
+    assert deleted.status_code == 200
+    assert asset_id not in access_repository.policies
+
+
+@pytest.mark.asyncio
+async def test_creator_route_group_key_retries_a_generated_collision(
+    client,
+    test_app,
+    monkeypatch,
+):
+    repository = _FakeRouteGroupRepository()
+    repository.groups["grp-k7m4-customer-support"] = RouteGroupRecord(
+        route_group_id="existing-route-group",
+        group_key="grp-k7m4-customer-support",
+    )
+    access_repository = _FakeManagedAssetAccessRepository(test_app)
+    test_app.state.route_group_repository = repository
+    test_app.state.managed_asset_access_repository = access_repository
+    test_app.state.creator_route_group_access_service = CreatorRouteGroupAccessService(
+        access_repository,
+        repository,
+    )
+    test_app.state.logical_model_repository = _FakeLogicalModelRepository()
+    test_app.state.route_group_mutation_service = None
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    test_app.state.platform_identity_service = _IdentityService(_user_context("group-owner"))
+    codes = iter(("k7m4", "q2x9"))
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.route_groups.generate_compact_asset_code",
+        lambda: next(codes),
+    )
+
+    created = await client.post(
+        "/ui/api/route-groups",
+        cookies={"deltallm_session": "route-group-session"},
+        json={"group_key": "ignored-client-key", "name": "Customer Support", "mode": "chat"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["group_key"] == "grp-q2x9-customer-support"
+    assert created.json()["name"] == "Customer Support"
 
 
 @pytest.mark.asyncio
@@ -1198,6 +1519,10 @@ async def test_route_group_policy_api_rejects_nonchat_classifier_inventory(clien
 async def test_route_group_policy_api_reports_selector_rollback_gate(client, test_app, monkeypatch):
     setattr(test_app.state.settings, "master_key", "mk-test")
     repository = _FakeRouteGroupRepository()
+    repository.groups["selector-route"] = RouteGroupRecord(
+        route_group_id="rg-selector-route",
+        group_key="selector-route",
+    )
     test_app.state.route_group_repository = repository
     headers = {"Authorization": "Bearer mk-test"}
 

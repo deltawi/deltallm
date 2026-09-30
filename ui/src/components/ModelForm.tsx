@@ -5,7 +5,16 @@ import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './Acces
 import ProviderBadge from './ProviderBadge';
 import Button from './Button';
 import { useApi } from '../lib/hooks';
-import { models, namedCredentials, type NamedCredential, type ProviderModelDiscoveryPayload, type ProviderModelOption } from '../lib/api';
+import {
+  models,
+  namedCredentials,
+  type ManagedAssetAccessInput,
+  type NamedCredential,
+  type ProviderModelDiscoveryPayload,
+  type ProviderModelOption,
+} from '../lib/api';
+import NamedCredentialCreateDialog from './NamedCredentialCreateDialog';
+import type { NamedCredentialAudienceOption } from './NamedCredentialForm';
 import {
   canonicalNamedCredentialProvider,
   DEFAULT_CUSTOM_AUTH_HEADER_FORMAT,
@@ -17,6 +26,7 @@ import {
   EMPTY_FORM,
   MODE_OPTIONS,
   buildModelPayload,
+  suggestApiModelSlug,
   validateContextCapacityFields,
   type ContextCapacityField,
   type ChatBatchingMode,
@@ -201,11 +211,25 @@ interface ModelFormProps {
   submitLabel?: string;
   saving?: boolean;
   error?: string | null;
+  allowInlineCredentials?: boolean;
+  lockApiModelId?: boolean;
+  namespaceRequired?: boolean;
+  namedCredentialDefaultAccess?: ManagedAssetAccessInput;
+  namedCredentialTeamOptions?: NamedCredentialAudienceOption[];
+  namedCredentialOrganizationOptions?: NamedCredentialAudienceOption[];
+  allowPublicNamedCredentials?: boolean;
+  namedCredentialAudiencesLoading?: boolean;
+  namedCredentialAudiencesError?: string | null;
+  onRetryNamedCredentialAudiences?: () => void;
 }
 
 const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary";
+const CREATE_NEW_NAMED_CREDENTIAL = '__create_new_named_credential__';
 type RequiredField =
   | 'model_name'
+  | 'api_model_id'
+  | 'api_model_slug'
+  | 'api_namespace'
   | 'provider'
   | 'model'
   | 'api_base'
@@ -294,12 +318,32 @@ export default function ModelForm({
   submitLabel = 'Create',
   saving = false,
   error = null,
+  allowInlineCredentials = true,
+  lockApiModelId = false,
+  namespaceRequired = false,
+  namedCredentialDefaultAccess,
+  namedCredentialTeamOptions = [],
+  namedCredentialOrganizationOptions = [],
+  allowPublicNamedCredentials = false,
+  namedCredentialAudiencesLoading = false,
+  namedCredentialAudiencesError = null,
+  onRetryNamedCredentialAudiences,
 }: ModelFormProps) {
-  const [form, setForm] = useState<ModelFormValues>(initialValues || { ...EMPTY_FORM });
+  const [form, setForm] = useState<ModelFormValues>(() => {
+    const values = initialValues || { ...EMPTY_FORM };
+    return allowInlineCredentials || values.credential_source === 'named'
+      ? values
+      : { ...values, credential_source: 'named' };
+  });
   const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>(initialDefaultParams || []);
   const [initialModelInfoSnapshot] = useState<Record<string, unknown>>(() => ({ ...(initialModelInfo || {}) }));
   const [validationError, setValidationError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
+  const [apiIdentityEdited, setApiIdentityEdited] = useState(
+    () => Boolean(initialValues?.api_model_id || initialValues?.api_model_slug),
+  );
+  const [credentialCreateOpen, setCredentialCreateOpen] = useState(false);
+  const [recentlyCreatedCredential, setRecentlyCreatedCredential] = useState<NamedCredential | null>(null);
   const accessGroupInputRef = useRef<AccessGroupTokenInputHandle | null>(null);
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<{
     requestKey: string | null;
@@ -318,13 +362,18 @@ export default function ModelForm({
     (signal) => models.providerPresets(signal),
     [],
   );
-  const { data: namedCredentialResponse } = useApi(
+  const { data: namedCredentialResponse, refetch: refetchNamedCredentials } = useApi(
     () => (credentialProvider ? namedCredentials.list({ provider: credentialProvider }) : Promise.resolve({ data: [] as NamedCredential[] })),
     [credentialProvider],
   );
   const { data: catalogDiscoveryResponse, loading: catalogDiscoveryLoading } = useApi(
     async (signal) => {
-      if (!form.provider) {
+      if (
+        !form.provider
+        || (!allowInlineCredentials
+          && !form.keep_existing_named_credential
+          && !form.named_credential_id.trim())
+      ) {
         return emptyDiscoveryResult();
       }
       try {
@@ -337,7 +386,13 @@ export default function ModelForm({
         return { data: [], warnings: [message] };
       }
     },
-    [form.provider, mode],
+    [
+      allowInlineCredentials,
+      form.keep_existing_named_credential,
+      form.named_credential_id,
+      form.provider,
+      mode,
+    ],
   );
   const modelSuggestionListId = useId();
   const contextWindowInputId = useId();
@@ -345,7 +400,12 @@ export default function ModelForm({
   const maxOutputTokensInputId = useId();
 
   const providerPresets = providerPresetResponse?.data || [];
-  const availableNamedCredentials = namedCredentialResponse?.data || [];
+  const listedNamedCredentials = namedCredentialResponse?.data || [];
+  const availableNamedCredentials = recentlyCreatedCredential
+    && canonicalNamedCredentialProvider(recentlyCreatedCredential.provider) === credentialProvider
+    && !listedNamedCredentials.some((credential) => credential.credential_id === recentlyCreatedCredential.credential_id)
+    ? [recentlyCreatedCredential, ...listedNamedCredentials]
+    : listedNamedCredentials;
   const supportsCustomAuth = supportsCustomUpstreamAuthProvider(form.provider, form.model);
   const liveDiscoveryPayload: ProviderModelDiscoveryPayload = {
     provider: form.provider,
@@ -401,6 +461,7 @@ export default function ModelForm({
   };
 
   const applyProvider = (provider: string) => {
+    if (form.keep_existing_named_credential) return;
     const preset = providerPresets.find((item) => item.provider === provider);
     invalidateLiveDiscovery();
     setForm((current) => ({
@@ -467,8 +528,34 @@ export default function ModelForm({
       ...current,
       named_credential_id: credentialId,
       named_credential_name: selected?.name || '',
+      keep_existing_named_credential: false,
     }));
     clearValidation('named_credential_id');
+  };
+
+  const selectNamedCredentialOption = (credentialId: string) => {
+    if (credentialId === CREATE_NEW_NAMED_CREDENTIAL) {
+      setCredentialCreateOpen(true);
+      return;
+    }
+    applyNamedCredential(credentialId);
+  };
+
+  const handleNamedCredentialCreated = (credential: NamedCredential) => {
+    invalidateLiveDiscovery();
+    setRecentlyCreatedCredential(credential);
+    setForm((current) => ({
+      ...current,
+      provider: current.provider || credential.provider,
+      model: current.provider && current.provider !== credential.provider ? '' : current.model,
+      credential_source: 'named',
+      named_credential_id: credential.credential_id,
+      named_credential_name: credential.name,
+      keep_existing_named_credential: false,
+      clear_inline_api_key: false,
+    }));
+    clearValidation('named_credential_id');
+    refetchNamedCredentials();
   };
 
   const updateModelValue = (value: string) => {
@@ -484,7 +571,11 @@ export default function ModelForm({
     if (!form.provider) {
       return;
     }
-    if (form.credential_source === 'named' && !form.named_credential_id.trim()) {
+    if (
+      form.credential_source === 'named'
+      && !form.keep_existing_named_credential
+      && !form.named_credential_id.trim()
+    ) {
       return;
     }
     if (form.credential_source === 'inline' && !form.api_key.trim()) {
@@ -526,14 +617,36 @@ export default function ModelForm({
     }
     const nextFieldErrors: Partial<Record<RequiredField, string>> = {};
     const modelName = form.model_name.trim();
+    const apiNamespace = form.api_namespace.trim().toLowerCase();
+    const apiModelSlug = form.api_model_slug.trim().toLowerCase();
+    const apiModelId = namespaceRequired
+      ? `${apiNamespace}/${apiModelSlug}`
+      : form.api_model_id.trim();
     const provider = form.provider.trim();
     const upstreamModel = form.model.trim();
     const apiBase = form.api_base.trim();
     const namedCredentialId = form.named_credential_id.trim();
-    const useNamedCredential = form.credential_source === 'named';
+    const useNamedCredential = !allowInlineCredentials || form.credential_source === 'named';
 
     if (!modelName) {
       nextFieldErrors.model_name = 'Model Name is required.';
+    }
+    if (namespaceRequired) {
+      if (
+        apiNamespace.length < 3
+        || apiNamespace.length > 32
+        || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(apiNamespace)
+        || apiNamespace.includes('--')
+      ) {
+        nextFieldErrors.api_namespace = 'Use 3-32 lowercase letters, numbers, or hyphens.';
+      }
+      if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(apiModelSlug) || apiModelSlug.includes('--')) {
+        nextFieldErrors.api_model_slug = 'Use 1-64 lowercase letters, numbers, or hyphens.';
+      }
+    } else if (lockApiModelId ? !apiModelId : (
+      !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(apiModelId) || apiModelId.includes('--')
+    )) {
+      nextFieldErrors.api_model_id = 'Use 1-64 lowercase letters, numbers, or hyphens.';
     }
     if (!provider) {
       nextFieldErrors.provider = 'Provider is required.';
@@ -541,7 +654,7 @@ export default function ModelForm({
     if (!upstreamModel) {
       nextFieldErrors.model = 'Provider Model is required.';
     }
-    if (useNamedCredential && !namedCredentialId) {
+    if (useNamedCredential && !form.keep_existing_named_credential && !namedCredentialId) {
       nextFieldErrors.named_credential_id = 'Named credential is required.';
     }
     if (!useNamedCredential && !apiBase) {
@@ -618,6 +731,9 @@ export default function ModelForm({
       {
         ...form,
         model_name: modelName,
+        api_model_id: apiModelId,
+        api_model_slug: apiModelSlug,
+        api_namespace: apiNamespace,
         provider,
         model: upstreamModel,
         api_base: apiBase,
@@ -712,15 +828,94 @@ export default function ModelForm({
         </div>
       </Card>
 
-      <Card title="Provider Connection">
+      <Card title="Model Identity & Provider Connection">
         <div className="space-y-4">
           <p className="text-xs text-gray-500">Fields marked <span className="text-red-500">*</span> are required.</p>
           {validationError ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{validationError}</div> : null}
           <div>
             <FieldLabel label="Model Name" required />
-            <input value={form.model_name} onChange={(e) => { setForm({ ...form, model_name: e.target.value }); clearValidation('model_name'); }} placeholder={mode === 'image_generation' ? 'gpt-image-1.5' : mode === 'audio_speech' ? 'gpt-4o-mini-tts' : mode === 'audio_transcription' ? 'gpt-4o-transcribe' : mode === 'embedding' ? 'text-embedding-3-large' : mode === 'rerank' ? 'rerank-english-v3' : 'gpt-5.4'} className={inputClasses(Boolean(fieldErrors.model_name))} />
+            <input
+              value={form.model_name}
+              onChange={(e) => {
+                const displayName = e.target.value;
+                const suggestedSlug = suggestApiModelSlug(displayName);
+                setForm((current) => ({
+                  ...current,
+                  model_name: displayName,
+                  api_model_slug: namespaceRequired && !apiIdentityEdited
+                    ? suggestedSlug
+                    : current.api_model_slug,
+                  api_model_id: !namespaceRequired && !apiIdentityEdited
+                    ? suggestedSlug
+                    : current.api_model_id,
+                }));
+                clearValidation('model_name');
+              }}
+              placeholder={mode === 'image_generation' ? 'Image Generator' : mode === 'audio_speech' ? 'Voice Assistant' : mode === 'audio_transcription' ? 'Meeting Transcriber' : mode === 'embedding' ? 'Document Embeddings' : mode === 'rerank' ? 'Search Reranker' : 'Customer Support Model'}
+              className={`${inputClasses(Boolean(fieldErrors.model_name))} read-only:bg-gray-100 read-only:text-gray-500`}
+            />
             {fieldErrors.model_name ? <p className="mt-1 text-xs text-red-600">{fieldErrors.model_name}</p> : null}
-            <p className="text-xs text-gray-400 mt-1">Public name users will reference in API calls</p>
+            <p className="text-xs text-gray-400 mt-1">
+              A friendly label shown in the dashboard. It changes only when you edit it.
+            </p>
+          </div>
+          <div>
+            <FieldLabel label="API Model ID" required />
+            {namespaceRequired && !lockApiModelId ? (
+              <div
+                aria-label="Generated API Model ID"
+                className="flex min-h-10 items-center rounded-lg border border-gray-200 bg-gray-50 px-3 font-mono text-sm text-gray-700"
+              >
+                <span className="text-gray-500">{form.api_namespace}/</span>
+                <span>{form.api_model_slug || 'model'}</span>
+              </div>
+            ) : namespaceRequired ? (
+              <div className="flex items-stretch">
+                <input
+                  aria-label="Creator namespace"
+                  readOnly={lockApiModelId || form.api_namespace_locked}
+                  value={form.api_namespace}
+                  onChange={(e) => {
+                    setForm((current) => ({ ...current, api_namespace: e.target.value.toLowerCase() }));
+                    clearValidation('api_namespace');
+                  }}
+                  className={`${inputClasses(Boolean(fieldErrors.api_namespace))} min-w-0 rounded-r-none font-mono read-only:bg-gray-100 read-only:text-gray-500`}
+                />
+                <span className="flex items-center border-y border-gray-300 bg-gray-50 px-2 font-mono text-sm text-gray-400">/</span>
+                <input
+                  aria-label="API model slug"
+                  readOnly={lockApiModelId}
+                  value={form.api_model_slug}
+                  onChange={(e) => {
+                    setApiIdentityEdited(true);
+                    setForm((current) => ({ ...current, api_model_slug: e.target.value.toLowerCase() }));
+                    clearValidation('api_model_slug');
+                  }}
+                  className={`${inputClasses(Boolean(fieldErrors.api_model_slug))} min-w-0 rounded-l-none font-mono read-only:bg-gray-100 read-only:text-gray-500`}
+                />
+              </div>
+            ) : (
+              <input
+                readOnly={lockApiModelId}
+                value={form.api_model_id}
+                onChange={(e) => {
+                  setApiIdentityEdited(true);
+                  setForm((current) => ({ ...current, api_model_id: e.target.value }));
+                  clearValidation('api_model_id');
+                }}
+                className={`${inputClasses(Boolean(fieldErrors.api_model_id))} font-mono read-only:bg-gray-100 read-only:text-gray-500`}
+              />
+            )}
+            {fieldErrors.api_namespace ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_namespace}</p> : null}
+            {fieldErrors.api_model_slug ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_model_slug}</p> : null}
+            {fieldErrors.api_model_id ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_model_id}</p> : null}
+            <p className="mt-1 text-xs text-gray-400">
+              {lockApiModelId
+                ? 'This callable ID is fixed so existing API clients keep working.'
+                : namespaceRequired
+                  ? 'Generated from Model Name. The friendly name keeps your exact text; this callable ID becomes fixed after creation.'
+                    : 'Choose the short callable ID used in API requests. It becomes fixed after creation.'}
+            </p>
           </div>
           <div>
             <FieldLabel label="Provider and Provider Model" required />
@@ -728,7 +923,8 @@ export default function ModelForm({
               <select
                 value={form.provider}
                 onChange={(e) => applyProvider(e.target.value)}
-                className="w-40 shrink-0 border-r border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:outline-none"
+                disabled={form.keep_existing_named_credential}
+                className="w-40 shrink-0 border-r border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed disabled:text-gray-500"
               >
                 <option value="">Select provider</option>
                 {providerPresets.map((preset) => (
@@ -771,7 +967,7 @@ export default function ModelForm({
                 Showing built-in suggestions first. Add the provider API key, then refresh to fetch live provider models when supported.
               </p>
             ) : null}
-            {form.provider && form.credential_source === 'named' && !form.named_credential_id.trim() ? (
+            {form.provider && form.credential_source === 'named' && !form.keep_existing_named_credential && !form.named_credential_id.trim() ? (
               <p className="mt-1 text-xs text-gray-400">
                 Select a named credential to fetch live provider models without entering inline secrets.
               </p>
@@ -817,27 +1013,53 @@ export default function ModelForm({
                   <div className="font-medium">Named Credential</div>
                   <div className="mt-0.5 text-xs text-gray-500">Recommended for shared provider access and credential rotation.</div>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setCredentialSource('inline')}
-                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'inline' ? 'border-brand-primary bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
-                >
-                  <div className="font-medium">Inline Credentials</div>
-                  <div className="mt-0.5 text-xs text-gray-500">Use deployment-specific provider credentials directly on this model.</div>
-                </button>
+                {allowInlineCredentials ? (
+                  <button
+                    type="button"
+                    onClick={() => setCredentialSource('inline')}
+                    className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'inline' ? 'border-brand-primary bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
+                  >
+                    <div className="font-medium">Inline Credentials</div>
+                    <div className="mt-0.5 text-xs text-gray-500">Use deployment-specific provider credentials directly on this model.</div>
+                  </button>
+                ) : null}
               </div>
             </div>
 
             {form.credential_source === 'named' ? (
               <div className="space-y-3">
+                {form.keep_existing_named_credential ? (
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm">
+                    <div className="font-medium text-blue-900">Owner-managed credential</div>
+                    <p className="mt-1 text-xs text-blue-700">
+                      This model keeps using its existing private credential. You can edit other model settings without seeing or changing it.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        invalidateLiveDiscovery();
+                        setForm((current) => ({
+                          ...current,
+                          keep_existing_named_credential: false,
+                          named_credential_id: '',
+                          named_credential_name: '',
+                        }));
+                      }}
+                      className="mt-3 inline-flex items-center rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                    >
+                      Replace with a credential I can access
+                    </button>
+                  </div>
+                ) : (
                 <div>
                   <FieldLabel label="Named Credential" required />
                   <select
                     value={form.named_credential_id}
-                    onChange={(e) => applyNamedCredential(e.target.value)}
+                    onChange={(e) => selectNamedCredentialOption(e.target.value)}
                     className={inputClasses(Boolean(fieldErrors.named_credential_id))}
                   >
                     <option value="">Select named credential</option>
+                    <option value={CREATE_NEW_NAMED_CREDENTIAL}>＋ Create new credential…</option>
                     {availableNamedCredentials.map((credential) => (
                       <option key={credential.credential_id} value={credential.credential_id}>
                         {credential.name}
@@ -846,11 +1068,15 @@ export default function ModelForm({
                   </select>
                   {fieldErrors.named_credential_id ? <p className="mt-1 text-xs text-red-600">{fieldErrors.named_credential_id}</p> : null}
                   {form.provider && availableNamedCredentials.length === 0 ? (
-                    <p className="mt-1 text-xs text-gray-400">No named credentials available for {providerDisplayName(form.provider)} yet.</p>
+                    <p className="mt-1 text-xs text-gray-400">
+                      No existing credentials for {providerDisplayName(form.provider)}. Choose Create new credential above.
+                    </p>
                   ) : null}
                 </div>
 
-                {selectedNamedCredential ? (
+                )}
+
+                {!form.keep_existing_named_credential && selectedNamedCredential ? (
                   <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm">
                     <div className="font-medium text-blue-900">{selectedNamedCredential.name}</div>
                     <div className="mt-1 text-xs text-blue-700">
@@ -1306,6 +1532,22 @@ export default function ModelForm({
         <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
         <Button onClick={handleSubmit} loading={saving}>{saving ? 'Saving...' : submitLabel}</Button>
       </div>
+
+      <NamedCredentialCreateDialog
+        open={credentialCreateOpen}
+        providerPresets={providerPresets}
+        initialProvider={credentialProvider}
+        initialAccess={namedCredentialDefaultAccess}
+        lockProvider={Boolean(credentialProvider)}
+        teamOptions={namedCredentialTeamOptions}
+        organizationOptions={namedCredentialOrganizationOptions}
+        allowPublic={allowPublicNamedCredentials}
+        audiencesLoading={namedCredentialAudiencesLoading}
+        audiencesError={namedCredentialAudiencesError}
+        onRetryAudiences={onRetryNamedCredentialAudiences}
+        onClose={() => setCredentialCreateOpen(false)}
+        onCreated={handleNamedCredentialCreated}
+      />
     </div>
   );
 }

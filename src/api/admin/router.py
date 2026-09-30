@@ -12,6 +12,7 @@ from src.api.admin.endpoints import (
     guardrails_router,
     invitations_router,
     keys_router,
+    managed_assets_router,
     mcp_router,
     models_router,
     named_credentials_router,
@@ -44,6 +45,7 @@ admin_router.include_router(email_router)
 admin_router.include_router(email_feedback_router)
 admin_router.include_router(invitations_router)
 admin_router.include_router(keys_router)
+admin_router.include_router(managed_assets_router)
 admin_router.include_router(mcp_router)
 admin_router.include_router(callable_targets_router)
 admin_router.include_router(models_router)

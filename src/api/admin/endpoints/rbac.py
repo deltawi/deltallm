@@ -14,7 +14,12 @@ from src.auth.roles import (
     validate_team_role,
 )
 from src.audit import AuditAction
-from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    managed_asset_membership_transaction,
+    to_json_value,
+)
 from src.api.admin.organization_mutations import (
     require_active_organization_mutation,
     require_active_organization_mutations,
@@ -631,6 +636,23 @@ async def delete_rbac_account(request: Request, account_id: str) -> dict[str, bo
         )
         if not existing:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+        owned_assets = await tx.query_raw(
+            """
+            SELECT COUNT(*)::int AS count
+            FROM deltallm_managedasset
+            WHERE owner_account_id = $1
+            """,
+            account_id,
+        )
+        owned_asset_count = int((owned_assets[0] if owned_assets else {}).get("count") or 0)
+        if owned_asset_count:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot delete account: it owns {owned_asset_count} managed asset(s). "
+                    "Transfer or delete those assets first."
+                ),
+            )
         organization_rows = await tx.query_raw(
             """
             SELECT DISTINCT organization_id
@@ -801,7 +823,7 @@ async def delete_org_membership(request: Request, membership_id: str) -> dict[st
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Organization membership mutation requires transaction support",
         )
-    async with db.tx() as tx:
+    async with managed_asset_membership_transaction(db) as tx:
         existing_rows = await tx.query_raw(
             """
             SELECT membership_id, account_id, organization_id, role, created_at, updated_at
@@ -1004,7 +1026,7 @@ async def delete_team_membership(request: Request, membership_id: str) -> dict[s
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Team membership mutation requires transaction support",
         )
-    async with db.tx() as tx:
+    async with managed_asset_membership_transaction(db) as tx:
         existing_rows = await tx.query_raw(
             """
             SELECT tm.membership_id, t.organization_id

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -8,6 +10,7 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import HTTPException, Request, status
+from prisma.errors import RawQueryError
 
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
@@ -46,6 +49,35 @@ _CONNECTION_SUMMARY_FIELDS = (
     "api_version",
     "region",
 )
+
+_MODEL_CREDENTIAL_AUDIENCE_CONSTRAINTS = (
+    "creator model audience exceeds its named credential audience",
+    "creator model has an invalid named credential binding",
+)
+
+
+@asynccontextmanager
+async def managed_asset_membership_transaction(db: Any) -> AsyncIterator[Any]:
+    """Map deferred model/credential audience failures to a useful API conflict."""
+
+    try:
+        async with db.tx() as tx:
+            yield tx
+    except RawQueryError as exc:
+        metadata = exc.meta if isinstance(exc.meta, Mapping) else {}
+        if (
+            metadata.get("code") == "23514"
+            and any(message in str(exc) for message in _MODEL_CREDENTIAL_AUDIENCE_CONSTRAINTS)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This membership cannot be removed because a creator-owned model "
+                    "still uses a named credential shared through it. Change the model "
+                    "or credential access first."
+                ),
+            ) from exc
+        raise
 
 
 @dataclass
@@ -423,11 +455,26 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
                 else None
             )
             provider = resolve_provider(params)
-            credential_source = "named" if named_credential_id else "inline"
+            credential_source = (
+                "named"
+                if (
+                    named_credential_id
+                    or deployment.get("credential_binding_mode")
+                    or deployment.get("credential_binding_state")
+                )
+                else "inline"
+            )
             entries.append(
                 {
                     "deployment_id": deployment_id,
+                    "model_id": (
+                        str(deployment.get("model_id")).strip()
+                        if deployment.get("model_id") is not None
+                        else None
+                    ),
                     "model_name": model_name,
+                    "routable": True,
+                    "runtime_status": "active",
                     "provider": provider,
                     "mode": model_info.get("mode", "chat"),
                     "credential_source": credential_source,
@@ -440,6 +487,11 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
                         str(deployment.get("named_credential_name")).strip()
                         if deployment.get("named_credential_name") is not None
                         else None
+                    ),
+                    "credential_binding_mode": deployment.get("credential_binding_mode"),
+                    "credential_binding_state": deployment.get("credential_binding_state"),
+                    "credential_bound_by_account_id": deployment.get(
+                        "credential_bound_by_account_id"
                     ),
                     "deltallm_params": redact_connection_config(params),
                     "model_info": model_info,

@@ -51,9 +51,46 @@ class ModelDeploymentRecord:
     deployment_id: str
     model_name: str
     deltallm_params: dict[str, Any]
+    model_id: str | None = None
     named_credential_id: str | None = None
     model_info: dict[str, Any] | None = None
     routing_state_incarnation: str | None = None
+    credential_binding_mode: str | None = None
+    credential_binding_state: str | None = None
+    credential_bound_by_account_id: str | None = None
+    credential_bound_at: datetime | None = None
+    credential_revoked_at: datetime | None = None
+    governance_source: str | None = None
+
+
+def _model_deployment_record(row: dict[str, Any]) -> ModelDeploymentRecord:
+    return ModelDeploymentRecord(
+        deployment_id=str(row.get("deployment_id") or ""),
+        model_name=str(row.get("model_name") or ""),
+        model_id=str(row.get("model_id")) if row.get("model_id") is not None else None,
+        named_credential_id=str(row.get("named_credential_id"))
+        if row.get("named_credential_id") is not None
+        else None,
+        deltallm_params=_parse_json_object(row.get("deltallm_params")),
+        model_info=_parse_metadata(row.get("model_info")),
+        routing_state_incarnation=str(row.get("routing_state_incarnation"))
+        if row.get("routing_state_incarnation") is not None
+        else None,
+        credential_binding_mode=str(row.get("credential_binding_mode"))
+        if row.get("credential_binding_mode") is not None
+        else None,
+        credential_binding_state=str(row.get("credential_binding_state"))
+        if row.get("credential_binding_state") is not None
+        else None,
+        credential_bound_by_account_id=str(row.get("credential_bound_by_account_id"))
+        if row.get("credential_bound_by_account_id") is not None
+        else None,
+        credential_bound_at=row.get("credential_bound_at"),
+        credential_revoked_at=row.get("credential_revoked_at"),
+        governance_source=str(row.get("governance_source"))
+        if row.get("governance_source") is not None
+        else None,
+    )
 
 
 class _ModelDeploymentChangedWhileLocking(RuntimeError):
@@ -74,27 +111,24 @@ class ModelDeploymentRepository:
 
         rows = await self.prisma.query_raw(
             """
-            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info,
-                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
+            SELECT deployment_id, model_name, model_id, named_credential_id,
+                   credential_binding_mode, credential_binding_state,
+                   credential_bound_by_account_id, credential_bound_at,
+                   credential_revoked_at, deltallm_params, model_info,
+                   (
+                     SELECT asset.governance_source
+                     FROM deltallm_model AS logical_model
+                     JOIN deltallm_managedasset AS asset
+                       ON asset.asset_id = logical_model.managed_asset_id
+                     WHERE logical_model.model_id = deltallm_modeldeployment.model_id
+                   ) AS governance_source,
+                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS')
+                     AS routing_state_incarnation
             FROM deltallm_modeldeployment
             ORDER BY model_name ASC, created_at ASC
             """
         )
-        return [
-            ModelDeploymentRecord(
-                deployment_id=str(row.get("deployment_id") or ""),
-                model_name=str(row.get("model_name") or ""),
-                named_credential_id=str(row.get("named_credential_id"))
-                if row.get("named_credential_id") is not None
-                else None,
-                deltallm_params=_parse_json_object(row.get("deltallm_params")),
-                model_info=_parse_metadata(row.get("model_info")),
-                routing_state_incarnation=str(row.get("routing_state_incarnation"))
-                if row.get("routing_state_incarnation") is not None
-                else None,
-            )
-            for row in rows
-        ]
+        return [_model_deployment_record(row) for row in rows]
 
     async def get_by_deployment_id(self, deployment_id: str) -> ModelDeploymentRecord | None:
         if self.prisma is None:
@@ -102,8 +136,19 @@ class ModelDeploymentRepository:
 
         rows = await self.prisma.query_raw(
             """
-            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info,
-                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
+            SELECT deployment_id, model_name, model_id, named_credential_id,
+                   credential_binding_mode, credential_binding_state,
+                   credential_bound_by_account_id, credential_bound_at,
+                   credential_revoked_at, deltallm_params, model_info,
+                   (
+                     SELECT asset.governance_source
+                     FROM deltallm_model AS logical_model
+                     JOIN deltallm_managedasset AS asset
+                       ON asset.asset_id = logical_model.managed_asset_id
+                     WHERE logical_model.model_id = deltallm_modeldeployment.model_id
+                   ) AS governance_source,
+                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS')
+                     AS routing_state_incarnation
             FROM deltallm_modeldeployment
             WHERE deployment_id = $1
             LIMIT 1
@@ -112,19 +157,7 @@ class ModelDeploymentRepository:
         )
         if not rows:
             return None
-        row = rows[0]
-        return ModelDeploymentRecord(
-            deployment_id=str(row.get("deployment_id") or ""),
-            model_name=str(row.get("model_name") or ""),
-            named_credential_id=str(row.get("named_credential_id"))
-            if row.get("named_credential_id") is not None
-            else None,
-            deltallm_params=_parse_json_object(row.get("deltallm_params")),
-            model_info=_parse_metadata(row.get("model_info")),
-            routing_state_incarnation=str(row.get("routing_state_incarnation"))
-            if row.get("routing_state_incarnation") is not None
-            else None,
-        )
+        return _model_deployment_record(rows[0])
 
     async def has_model_name(
         self,
@@ -180,29 +213,26 @@ class ModelDeploymentRepository:
         placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
         rows = await self.prisma.query_raw(
             f"""
-            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info,
-                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
+            SELECT deployment_id, model_name, model_id, named_credential_id,
+                   credential_binding_mode, credential_binding_state,
+                   credential_bound_by_account_id, credential_bound_at,
+                   credential_revoked_at, deltallm_params, model_info,
+                   (
+                     SELECT asset.governance_source
+                     FROM deltallm_model AS logical_model
+                     JOIN deltallm_managedasset AS asset
+                       ON asset.asset_id = logical_model.managed_asset_id
+                     WHERE logical_model.model_id = deltallm_modeldeployment.model_id
+                   ) AS governance_source,
+                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS')
+                     AS routing_state_incarnation
             FROM deltallm_modeldeployment
             WHERE deployment_id IN ({placeholders})
             ORDER BY model_name ASC, created_at ASC
             """,
             *normalized_ids,
         )
-        return [
-            ModelDeploymentRecord(
-                deployment_id=str(row.get("deployment_id") or ""),
-                model_name=str(row.get("model_name") or ""),
-                named_credential_id=str(row.get("named_credential_id"))
-                if row.get("named_credential_id") is not None
-                else None,
-                deltallm_params=_parse_json_object(row.get("deltallm_params")),
-                model_info=_parse_metadata(row.get("model_info")),
-                routing_state_incarnation=str(row.get("routing_state_incarnation"))
-                if row.get("routing_state_incarnation") is not None
-                else None,
-            )
-            for row in rows
-        ]
+        return [_model_deployment_record(row) for row in rows]
 
     async def create(self, record: ModelDeploymentRecord) -> ModelDeploymentRecord:
         if self.prisma is None:
@@ -217,19 +247,32 @@ class ModelDeploymentRepository:
             INSERT INTO deltallm_modeldeployment (
                 deployment_id,
                 model_name,
+                model_id,
                 named_credential_id,
                 deltallm_params,
                 model_info,
+                credential_binding_mode,
+                credential_binding_state,
+                credential_bound_by_account_id,
+                credential_bound_at,
+                credential_revoked_at,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, NOW(), NOW())
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb,
+                    $7::text, $8::text, $9::text,
+                    CASE WHEN $7::text IS NULL THEN NULL ELSE NOW() END,
+                    NULL, NOW(), NOW())
             """,
             record.deployment_id,
             record.model_name,
+            record.model_id,
             record.named_credential_id,
             json.dumps(record.deltallm_params),
             json.dumps(record.model_info) if record.model_info is not None else None,
+            record.credential_binding_mode,
+            record.credential_binding_state,
+            record.credential_bound_by_account_id,
         )
         if not self._use_transactions:
             await self._bump_runtime_revision()
@@ -243,6 +286,11 @@ class ModelDeploymentRepository:
         named_credential_id: str | None,
         deltallm_params: dict[str, Any],
         model_info: dict[str, Any] | None,
+        display_name: str | None = None,
+        credential_binding_mode: str | None = None,
+        credential_binding_state: str | None = None,
+        credential_bound_by_account_id: str | None = None,
+        clear_credential_binding: bool = False,
     ) -> ModelDeploymentRecord | None:
         if self.prisma is None:
             return None
@@ -256,6 +304,11 @@ class ModelDeploymentRepository:
                             named_credential_id=named_credential_id,
                             deltallm_params=deltallm_params,
                             model_info=model_info,
+                            display_name=display_name,
+                            credential_binding_mode=credential_binding_mode,
+                            credential_binding_state=credential_binding_state,
+                            credential_bound_by_account_id=credential_bound_by_account_id,
+                            clear_credential_binding=clear_credential_binding,
                         )
                 except _ModelDeploymentChangedWhileLocking:
                     if attempt == 2:
@@ -293,16 +346,60 @@ class ModelDeploymentRepository:
             else []
         )
 
+        if display_name is not None:
+            await self.prisma.execute_raw(
+                """
+                UPDATE deltallm_model
+                SET display_name = $2,
+                    updated_at = NOW()
+                WHERE model_id = (
+                    SELECT model_id
+                    FROM deltallm_modeldeployment
+                    WHERE deployment_id = $1
+                )
+                """,
+                deployment_id,
+                display_name,
+            )
+
         rows = await self.prisma.query_raw(
             """
             UPDATE deltallm_modeldeployment
             SET model_name = $2,
+                model_id = (
+                    SELECT model_id FROM deltallm_model WHERE model_name = $2 LIMIT 1
+                ),
                 named_credential_id = $3,
                 deltallm_params = $4::jsonb,
                 model_info = $5::jsonb,
+                credential_binding_mode = CASE
+                    WHEN $9::boolean THEN NULL
+                    ELSE COALESCE($6, credential_binding_mode)
+                END,
+                credential_binding_state = CASE
+                    WHEN $9::boolean THEN NULL
+                    ELSE COALESCE($7, credential_binding_state)
+                END,
+                credential_bound_by_account_id = CASE
+                    WHEN $9::boolean THEN NULL
+                    ELSE COALESCE($8, credential_bound_by_account_id)
+                END,
+                credential_bound_at = CASE
+                    WHEN $9::boolean THEN NULL
+                    WHEN $6 IS NOT NULL THEN NOW()
+                    ELSE credential_bound_at
+                END,
+                credential_revoked_at = CASE
+                    WHEN $9::boolean THEN NULL
+                    WHEN COALESCE($7, credential_binding_state) = 'active' THEN NULL
+                    ELSE credential_revoked_at
+                END,
                 updated_at = NOW()
             WHERE deployment_id = $1
-            RETURNING deployment_id, model_name, named_credential_id, deltallm_params, model_info,
+            RETURNING deployment_id, model_name, model_id, named_credential_id,
+                      credential_binding_mode, credential_binding_state,
+                      credential_bound_by_account_id, credential_bound_at,
+                      credential_revoked_at, deltallm_params, model_info,
                       to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS routing_state_incarnation
             """,
             deployment_id,
@@ -310,25 +407,17 @@ class ModelDeploymentRepository:
             named_credential_id,
             json.dumps(deltallm_params),
             json.dumps(model_info) if model_info is not None else None,
+            credential_binding_mode,
+            credential_binding_state,
+            credential_bound_by_account_id,
+            clear_credential_binding,
         )
         if not rows:
             return None
         await self._validate_locked_route_groups(locked_groups)
         if not self._use_transactions:
             await self._bump_runtime_revision()
-        row = rows[0]
-        return ModelDeploymentRecord(
-            deployment_id=str(row.get("deployment_id") or ""),
-            model_name=str(row.get("model_name") or ""),
-            named_credential_id=str(row.get("named_credential_id"))
-            if row.get("named_credential_id") is not None
-            else None,
-            deltallm_params=_parse_json_object(row.get("deltallm_params")),
-            model_info=_parse_metadata(row.get("model_info")),
-            routing_state_incarnation=str(row.get("routing_state_incarnation"))
-            if row.get("routing_state_incarnation") is not None
-            else None,
-        )
+        return _model_deployment_record(rows[0])
 
     async def delete(self, deployment_id: str) -> bool:
         if self.prisma is None:
@@ -356,6 +445,49 @@ class ModelDeploymentRepository:
             if not self._use_transactions:
                 await self._bump_runtime_revision()
         return bool(rows)
+
+    async def revoke_credential_binding(
+        self,
+        deployment_id: str,
+        *,
+        expected_credential_id: str,
+    ) -> ModelDeploymentRecord | None:
+        """Revoke one exact live binding without letting routing dependencies block it."""
+
+        if self.prisma is None:
+            return None
+        if self._use_transactions and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                return await self.with_db(tx).revoke_credential_binding(
+                    deployment_id,
+                    expected_credential_id=expected_credential_id,
+                )
+
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_modeldeployment
+            SET named_credential_id = NULL,
+                credential_binding_state = 'revoked',
+                credential_revoked_at = NOW(),
+                updated_at = NOW()
+            WHERE deployment_id = $1
+              AND named_credential_id = $2
+              AND credential_binding_state = 'active'
+            RETURNING deployment_id, model_name, model_id, named_credential_id,
+                      credential_binding_mode, credential_binding_state,
+                      credential_bound_by_account_id, credential_bound_at,
+                      credential_revoked_at, deltallm_params, model_info,
+                      to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS')
+                        AS routing_state_incarnation
+            """,
+            deployment_id,
+            expected_credential_id,
+        )
+        if not rows:
+            return None
+        if not self._use_transactions:
+            await self._bump_runtime_revision()
+        return _model_deployment_record(rows[0])
 
     async def _lock_route_groups_for_deployment(
         self,
@@ -416,20 +548,33 @@ class ModelDeploymentRepository:
                 INSERT INTO deltallm_modeldeployment (
                     deployment_id,
                     model_name,
+                    model_id,
                     named_credential_id,
                     deltallm_params,
                     model_info,
+                    credential_binding_mode,
+                    credential_binding_state,
+                    credential_bound_by_account_id,
+                    credential_bound_at,
+                    credential_revoked_at,
                     created_at,
                     updated_at
                 )
-                VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, NOW(), NOW())
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb,
+                        $7::text, $8::text, $9::text,
+                        CASE WHEN $7::text IS NULL THEN NULL ELSE NOW() END,
+                        NULL, NOW(), NOW())
                 ON CONFLICT (deployment_id) DO NOTHING
                 """,
                 record.deployment_id,
                 record.model_name,
+                record.model_id,
                 record.named_credential_id,
                 json.dumps(record.deltallm_params),
                 json.dumps(record.model_info) if record.model_info is not None else None,
+                record.credential_binding_mode,
+                record.credential_binding_state,
+                record.credential_bound_by_account_id,
             )
         if not self._use_transactions:
             await self._bump_runtime_revision()

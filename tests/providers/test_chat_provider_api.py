@@ -12,7 +12,10 @@ from src.db.named_credentials import NamedCredentialRecord
 from src.db.repositories import ModelDeploymentRecord
 from src.router.router import build_deployment_registry
 from src.services.model_deployments import build_model_registry_from_records
-from tests.test_named_credentials_api import _FakeNamedCredentialRepository
+from tests.test_named_credentials_api import (
+    _FakeManagedAssetAccessRepository,
+    _FakeNamedCredentialRepository,
+)
 from tests.test_chat import _SpendRecorder
 from tests.providers.test_chat_discovery import model_list, discovery_runtime
 
@@ -55,6 +58,7 @@ def request_body(*, stream=False):
 async def test_named_credential_and_model_setup(client, test_app, contract, monkeypatch):
     test_app.state.settings.master_key = "mk-test"
     test_app.state.named_credential_repository = _ReloadableNamedCredentialRepository()
+    test_app.state.managed_asset_access_repository = _FakeManagedAssetAccessRepository(test_app)
     monkeypatch.setenv("PROVIDER_EXPANSION_TEST_KEY", "private-test-secret")
     headers = {"Authorization": "Bearer mk-test"}
     presets = await client.get("/ui/api/provider-presets", headers=headers)

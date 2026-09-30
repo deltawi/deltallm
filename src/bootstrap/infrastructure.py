@@ -27,6 +27,8 @@ from src.db.client import prisma_manager, telemetry_prisma_manager
 from src.db.email import EmailOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
+from src.db.logical_models import LogicalModelRepository
+from src.db.managed_assets import ManagedAssetAccessRepository
 from src.db.mcp import MCPRepository
 from src.db.mcp_scope_policies import MCPScopePolicyRepository
 from src.db.named_credentials import NamedCredentialRepository
@@ -44,6 +46,11 @@ from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
 from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.services.route_groups import RouteGroupRuntimeCache
+from src.services.creator_mcp_access import CreatorMCPAccessService
+from src.services.creator_model_access import CreatorModelAccessService
+from src.services.creator_prompt_access import CreatorPromptAccessService
+from src.services.creator_route_group_access import CreatorRouteGroupAccessService
+from src.services.managed_asset_reconciliation import ManagedAssetReconciliationService
 from src.services.ui_branding_assets import UIBrandingAssetService
 from src.services.route_group_mutations import RouteGroupMutationService
 from src.upstream_http import (
@@ -61,6 +68,7 @@ class InfrastructureRuntime:
     dynamic_config_manager: DynamicConfigManager
     http_client: httpx.AsyncClient
     control_http_client: httpx.AsyncClient
+    managed_asset_reconciliation_service: ManagedAssetReconciliationService
     telemetry_database_connected: bool = False
     statuses: tuple[BootstrapStatus, ...] = ()
 
@@ -174,7 +182,66 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     )
 
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
+    app.state.logical_model_repository = LogicalModelRepository(prisma_manager.client)
     app.state.named_credential_repository = NamedCredentialRepository(prisma_manager.client)
+    snapshot_max_policies = _startup_setting(
+        cfg.general_settings,
+        settings,
+        "managed_asset_snapshot_max_policies",
+        50_000,
+    )
+    authorization_max_staleness_seconds = _startup_setting(
+        cfg.general_settings,
+        settings,
+        "managed_asset_authorization_max_staleness_seconds",
+        60.0,
+    )
+    app.state.managed_asset_access_repository = ManagedAssetAccessRepository(
+        prisma_manager.client,
+        max_snapshot_policies=snapshot_max_policies,
+    )
+    app.state.managed_asset_reconciliation_service = ManagedAssetReconciliationService(
+        app.state.managed_asset_access_repository,
+        interval_seconds=_startup_setting(
+            cfg.general_settings,
+            settings,
+            "managed_asset_reconciliation_interval_seconds",
+            30.0,
+        ),
+        batch_size=_startup_setting(
+            cfg.general_settings,
+            settings,
+            "managed_asset_reconciliation_batch_size",
+            250,
+        ),
+        max_batches_per_run=_startup_setting(
+            cfg.general_settings,
+            settings,
+            "managed_asset_reconciliation_max_batches_per_run",
+            20,
+        ),
+    )
+    await app.state.managed_asset_reconciliation_service.start()
+    app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
+    app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
+    app.state.creator_model_access_service = CreatorModelAccessService(
+        app.state.managed_asset_access_repository,
+        app.state.logical_model_repository,
+        max_staleness_seconds=authorization_max_staleness_seconds,
+    )
+    await app.state.creator_model_access_service.reload()
+    app.state.creator_prompt_access_service = CreatorPromptAccessService(
+        app.state.managed_asset_access_repository,
+        app.state.prompt_registry_repository,
+        max_staleness_seconds=authorization_max_staleness_seconds,
+    )
+    await app.state.creator_prompt_access_service.reload()
+    app.state.creator_route_group_access_service = CreatorRouteGroupAccessService(
+        app.state.managed_asset_access_repository,
+        app.state.route_group_repository,
+        max_staleness_seconds=authorization_max_staleness_seconds,
+    )
+    await app.state.creator_route_group_access_service.reload()
     app.state.callable_target_binding_repository = CallableTargetBindingRepository(
         prisma_manager.client
     )
@@ -184,16 +251,21 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(
         prisma_manager.client
     )
-    app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
     app.state.route_group_mutation_service = RouteGroupMutationService(
         route_groups=app.state.route_group_repository,
         callable_bindings=app.state.callable_target_binding_repository,
         model_deployments=app.state.model_deployment_repository,
         model_registry_getter=lambda: getattr(app.state, "model_registry", None),
+        managed_assets=app.state.managed_asset_access_repository,
     )
     app.state.tier_repository = TierRepository(prisma_manager.client)
-    app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
     app.state.mcp_repository = MCPRepository(prisma_manager.client)
+    app.state.creator_mcp_access_service = CreatorMCPAccessService(
+        app.state.managed_asset_access_repository,
+        app.state.mcp_repository,
+        max_staleness_seconds=authorization_max_staleness_seconds,
+    )
+    await app.state.creator_mcp_access_service.reload()
     app.state.mcp_scope_policy_repository = MCPScopePolicyRepository(prisma_manager.client)
     app.state.batch_repository = BatchRepository(
         prisma_manager.client,
@@ -208,11 +280,19 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         dynamic_config_manager=dynamic_config_manager,
         http_client=http_client,
         control_http_client=control_http_client,
+        managed_asset_reconciliation_service=(app.state.managed_asset_reconciliation_service),
         telemetry_database_connected=telemetry_database_connected,
         statuses=(
             BootstrapStatus("config", "ready"),
             BootstrapStatus("redis", "ready"),
             BootstrapStatus("database", "ready"),
+            BootstrapStatus(
+                "managed_asset_links",
+                "ready"
+                if app.state.managed_asset_reconciliation_service.health_snapshot().ready
+                else "degraded",
+                app.state.managed_asset_reconciliation_service.health_snapshot().detail,
+            ),
             BootstrapStatus("dynamic_config", "ready"),
             BootstrapStatus("ui_branding_assets", "ready"),
             BootstrapStatus("http_client", "ready"),
@@ -223,6 +303,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
 
 async def shutdown_infrastructure_runtime(runtime: InfrastructureRuntime) -> None:
+    await runtime.managed_asset_reconciliation_service.close()
     await runtime.dynamic_config_manager.close()
     await runtime.http_client.aclose()
     await runtime.control_http_client.aclose()

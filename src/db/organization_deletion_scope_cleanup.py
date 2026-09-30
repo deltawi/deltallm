@@ -85,7 +85,10 @@ class OrganizationDeletionScopeCleanup:
         *,
         page_size: int,
     ) -> CleanupPageResult:
-        processed = 0
+        processed = await self._delete_asset_grants(
+            organization_id,
+            limit=page_size,
+        )
         for table in _SCOPED_TABLES:
             remaining_budget = page_size - processed
             if remaining_budget <= 0:
@@ -109,6 +112,129 @@ class OrganizationDeletionScopeCleanup:
             )
             processed += len(rows)
         return CleanupPageResult(processed=processed, remaining=processed >= page_size)
+
+    async def _delete_asset_grants(self, organization_id: str, *, limit: int) -> int:
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH {ORGANIZATION_SCOPE_INVENTORY_CTE_SQL},
+            candidates AS MATERIALIZED (
+                SELECT asset_grant.grant_id, asset_grant.managed_asset_id
+                FROM deltallm_assetgrant AS asset_grant
+                WHERE asset_grant.organization_id = $1
+                   OR asset_grant.team_id IN (SELECT team_id FROM target_teams)
+                ORDER BY asset_grant.grant_id
+                LIMIT $2
+            ), removed AS (
+                DELETE FROM deltallm_assetgrant AS asset_grant
+                USING candidates
+                WHERE asset_grant.grant_id = candidates.grant_id
+                RETURNING asset_grant.managed_asset_id
+            ), bumped AS (
+                UPDATE deltallm_managedasset AS asset
+                SET policy_version = policy_version + 1,
+                    updated_at = NOW()
+                WHERE asset.asset_id IN (SELECT managed_asset_id FROM removed)
+                RETURNING asset.asset_id, asset.asset_kind
+            ), detached_invalid_credentials AS (
+                UPDATE deltallm_modeldeployment AS deployment
+                SET named_credential_id = NULL,
+                    updated_at = NOW()
+                WHERE deployment.named_credential_id IS NOT NULL
+                  AND deployment.credential_binding_mode = 'audience_scoped'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM deltallm_model AS model
+                    JOIN deltallm_managedasset AS model_asset
+                      ON model_asset.asset_id = model.managed_asset_id
+                    JOIN deltallm_namedcredential AS credential
+                      ON credential.credential_id = deployment.named_credential_id
+                    JOIN deltallm_managedasset AS credential_asset
+                      ON credential_asset.asset_id = credential.managed_asset_id
+                    WHERE model.model_id = deployment.model_id
+                      AND model_asset.governance_source = 'creator'
+                      AND (
+                        NOT (
+                          credential_asset.owner_account_id = model_asset.owner_account_id
+                          OR EXISTS (
+                            SELECT 1
+                            FROM deltallm_assetgrant AS owner_grant
+                            WHERE owner_grant.managed_asset_id = credential_asset.asset_id
+                              AND (
+                                owner_grant.subject_type = 'public'
+                                OR (
+                                  owner_grant.subject_type = 'team'
+                                  AND EXISTS (
+                                    SELECT 1 FROM deltallm_teammembership AS owner_team
+                                    WHERE owner_team.account_id = model_asset.owner_account_id
+                                      AND owner_team.team_id = owner_grant.team_id
+                                  )
+                                )
+                                OR (
+                                  owner_grant.subject_type = 'organization'
+                                  AND EXISTS (
+                                    SELECT 1 FROM deltallm_organizationmembership AS owner_org
+                                    WHERE owner_org.account_id = model_asset.owner_account_id
+                                      AND owner_org.organization_id = owner_grant.organization_id
+                                  )
+                                )
+                              )
+                          )
+                        )
+                        OR EXISTS (
+                          SELECT 1
+                          FROM deltallm_assetgrant AS model_grant
+                          LEFT JOIN deltallm_teamtable AS model_team
+                            ON model_team.team_id = model_grant.team_id
+                          WHERE model_grant.managed_asset_id = model_asset.asset_id
+                            AND NOT EXISTS (
+                              SELECT 1
+                              FROM deltallm_assetgrant AS credential_grant
+                              WHERE credential_grant.managed_asset_id = credential_asset.asset_id
+                                AND (
+                                  credential_grant.subject_type = 'public'
+                                  OR (
+                                    model_grant.subject_type = 'team'
+                                    AND credential_grant.subject_type = 'team'
+                                    AND credential_grant.team_id = model_grant.team_id
+                                  )
+                                  OR (
+                                    model_grant.subject_type = 'team'
+                                    AND credential_grant.subject_type = 'organization'
+                                    AND credential_grant.organization_id = model_team.organization_id
+                                  )
+                                  OR (
+                                    model_grant.subject_type = 'organization'
+                                    AND credential_grant.subject_type = 'organization'
+                                    AND credential_grant.organization_id = model_grant.organization_id
+                                  )
+                                )
+                            )
+                          )
+                        )
+                      )
+                RETURNING deployment.deployment_id
+            ), revision_bump AS (
+                UPDATE deltallm_routeruntimestate
+                SET revision = revision + 1,
+                    updated_at = NOW()
+                WHERE state_key = 'routing_runtime'
+                  AND (
+                    EXISTS (SELECT 1 FROM detached_invalid_credentials)
+                    OR EXISTS (
+                      SELECT 1 FROM bumped
+                      WHERE asset_kind IN (
+                          'model', 'route_group', 'mcp_server', 'prompt_template'
+                      )
+                    )
+                  )
+                RETURNING revision
+            )
+            SELECT asset_id FROM bumped
+            """,
+            organization_id,
+            limit,
+        )
+        return len(rows)
 
     async def has_sensitive_history(self, organization_id: str) -> bool:
         rows = await self.prisma.query_raw(
@@ -161,6 +287,11 @@ class OrganizationDeletionScopeCleanup:
                 SELECT 1
                 FROM ({union_sql}) target
                 WHERE ({scope_predicate("target")})
+            ) OR EXISTS (
+                SELECT 1
+                FROM deltallm_assetgrant AS asset_grant
+                WHERE asset_grant.organization_id = $1
+                   OR asset_grant.team_id IN (SELECT team_id FROM target_teams)
             ) AS has_scoped_access
             """,
             organization_id,

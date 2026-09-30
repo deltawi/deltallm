@@ -18,6 +18,7 @@ from src.mcp.exceptions import (
     MCPApprovalDeniedError,
     MCPApprovalRequiredError,
     MCPRateLimitError,
+    MCPToolNotFoundError,
     MCPToolTimeoutError,
 )
 from src.mcp.gateway import MCPGatewayService
@@ -27,6 +28,7 @@ from src.mcp.policy import MCPToolPolicyEnforcer
 from src.mcp.result_cache import MCPToolResultCache
 from src.models.responses import UserAPIKeyAuth
 from src.services.limit_counter import LimitCounter
+from src.services.creator_mcp_access import CreatorMCPAccessSnapshot
 from src.services.runtime_scopes import annotate_auth_metadata
 from tests.conftest import FakeRedis
 
@@ -68,11 +70,13 @@ def _server(
     *,
     capabilities: list[MCPToolSchema],
     forwarded_headers_allowlist: list[str] | None = None,
+    managed_asset_id: str | None = None,
 ) -> MCPServerRecord:
     return MCPServerRecord(
         mcp_server_id=server_id,
         server_key=server_key,
         name=server_key.title(),
+        managed_asset_id=managed_asset_id,
         transport="streamable_http",
         base_url=f"https://{server_key}.example.com/mcp",
         enabled=True,
@@ -91,6 +95,14 @@ def _server(
         created_at=datetime.now(tz=UTC),
         updated_at=datetime.now(tz=UTC),
     )
+
+
+class _CreatorAccessService:
+    def __init__(self, snapshot: CreatorMCPAccessSnapshot) -> None:
+        self._snapshot = snapshot
+
+    def snapshot(self) -> CreatorMCPAccessSnapshot:
+        return self._snapshot
 
 
 class _FakeRegistry:
@@ -402,6 +414,110 @@ async def test_mcp_gateway_initialize_and_tools_list(client, test_app):
     assert tool_list.status_code == 200
     names = [tool["name"] for tool in tool_list.json()["result"]["tools"]]
     assert names == ["docs.search", "github.search"]
+
+
+@pytest.mark.asyncio
+async def test_creator_mcp_visibility_allows_use_and_legacy_bindings_only_narrow() -> None:
+    creator_private = _server(
+        "srv-private",
+        "private",
+        managed_asset_id="asset-private",
+        capabilities=[
+            MCPToolSchema(name="search", input_schema={"type": "object"}),
+            MCPToolSchema(name="write", input_schema={"type": "object"}),
+        ],
+    )
+    creator_public = _server(
+        "srv-public",
+        "public",
+        managed_asset_id="asset-public",
+        capabilities=[MCPToolSchema(name="search", input_schema={"type": "object"})],
+    )
+    platform = _server(
+        "srv-platform",
+        "platform",
+        capabilities=[MCPToolSchema(name="search", input_schema={"type": "object"})],
+    )
+    registry = _FakeRegistry(
+        servers=[creator_private, creator_public, platform],
+        bindings=[
+            MCPServerBindingRecord(
+                "bind-private",
+                "srv-private",
+                "team",
+                "team-owner",
+                True,
+                ["search"],
+            ),
+            MCPServerBindingRecord(
+                "bind-platform",
+                "srv-platform",
+                "organization",
+                "org-1",
+                True,
+                None,
+            ),
+        ],
+        policies=[],
+    )
+    snapshot = CreatorMCPAccessSnapshot.create(
+        server_ids={"srv-private", "srv-public"},
+        public_servers={"srv-public"},
+        servers_by_owner={"owner-1": {"srv-private"}},
+        servers_by_team={},
+        servers_by_organization={},
+        asset_id_by_server_id={
+            "srv-private": "asset-private",
+            "srv-public": "asset-public",
+        },
+    )
+    transport = _FakeTransport()
+    gateway = MCPGatewayService(
+        registry,
+        transport,
+        creator_access_service=_CreatorAccessService(snapshot),  # type: ignore[arg-type]
+    )
+    owner = UserAPIKeyAuth(
+        api_key="sk-owner",
+        owner_account_id="owner-1",
+        team_id="team-owner",
+        organization_id="org-1",
+    )
+
+    tools = await gateway.list_visible_tools(owner)
+
+    assert [tool.namespaced_name for tool in tools] == [
+        "platform.search",
+        "private.search",
+        "public.search",
+    ]
+    result = await gateway.call_tool(
+        owner,
+        namespaced_tool_name="private.search",
+        arguments={"query": "hello"},
+    )
+    assert result.structured_content == {
+        "server": "private",
+        "tool": "search",
+        "arguments": {"query": "hello"},
+    }
+
+    outsider = UserAPIKeyAuth(
+        api_key="sk-outsider",
+        team_id="team-owner",
+        organization_id="org-1",
+    )
+    outsider_tools = await gateway.list_visible_tools(outsider)
+    assert [tool.namespaced_name for tool in outsider_tools] == [
+        "platform.search",
+        "public.search",
+    ]
+    with pytest.raises(MCPToolNotFoundError, match="Unknown MCP tool 'private.search'"):
+        await gateway.call_tool(
+            outsider,
+            namespaced_tool_name="private.search",
+            arguments={},
+        )
 
 
 @pytest.mark.asyncio

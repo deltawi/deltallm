@@ -3,6 +3,7 @@ from uuid import UUID
 import pytest
 
 from src.models.platform_auth import PlatformAuthContext
+from src.services.managed_asset_access import AssetPrincipal
 from tests.test_ui_route_group_addresses import BASE, HEADERS
 from tests import test_ui_route_group_addresses as addresses
 from tests.test_ui_route_groups import _publish_test_model_registry, _selector_policy_payload
@@ -84,8 +85,11 @@ async def test_selector_options_deny_before_inventory_or_group_lookup(
         role="org_user",
         organization_memberships=[{"organization_id": "org-a", "role": "org_owner"}],
     )
-    monkeypatch.setattr("src.middleware.admin.get_platform_auth_context", lambda request: context)
-    assert (await client.get(path)).status_code == 403
+    monkeypatch.setattr(
+        "src.middleware.platform_auth.get_platform_auth_context",
+        lambda request: context,
+    )
+    assert (await client.get(path)).status_code == 503
 
 
 async def test_selector_options_unavailable_is_not_empty(client, options_path, monkeypatch):
@@ -99,6 +103,75 @@ async def test_selector_options_unavailable_is_not_empty(client, options_path, m
     response = await client.get(options_path, headers=HEADERS)
     assert response.status_code == 503
     assert response.json() == {"detail": "Routing inventory unavailable"}
+
+
+async def test_selector_options_use_the_same_tier_scoped_model_catalog(
+    client,
+    test_app,
+    options_path,
+    monkeypatch,
+):
+    test_app.state.model_registry = {
+        "tier-visible": [
+            {
+                "deployment_id": "visible-deployment",
+                "deltallm_params": {"model": "openai/visible"},
+                "model_info": {"mode": "chat"},
+            }
+        ],
+        "tier-hidden": [
+            {
+                "deployment_id": "hidden-deployment",
+                "deltallm_params": {"model": "openai/hidden"},
+                "model_info": {"mode": "chat"},
+            }
+        ],
+    }
+    _publish_test_model_registry(test_app)
+
+    class _TierPolicyService:
+        mode = "enforce"
+        snapshot_stale = False
+
+        @staticmethod
+        def resolve_org_allowed_callable_keys(organization_id: str):  # noqa: ANN205
+            return frozenset({"tier-visible"}) if organization_id == "org-a" else None
+
+    test_app.state.tier_policy_service = _TierPolicyService()
+
+    async def authorize(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        return (
+            AssetPrincipal(
+                account_id="tier-member",
+                organization_ids=frozenset({"org-a"}),
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.route_group_selectors.operations.authorize_route_group_for_request",
+        authorize,
+    )
+
+    response = await client.get(
+        options_path,
+        headers=HEADERS,
+        params={"selected_id": "hidden-deployment"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["deployment_id"] for item in response.json()["data"]] == [
+        "visible-deployment"
+    ]
+    assert response.json()["selected"] is None
+
+    direct_reference = await client.post(
+        options_path.removesuffix("/selector-options") + "/members",
+        headers=HEADERS,
+        json={"deployment_id": "hidden-deployment"},
+    )
+    assert direct_reference.status_code == 400
+    assert direct_reference.json() == {"detail": "deployment_id is invalid or inaccessible"}
 
 
 @pytest.mark.parametrize("by_id", [False, True])

@@ -11,11 +11,12 @@ interface PromptVersionForm {
 interface PromptVersionComposerCardProps {
   value: PromptVersionForm;
   creating: boolean;
+  disabled?: boolean;
   onChange: (next: PromptVersionForm) => void;
   onCreate: () => void;
 }
 
-export default function PromptVersionComposerCard({ value, creating, onChange, onCreate }: PromptVersionComposerCardProps) {
+export default function PromptVersionComposerCard({ value, creating, disabled = false, onChange, onCreate }: PromptVersionComposerCardProps) {
   const variables = value.variables
     .split(',')
     .map((item) => item.trim())
@@ -33,6 +34,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
           <label className="mb-1 block text-sm font-medium text-gray-700">System Prompt</label>
           <textarea
             value={value.system_prompt}
+            disabled={disabled}
             onChange={(event) => onChange({ ...value, system_prompt: event.target.value })}
             className="h-56 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
@@ -43,6 +45,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
           <label className="mb-1 block text-sm font-medium text-gray-700">Required Variables</label>
           <input
             value={value.variables}
+            disabled={disabled}
             onChange={(event) => onChange({ ...value, variables: event.target.value })}
             placeholder="product_name, customer_name"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
@@ -66,6 +69,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
               <label className="mb-1 block text-sm font-medium text-gray-700">Model Hints</label>
               <textarea
                 value={value.model_hints}
+                disabled={disabled}
                 onChange={(event) => onChange({ ...value, model_hints: event.target.value })}
                 className="h-40 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
@@ -74,6 +78,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
               <label className="mb-1 block text-sm font-medium text-gray-700">Route Preferences</label>
               <textarea
                 value={value.route_preferences}
+                disabled={disabled}
                 onChange={(event) => onChange({ ...value, route_preferences: event.target.value })}
                 className="h-40 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
@@ -85,6 +90,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
             <input
               type="checkbox"
               checked={value.publish}
+              disabled={disabled}
               onChange={(event) => onChange({ ...value, publish: event.target.checked })}
               className="mt-0.5 rounded border-gray-300"
             />
@@ -99,7 +105,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
           <button
             type="button"
             onClick={onCreate}
-            disabled={creating}
+            disabled={creating || disabled}
             className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             {creating ? 'Creating...' : 'Create Version'}

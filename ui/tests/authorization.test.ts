@@ -37,6 +37,7 @@ test('legacy permission fallback does not expose gated self reporting', () => {
 
   assert.equal(access.usage, false);
   assert.equal(access.dashboard, false);
+  assert.equal(access.prompts, true);
 });
 
 test('legacy permission fallback does not expose gated team reporting', () => {

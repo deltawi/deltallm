@@ -1,5 +1,6 @@
 import { apiFetch, withQuery } from './transport';
 import type { Paginated } from './pagination';
+import type { ManagedAssetAccess, ManagedAssetAccessInput } from './managedAssets';
 
 export interface PromptTemplate {
   prompt_template_id: string;
@@ -13,6 +14,16 @@ export interface PromptTemplate {
   binding_count: number;
   created_at?: string | null;
   updated_at?: string | null;
+  managed_asset_id?: string | null;
+  access?: ManagedAssetAccess | null;
+}
+
+export interface PromptTemplateCreateInput {
+  template_key: string;
+  name: string;
+  description?: string | null;
+  owner_scope?: string | null;
+  access?: ManagedAssetAccessInput;
 }
 
 export interface PromptVersion {
@@ -69,7 +80,7 @@ export const promptRegistry = {
     apiFetch<{ template: PromptTemplate; versions: PromptVersion[]; labels: PromptLabel[]; bindings: PromptBinding[] }>(
       `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { signal }
     ),
-  createTemplate: (payload: object) =>
+  createTemplate: (payload: PromptTemplateCreateInput) =>
     apiFetch<PromptTemplate>('/ui/api/prompt-registry/templates', { method: 'POST', json: payload }),
   updateTemplate: (templateKey: string, payload: object) =>
     apiFetch<PromptTemplate>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'PUT', json: payload }),

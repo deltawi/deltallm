@@ -32,6 +32,7 @@ class RouteGroupResponse(BaseModel):
     default_prompt: dict[str, str] | None = None
     owner_scope_type: str = "global"
     owner_scope_id: str | None = None
+    access: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
