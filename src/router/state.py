@@ -38,6 +38,7 @@ from src.router.health_state import (
     health_state_ttl_seconds,
 )
 from src.router.redis_keys import RouterHealthProbeScope, RouterRedisKeyspace
+from src.router.recovery_completion import RECOVERY_COMPLETION_SCRIPT
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ class DeploymentStateBackend(Protocol):
     ) -> AttemptPermit: ...
 
     async def release_attempt(self, permit: AttemptPermit) -> int | None: ...
+
+    async def complete_recovery_attempt(self, permit: AttemptPermit) -> HealthTransitionResult: ...
 
     async def get_active_requests(self, deployment_id: str) -> int: ...
 
@@ -436,6 +439,35 @@ class RedisStateBackend:
         except Exception as exc:
             self._handle_backend_failure(exc)
             return None
+
+    async def complete_recovery_attempt(self, permit: AttemptPermit) -> HealthTransitionResult:
+        if not (
+            permit.acquired and permit.recovery and permit.backend == "redis" and permit.owner_token
+        ):
+            raise ValueError("Recovery completion requires a shared recovery permit")
+        keys = [
+            *self._health_transition_keys(permit.health_ref),
+            self.keyspace.active_requests(permit.deployment_id),
+            self._attempt_owners_key(permit.deployment_id),
+        ]
+        try:
+            raw = await self._redis_call(
+                "eval",
+                RECOVERY_COMPLETION_SCRIPT,
+                len(keys),
+                *keys,
+                permit.owner_token,
+                health_state_ttl_seconds(),
+            )
+            return HealthTransitionResult(
+                applied=int(raw[0]) == 1,
+                state=DeploymentHealthState(self._decode_redis_text(raw[3])),
+                recovered=int(raw[2]) == 1,
+            )
+        except Exception as exc:
+            self._handle_backend_failure(exc)
+            # Shared ownership must never be replaced by a local transition.
+            raise ServiceUnavailableError(message="Routing recovery is unavailable") from exc
 
     def _acquire_local_attempt(
         self,

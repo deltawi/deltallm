@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable
 
 from src.metrics import increment_router_health_transition
 from src.router.health_policy import affects_deployment_health
+from src.router.candidates import AttemptPermit
 from src.router.health_state import HealthProbeClaim, HealthRefInput, coerce_health_ref
 from src.router.redis_keys import RouterHealthProbeScope
 from src.router.state import DeploymentStateBackend
@@ -68,6 +69,11 @@ class CooldownManager:
             health_ref,
             recovery_token=recovery_token,
         )
+        if transition.recovered:
+            increment_router_health_transition(transition="recovered")
+
+    async def complete_recovery_attempt(self, permit: AttemptPermit) -> None:
+        transition = await self.state.complete_recovery_attempt(permit)
         if transition.recovered:
             increment_router_health_transition(transition="recovered")
 

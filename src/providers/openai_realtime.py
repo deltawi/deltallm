@@ -62,6 +62,17 @@ def resolve_realtime_target(
     )
 
 
+def successful_realtime_terminal(event: Mapping[str, object]) -> bool:
+    if event.get("type") == "conversation.item.input_audio_transcription.completed":
+        return True
+    response = event.get("response")
+    return (
+        event.get("type") == "response.done"
+        and isinstance(response, Mapping)
+        and response.get("status") == "completed"
+    )
+
+
 class OpenAIRealtimeSocket:
     def __init__(self, connection: ClientConnection) -> None:
         self._connection = connection

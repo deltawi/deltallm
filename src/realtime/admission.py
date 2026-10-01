@@ -5,10 +5,13 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+import logging
 
 from src.billing.realtime_charge import RealtimeAttribution, RealtimeChargeContext
 from src.billing.realtime_usage import RealtimeDurationUsage, realtime_usage_receipt
 from src.metrics.realtime import record_receipt
+from src.metrics import increment_router_health_update_failure
+from src.providers.openai_realtime import successful_realtime_terminal
 from src.router.candidates import AttemptPermit
 from src.db.realtime_billing import RealtimeBillingRepository
 from src.realtime.capacity import RealtimeCapacity, RealtimeLeases
@@ -19,6 +22,8 @@ from src.realtime.errors import RealtimeError
 from src.realtime.routing import RealtimeRoute, RealtimeRouting
 from src.services.key_service import KeyService
 from src.services.runtime_scopes import resolve_runtime_scope_context
+
+logger = logging.getLogger(__name__)
 
 
 class RealtimeAdmissionService:
@@ -194,12 +199,27 @@ class RealtimeSessionPermit:
         record_receipt(pending=receipt.pending_reason is not None)
         self.receipts[receipt.receipt_id] = operation
         if operation == self.current:
-            await self.close()
+            await self._complete_turn(event)
             self.current, self.committed = None, False
         if receipt.pending_reason:
             raise RealtimeError(
                 "usage_pending", "Realtime usage requires reconciliation", close_code=1011
             )
+
+    async def _complete_turn(self, event: Mapping[str, object]) -> None:
+        permit = self.provider_permit
+        if permit is None or not permit.recovery or not successful_realtime_terminal(event):
+            await self.close()
+            return
+        try:
+            await self.route.generation.cooldown_manager.complete_recovery_attempt(permit)
+        except Exception:
+            # The receipt is already durable. Retain the permit for idempotent
+            # cleanup and never replay provider work after this failure.
+            increment_router_health_update_failure()
+            logger.warning("Realtime recovery completion failed")
+            raise
+        self.provider_permit = None
 
     async def check_health(self) -> None:
         self.owner.require_ready()
