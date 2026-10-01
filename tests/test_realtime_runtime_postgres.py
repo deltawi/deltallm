@@ -190,6 +190,7 @@ def response_event(index):
         "type": "response.done",
         "response": {
             "id": f"resp_{index}",
+            "status": "completed",
             "usage": {
                 "input_tokens": 1,
                 "output_tokens": 2,
@@ -203,8 +204,9 @@ def response_event(index):
 
 @pytest.mark.parametrize("profile", ["realtime", "transcription"])
 @pytest.mark.parametrize("client_kind", ["wire", "sdk"])
+@pytest.mark.parametrize("recovering", [False, True])
 async def test_bootstrapped_two_turn_session_reaches_canonical_ledger(
-    test_app, realtime_dependencies, monkeypatch, profile, client_kind
+    test_app, realtime_dependencies, monkeypatch, profile, client_kind, recovering
 ):
     if client_kind == "sdk" and not os.getenv("DELTALLM_REALTIME_SDK_PYTHON"):
         if os.getenv("CI"):
@@ -213,6 +215,12 @@ async def test_bootstrapped_two_turn_session_reaches_canonical_ledger(
     runtime, spend = await bootstrap(test_app, realtime_dependencies, profile)
     db, _, identity, token, raw_key = realtime_dependencies
     operations = []
+    generation = test_app.state.routing_runtime_generation_store.require_snapshot()
+    ref = generation.deployment_registry.physical_deployments[identity].health_ref
+    backend = generation.router.state
+    if recovering:
+        await generation.cooldown_manager.manual_cooldown(ref, 60)
+        await realtime_dependencies[1].delete(backend.keyspace.cooldown(identity, ref.generation))
 
     async def provider(socket):
         assert socket.request.headers["Authorization"] == "Bearer provider-secret"
@@ -235,6 +243,8 @@ async def test_bootstrapped_two_turn_session_reaches_canonical_ledger(
                 )
                 assert len(rows) == 1
                 operations.append(rows[0]["operation_id"])
+                if recovering and len(operations) == 2:
+                    assert (await backend.get_health(ref))["recovery_required"] == "false"
             if event["type"] == (
                 "input_audio_buffer.commit" if profile == "transcription" else "response.create"
             ):
@@ -276,6 +286,15 @@ async def test_bootstrapped_two_turn_session_reaches_canonical_ledger(
                     break
                 await asyncio.sleep(0.02)
         assert len(set(operations)) == 2
+        timings = await db.query_raw(
+            "SELECT i.created_at::timestamptz(3) = s.start_time AT TIME ZONE 'UTC' AS matches, "
+            "s.latency_ms FROM deltallm_realtime_billing_intents i "
+            "JOIN deltallm_spendlog_events s ON s.id=i.event_id "
+            "WHERE i.operation_id=ANY($1::text[])",
+            operations,
+        )
+        assert len(timings) == 2
+        assert all(row["matches"] and 0 <= row["latency_ms"] < 5000 for row in timings)
         total = Decimal("0.00048") if profile == "transcription" else Decimal("0.000018")
         key = await db.query_raw(
             "SELECT spend_exact::text AS spend FROM deltallm_verificationtoken WHERE token=$1",

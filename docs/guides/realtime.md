@@ -167,6 +167,17 @@ usage stops the session. A disconnect, process failure, or missing receipt leave
 a pending accounting record; recovery never retries provider work or assumes a
 zero charge. Accepted receipts continue recovering when new sessions are disabled.
 
+Each turn's reporting time starts when its dispatch intent is recorded and ends
+when its first receipt is accepted. Idle time before the turn is excluded. Session
+start time is retained separately in metadata. Duplicate receipts and recovery
+preserve the first accepted timestamps; previously accepted records are unchanged.
+This duration measures dispatch through receipt acceptance, including transcription
+input time, rather than time to the first audio chunk.
+
+A successfully completed turn can restore a deployment recovering from cooldown.
+Cancelled, failed and incomplete responses release their capacity without marking
+the deployment healthy. A newer manual cooldown remains authoritative.
+
 The journal retains frozen attribution, rate cards, normalized usage and state;
 it does not retain audio, transcripts, instructions, or provider credentials.
 Unresolved records count against the bounded journal capacity. Settled journal
@@ -185,6 +196,13 @@ Set ingress WebSocket read/write timeouts above your session duration and allow
 Upgrade headers. On Kubernetes, `terminationGracePeriodSeconds` must exceed
 `cleanup_seconds + write_seconds + telemetry_shutdown_drain_timeout_seconds`;
 with defaults, use at least 45 seconds. The Helm chart validates this bound.
+
+When upgrading to these shared-lease fixes, disable new Realtime admissions and
+drain all sockets on the old version before enabling the upgraded runtime. An old
+WebSocket worker can still shorten a concurrency key shared with HTTP requests.
+Keep the spend worker running and retain pending accounting records throughout
+the upgrade. Rolling back should also disable new admissions and drain sessions;
+accepted receipts can continue settling with Realtime disabled.
 
 Before rollout, verify an exact-model conversation, text-to-audio, transcription,
 cancellation and disconnect; reconcile their provider usage; exercise Redis/database

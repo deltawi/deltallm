@@ -99,14 +99,10 @@ class RealtimeBillingRepository:
             "pending_reason": receipt.pending_reason,
         }
         encoded_facts = _encode(facts)
-        payload = (
-            None
-            if receipt.pending_reason
-            else context.spend_payload(receipt, completed_at=datetime.now(UTC))
-        )
         async with billing_transaction(self.db, _deadline()) as tx:
             rows = await tx.query_raw(
-                "SELECT state,receipt_facts FROM deltallm_realtime_billing_intents "
+                "SELECT state,receipt_facts,created_at::text AS started_at, "
+                "CURRENT_TIMESTAMP::text AS completed_at FROM deltallm_realtime_billing_intents "
                 "WHERE operation_id=$1 AND snapshot=$2::jsonb FOR UPDATE",
                 operation_id,
                 _encode(context.snapshot()),
@@ -120,6 +116,19 @@ class RealtimeBillingRepository:
                 if previous != json.loads(encoded_facts):
                     raise BillingOperationUnavailable()
                 return
+            # The journal owns per-turn dispatch time. Use the same database
+            # clock for acceptance, and freeze both with the first receipt.
+            payload = (
+                None
+                if receipt.pending_reason
+                else context.spend_payload(
+                    receipt,
+                    operation_started_at=datetime.fromisoformat(rows[0]["started_at"]).astimezone(
+                        UTC
+                    ),
+                    completed_at=datetime.fromisoformat(rows[0]["completed_at"]).astimezone(UTC),
+                )
+            )
             await tx.execute_raw(
                 "UPDATE deltallm_realtime_billing_intents SET event_id=$2,receipt_facts=$3::jsonb, "
                 "spend_payload=$4::jsonb,state=$5,pending_reason=$6,updated_at=NOW() WHERE operation_id=$1",

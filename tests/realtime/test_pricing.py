@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -70,7 +70,9 @@ def test_exact_exclusive_pricing_and_frozen_snapshot():
     assert context.customer.cost(usage.usage) == Decimal("0.0000839")
     with pytest.raises(TypeError):
         context.customer.rates["input_text"] = Decimal(99)
-    payload = context.spend_payload(usage, completed_at=context.started_at)
+    payload = context.spend_payload(
+        usage, operation_started_at=context.started_at, completed_at=context.started_at
+    )
     assert payload["usage"]["total_tokens"] == 37
     assert payload["cost_exact"] == "0.000083900000000000"
     assert payload["metadata"]["billing"]["realtime_components"]["cached_input_audio"] == "3"
@@ -95,4 +97,20 @@ def test_missing_usage_cannot_be_made_into_a_zero_charge():
     context = charge_context()
     pending = RealtimeUsageReceipt(str(uuid4()), "response", "resp_1", None, "usage_missing")
     with pytest.raises(ValueError):
-        context.spend_payload(pending, completed_at=context.started_at)
+        context.spend_payload(
+            pending, operation_started_at=context.started_at, completed_at=context.started_at
+        )
+
+
+def test_turn_timing_excludes_idle_session_time():
+    context = charge_context()
+    started = context.started_at + timedelta(minutes=2)
+    payload = context.spend_payload(
+        receipt(context.attribution.session_id),
+        operation_started_at=started,
+        completed_at=started + timedelta(seconds=2),
+    )
+    assert datetime.fromisoformat(payload["end_time"]) - datetime.fromisoformat(
+        payload["start_time"]
+    ) == timedelta(seconds=2)
+    assert payload["metadata"]["realtime_session_started_at"] == context.started_at.isoformat()

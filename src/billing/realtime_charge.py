@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from src.billing.money import money_string
 from src.billing.realtime_pricing import RealtimePrices
@@ -38,7 +38,11 @@ class RealtimeChargeContext:
         }
 
     def spend_payload(
-        self, receipt: RealtimeUsageReceipt, *, completed_at: datetime
+        self,
+        receipt: RealtimeUsageReceipt,
+        *,
+        operation_started_at: datetime,
+        completed_at: datetime,
     ) -> dict[str, object]:
         usage = receipt.usage
         if usage is None or receipt.pending_reason is not None:
@@ -69,12 +73,14 @@ class RealtimeChargeContext:
             "usage": units,
             "cost_exact": money_string(self.customer.cost(usage)),
             "provider_cost_exact": money_string(self.provider.cost(usage)),
-            "start_time": self.started_at.isoformat(),
-            "end_time": completed_at.isoformat(),
+            "start_time": operation_started_at.astimezone(UTC).isoformat(),
+            "end_time": completed_at.astimezone(UTC).isoformat(),
             "metadata": {
                 "provider": "openai",
                 "deployment_id": owner.deployment_id,
                 "deployment_model": owner.deployment_model,
+                "realtime_session_started_at": self.started_at.isoformat(),
+                "realtime_timing_basis": "dispatch_to_receipt_acceptance",
                 "realtime_pricing": {
                     "customer": self.customer.snapshot(),
                     "provider": self.provider.snapshot(),

@@ -25,6 +25,8 @@ ROOT = Path(__file__).parents[2] / "src"
         "realtime/runtime.py",
         "realtime/session.py",
         "providers/openai_realtime.py",
+        "router/recovery_completion.py",
+        "services/parallel_lease_lua.py",
         "billing/realtime_usage.py",
         "api/v1/endpoints/realtime.py",
     ],

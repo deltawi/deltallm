@@ -79,6 +79,26 @@ recheck revocation. Terminal usage must be durably accepted before forwarding
 its terminal event. Cancellation while accepting a receipt must be recoverable
 using its stable identity and an existing durable dispatch record.
 
+Every owned parallel-lease writer uses Redis time and sets the shared owner key's
+expiry to its latest owner deadline. A short WebSocket lease cannot expire a
+longer HTTP or tier lease. Acquisition and renewal keep their existing single
+Redis round trip; strict renewal still rejects missing or expired ownership.
+
+Only successful native response completion or transcription completion can clear
+recovery. The existing cooldown owner composes its health transition and attempt
+release into one atomic Redis call, fencing both the live attempt and recovery
+token. Stale owners cannot clear a newer manual cooldown. Durable billing
+acceptance precedes this transition; Redis failure or cancellation preserves the
+permit for idempotent cleanup and never replays provider work.
+
+Reporting starts at the per-operation journal `created_at`, read with the database
+acceptance timestamp in the existing locked receipt query. Both are frozen in the
+first accepted spend payload. Duplicate delivery and worker recovery preserve that
+payload, including receipts accepted by older versions. Session start remains
+metadata. The timing basis is dispatch through receipt acceptance, not TTFT; the
+canonical ledger retains its existing millisecond precision. No migration or
+additional database round trip is needed.
+
 Hard-budget sessions require a proven conservative reservation across applicable
 scopes. Session duration is not a cost bound. Unsupported hard-budget profiles
 must fail closed. Missing usage, abandoned input, provider disconnects and
@@ -194,6 +214,11 @@ runtime. Older spend workers can consume the same outbox; upgraded recovery
 recognizes their canonical ledger writes and settles matching journal entries.
 Conflicting ledger facts are quarantined without replacing authoritative usage.
 
+For the shared-lease fix, first disable Realtime admission and drain all old
+Realtime workers. Only then enable upgraded workers: old renewal scripts can
+still shorten shared HTTP/tier owner-key expiry during a mixed-version rollout.
+Keep receipt recovery and the spend worker running during this transition.
+
 Rollback disables new admissions and drains sockets before shared services stop.
 Retain the additive schema and pending facts. Accepted receipts continue recovering
 with Realtime disabled. Unknown usage remains pending and occupies bounded journal
@@ -217,7 +242,7 @@ Run the full application lane as well
 as the existing authentication and HTTP audio regressions after changes to the
 shared connection-auth boundary.
 
-Verification in this implementation includes:
+Earlier implementation verification included:
 
 - Hermetic/application regression suite: 5,478 passed.
 - Production bootstrap with real PostgreSQL and Redis and a local WebSocket peer:
@@ -236,3 +261,65 @@ Verification in this implementation includes:
 
 No paid OpenAI request or production deployment was performed. Live model
 qualification and the measured capacity envelope remain release gates.
+
+
+### Review-fix verification (2026-10-01)
+
+The shared-lease, cooldown-recovery and per-turn timestamp fixes passed the full
+hermetic/application/PostgreSQL/Redis suite: **5,924 passed**, 71 unrelated Helm
+cases deselected. Two later regressions also passed: recovery after a lost Redis
+completion acknowledgment cannot release a new owner, and an older accepted
+payload retains its original timestamps. The focused Realtime run passed 303
+cases, including eight bootstrapped direct-client/official-SDK combinations across
+conversation/transcription and healthy/recovering deployments. Repository-wide
+Ruff, whitespace checks, nine documentation tests, generated references, strict
+public documentation build and public artifact containment passed.
+
+[The comparison harness](../../tests/performance/realtime_review_profile.py) runs
+against isolated Redis 7.4.2/PostgreSQL 15 with the locked Python environment.
+It measures the changed owner operations at 20 arrivals/second for five seconds
+per case, with at most 16 operations in flight. Receipt cases include a fixed
+1 ms provider delay and durable acceptance; dispatch, socket handshake, settlement
+and TTFT are outside this focused measurement. It is not a deployment capacity
+certificate. Baseline: `e0adec486f1baf6adf1cdbba1082ecdf55b1c78a`; after: these three
+review fixes, using the same harness in both checkouts.
+
+The repeated pair completed all 800 operations with no dropped arrivals, a maximum
+of one operation in flight, zero sampled in-flight slope, and 20 completions/second
+in every case. Measured latency in milliseconds:
+
+| Operation | Before p50 / p95 / p99 | After p50 / p95 / p99 |
+| --- | --- | --- |
+| Non-strict lease renewal | 0.533 / 0.707 / 0.813 | 0.579 / 0.667 / 0.799 |
+| Strict lease renewal | 0.537 / 0.775 / 0.878 | 0.552 / 0.809 / 0.950 |
+| Healthy turn receipt | 8.514 / 9.361 / 9.803 | 8.427 / 9.131 / 9.238 |
+| Recovering turn receipt | 8.462 / 9.301 / 9.587 | 8.378 / 9.178 / 9.397 |
+
+Before and after, each renewal makes one Redis call; each receipt makes one Redis
+call and three SQL statements within one transaction (transaction begin/commit are
+additional to those statements). The harness asserts these counts. No dependency
+round trip, retry or timeout allowance was added; the existing 250 ms billing
+transaction bound remains in force. Raw samples also retain scheduling lag and
+actual time spent in the fixed provider delay.
+
+The first pair is retained too: the baseline completed 400/400 and the first after
+run completed 399/400. One receipt hit the billing deadline during a scheduling
+pause of about 280 ms; recovery-receipt p99 was 80.430 ms and maximum in-flight was
+seven. The paired repeat above was run without changing code, load or deadlines.
+These observations support unchanged call budgets and similar local latency, but
+cannot establish a production latency guarantee or conclusively attribute the
+initial scheduling pause.
+
+[Raw samples and summaries](project/benchmarks/realtime-runtime-review/) include
+both pairs and [the receipt query plans](project/benchmarks/realtime-runtime-review/receipt-explain.txt).
+The before/after queries both use the existing primary-key index and lock one row
+on a temporary 10,000-row journal. Execution times were 0.018/0.020 ms; these query
+plan samples do not measure network or transaction overhead. Reproduce with
+`psql -X -v ON_ERROR_STOP=1 -f tests/performance/realtime_receipt_explain.sql`
+against an isolated migrated database; all generated rows roll back.
+
+To reproduce the owner comparison, set `DATABASE_URL` and
+`DELTALLM_TEST_REDIS_URL` to isolated migrated services, then run the same harness
+file with `PYTHONPATH` pointing at each checkout and its locked Python executable:
+`python tests/performance/realtime_review_profile.py --label after --output-dir /tmp/realtime-profile`.
+Use the absolute harness path and `--label before` when importing the baseline.
