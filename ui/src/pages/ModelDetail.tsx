@@ -131,6 +131,17 @@ function modeSpecificItems(mode: string, model: ModelDeploymentDetail): Array<{ 
       ];
     case 'image_generation':
       return [{ label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) }];
+    case 'realtime':
+      return [
+        { label: 'Session', value: mi.realtime_profile === 'transcription' ? 'Transcription' : 'Conversation' },
+        { label: 'Usage', value: mi.realtime_usage_type === 'duration' ? 'Audio duration' : 'Tokens' },
+        { label: 'Input Text / Token', value: formatCost(mi.input_cost_per_token) },
+        { label: 'Output Text / Token', value: formatCost(mi.output_cost_per_token) },
+        { label: 'Input Audio / Token', value: formatCost(mi.input_cost_per_audio_token) },
+        { label: 'Output Audio / Token', value: formatCost(mi.output_cost_per_audio_token) },
+        { label: 'Cached Audio / Token', value: formatCost(mi.input_cost_per_audio_token_cache_hit) },
+        { label: 'Audio / Second', value: formatCost(mi.input_cost_per_second) },
+      ];
     case 'audio_speech':
       return [
         { label: 'Cost / Character',      value: formatCost(mi.input_cost_per_character) },

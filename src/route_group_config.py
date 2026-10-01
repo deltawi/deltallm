@@ -17,6 +17,7 @@ ModelMode = Literal[
     "image_generation",
     "audio_speech",
     "audio_transcription",
+    "realtime",
     "rerank",
 ]
 SUPPORTED_MODEL_MODES = frozenset(
@@ -26,6 +27,7 @@ SUPPORTED_MODEL_MODES = frozenset(
         "image_generation",
         "audio_speech",
         "audio_transcription",
+        "realtime",
         "rerank",
     }
 )

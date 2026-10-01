@@ -138,6 +138,12 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
         checks["spend_ingestion_worker"] = bool(spend_health.ready)
         details["spend_ingestion_worker"] = _worker_health_payload(spend_health)
 
+    realtime_settings = getattr(request.app.state, "realtime_settings", None)
+    if realtime_settings is not None and realtime_settings.enabled:
+        realtime = getattr(request.app.state, "realtime_runtime", None)
+        checks["realtime"] = bool(realtime is not None and realtime.ready)
+        details["realtime"] = {"state": "ready" if checks["realtime"] else "unavailable"}
+
     audit_service = getattr(request.app.state, "audit_service", None)
     audit_health = getattr(audit_service, "worker_health", None)
     if audit_health is not None:

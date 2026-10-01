@@ -90,6 +90,9 @@ export interface ChatRoutingCapabilities {
 export interface ModelInfo extends Record<string, unknown> {
   chat_capabilities?: ChatRoutingCapabilities | null;
   mode?: string;
+  realtime_profile?: 'realtime' | 'transcription';
+  realtime_usage_type?: 'tokens' | 'duration';
+  input_cost_per_audio_token_cache_hit?: string | null;
   max_tokens?: number | null;
   max_input_tokens?: number | null;
   max_output_tokens?: number | null;

@@ -67,6 +67,12 @@ class RealtimePermit(Protocol):
 
     def authorize_client_event(self, event: Mapping[str, object]) -> None: ...
 
+    async def prepare_upstream(self, upstream: TextSocket) -> TextSocket: ...
+
+    async def before_client_event(self, event: Mapping[str, object]) -> None:
+        """Boundary I/O only: durably record new billable turns before forwarding."""
+        ...
+
     async def accept_usage(self, event: Mapping[str, object]) -> None:
         """Durably accept an idempotent receipt or pending usage before delivery."""
         ...
@@ -75,6 +81,9 @@ class RealtimePermit(Protocol):
 
 
 class RealtimeAdmission(Protocol):
+    @property
+    def ready(self) -> bool: ...
+
     def admit(self, request: RealtimeRequest) -> AsyncContextManager["AdmittedRealtime"]: ...
 
 

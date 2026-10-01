@@ -81,6 +81,7 @@ nav:
           - Route traffic and handle failures: guides/routing-and-failover.md
           - Cache repeated requests: features/caching.md
           - Process work in batches: guides/batching.md
+      - Realtime audio over WebSockets: guides/realtime.md
       - Tools and safety:
           - Connect your first MCP server: getting-started/mcp-quickstart.md
           - Add your first guardrail: guides/guardrails.md

@@ -1,7 +1,31 @@
-# Native Realtime WebSocket foundation
+# Native Realtime WebSocket runtime
 
-Status: first implementation slice; **not enabled for production traffic**.
+Status: opt-in runtime for manual OpenAI conversation and transcription sessions.
 Date: 2026-10-01. Owner: API runtime, provider integration, and billing maintainers.
+
+## Implementation and release boundary
+
+Normal application bootstrap now installs the runtime when explicitly enabled.
+Configuration, admin model fields, routing and grants, shared Redis leases,
+per-turn request limits, exact usage accounting, durable recovery, readiness and
+shutdown are connected to their existing owners. PostgreSQL remains the billing
+source of truth; the existing spend worker is the only ledger writer.
+
+The supported profile is server-to-server, manual turns, one billable operation
+at a time, using the public OpenAI origin. It supports text/audio/cache tokens
+and duration-metered transcription. Every provider turn has durable intent before
+dispatch; terminal usage is durable before delivery. No provider call is replayed.
+
+Automatic VAD, hard shared budgets, token/audio quotas, legacy key concurrency
+caps, guardrails, browser auth and alternative origins remain explicitly denied.
+These require additional qualification or shared accounting controls. In particular,
+HTTP must honor the same reservations before hard budgets can be supported; a
+WebSocket-only hold or periodic spend check is insufficient. Do not remove user
+limits to work around these denials.
+
+Live exact-model compatibility, multiple-replica load, ingress behavior and
+provider usage reconciliation are still deployment release checks. Repository
+wire tests use a local OpenAI-protocol peer; they do not substitute for those checks.
 
 ## Decision and current scope
 
@@ -11,20 +35,17 @@ and ordering. Map public model aliases only in documented control fields. Keep
 supplied-text synthesis on the existing HTTP Speech API; no custom speech
 WebSocket URLs or event envelope are introduced.
 
-This change implements the transport foundation and exact usage interpretation.
-It registers the endpoint, reuses bearer authentication and organization checks,
-adds the OpenAI connector, bounds the relay, and tests it using deterministic
-provider and admission doubles. **Application bootstrap does not install a
-Realtime runtime.** The endpoint returns a 503 denial, or 403 on ASGI servers
-without WebSocket denial-response support. Existing configuration cannot enable
-it. This is deliberate: HTTP budget checks and concurrency leases alone cannot
-authorize repeated billable turns on a socket.
+The endpoint uses existing bearer authentication, model grants, routing generation,
+deployment credentials and tier policy services. It confirms manual upstream
+session controls before accepting the socket. Each turn consumes existing request
+quotas and physical deployment capacity, then records durable dispatch intent.
+The first transcription audio append is the billable boundary because streaming
+transcription can start work before commit. Each receipt freezes exact customer
+and provider charges and enters the existing spend outbox and canonical ledger.
 
-Routing, model grants, distributed admission, durable usage ingestion and
-recovery are the next implementation slice. The `RealtimeAdmission` contract is
-required; there is no permissive production implementation or hidden fallback.
-Tests install a runtime explicitly. They prove wire and lifecycle behavior, not
-production policy correctness or live-provider compatibility.
+Disabled or unhealthy runtimes deny admission. There is no permissive fallback
+for Redis, billing, unsupported policies or missing prices. See the
+[public guide](../guides/realtime.md) for configuration and client flows.
 
 ## Ownership and integration boundary
 
@@ -37,7 +58,10 @@ production policy correctness or live-provider compatibility.
 | `src/realtime/protocol.py` | Native event validation, fixed model aliases, unsupported control rejection, public error mapping |
 | `src/realtime/errors.py` | Shared diagnostic sanitization, bounded safe correlation IDs, gateway error identities |
 | `src/providers/openai_realtime.py` | Server-owned credentials, qualified origin, one connection attempt, bounded upstream buffers |
-| `src/billing/realtime_usage.py` | Stable receipt identities, exclusive text/audio/cache units, exact Decimal prices, explicit unknown usage |
+| `src/realtime/admission.py`, `routing.py`, `capacity.py` | Pinned routes and prices, existing authorization, per-turn dispatch, owned shared leases and revocation |
+| `src/bootstrap/realtime.py` | Composition from existing services, recovery attachment even when new sessions are disabled |
+| `src/billing/realtime_usage.py`, `realtime_pricing.py`, `realtime_charge.py` | Stable receipt identities, exclusive token/duration units, frozen exact prices and attribution |
+| `src/db/realtime_billing.py`, `realtime_recovery.py` | Bounded durable intent/receipt journal and settlement through the existing spend worker |
 
 Lower layers receive typed inputs and socket protocols, never fabricated HTTP
 requests. Shared authentication accepts `HTTPConnection` for headers, app and
@@ -46,10 +70,10 @@ behavior is unchanged. The transport has no global HTTP client and creates no
 fire-and-forget tasks. Its required admission context owns final accounting and
 resource release on normal close, error, cancellation and setup failure.
 
-Production admission must pin the existing routing generation, authorize the
-public model and any independent transcription model, acquire owned distributed
-permits, and freeze attribution and prices **before connecting upstream**. It
-must enforce bounded billable input and output, including automatic VAD turns.
+Production admission pins the existing routing generation, authorizes the
+public model, acquires owned distributed permits, and freezes attribution and
+prices **before connecting upstream**. Independent transcription within a
+conversation and automatic VAD are denied. Input and output are bounded.
 Local per-event checks do no network I/O; periodic checks renew ownership and
 recheck revocation. Terminal usage must be durably accepted before forwarding
 its terminal event. Cancellation while accepting a receipt must be recoverable
@@ -59,15 +83,15 @@ Hard-budget sessions require a proven conservative reservation across applicable
 scopes. Session duration is not a cost bound. Unsupported hard-budget profiles
 must fail closed. Missing usage, abandoned input, provider disconnects and
 process death must retain pending liabilities. No absence of usage implies a
-free session. The current receipt parser marks duration-based or unknown usage
-unqualified, so that such work cannot be accidentally priced as zero.
+free session. The receipt parser accepts qualified token and transcription-duration usage;
+unknown dimensions remain pending rather than being priced as zero.
 
 ## Compatibility boundary
 
 - Only the public OpenAI HTTPS origin is qualified. Connection URLs and headers
   come from the selected deployment, never client query parameters. Redirects
   and implicit system proxies are disabled. Custom origins require explicit
-  egress qualification in the next slice; HTTP compatibility is insufficient.
+  egress qualification before enablement; HTTP compatibility is insufficient.
 - Server-to-server bearer auth only. Browser origins, browser token
   subprotocols and beta protocol headers are rejected. No browser credential
   storage, ticket endpoint, or UI audio stack is added.
@@ -82,8 +106,8 @@ unqualified, so that such work cannot be accidentally priced as zero.
   retains its safe correlation ID on rejection; excessive upstream nesting
   produces a sanitized upstream error.
 - Transcription transport accepts `intent=transcription` without inventing a
-  model query requirement. Its admission owner must resolve an authorized
-  default route and validate effective upstream session configuration before
+  model query requirement. Admission resolves an authorized
+  default route and validates effective upstream session configuration before
   billable input. Nested models map to that bound route. Additional input
   transcription inside a conversational session is blocked until independently
   authorized and priced.
@@ -107,8 +131,9 @@ and [Realtime usage guide](https://developers.openai.com/api/docs/guides/voice-l
 The transcription query is also shown in the older official
 [transcription cookbook](https://developers.openai.com/cookbook/examples/speech_transcription_methods).
 GA `session.update` is used, not the cookbook's beta session-update dialect.
-A pinned official SDK and live-provider test are still required before claiming
-the combined handshake/profile is qualified for release.
+The pinned official OpenAI Python SDK 3.22.1 passes both profiles against the
+bootstrapped gateway and local provider peer. A live-provider test is still
+required to qualify the exact upstream model for release.
 
 ## Capacity and failure behavior
 
@@ -163,18 +188,17 @@ existing HTTP audio or Responses handlers would lose native session semantics.
 The chosen design keeps one small transport and requires the existing policy
 and persistence owners to authorize its use.
 
-There is no schema migration and no configuration switch in this slice. Adding
-an apparently usable switch before its admission owner exists would be
-misleading. The production slice must add `realtime` mode/capability metadata,
-configuration and all applicable environment/Helm/admin surfaces together,
-wire the lifecycle through bootstrap, and validate real Redis/PostgreSQL
-failure and recovery behavior. It must also prove ingress upgrades and drain
-behavior, official SDK compatibility, and bounded dependency-call costs.
+The additive Realtime intent migration and startup-only configuration ship with
+Helm, environment and admin model surfaces. Apply migrations before enabling the
+runtime. Older spend workers can consume the same outbox; upgraded recovery
+recognizes their canonical ledger writes and settles matching journal entries.
+Conflicting ledger facts are quarantined without replacing authoritative usage.
 
-Rollback of this slice removes the new route and modules; HTTP paths and
-existing data are unchanged. Once enabled in a future slice, rollback must
-stop admissions, drain active sessions before shared dependencies, and retain
-pending billing receipts. No compatibility shim or parallel ledger is added.
+Rollback disables new admissions and drains sockets before shared services stop.
+Retain the additive schema and pending facts. Accepted receipts continue recovering
+with Realtime disabled. Unknown usage remains pending and occupies bounded journal
+capacity; it requires authoritative provider reconciliation. Settled journal
+entries expire after 30 days. No media or transcript storage is added.
 
 ## Verification
 
@@ -188,20 +212,27 @@ deep client/provider nesting, cumulative shutdown time, repeated shutdown,
 disconnect during drain, pump-join deadlines, resource-exit timeouts and
 exceptions, cancellation during resource finalization, and retained ownership
 when cleanup outlives its deadline. These tests
-use no paid keys and no external service. Run the full application lane as well
+use no paid keys; real dependency tests run against isolated Redis and PostgreSQL.
+Run the full application lane as well
 as the existing authentication and HTTP audio regressions after changes to the
 shared connection-auth boundary.
 
-Verified after the third review fixes on 2026-10-01:
+Verification in this implementation includes:
 
-- `.venv/bin/pytest tests/realtime --ignore=tests/realtime/test_wire.py -q --tb=short`:
-  176 passed.
-- `.venv/bin/pytest -m app -q --tb=short`:
-  1,585 passed, 4,271 deselected, with local socket permission. This lane also
-  includes the two wire tests. Its 147 warnings are dependency/API deprecations.
+- Hermetic/application regression suite: 5,478 passed.
+- Production bootstrap with real PostgreSQL and Redis and a local WebSocket peer:
+  two conversation turns and two duration-transcription turns reach the canonical
+  ledger and all applicable scope totals exactly once.
+- Real dependency failure checks: durable dispatch failure blocks provider work;
+  lost leases, revoked users, newly imposed budgets, credential changes, routing
+  reconciliation and capacity changes close active sessions.
+- Durable recovery checks: repeated receipts, conflicts, older-worker settlement,
+  process expiry and unresolved capacity retention.
+- Full PostgreSQL/Redis regression lanes: 404 passed; subsequent ownership and
+  per-turn quota checks also pass. Official SDK conversation and transcription
+  tests run in an isolated environment with locked dependencies.
+- UI unit tests: 273 passed; production build; 71 Helm checks; strict public
+  documentation build; fresh and upgrade migration validation.
 
-Ruff lint and format checks passed for all 26 touched Python files, and
-whitespace checks passed. The dependency lock was validated in the initial
-implementation and is unchanged by these fixes. No live OpenAI requests,
-database migrations or production Redis tests were needed for this deliberately
-inactive transport slice.
+No paid OpenAI request or production deployment was performed. Live model
+qualification and the measured capacity envelope remain release gates.

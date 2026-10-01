@@ -235,6 +235,8 @@ export function pricingProfileForModelMode(mode?: string | null): TierPricingPro
       return 'audio_transcription';
     case 'rerank':
       return 'rerank';
+    case 'realtime':
+      return 'custom';
     default:
       return 'token';
   }

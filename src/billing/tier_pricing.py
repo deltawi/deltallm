@@ -31,6 +31,7 @@ _PRICING_KEYS = frozenset(
         "input_cost_per_image",
         "output_cost_per_image",
         "input_cost_per_audio_token",
+        "input_cost_per_audio_token_cache_hit",
         "output_cost_per_audio_token",
         "cost_per_request",
     }

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketState
 
+from src.metrics.realtime import record_session
 from src.middleware.auth import authenticate_request
 from src.models.errors import ProxyError
 from src.models.responses import UserAPIKeyAuth
@@ -92,6 +93,7 @@ async def _run(websocket: WebSocket, runtime: RealtimeRuntime, drain: RealtimeDr
             upstream = await drain.enter_context(
                 stack, runtime.connector.open(admitted.target, runtime.limits)
             )
+            upstream = await admitted.permit.prepare_upstream(upstream)
             await websocket.accept()
         await relay_session(
             _DownstreamSocket(websocket),
@@ -127,6 +129,7 @@ async def _serve_reserved(
     error = None
     status = 503
     close_code = 1000
+    outcome = "closed"
     try:
         await _run(websocket, runtime, drain)
     except HTTPException as exc:
@@ -142,12 +145,18 @@ async def _serve_reserved(
         pass
     except asyncio.CancelledError:
         close_code = 1012
+        outcome = "cancelled"
         raise
     except Exception:
         error = RealtimeError(
             "realtime_unavailable", "Realtime connection could not continue", close_code=1011
         )
     finally:
+        if error is not None:
+            outcome = (
+                "error" if websocket.application_state is WebSocketState.CONNECTED else "denied"
+            )
+        record_session(outcome)
         with suppress(WebSocketDisconnect, RuntimeError, OSError, TimeoutError):
             async with drain.close_socket():
                 if error is not None:
@@ -159,8 +168,7 @@ async def _serve_reserved(
 @router.websocket("/realtime")
 async def realtime(websocket: WebSocket) -> None:
     runtime = getattr(websocket.app.state, "realtime_runtime", None)
-    # No bootstrap owner is installed until durable admission is qualified.
-    # A model declaration or provider credentials cannot enable this route.
+    # Only the startup owner can enable this route after checking dependencies.
     if not isinstance(runtime, RealtimeRuntime):
         async with asyncio.timeout(5):
             await _error(

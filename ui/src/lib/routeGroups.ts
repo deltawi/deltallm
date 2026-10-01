@@ -1,6 +1,6 @@
 import { applyGuidedSelector, readGuidedSelector, selectorDefaults, validateGuidedSelector, type GuidedSelector } from './routeGroupSelector';
 
-export const ROUTE_GROUP_MODE_OPTIONS = ['chat', 'embedding', 'image_generation', 'audio_speech', 'audio_transcription', 'rerank'] as const;
+export const ROUTE_GROUP_MODE_OPTIONS = ['chat', 'embedding', 'image_generation', 'audio_speech', 'audio_transcription', 'realtime', 'rerank'] as const;
 
 export function groupKeySuffixFromName(value: string): string {
   return value
@@ -30,6 +30,7 @@ export const ROUTE_GROUP_MODE_COLORS: Record<string, string> = {
   embedding: 'bg-violet-100 text-violet-700',
   audio_speech: 'bg-orange-100 text-orange-700',
   audio_transcription: 'bg-orange-100 text-orange-700',
+  realtime: 'bg-teal-100 text-teal-700',
   image_generation: 'bg-pink-100 text-pink-700',
   rerank: 'bg-teal-100 text-teal-700',
 };

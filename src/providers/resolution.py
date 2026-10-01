@@ -50,7 +50,14 @@ PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
 
 PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     **{provider: {"chat"} for provider in CHAT_PROVIDER_PROFILES},
-    "openai": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
+    "openai": {
+        "chat",
+        "embedding",
+        "image_generation",
+        "audio_speech",
+        "audio_transcription",
+        "realtime",
+    },
     "anthropic": {"chat"},
     "azure": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
     "azure_openai": {

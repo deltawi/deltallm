@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
-from datetime import timedelta
 import json
-import math
 from decimal import Decimal
 from typing import TYPE_CHECKING, AsyncIterator, Literal
 
@@ -19,6 +16,7 @@ from src.billing.operation_reservation import (
     operation_selector_pricing,
 )
 from src.billing.selector_charge import AcceptedSelectorCharge
+from src.db.billing_transaction import billing_transaction
 from src.db.soft_selector_admission import check_soft_selector_admission
 
 if TYPE_CHECKING:
@@ -43,24 +41,8 @@ class BillingOperationRepository:
 
     @asynccontextmanager
     async def _transaction(self, expires_at: float) -> AsyncIterator[Prisma]:
-        now = asyncio.get_running_loop().time()
-        if not math.isfinite(expires_at) or expires_at <= now:
-            raise BillingOperationUnavailable()
-        remaining = min(expires_at - now, DB_BUDGET_SECONDS)
-        try:
-            async with asyncio.timeout(remaining):
-                async with self.db.tx(
-                    max_wait=timedelta(seconds=remaining), timeout=timedelta(seconds=remaining)
-                ) as tx:
-                    await tx.query_raw(
-                        "SELECT set_config('statement_timeout',$1,true), "
-                        "set_config('lock_timeout',$1,true)",
-                        f"{max(1, int(remaining * 1000))}ms",
-                    )
-                    yield tx
-        except Exception:
-            # Billing errors, including its deadline, must never become selector defaults.
-            raise BillingOperationUnavailable() from None
+        async with billing_transaction(self.db, expires_at) as tx:
+            yield tx
 
     async def reserve(self, operation: BillingOperation, *, expires_at: float) -> ReservedOperation:
         async with self._transaction(expires_at) as tx:

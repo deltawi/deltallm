@@ -31,7 +31,7 @@ def resolve_realtime_target(
 ) -> OpenAIRealtimeTarget:
     """Resolve a pinned server-owned deployment, never client connection parameters.
 
-    Only the public OpenAI origin is qualified in this first transport slice.
+    Only the public OpenAI origin is supported by this runtime.
     Alternate origins need the gateway's egress policy before being enabled.
     HTTP compatibility alone is not proof of Realtime compatibility.
     """

@@ -17,6 +17,7 @@ MODES = (
     "image_generation",
     "audio_speech",
     "audio_transcription",
+    "realtime",
     "rerank",
 )
 MODE_LABELS = {
@@ -25,6 +26,7 @@ MODE_LABELS = {
     "image_generation": "Images",
     "audio_speech": "Speech",
     "audio_transcription": "Transcription",
+    "realtime": "Realtime WebSocket",
     "rerank": "Rerank",
 }
 PROVIDER_LABELS = {

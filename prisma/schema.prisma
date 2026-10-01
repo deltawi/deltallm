@@ -608,6 +608,25 @@ model DeltaLLM_BillingOperation {
   @@map("deltallm_billing_operations")
 }
 
+model DeltaLLM_RealtimeBillingIntent {
+  operation_id String @id
+  session_id String
+  snapshot Json
+  state String @default("dispatched")
+  event_id String? @unique
+  receipt_facts Json?
+  spend_payload Json?
+  pending_reason String?
+  expires_at DateTime @db.Timestamptz
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @default(now()) @db.Timestamptz
+
+  @@index([state, updated_at, operation_id], map: "deltallm_realtime_billing_intents_recovery_idx")
+  @@index([session_id], map: "deltallm_realtime_billing_intents_session_idx")
+  @@index([state, expires_at, operation_id], map: "deltallm_realtime_billing_intents_expiry_idx")
+  @@map("deltallm_realtime_billing_intents")
+}
+
 model DeltaLLM_SpendIngestionOutbox {
   event_id        String    @id
   event_type      String

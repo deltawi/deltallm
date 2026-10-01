@@ -430,6 +430,11 @@ class Router:
             for deployment in deployments
             if tags_allow_deployment(deployment.tags, normalized_tags)
             and self._supports_request_mode(deployment, request_mode)
+            and (
+                request_mode != "realtime"
+                or deployment.model_info.get("realtime_profile", "realtime")
+                == request_context.get("realtime_profile", "realtime")
+            )
         ]
 
     @staticmethod
