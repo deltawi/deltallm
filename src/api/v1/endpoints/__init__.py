@@ -13,6 +13,7 @@ from src.api.v1.endpoints.mcp import router as mcp_router
 from src.api.v1.endpoints.messages import router as messages_router
 from src.api.v1.endpoints.models import router as models_router
 from src.api.v1.endpoints.rerank import router as rerank_router
+from src.api.v1.endpoints.realtime import router as realtime_router
 from src.api.v1.endpoints.responses import router as responses_router
 from src.api.v1.endpoints.spend import global_router, spend_router
 
@@ -34,5 +35,6 @@ __all__ = [
     "models_router",
     "rerank_router",
     "responses_router",
+    "realtime_router",
     "spend_router",
 ]

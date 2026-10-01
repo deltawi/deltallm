@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import Depends, Header, HTTPException, Request, status
+from starlette.requests import HTTPConnection
 
 from src.models.errors import AuthenticationError
 from src.models.responses import UserAPIKeyAuth
@@ -15,7 +16,7 @@ from src.telemetry.event_identity import get_or_create_billing_event_id
 
 
 async def authenticate_request(
-    request: Request,
+    request: HTTPConnection,
     authorization: str | None = None,
 ) -> UserAPIKeyAuth:
     existing = getattr(request.state, "user_api_key", None)
@@ -81,7 +82,7 @@ def auth_dependency() -> Depends:
     return Depends(require_api_key)
 
 
-def _is_master_key(request: Request, token: str) -> bool:
+def _is_master_key(request: HTTPConnection, token: str) -> bool:
     import hmac as _hmac
 
     dcm = getattr(request.app.state, "dynamic_config_manager", None)
@@ -95,7 +96,7 @@ def _is_master_key(request: Request, token: str) -> bool:
     return _hmac.compare_digest(token, configured)
 
 
-async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth | None:
+async def _try_fallback_auth(request: HTTPConnection, raw_token: str) -> UserAPIKeyAuth | None:
     jwt_handler = getattr(request.app.state, "jwt_auth_handler", None)
     if jwt_handler is not None:
         try:
@@ -115,6 +116,11 @@ async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth
 
     custom_auth_manager = getattr(request.app.state, "custom_auth_manager", None)
     if custom_auth_manager is not None:
+        if not isinstance(request, Request):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Custom authentication is not configured for WebSockets",
+            )
         auth = await custom_auth_manager.authenticate(raw_token, request)
         metadata = auth.metadata if isinstance(auth.metadata, dict) else {}
         auth_source = str(metadata.get("auth_source") or "").strip().lower()
@@ -125,14 +131,14 @@ async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth
     return None
 
 
-def _attach_request_auth_context(request: Request, auth: UserAPIKeyAuth) -> None:
+def _attach_request_auth_context(request: HTTPConnection, auth: UserAPIKeyAuth) -> None:
     get_or_create_billing_event_id(request)
     request.state.user_api_key = auth
     request.state.auth_context = auth
     request.state.runtime_scope_context = resolve_runtime_scope_context(auth)
 
 
-async def _require_active_organization(request: Request, auth: UserAPIKeyAuth) -> None:
+async def _require_active_organization(request: HTTPConnection, auth: UserAPIKeyAuth) -> None:
     organization_id = str(auth.organization_id or "").strip()
     team_id = str(auth.team_id or "").strip()
     if not organization_id and not team_id:

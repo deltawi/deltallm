@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import uuid4
 
-from starlette.requests import Request
+from starlette.requests import HTTPConnection
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,7 +11,7 @@ class BillingEventIdentity:
     event_id: str
 
 
-def get_or_create_billing_event_identity(request: Request) -> BillingEventIdentity:
+def get_or_create_billing_event_identity(request: HTTPConnection) -> BillingEventIdentity:
     """Return the server-owned billing identity for one accepted request."""
 
     try:
@@ -24,5 +24,5 @@ def get_or_create_billing_event_identity(request: Request) -> BillingEventIdenti
     return identity
 
 
-def get_or_create_billing_event_id(request: Request) -> str:
+def get_or_create_billing_event_id(request: HTTPConnection) -> str:
     return get_or_create_billing_event_identity(request).event_id
