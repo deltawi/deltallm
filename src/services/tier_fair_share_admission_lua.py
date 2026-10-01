@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from src.services.redis_lua import RedisLuaScript
+from src.services.parallel_lease_lua import PARALLEL_LEASE_LUA
 
-RATE_AND_FAIR_SHARE_SCRIPT = """
+RATE_AND_FAIR_SHARE_SCRIPT = (
+    PARALLEL_LEASE_LUA
+    + """
 -- tier_admission_v2
 local rate_n = tonumber(ARGV[1]) or 0
 local fair_n = tonumber(ARGV[2]) or 0
 local legacy_parallel_n = tonumber(ARGV[3]) or 0
 local parallel_n = tonumber(ARGV[4]) or 0
-local now_ms = tonumber(ARGV[5]) or 0
-local parallel_expires_at_ms = tonumber(ARGV[6]) or 0
+local now_ms = parallel_now_ms()
 local parallel_ttl_seconds = tonumber(ARGV[7]) or 300
+local parallel_expires_at_ms = now_ms + parallel_ttl_seconds * 1000
 local cursor = 7
 
 local rate_amounts = {}
@@ -477,7 +480,7 @@ for i = 1, parallel_n do
     token_index = token_index + 1
     redis.call('ZADD', key, parallel_expires_at_ms, parallel_tokens[token_index])
   end
-  redis.call('EXPIRE', key, math.ceil((parallel_expires_at_ms - now_ms) / 1000))
+  expire_parallel_owners(key)
 end
 
 commit_active_states()
@@ -512,5 +515,6 @@ for fair_index = 1, fair_n do
 end
 return results
 """
+)
 
 RATE_AND_FAIR_SHARE_LUA = RedisLuaScript(RATE_AND_FAIR_SHARE_SCRIPT)

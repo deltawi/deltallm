@@ -8,6 +8,7 @@ import time
 from typing import Any, Literal
 
 from src.models.errors import RateLimitError, ServiceUnavailableError
+from src.services.parallel_lease_lua import PARALLEL_LEASE_LUA
 from src.services.tier_capacity_fair_share import (
     DEFAULT_ACTIVE_TTL_SECONDS,
     FAIR_SHARE_WINDOW_SECONDS,
@@ -677,13 +678,14 @@ return {1, current}
         requested_counts = [str(int(group.requested_count)) for group in groups]
         tokens = [lease.token for lease in leases]
 
-        script = """
+        script = (
+            PARALLEL_LEASE_LUA
+            + """
 local n = #KEYS
 local now_ms = tonumber(ARGV[1]) or 0
 local expires_at_ms = tonumber(ARGV[2]) or 0
 local ttl_ms = expires_at_ms - now_ms
-local server_time = redis.call('TIME')
-now_ms = tonumber(server_time[1]) * 1000 + math.floor(tonumber(server_time[2]) / 1000)
+now_ms = parallel_now_ms()
 expires_at_ms = now_ms + ttl_ms
 for i = 1, n do
   redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', now_ms)
@@ -702,10 +704,11 @@ for i = 1, n do
     local token = ARGV[token_index]
     redis.call('ZADD', KEYS[i], expires_at_ms, token)
   end
-  redis.call('EXPIRE', KEYS[i], math.ceil((expires_at_ms - now_ms) / 1000))
+  expire_parallel_owners(KEYS[i])
 end
 return {1, 0}
 """
+        )
         try:
             raw = await self.redis.eval(
                 script,
@@ -794,15 +797,15 @@ return {1, 0}
             )
             for lease in redis_leases
         ]
-        script = """
+        script = (
+            PARALLEL_LEASE_LUA
+            + """
 local n = #KEYS
 local client_now_ms = tonumber(ARGV[(2 * n) + 1]) or 0
-local now_ms = client_now_ms
+local now_ms = parallel_now_ms()
 if ARGV[(2 * n) + 2] == '1' then
   -- Check the entire group before renewing any member. Expired tokens must
   -- never be resurrected, even if no new acquisition has swept them yet.
-  local server_time = redis.call('TIME')
-  now_ms = tonumber(server_time[1]) * 1000 + math.floor(tonumber(server_time[2]) / 1000)
   for i = 1, n do
     local expires = tonumber(redis.call('ZSCORE', KEYS[i], ARGV[i]))
     if not expires or expires <= now_ms then
@@ -813,16 +816,15 @@ end
 for i = 1, n do
   local token = ARGV[i]
   local expires_at_ms = tonumber(ARGV[n + i]) or 0
-  if ARGV[(2 * n) + 2] == '1' then
-    expires_at_ms = now_ms + expires_at_ms - client_now_ms
-  end
+  expires_at_ms = now_ms + expires_at_ms - client_now_ms
   if redis.call('ZSCORE', KEYS[i], token) then
     redis.call('ZADD', KEYS[i], expires_at_ms, token)
-    redis.call('EXPIRE', KEYS[i], math.ceil((expires_at_ms - now_ms) / 1000))
+    expire_parallel_owners(KEYS[i])
   end
 end
 return {1, 0}
 """
+        )
         try:
             result = await self.redis.eval(
                 script,
