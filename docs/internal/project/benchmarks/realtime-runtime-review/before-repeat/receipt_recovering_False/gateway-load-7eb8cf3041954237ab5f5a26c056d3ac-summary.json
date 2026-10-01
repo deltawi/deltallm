@@ -1,0 +1,69 @@
+{
+  "arrival_window_completion_rps": 20.0,
+  "arrival_window_seconds": 5,
+  "calls": {
+    "redis": 100,
+    "sql_execute": 100,
+    "sql_query": 200,
+    "sql_transactions": 100
+  },
+  "case": "receipt_recovering_False",
+  "client_started_count": 100,
+  "client_started_rps": 20.0,
+  "completion_count": 100,
+  "drain_window_seconds": 8.774999878369272e-05,
+  "environment": "local Redis/PostgreSQL; owner operations; fixed 1 ms receipt delay",
+  "fixed_provider_delay_seconds": 0.001,
+  "generator_dropped_count": 0,
+  "in_flight_samples": [
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ]
+  ],
+  "in_flight_slope_per_second": 0.0,
+  "label": "before-repeat",
+  "latency_seconds": {
+    "max": 0.012086583999916911,
+    "mean": 0.008533224209095351,
+    "p50": 0.008514082990586758,
+    "p95": 0.00936112500494346,
+    "p99": 0.009803332999581471
+  },
+  "max_in_flight_observed": 1,
+  "measured_provider_seconds": 0.12702058284776285,
+  "run_id": "7eb8cf3041954237ab5f5a26c056d3ac",
+  "scheduling_lag_seconds": {
+    "max": 0.002211582992458716,
+    "mean": 0.0014237674901960418,
+    "p50": 0.0016022079798858613,
+    "p95": 0.0021358329977374524,
+    "p99": 0.0021486670011654496
+  },
+  "started_at": "2026-10-01T20:16:01.226664+00:00",
+  "status_counts": {
+    "200": 100
+  },
+  "success_count": 100,
+  "target_count": 100,
+  "target_rate_rps": 20,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  }
+}
