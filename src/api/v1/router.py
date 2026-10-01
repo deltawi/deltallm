@@ -18,6 +18,7 @@ from src.api.v1.endpoints import (
     models_router,
     rerank_router,
     responses_router,
+    realtime_router,
     spend_router,
 )
 
@@ -31,6 +32,7 @@ v1_router.include_router(batches_router)
 v1_router.include_router(chat_router)
 v1_router.include_router(completions_router)
 v1_router.include_router(responses_router)
+v1_router.include_router(realtime_router)
 v1_router.include_router(messages_router)
 v1_router.include_router(embeddings_router)
 v1_router.include_router(images_router)
