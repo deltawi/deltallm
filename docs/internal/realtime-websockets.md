@@ -91,6 +91,14 @@ token. Stale owners cannot clear a newer manual cooldown. Durable billing
 acceptance precedes this transition; Redis failure or cancellation preserves the
 permit for idempotent cleanup and never replays provider work.
 
+Ordinary completion, unsuccessful recovery and failed durable dispatch use the
+same confirmed-release path. A missing Redis acknowledgment raises an unavailable
+error even when the general router policy is `fail_open`; the permit stays owned
+until a confirmed release, including a zero count. Session finalization can retry
+under its existing cleanup deadline. A lost reply cannot release a newer owner,
+and an unresolved finalization failure reaches the existing readiness signal.
+There is no additional successful-path Redis call or independent retry loop.
+
 Reporting starts at the per-operation journal `created_at`, read with the database
 acceptance timestamp in the existing locked receipt query. Both are frozen in the
 first accepted spend payload. Duplicate delivery and worker recovery preserve that
@@ -323,3 +331,38 @@ To reproduce the owner comparison, set `DATABASE_URL` and
 file with `PYTHONPATH` pointing at each checkout and its locked Python executable:
 `python tests/performance/realtime_review_profile.py --label after --output-dir /tmp/realtime-profile`.
 Use the absolute harness path and `--label before` when importing the baseline.
+
+### Release acknowledgment follow-up (2026-10-02)
+
+Regression coverage now exercises the production-default `fail_open` router as
+well as `fail_closed`: ordinary completion, cancelled/failed recovery, lost
+release replies, cancellation, failed dispatch, confirmed zero and a newer owner.
+Two real WebSocket/PostgreSQL cases verify that transient release failure closes
+the socket, keeps the durable receipt and frees shared capacity during cleanup.
+The new Redis regressions reproduced seven failures before the fix.
+
+Verification with isolated services and the configured SDK executable:
+`pytest -q tests/realtime tests/router/selection/test_realtime*.py tests/test_realtime*.py`
+passed **383** tests. The documentation workflow passed all reference and health
+checks, **9** documentation tests, strict MkDocs build and public containment.
+Repository-wide Ruff, touched-file formatting and `git diff --check` passed.
+
+The same constant-arrival harness above compared baseline `eec4cda6` with this
+release acknowledgment fix. All **800/800** operations completed, with no dropped
+arrivals, 20 completions/second in every case and zero sampled in-flight slope.
+Successful-path dependency counts stayed at one Redis call per renewal or receipt,
+and two SQL reads plus one write in one transaction per receipt. SQL and deadlines
+are unchanged. Raw records include scheduling lag, fixed-provider time and load
+samples in [the release comparison](project/benchmarks/realtime-runtime-review/release-ack/).
+
+| Operation | Before p50 / p95 / p99 (ms) | After p50 / p95 / p99 (ms) |
+| --- | --- | --- |
+| Non-strict lease renewal | 0.540 / 0.714 / 1.887 | 0.909 / 1.348 / 1.639 |
+| Strict lease renewal | 0.886 / 1.938 / 2.874 | 0.821 / 1.374 / 1.630 |
+| Healthy turn receipt | 8.359 / 9.710 / 23.285 | 9.905 / 12.659 / 14.622 |
+| Recovering turn receipt | 9.831 / 12.706 / 21.844 | 9.797 / 17.017 / 65.813 |
+
+Maximum observed in-flight work was one except for five during the after-run's
+recovering receipt case. This successful-recovery code path is unchanged by the
+follow-up, but these samples cannot establish the cause of the latency variation
+or a production latency guarantee. No measurement was discarded or deadline relaxed.

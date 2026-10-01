@@ -12,6 +12,7 @@ from websockets.asyncio.server import serve
 
 from src.billing.operation_reservation import BillingOperationUnavailable
 from src.realtime.routing import resolve_realtime_target
+from src.router.candidates import AttemptCapacity
 from src.services.limit_counter import _parallel_lease_key
 from tests import test_realtime_runtime_postgres as fixtures
 from tests.test_stream_accounting_commit import loopback_gateway
@@ -134,6 +135,61 @@ async def test_failed_durable_dispatch_never_reaches_provider(
         )
         == []
     )
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+async def test_transient_release_failure_closes_socket_and_retries_cleanup(
+    test_app, realtime_dependencies, monkeypatch, recovering
+):
+    db, redis, identity, token, _ = realtime_dependencies
+    async with connected(test_app, realtime_dependencies, monkeypatch) as (
+        client,
+        runtime,
+        observed,
+    ):
+        generation = test_app.state.routing_runtime_generation_store.require_snapshot()
+        backend = generation.router.state
+        assert backend.degraded_mode == "fail_open"
+        ref = generation.deployment_registry.physical_deployments[identity].health_ref
+        if recovering:
+            await generation.cooldown_manager.manual_cooldown(ref, 60)
+            await redis.delete(backend.keyspace.cooldown(identity, ref.generation))
+        original = backend._redis_call
+        releases = 0
+
+        async def transient_failure(method, *args, **kwargs):
+            nonlocal releases
+            if method == "eval" and "router_attempt_release_v2" in args[0]:
+                releases += 1
+                if releases == 1:
+                    raise ConnectionError("one transient release outage")
+            return await original(method, *args, **kwargs)
+
+        monkeypatch.setattr(backend, "_redis_call", transient_failure)
+        owners = tuple(runtime._sessions)
+        await client.send('{"type":"response.create"}')
+        await asyncio.wait_for(observed.received.wait(), 5)
+        event = fixtures.response_event(1)
+        if recovering:
+            event["response"]["status"] = "cancelled"
+        await observed.socket.send(json.dumps(event))
+        error = json.loads(await asyncio.wait_for(client.recv(), 5))
+        assert error["type"] == "error"
+        assert "transient release outage" not in json.dumps(error)
+        await asyncio.wait_for(client.wait_closed(), 5)
+        await asyncio.wait_for(asyncio.gather(*owners), 5)
+        assert releases == 2
+        assert runtime.active_sessions == 0 and runtime.ready
+        assert await backend.get_active_requests(identity) == 0
+        next_attempt = await backend.acquire_attempt(ref, AttemptCapacity(require_shared=True))
+        assert next_attempt.acquired and next_attempt.recovery == recovering
+        await backend.release_attempt(next_attempt)
+    rows = await db.query_raw(
+        "SELECT state FROM deltallm_realtime_billing_intents "
+        "WHERE snapshot->'attribution'->>'api_key'=$1",
+        token,
+    )
+    assert len(rows) == 1 and rows[0]["state"] in {"accepted", "settled"}
 
 
 async def test_request_quota_applies_to_each_turn_before_upstream_dispatch(

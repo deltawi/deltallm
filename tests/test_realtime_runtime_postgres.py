@@ -141,7 +141,7 @@ async def bootstrap(app, dependencies, profile):
             }
         ]
     }
-    backend = RedisStateBackend(redis, degraded_mode="fail_closed")
+    backend = RedisStateBackend(redis)
     registry = build_deployment_registry(models)
     router = Router(
         strategy=RoutingStrategy.SIMPLE_SHUFFLE,

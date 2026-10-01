@@ -177,6 +177,9 @@ input time, rather than time to the first audio chunk.
 A successfully completed turn can restore a deployment recovering from cooldown.
 Cancelled, failed and incomplete responses release their capacity without marking
 the deployment healthy. A newer manual cooldown remains authoritative.
+If Redis cannot confirm the release, the session closes and finalization retries
+within the existing cleanup deadline. Durable usage is retained. If cleanup also
+fails, Realtime readiness fails and the shared permit expires by its lease deadline.
 
 The journal retains frozen attribution, rate cards, normalized usage and state;
 it does not retain audio, transcripts, instructions, or provider credentials.

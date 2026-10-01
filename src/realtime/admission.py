@@ -11,6 +11,7 @@ from src.billing.realtime_charge import RealtimeAttribution, RealtimeChargeConte
 from src.billing.realtime_usage import RealtimeDurationUsage, realtime_usage_receipt
 from src.metrics.realtime import record_receipt
 from src.metrics import increment_router_health_update_failure
+from src.models.errors import ServiceUnavailableError
 from src.providers.openai_realtime import successful_realtime_terminal
 from src.router.candidates import AttemptPermit
 from src.db.realtime_billing import RealtimeBillingRepository
@@ -158,7 +159,7 @@ class RealtimeSessionPermit:
             if self.current is not None or self.turns >= self.owner.settings.max_turns:
                 raise RealtimeError("turn_limit_exceeded", "Realtime turn limit reached")
             await self.check_health()
-            provider = await self.leases.turn(self.request.auth)
+            self.provider_permit = await self.leases.turn(self.request.auth)
             try:
                 operation_id = str(uuid4())
                 await self.owner.billing.dispatch(
@@ -166,9 +167,8 @@ class RealtimeSessionPermit:
                 )
                 self.current = operation_id
                 self.turns += 1
-                self.provider_permit = provider
             except BaseException:
-                await self.route.generation.router.state.release_attempt(provider)
+                await self.close()
                 raise
         if transcription and kind == "input_audio_buffer.commit":
             if self.current is None:
@@ -267,5 +267,11 @@ class RealtimeSessionPermit:
 
     async def close(self) -> None:
         if self.provider_permit is not None:
-            await self.route.generation.router.state.release_attempt(self.provider_permit)
+            released = await self.route.generation.router.state.release_attempt(
+                self.provider_permit
+            )
+            # Fail-open router policy can return no acknowledgment. Retain the
+            # owner for fenced cleanup; a confirmed zero is a successful release.
+            if released is None:
+                raise ServiceUnavailableError(message="Realtime capacity release unavailable")
             self.provider_permit = None

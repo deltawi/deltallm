@@ -23,7 +23,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.redis]
 
 async def recovery_session(dependencies, profile="realtime"):
     first, _, identity = dependencies
-    state = RedisStateBackend(first, degraded_mode="fail_closed")
+    state = RedisStateBackend(first)
     ref = DeploymentHealthRef(identity)
     cooldown = CooldownManager(state)
     await cooldown.manual_cooldown(ref, 60)
