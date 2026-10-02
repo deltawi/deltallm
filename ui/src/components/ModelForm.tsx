@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react';
+import RealtimeModelFields from './models/RealtimeModelFields';
 import Card from './Card';
 import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
 import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
@@ -81,6 +82,7 @@ function upstreamModelPlaceholder(mode: ModelMode, provider?: string): string {
   if (providerPlaceholder) return providerPlaceholder;
   if (mode === 'image_generation') return 'gpt-image-1.5';
   if (mode === 'audio_speech') return 'gpt-4o-mini-tts';
+  if (mode === 'realtime') return 'gpt-realtime';
   if (mode === 'audio_transcription') return 'gpt-4o-transcribe';
   if (mode === 'embedding') return 'text-embedding-3-large';
   if (mode === 'rerank') return 'rerank-english-v3.0';
@@ -1356,7 +1358,9 @@ export default function ModelForm({
         </CollapsibleCard>
       )}
 
-      <CollapsibleCard title="Cost Tracking">
+      {mode === 'realtime' && <RealtimeModelFields form={form} onChange={setForm} />}
+
+      {mode !== 'realtime' && <CollapsibleCard title="Cost Tracking">
         <div className="space-y-4">
           {mode === 'chat' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1475,7 +1479,7 @@ export default function ModelForm({
             </>
           )}
         </div>
-      </CollapsibleCard>
+      </CollapsibleCard>}
 
       <CollapsibleCard title="Default Parameters">
         <div className="space-y-3">

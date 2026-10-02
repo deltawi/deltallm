@@ -68,6 +68,10 @@ def detect_external_dependency(*, path: Path, source: str) -> str | None:
         if any(pattern.search(source) for pattern in patterns)
     )
 
+    # The PostgreSQL lane provisions Redis for cross-owner runtime integration.
+    # A test still has one primary lane; the Redis-only lane stays independent.
+    if detected == {"postgres", "redis"}:
+        return "postgres"
     if len(detected) > 1:
         rendered = ", ".join(sorted(detected))
         raise DependencyLaneError(

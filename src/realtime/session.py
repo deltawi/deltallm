@@ -72,6 +72,7 @@ class _Relay:
                 except ProxyError as exc:
                     raise RealtimeError.admission_denied() from exc
                 async with asyncio.timeout(self.limits.write_seconds):
+                    await self.permit.before_client_event(event)
                     await self.upstream.send_text(encode_event(mapped))
             except RealtimeError as exc:
                 exc.client_event_id = safe_identifier(event.get("event_id"), self.target.headers)

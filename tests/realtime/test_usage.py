@@ -105,14 +105,32 @@ def test_transcription_is_a_separate_operation_with_text_output():
     assert realtime_usage_receipt(session, other).receipt_id != receipt.receipt_id
 
 
-def test_duration_pricing_is_not_guessed_from_missing_tokens():
+def test_reported_duration_is_priced_exactly_without_guessing_tokens():
     event = {
         "type": "conversation.item.input_audio_transcription.completed",
         "item_id": "i",
         "content_index": 0,
         "usage": {"type": "duration", "seconds": 2.4},
     }
-    assert realtime_usage_receipt(str(uuid4()), event).pending_reason == "usage_unqualified"
+    receipt = realtime_usage_receipt(str(uuid4()), event)
+    assert receipt.pending_reason is None
+    assert receipt.usage.seconds == Decimal("2.4")
+    assert price_realtime_usage(receipt.usage, prices={"seconds": Decimal("0.0001")}) == Decimal(
+        "0.00024"
+    )
+
+
+@pytest.mark.parametrize("seconds", [True, -1, float("nan"), float("inf"), "2.4", None, 86401])
+def test_invalid_duration_remains_pending(seconds):
+    event = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "item_id": "i",
+        "content_index": 0,
+        "usage": {"type": "duration", "seconds": seconds},
+    }
+    receipt = realtime_usage_receipt(str(uuid4()), event)
+    assert receipt.usage is None
+    assert receipt.pending_reason == "usage_unqualified"
 
 
 def test_unknown_top_level_charge_dimension_is_not_ignored():

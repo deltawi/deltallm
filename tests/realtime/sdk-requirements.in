@@ -1,0 +1,2 @@
+# Isolated because the official client currently requires websockets<16.
+openai[realtime]==3.22.1

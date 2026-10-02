@@ -260,6 +260,119 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
+            "realtime": {
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "default_transcription_model": {
+                  "anyOf": [
+                    {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "max_turns": {
+                  "default": 100,
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_output_tokens": {
+                  "default": 4096,
+                  "maximum": 4096,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "global_max_connections": {
+                  "default": 256,
+                  "maximum": 100000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "organization_max_connections": {
+                  "default": 64,
+                  "maximum": 10000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_connections": {
+                  "default": 64,
+                  "maximum": 4096,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_message_bytes": {
+                  "default": 1048576,
+                  "maximum": 16777216,
+                  "minimum": 1024,
+                  "type": "integer"
+                },
+                "max_input_bytes": {
+                  "default": 67108864,
+                  "maximum": 1073741824,
+                  "minimum": 1024,
+                  "type": "integer"
+                },
+                "max_client_events": {
+                  "default": 10000,
+                  "maximum": 100000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_server_events": {
+                  "default": 100000,
+                  "maximum": 1000000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "handshake_seconds": {
+                  "default": 10,
+                  "exclusiveMinimum": 0,
+                  "maximum": 30,
+                  "type": "number"
+                },
+                "session_seconds": {
+                  "default": 300,
+                  "exclusiveMinimum": 0,
+                  "maximum": 3600,
+                  "type": "number"
+                },
+                "idle_seconds": {
+                  "default": 60,
+                  "exclusiveMinimum": 0,
+                  "maximum": 300,
+                  "type": "number"
+                },
+                "write_seconds": {
+                  "default": 10,
+                  "exclusiveMinimum": 0,
+                  "maximum": 30,
+                  "type": "number"
+                },
+                "health_seconds": {
+                  "default": 5,
+                  "maximum": 30,
+                  "minimum": 1,
+                  "type": "number"
+                },
+                "cleanup_seconds": {
+                  "default": 5,
+                  "exclusiveMinimum": 0,
+                  "maximum": 30,
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            },
             "provider_discovery_allow_http": { "type": "boolean" },
             "provider_discovery_allowed_ports": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
             "provider_discovery_allowed_private_cidrs": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 3 } },

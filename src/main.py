@@ -26,6 +26,7 @@ from src.bootstrap import (
     shutdown_runtime_services,
     shutdown_routing_runtime,
 )
+from src.bootstrap.realtime import init_realtime_runtime
 from src.cache import (
     CacheMiddleware,
 )
@@ -76,6 +77,10 @@ async def lifespan(app: FastAPI):
 
         runtime_services = await init_runtime_services(app, cfg)
         exit_stack.push_async_callback(shutdown_runtime_services, runtime_services)
+
+        realtime_runtime = await init_realtime_runtime(app.state, cfg)
+        if realtime_runtime is not None:
+            exit_stack.push_async_callback(realtime_runtime.close)
 
         batch_runtime = await init_batch_runtime(app, cfg, app.state.batch_repository)
         exit_stack.push_async_callback(shutdown_batch_runtime, batch_runtime)

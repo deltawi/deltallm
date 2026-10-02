@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from src.metrics.realtime import active_sessions
 from src.providers.openai_realtime import OpenAIRealtimeConnector
 from src.realtime.contracts import RealtimeAdmission, RealtimeError, RealtimeLimits
 from src.realtime.lifecycle import RealtimeDrain
@@ -34,6 +35,10 @@ class RealtimeRuntime:
         self._cleanup_failed = False
 
     @property
+    def ready(self) -> bool:
+        return not self._closing and not self._cleanup_failed and self.admission.ready
+
+    @property
     def active_sessions(self) -> int:
         return len(self._sessions)
 
@@ -50,11 +55,13 @@ class RealtimeRuntime:
             raise RuntimeError("Realtime sessions need a unique owner task")
         drain = RealtimeDrain(self.limits)
         self._sessions[task] = drain
+        active_sessions.inc()
         try:
             yield drain
         finally:
             self._cleanup_failed |= drain.failed
             del self._sessions[task]
+            active_sessions.dec()
 
     async def close(self) -> None:
         self._closing = True

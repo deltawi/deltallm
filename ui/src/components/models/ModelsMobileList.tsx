@@ -48,7 +48,7 @@ type ModelRow = {
   } | null;
 };
 
-export type ModelFilterValue = 'all' | 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
+export type ModelFilterValue = 'all' | 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'realtime' | 'rerank';
 
 type Props = {
   items: ModelRow[];
@@ -75,6 +75,7 @@ const FILTERS: { value: ModelFilterValue; label: string }[] = [
   { value: 'rerank', label: 'Rerank' },
   { value: 'audio_speech', label: 'TTS' },
   { value: 'audio_transcription', label: 'STT' },
+  { value: 'realtime', label: 'Realtime' },
   { value: 'image_generation', label: 'Image' },
 ];
 
@@ -111,6 +112,7 @@ function getTypeConfig(mode: string | undefined): TypeStyle {
       return { icon: ImageIcon, color: 'text-pink-700 bg-pink-100', label: 'Image' };
     case 'audio_speech':
       return { icon: Volume2, color: 'text-green-700 bg-green-100', label: 'TTS' };
+    case 'realtime':
     case 'audio_transcription':
       return { icon: Mic, color: 'text-yellow-700 bg-yellow-100', label: 'STT' };
     default:

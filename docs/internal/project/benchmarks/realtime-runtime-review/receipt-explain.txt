@@ -1,0 +1,33 @@
+BEGIN
+CREATE TABLE
+INSERT 0 10000
+ANALYZE
+                                                                                   QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ LockRows  (cost=0.29..8.31 rows=1 width=49) (actual time=0.007..0.007 rows=1 loops=1)
+   Buffers: local hit=4
+   ->  Index Scan using deltallm_realtime_billing_intents_pkey on deltallm_realtime_billing_intents  (cost=0.29..8.30 rows=1 width=49) (actual time=0.005..0.006 rows=1 loops=1)
+         Index Cond: (operation_id = 'profile-5000'::text)
+         Filter: (snapshot = '{"benchmark": true}'::jsonb)
+         Buffers: local hit=3
+ Planning:
+   Buffers: shared hit=36, local hit=5
+ Planning Time: 22.723 ms
+ Execution Time: 0.018 ms
+(10 rows)
+
+                                                                                    QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ LockRows  (cost=0.29..8.33 rows=1 width=113) (actual time=0.014..0.014 rows=1 loops=1)
+   Buffers: local hit=4
+   ->  Index Scan using deltallm_realtime_billing_intents_pkey on deltallm_realtime_billing_intents  (cost=0.29..8.32 rows=1 width=113) (actual time=0.014..0.014 rows=1 loops=1)
+         Index Cond: (operation_id = 'profile-5000'::text)
+         Filter: (snapshot = '{"benchmark": true}'::jsonb)
+         Buffers: local hit=3
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.034 ms
+ Execution Time: 0.020 ms
+(10 rows)
+
+ROLLBACK

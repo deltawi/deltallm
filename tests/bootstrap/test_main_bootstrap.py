@@ -81,6 +81,16 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     async def _shutdown_runtime_services(runtime):  # noqa: ANN001, ANN202
         calls.append(f"shutdown_runtime_services:{runtime.marker}")
 
+    async def _init_realtime(state, cfg):
+        calls.append(f"init_realtime:{cfg}")
+
+        async def close():
+            calls.append("shutdown_realtime")
+
+        return SimpleNamespace(close=close)
+
+    monkeypatch.setattr("src.main.init_realtime_runtime", _init_realtime)
+
     async def _init_batch(app, cfg, repository):  # noqa: ANN001, ANN202
         calls.append(f"init_batch:{repository}")
         return SimpleNamespace(
@@ -122,9 +132,11 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
         "init_auth:cfg",
         "init_routing:cfg",
         "init_runtime_services:cfg",
+        "init_realtime:cfg",
         "init_batch:batch-repo",
         "yield",
         "shutdown_batch:batch-runtime",
+        "shutdown_realtime",
         "shutdown_runtime_services:runtime-services",
         "shutdown_routing:routing-runtime",
         "shutdown_auth:auth-runtime",

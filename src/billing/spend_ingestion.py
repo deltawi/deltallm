@@ -47,6 +47,7 @@ from src.telemetry.lifecycle import (
 
 if TYPE_CHECKING:
     from src.db.billing_operation_recovery import BillingOperationRecovery
+    from src.db.realtime_recovery import RealtimeBillingRecovery
 
 logger = logging.getLogger(__name__)
 _SELECTOR_RECEIPT_ACCEPT_TIMEOUT_SECONDS = 2.0
@@ -111,6 +112,7 @@ class SpendIngestionService:
         self.writer = writer
         self.config = config
         self.operation_recovery = operation_recovery
+        self.realtime_recovery: RealtimeBillingRecovery | None = None
         self.repository = SpendIngestionRepository(db_client)
         self._running = False
         self._wake = asyncio.Event()
@@ -502,6 +504,12 @@ class SpendIngestionService:
                 # must not starve the canonical outbox that can settle those holds.
                 increment_spend_ingestion_failure("operation_recovery")
                 logger.warning("billing_operation_recovery_unavailable")
+        if self.realtime_recovery is not None:
+            try:
+                await self.realtime_recovery.recover()
+            except BillingOperationUnavailable:
+                increment_spend_ingestion_failure("realtime_recovery")
+                logger.warning("realtime_billing_recovery_unavailable")
         return await self.repository.claim_batch(
             limit=self.config.batch_size,
             worker_id=self.config.worker_id,
@@ -564,6 +572,11 @@ class SpendIngestionService:
                 or prepared.row.get("call_type") == "model_router_selector"
             )
         ]
+        realtime_events = [
+            record.event_id
+            for record, prepared in records
+            if str(prepared.row.get("call_type", "")).startswith("realtime_")
+        ]
         heartbeat = asyncio.create_task(
             self._lease_heartbeat(
                 event_ids=[record.event_id for record, _ in records],
@@ -574,12 +587,16 @@ class SpendIngestionService:
             async with self._transaction() as tx:
                 if self.operation_recovery is not None and operation_events:
                     await self.operation_recovery.lock_for_events(tx, operation_events)
+                if self.realtime_recovery is not None and realtime_events:
+                    await self.realtime_recovery.lock_for_events(tx, realtime_events)
                 batch_writer = self.writer.with_db(tx)
                 _, ledger_counts = await batch_writer.log_prepared_batch_once(
                     [prepared for _, prepared in records]
                 )
                 if self.operation_recovery is not None and operation_events:
                     await self.operation_recovery.settle_events(tx, operation_events)
+                if self.realtime_recovery is not None and realtime_events:
+                    await self.realtime_recovery.settle_events(tx, realtime_events)
                 completed = await self.repository.with_db(tx).mark_completed(
                     event_ids=[record.event_id for record, _ in records],
                     worker_id=self.config.worker_id,

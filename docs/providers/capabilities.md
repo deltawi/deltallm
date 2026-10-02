@@ -7,28 +7,28 @@ A capability means DeltaLLM has an implementation path for that configured model
 
 ## Capability matrix
 
-| Provider | Protocol | Chat/text | Embeddings | Images | Speech | Transcription | Rerank | Curated models | Last verified |
-| --- | --- | --- | --- | --- | --- | --- | --- | ---: | --- |
-| DeepSeek | OpenAI-compatible | Yes | — | — | — | — | — | 2 | 2026-09-09 |
-| Z.ai | OpenAI-compatible | Yes | — | — | — | — | — | 3 | 2026-09-09 |
-| Qwen (Alibaba Model Studio) | OpenAI-compatible | Yes | — | — | — | — | — | 2 | 2026-09-09 |
-| Tencent TokenHub | OpenAI-compatible | Yes | — | — | — | — | — | 2 | 2026-09-09 |
-| MiniMax | OpenAI-compatible | Yes | — | — | — | — | — | 2 | 2026-09-09 |
-| OpenAI | OpenAI-compatible | Yes | Yes | Yes | Yes | Yes | — | 22 | 2026-04-01 |
-| Anthropic | Anthropic-native | Yes | — | — | — | — | — | 3 | 2026-04-01 |
-| Azure OpenAI | OpenAI-compatible | Yes | Yes | Yes | Yes | Yes | — | — | — |
-| OpenRouter | OpenAI-compatible | Yes | Yes | Yes | — | — | — | — | — |
-| Groq | OpenAI-compatible | Yes | Yes | — | Yes | Yes | — | 16 | 2026-04-01 |
-| Together AI | OpenAI-compatible | Yes | Yes | Yes | — | — | — | — | — |
-| Fireworks AI | OpenAI-compatible | Yes | Yes | Yes | — | — | — | 1 | 2026-04-01 |
-| DeepInfra | OpenAI-compatible | Yes | Yes | Yes | — | — | — | — | — |
-| Perplexity | OpenAI-compatible | Yes | — | — | — | — | — | — | — |
-| Google Gemini | Native adapter | Yes | — | — | Yes | — | — | 20 | 2026-04-01 |
-| Amazon Bedrock | Native adapter | Yes | — | — | — | — | — | 1 | 2026-04-01 |
-| ElevenLabs | Native adapter | — | — | — | Yes | Yes | — | 5 | 2026-06-13 |
-| vLLM | OpenAI-compatible | Yes | Yes | Yes | Yes | Yes | Yes | — | — |
-| LM Studio | OpenAI-compatible | Yes | Yes | — | — | — | — | — | — |
-| Ollama | OpenAI-compatible | Yes | Yes | — | — | — | — | — | — |
+| Provider | Protocol | Chat/text | Embeddings | Images | Speech | Transcription | Realtime WebSocket | Rerank | Curated models | Last verified |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | --- |
+| DeepSeek | OpenAI-compatible | Yes | — | — | — | — | — | — | 2 | 2026-09-09 |
+| Z.ai | OpenAI-compatible | Yes | — | — | — | — | — | — | 3 | 2026-09-09 |
+| Qwen (Alibaba Model Studio) | OpenAI-compatible | Yes | — | — | — | — | — | — | 2 | 2026-09-09 |
+| Tencent TokenHub | OpenAI-compatible | Yes | — | — | — | — | — | — | 2 | 2026-09-09 |
+| MiniMax | OpenAI-compatible | Yes | — | — | — | — | — | — | 2 | 2026-09-09 |
+| OpenAI | OpenAI-compatible | Yes | Yes | Yes | Yes | Yes | Yes | — | 22 | 2026-04-01 |
+| Anthropic | Anthropic-native | Yes | — | — | — | — | — | — | 3 | 2026-04-01 |
+| Azure OpenAI | OpenAI-compatible | Yes | Yes | Yes | Yes | Yes | — | — | — | — |
+| OpenRouter | OpenAI-compatible | Yes | Yes | Yes | — | — | — | — | — | — |
+| Groq | OpenAI-compatible | Yes | Yes | — | Yes | Yes | — | — | 16 | 2026-04-01 |
+| Together AI | OpenAI-compatible | Yes | Yes | Yes | — | — | — | — | — | — |
+| Fireworks AI | OpenAI-compatible | Yes | Yes | Yes | — | — | — | — | 1 | 2026-04-01 |
+| DeepInfra | OpenAI-compatible | Yes | Yes | Yes | — | — | — | — | — | — |
+| Perplexity | OpenAI-compatible | Yes | — | — | — | — | — | — | — | — |
+| Google Gemini | Native adapter | Yes | — | — | Yes | — | — | — | 20 | 2026-04-01 |
+| Amazon Bedrock | Native adapter | Yes | — | — | — | — | — | — | 1 | 2026-04-01 |
+| ElevenLabs | Native adapter | — | — | — | Yes | Yes | — | — | 5 | 2026-06-13 |
+| vLLM | OpenAI-compatible | Yes | Yes | Yes | Yes | Yes | — | Yes | — | — |
+| LM Studio | OpenAI-compatible | Yes | Yes | — | — | — | — | — | — | — |
+| Ollama | OpenAI-compatible | Yes | Yes | — | — | — | — | — | — | — |
 
 ## Preset endpoints
 

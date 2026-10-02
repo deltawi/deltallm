@@ -99,3 +99,10 @@ def test_external_dependency_detection(
     expected: str | None,
 ) -> None:
     assert detect_external_dependency(path=path, source=source) == expected
+
+
+def test_postgres_lane_owns_combined_database_and_redis_runtime_tests():
+    source = "await _connect_" + "prisma(); Redis" + ".from_url(url)"
+    assert (
+        detect_external_dependency(path=Path("tests/test_runtime.py"), source=source) == "postgres"
+    )

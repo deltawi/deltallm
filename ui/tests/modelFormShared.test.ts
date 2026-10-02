@@ -403,3 +403,18 @@ test('self-registration helpers identify principals and format optional limits',
   assert.equal(formatOptionalBudget(5), '$5');
   assert.equal(formatOptionalBudget(null), 'No limit');
 });
+
+test('Realtime model edits retain the profile and exact cached audio price', () => {
+  const { form } = formFromModel({
+    deployment_id: 'voice-1', model_name: 'voice', provider: 'openai',
+    deltallm_params: { model: 'openai/gpt-realtime' },
+    model_info: { mode: 'realtime', realtime_profile: 'transcription', realtime_usage_type: 'duration',
+      input_cost_per_second: 0.0001, input_cost_per_audio_token_cache_hit: '0.000000000000000123' },
+  });
+  assert.equal(form.mode, 'realtime');
+  const payload = buildModelPayload(form, []);
+  assert.equal(payload.model_info.realtime_profile, 'transcription');
+  assert.equal(payload.model_info.realtime_usage_type, 'duration');
+  assert.equal(payload.model_info.input_cost_per_audio_token_cache_hit, '0.000000000000000123');
+  assert.equal(payload.model_info.input_cost_per_second, '0.0001');
+});

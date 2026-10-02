@@ -45,6 +45,7 @@ from src.upstream_auth import (
     validate_auth_header_format,
     validate_auth_header_name,
 )
+from src.realtime.config import RealtimeSettings
 from src.route_group_config import (
     CONTEXT_ROUTING_MODEL_MODES as CONTEXT_ROUTING_MODEL_MODES,
     ContextRoutingConfig as ContextRoutingConfig,
@@ -147,6 +148,8 @@ class DeltaLLMParams(BaseModel):
 
 class ModelInfo(BaseModel):
     mode: ModelMode = "chat"
+    realtime_profile: Literal["realtime", "transcription"] = "realtime"
+    realtime_usage_type: Literal["tokens", "duration"] = "tokens"
     chat_capabilities: ChatRoutingCapabilities | None = None
     weight: int = 1
     priority: int = 0
@@ -167,6 +170,7 @@ class ModelInfo(BaseModel):
     output_cost_per_image: float | None = None
     input_cost_per_audio_token: float | None = None
     output_cost_per_audio_token: float | None = None
+    input_cost_per_audio_token_cache_hit: str | None = None
     cost_per_request: float | None = None
     output_vector_size: int | None = None
     rpm_limit: int | None = None
@@ -183,6 +187,29 @@ class ModelInfo(BaseModel):
     upstream_max_batch_inputs: int | None = Field(default=None, ge=1)
     batch_capacity: BatchModelCapacityInfo | None = None
     default_params: dict[str, Any] | None = None
+
+    @field_validator("input_cost_per_audio_token_cache_hit", mode="before")
+    @classmethod
+    def validate_cached_audio_price(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        from src.billing.realtime_pricing import RealtimePrices
+
+        return str(
+            RealtimePrices.from_model_info({"input_cost_per_audio_token_cache_hit": value}).rates[
+                "cached_input_audio"
+            ]
+        )
+
+    @model_validator(mode="after")
+    def validate_realtime_profile(self) -> "ModelInfo":
+        if (
+            self.mode == "realtime"
+            and self.realtime_profile == "realtime"
+            and self.realtime_usage_type != "tokens"
+        ):
+            raise ValueError("Realtime conversation models require token pricing")
+        return self
 
     @field_validator("access_groups", mode="before")
     @classmethod
@@ -515,6 +542,8 @@ class UIBrandingUpdatePayload(BaseModel):
 
 class GeneralSettings(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
+
+    realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
 
     instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
     ui_branding: UIBrandingSettings = Field(default_factory=UIBrandingSettings)
@@ -1102,6 +1131,7 @@ class AppConfig(BaseModel):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DELTALLM_", extra="ignore")
 
+    realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
     app_name: str = "DeltaLLM Core API"
     app_env: str = "dev"
     log_level: str = "INFO"

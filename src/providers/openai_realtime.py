@@ -31,7 +31,7 @@ def resolve_realtime_target(
 ) -> OpenAIRealtimeTarget:
     """Resolve a pinned server-owned deployment, never client connection parameters.
 
-    Only the public OpenAI origin is qualified in this first transport slice.
+    Only the public OpenAI origin is supported by this runtime.
     Alternate origins need the gateway's egress policy before being enabled.
     HTTP compatibility alone is not proof of Realtime compatibility.
     """
@@ -59,6 +59,17 @@ def resolve_realtime_target(
         profile=profile,
         url="wss://api.openai.com/v1/realtime?" + urlencode(query),
         headers=build_openai_compatible_auth_headers(provider="openai", api_key=key),
+    )
+
+
+def successful_realtime_terminal(event: Mapping[str, object]) -> bool:
+    if event.get("type") == "conversation.item.input_audio_transcription.completed":
+        return True
+    response = event.get("response")
+    return (
+        event.get("type") == "response.done"
+        and isinstance(response, Mapping)
+        and response.get("status") == "completed"
     )
 
 

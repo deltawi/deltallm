@@ -16,6 +16,7 @@ export type ModelMode =
   | 'image_generation'
   | 'audio_speech'
   | 'audio_transcription'
+  | 'realtime'
   | 'rerank';
 
 export type ChatBatchingMode = '' | 'disabled' | 'concurrent' | 'sync_microbatch';
@@ -33,6 +34,7 @@ export const MODE_OPTIONS: ModelModeOption[] = [
   { value: 'image_generation', label: 'Image Generation', icon: Image, description: 'Text-to-image generation' },
   { value: 'audio_speech', label: 'Text-to-Speech', icon: Volume2, description: 'Generate spoken audio from text' },
   { value: 'audio_transcription', label: 'Speech-to-Text', icon: Mic, description: 'Transcribe audio to text' },
+  { value: 'realtime', label: 'Realtime Audio', icon: Mic, description: 'OpenAI WebSocket speech and transcription' },
   { value: 'rerank', label: 'Rerank', icon: ArrowUpDown, description: 'Document re-ranking' },
 ];
 
@@ -42,6 +44,7 @@ export const MODE_BADGE_COLORS: Record<string, string> = {
   image_generation: 'bg-pink-100 text-pink-700',
   audio_speech: 'bg-green-100 text-green-700',
   audio_transcription: 'bg-yellow-100 text-yellow-700',
+  realtime: 'bg-teal-100 text-teal-700',
   rerank: 'bg-orange-100 text-orange-700',
 };
 
@@ -60,6 +63,9 @@ export function suggestApiModelSlug(displayName: string): string {
 
 export interface ModelFormValues {
   mode: ModelMode;
+  realtime_profile: 'realtime' | 'transcription';
+  realtime_usage_type: 'tokens' | 'duration';
+  input_cost_per_audio_token_cache_hit: string;
   model_name: string;
   api_model_id: string;
   api_model_slug: string;
@@ -121,6 +127,9 @@ export type ModelPayload = ModelWritePayload;
 
 export const EMPTY_FORM: ModelFormValues = {
   mode: 'chat',
+  realtime_profile: 'realtime',
+  realtime_usage_type: 'tokens',
+  input_cost_per_audio_token_cache_hit: '',
   model_name: '',
   api_model_id: '',
   api_model_slug: '',
@@ -241,6 +250,9 @@ function objectRecordOrEmpty(val: unknown): Record<string, unknown> {
 
 const FORM_MANAGED_MODEL_INFO_FIELDS = [
   'mode',
+  'realtime_profile',
+  'realtime_usage_type',
+  'input_cost_per_audio_token_cache_hit',
   'priority',
   'tags',
   'access_groups',
@@ -430,6 +442,14 @@ export function buildModelPayload(
   } else if (form.mode === 'audio_transcription') {
     model_info.input_cost_per_second = numOrUndef(form.input_cost_per_second);
     model_info.output_cost_per_second = numOrUndef(form.output_cost_per_second);
+  } else if (form.mode === 'realtime') {
+    model_info.realtime_profile = form.realtime_profile;
+    model_info.realtime_usage_type = form.realtime_profile === 'realtime' ? 'tokens' : form.realtime_usage_type;
+    for (const field of ['input_cost_per_token', 'output_cost_per_token', 'input_cost_per_token_cache_hit',
+      'input_cost_per_audio_token', 'output_cost_per_audio_token', 'input_cost_per_audio_token_cache_hit',
+      'input_cost_per_second'] as const) {
+      model_info[field] = form[field].trim() || undefined;
+    }
   } else if (form.mode === 'rerank') {
     model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
   }
@@ -496,6 +516,9 @@ export function formFromModel(
 
   const form: ModelFormValues = {
     mode: toModelMode(mi.mode || model.mode),
+    realtime_profile: mi.realtime_profile === 'transcription' ? 'transcription' : 'realtime',
+    realtime_usage_type: mi.realtime_usage_type === 'duration' ? 'duration' : 'tokens',
+    input_cost_per_audio_token_cache_hit: strOrEmpty(mi.input_cost_per_audio_token_cache_hit),
     model_name: model.display_name || model.model_name || '',
     api_model_id: model.api_model_id || model.model_name || '',
     api_model_slug: (model.api_model_id || model.model_name || '').split('/').at(-1) || '',

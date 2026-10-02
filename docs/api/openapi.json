@@ -3590,6 +3590,7 @@
                   "image_generation",
                   "audio_speech",
                   "audio_transcription",
+                  "realtime",
                   "rerank"
                 ],
                 "type": "string"

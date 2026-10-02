@@ -8,6 +8,7 @@ import time
 from typing import Any, Literal
 
 from src.models.errors import RateLimitError, ServiceUnavailableError
+from src.services.parallel_lease_lua import PARALLEL_LEASE_LUA
 from src.services.tier_capacity_fair_share import (
     DEFAULT_ACTIVE_TTL_SECONDS,
     FAIR_SHARE_WINDOW_SECONDS,
@@ -612,8 +613,11 @@ return {1, next_value}
         lease: LegacyParallelLease,
         *,
         ttl_seconds: int | None = None,
+        require_owned: bool = False,
     ) -> None:
         if lease.backend != "redis":
+            if require_owned:
+                raise ServiceUnavailableError(message="Distributed lease ownership is unavailable")
             return
         if self.redis is None:
             raise ServiceUnavailableError(message="Rate limit backend unavailable")
@@ -630,7 +634,11 @@ redis.call('EXPIRE', KEYS[1], ARGV[1])
 return {1, current}
 """
         try:
-            await self.redis.eval(script, 1, key, str(normalized_ttl_seconds))
+            result = await self.redis.eval(script, 1, key, str(normalized_ttl_seconds))
+            if require_owned and (
+                not isinstance(result, (list, tuple)) or len(result) != 2 or int(result[1]) <= 0
+            ):
+                raise ServiceUnavailableError(message="Distributed parallel counter was lost")
         except Exception as exc:
             raise ServiceUnavailableError(message="Rate limit backend unavailable") from exc
 
@@ -670,10 +678,15 @@ return {1, current}
         requested_counts = [str(int(group.requested_count)) for group in groups]
         tokens = [lease.token for lease in leases]
 
-        script = """
+        script = (
+            PARALLEL_LEASE_LUA
+            + """
 local n = #KEYS
 local now_ms = tonumber(ARGV[1]) or 0
 local expires_at_ms = tonumber(ARGV[2]) or 0
+local ttl_ms = expires_at_ms - now_ms
+now_ms = parallel_now_ms()
+expires_at_ms = now_ms + ttl_ms
 for i = 1, n do
   redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', now_ms)
   local limit = tonumber(ARGV[2 + i]) or 0
@@ -691,10 +704,11 @@ for i = 1, n do
     local token = ARGV[token_index]
     redis.call('ZADD', KEYS[i], expires_at_ms, token)
   end
-  redis.call('EXPIRE', KEYS[i], math.ceil((expires_at_ms - now_ms) / 1000))
+  expire_parallel_owners(KEYS[i])
 end
 return {1, 0}
 """
+        )
         try:
             raw = await self.redis.eval(
                 script,
@@ -757,11 +771,14 @@ return {1, 0}
         leases: list[ParallelLimitLease],
         *,
         ttl_seconds: int | None = None,
+        require_owned: bool = False,
     ) -> None:
         if not leases:
             return
 
         redis_leases = [lease for lease in leases if lease.backend == "redis"]
+        if require_owned and len(redis_leases) != len(leases):
+            raise ServiceUnavailableError(message="Distributed lease ownership is unavailable")
         if not redis_leases:
             return
         if self.redis is None:
@@ -771,26 +788,59 @@ return {1, 0}
         tokens = [lease.token for lease in redis_leases]
         now_ms = int(time.time() * 1000)
         expires_at_values = [
-            str(now_ms + (max(1, int(ttl_seconds if ttl_seconds is not None else lease.ttl_seconds)) * 1000))
+            str(
+                now_ms
+                + (
+                    max(1, int(ttl_seconds if ttl_seconds is not None else lease.ttl_seconds))
+                    * 1000
+                )
+            )
             for lease in redis_leases
         ]
-        script = """
+        script = (
+            PARALLEL_LEASE_LUA
+            + """
 local n = #KEYS
-local now_ms = tonumber(ARGV[(2 * n) + 1]) or 0
+local client_now_ms = tonumber(ARGV[(2 * n) + 1]) or 0
+local now_ms = parallel_now_ms()
+if ARGV[(2 * n) + 2] == '1' then
+  -- Check the entire group before renewing any member. Expired tokens must
+  -- never be resurrected, even if no new acquisition has swept them yet.
+  for i = 1, n do
+    local expires = tonumber(redis.call('ZSCORE', KEYS[i], ARGV[i]))
+    if not expires or expires <= now_ms then
+      return {0, i}
+    end
+  end
+end
 for i = 1, n do
   local token = ARGV[i]
   local expires_at_ms = tonumber(ARGV[n + i]) or 0
+  expires_at_ms = now_ms + expires_at_ms - client_now_ms
   if redis.call('ZSCORE', KEYS[i], token) then
     redis.call('ZADD', KEYS[i], expires_at_ms, token)
-    redis.call('EXPIRE', KEYS[i], math.ceil((expires_at_ms - now_ms) / 1000))
+    expire_parallel_owners(KEYS[i])
   end
 end
 return {1, 0}
 """
+        )
         try:
-            await self.redis.eval(script, len(keys), *keys, *tokens, *expires_at_values, str(now_ms))
+            result = await self.redis.eval(
+                script,
+                len(keys),
+                *keys,
+                *tokens,
+                *expires_at_values,
+                str(now_ms),
+                "1" if require_owned else "0",
+            )
         except Exception as exc:
             raise ServiceUnavailableError(message="Rate limit backend unavailable") from exc
+        if require_owned and (
+            not isinstance(result, (list, tuple)) or len(result) != 2 or result[0] != 1
+        ):
+            raise ServiceUnavailableError(message="Distributed lease ownership was lost")
 
     async def _handle_redis_degraded(self) -> None:
         if self.degraded_mode == "fail_closed":

@@ -24,11 +24,24 @@ class RealtimeTokenUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class RealtimeDurationUsage:
+    seconds: Decimal
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.seconds, Decimal)
+            or not self.seconds.is_finite()
+            or not 0 <= self.seconds <= 86_400
+        ):
+            raise ValueError("invalid audio duration")
+
+
+@dataclass(frozen=True, slots=True)
 class RealtimeUsageReceipt:
     receipt_id: str
     operation: Literal["response", "transcription"]
     provider_id: str
-    usage: RealtimeTokenUsage | None
+    usage: RealtimeTokenUsage | RealtimeDurationUsage | None
     pending_reason: str | None
 
 
@@ -140,15 +153,25 @@ def realtime_usage_receipt(session_id: str, event: Mapping) -> RealtimeUsageRece
     pending = "usage_missing" if usage is None else None
     if usage is not None:
         try:
-            tokens = normalize_realtime_tokens(
-                _object(usage), transcription=operation == "transcription"
-            )
+            reported = _object(usage)
+            if operation == "transcription" and reported.get("type") == "duration":
+                _known_dimensions(reported, {"type", "seconds"})
+                seconds = reported.get("seconds")
+                if isinstance(seconds, bool) or not isinstance(seconds, (int, float, Decimal)):
+                    raise ValueError("invalid audio duration")
+                tokens = RealtimeDurationUsage(Decimal(str(seconds)))
+            else:
+                tokens = normalize_realtime_tokens(
+                    reported, transcription=operation == "transcription"
+                )
         except ValueError:
             pending = "usage_unqualified"
     return RealtimeUsageReceipt(receipt_id, operation, provider_id, tokens, pending)
 
 
-def price_realtime_usage(usage: RealtimeTokenUsage, *, prices: Mapping[str, Decimal]) -> Decimal:
+def price_realtime_usage(
+    usage: RealtimeTokenUsage | RealtimeDurationUsage, *, prices: Mapping[str, Decimal]
+) -> Decimal:
     """Use an admission-pinned rate card; omitted charged dimensions fail closed."""
     with localcontext() as context:
         context.prec = 80

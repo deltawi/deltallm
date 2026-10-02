@@ -43,6 +43,12 @@ class Permit:
             raise self.error
         self.authorized.append(event)
 
+    async def prepare_upstream(self, upstream):
+        return upstream
+
+    async def before_client_event(self, event):
+        pass
+
     async def accept_usage(self, event):
         if self.error:
             raise self.error
@@ -55,6 +61,8 @@ class Permit:
 
 
 class Admission:
+    ready = True
+
     def __init__(self, *, profile="realtime"):
         self.permit = Permit()
         self.target = target(profile)

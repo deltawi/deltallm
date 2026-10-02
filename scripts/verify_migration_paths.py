@@ -623,7 +623,8 @@ BEGIN
   SELECT count(*) INTO fixture_count
   FROM deltallm_routeruntimestate
   WHERE state_key = 'routing_runtime'
-    AND revision = 0
+    -- Publication triggers in newer upgrade bases may already advance revision.
+    AND revision >= 0
     AND route_groups_initialized = TRUE;
   IF fixture_count <> 1 THEN
     RAISE EXCEPTION 'route runtime state did not preserve initialized route groups';
@@ -999,6 +1000,15 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _verify_shared_migration_database(prisma, shared_url)
         _verify_operation_reservations(prisma, upgrade_url)
         _verify_operation_reservations(prisma, shared_url)
+        for database_url in (fresh_url, upgrade_url, shared_url):
+            _db_execute(
+                prisma,
+                schema=CURRENT_SCHEMA,
+                database_url=database_url,
+                sql=(
+                    REPO_ROOT / "scripts/migration_fixtures/realtime_billing_verify.sql"
+                ).read_text(),
+            )
     finally:
         primary_error = sys.exc_info()[1]
         cleanup_errors: list[subprocess.CalledProcessError] = []

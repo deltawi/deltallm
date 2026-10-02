@@ -168,6 +168,16 @@ general_settings:
 {{- if le $terminationGraceSeconds $telemetryDrainSeconds -}}
 {{- fail "terminationGracePeriodSeconds must be greater than telemetry_shutdown_drain_timeout_seconds" -}}
 {{- end -}}
+{{- $realtime := default (dict) (get $apiGeneral "realtime") -}}
+{{- if get $realtime "enabled" -}}
+{{- if or (ne (get $apiGeneral "spend_ingestion_mode") "outbox") (not (get $apiGeneral "spend_ingestion_worker_enabled")) -}}
+{{- fail "Realtime requires spend_ingestion_mode=outbox and spend_ingestion_worker_enabled=true" -}}
+{{- end -}}
+{{- $realtimeDrain := addf (float64 (default 5 (get $realtime "cleanup_seconds"))) (float64 (default 10 (get $realtime "write_seconds"))) -}}
+{{- if le $terminationGraceSeconds (addf $telemetryDrainSeconds $realtimeDrain) -}}
+{{- fail "terminationGracePeriodSeconds must exceed Realtime cleanup_seconds + write_seconds + telemetry_shutdown_drain_timeout_seconds" -}}
+{{- end -}}
+{{- end -}}
 {{- $emailEnabled := eq (lower (toString (default false (get $apiGeneral "email_enabled")))) "true" -}}
 {{- $emailWorkerEnabled := true -}}
 {{- if hasKey $apiGeneral "email_worker_enabled" -}}
