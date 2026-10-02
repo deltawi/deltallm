@@ -8,10 +8,13 @@ Before analyzing, planning, editing, running project commands, or reviewing chan
 
 If `RULES.md` is missing or cannot be read completely, stop and report the problem before changing the repository.
 
+## Documentation language
+
+You MUST use ASD-STE100 Simplified Technical English for all documentation and written project communication you produce or update. This includes pull requests, explanations, and MkDocs pages. Follow the [documentation language rule](RULES.md#documentation-language).
+
 ## Precedence and maintenance
 
 - Follow system and user instructions first, then the applicable repository guidance.
 - More local `AGENTS.md` or `AGENTS.override.md` files may add context or tighten requirements for their subtree, but must not weaken or contradict `RULES.md`.
 - Keep this file as a small discovery/bootstrap pointer. Do not duplicate the engineering rules here.
 - Do not edit `AGENTS.md` or `RULES.md` merely to make another change easier. Governance changes require explicit scope, rationale, and review.
-- Write plans, issues, and pull request content in simplified language that an average developer or anyone trying to understand the work can follow.

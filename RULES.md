@@ -8,6 +8,16 @@ These requirements govern new and modified behavior. Known exceptions in Section
 
 If a requested implementation conflicts with these invariants, stop and explain the conflict, then propose the smallest compliant design. Do not silently create a second config path, lifecycle, policy implementation, storage abstraction, or deployment mechanism.
 
+## Documentation language
+
+You MUST use ASD-STE100 Simplified Technical English for all documentation and written project communication you produce or update. This requirement applies throughout the repository and to project communication outside it.
+
+This includes:
+
+- Pull request titles, descriptions, review comments, and replies.
+- Plans, issues, explanations, progress updates, and final task responses.
+- MkDocs pages, READMEs, guides, API documentation, code comments, docstrings, and release notes.
+
 ## 1. Product DNA
 
 DeltaLLM is a self-hosted, multi-tenant, OpenAI-compatible LLM gateway and control plane. Applications keep the OpenAI request format while DeltaLLM owns provider credentials, model routing, policy enforcement, caching, failover, usage, spend, batch execution, MCP access, and operations.
@@ -59,7 +69,6 @@ Redis or process memory MUST NOT be the sole durable copy of billing, audit, ide
 - Do not weaken a test, lint rule, security check, timeout, or production default merely to make a change pass.
 - Do not edit or weaken `RULES.md` merely to make a feature compliant. A rule change is its own explicit design decision with rationale and reviewable consequences.
 - `RULES.md` is canonical. Any agent/tool-specific instruction file SHOULD point here and stay thin; it MUST NOT fork these rules into a divergent copy.
-- Write plans, issues, and pull request content in simplified language that an average developer or anyone trying to understand the work can follow.
 
 ### Ask only when necessary
 
