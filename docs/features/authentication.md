@@ -190,7 +190,10 @@ general_settings:
 
 ### Self-Service Sandbox Registration
 
-When SSO is enabled, DeltaLLM can provision first-time users from approved email domains into a constrained developer sandbox. This is not public signup: users must authenticate through the configured identity provider, pass the allowed-domain check, and land in the configured default organization and team.
+With SSO enabled, DeltaLLM can provision new users from approved email domains into a restricted developer sandbox.
+This does not permit public signup.
+Users must authenticate through the configured identity provider and pass the allowed-domain check.
+DeltaLLM puts them in the configured default organization and team.
 
 ```yaml
 general_settings:
@@ -234,11 +237,10 @@ when SSO creates a new platform account. Existing accounts keep their stored
 platform role, including accounts linking SSO for the first time. This applies
 with self-registration enabled or disabled.
 
-The identity provider must report a verified email before SSO can grant an
-initial platform-admin role or attach a new provider subject to an existing
-account. This ownership check applies to all existing account roles, including
-when `self_registration.require_email_verification` is `false`. That setting
-controls ordinary new-account provisioning only.
+The identity provider must report a verified email for the initial platform-admin role grant.
+This is also necessary to attach a new provider subject to an existing account.
+The ownership check applies to all existing account roles, including when `self_registration.require_email_verification` is `false`.
+That setting controls only ordinary new-account provisioning.
 
 An established provider-subject binding can continue signing in without an
 email-verification claim. If the provider supplies no subject and DeltaLLM uses
@@ -261,13 +263,17 @@ preserves existing organization and team roles. For example, demoting a platform
 admin to `org_user` leaves their `org_owner` and `team_admin` memberships intact.
 Explicit membership edits and invitation grants can still change those roles.
 
-Older versions reassigned roles from this list on subsequent SSO logins. When
-upgrading, finish the rollout across all API replicas before reapplying any lost
-platform or membership role changes in People & Access, then verify another SSO
-sign-in preserves them. Verify first-time email linking with your provider before
-rollout; unverified linking that older versions accepted is now denied.
-No database migration or automatic role restoration is performed. Rolling back
-to an affected version restores the old overwrite and unsafe email-linking behavior.
+Older versions assigned roles from this list again on later SSO logins.
+Before rollout, verify the first email link with your provider.
+The corrected version denies unverified links that older versions accepted.
+
+1. Complete the upgrade across all API replicas.
+2. In People & Access, restore lost platform or membership role changes as necessary.
+3. Sign in through SSO again.
+4. Verify that the role changes remain.
+
+This change has no database migration. It does not restore roles automatically.
+Rollback to an affected version restores the previous role overwrite and unsafe email-linking behavior.
 
 ## Role-Based Access Control
 
@@ -298,9 +304,13 @@ DeltaLLM separates platform roles, organization roles, and team roles.
 | `team_developer` | Use and create keys, self-service key creation (`key.create_self`), view usage from owned keys |
 | `team_viewer` | Read-only access, including usage from owned keys |
 
-The `team_developer` role includes the `key.create_self` permission, which allows developers to create, regenerate, revoke, and delete their own API keys when the team has self-service enabled. See [API Keys: Self-Service](../admin-ui/api-keys.md#self-service-key-creation) for details.
+The `team_developer` role includes `key.create_self`.
+When the team enables self-service, this permission lets developers create, regenerate, revoke, and delete their own API keys.
+See [API Keys: Self-Service](../admin-ui/api-keys.md#self-service-key-creation).
 
-Personal usage is attributed from the API key owner's immutable request-time snapshot. A later key transfer does not move earlier synchronous or batch usage to the new owner, and an intentionally ownerless key remains unattributed rather than falling back to its current owner.
+Personal usage uses an immutable snapshot of the API key owner at request time.
+A later key transfer does not move earlier synchronous or batch usage to the new owner.
+An intentionally ownerless key remains unattributed. The system does not substitute its current owner.
 
 ### Important Note on `user_role`
 

@@ -40,10 +40,12 @@ A route group defines:
 
 Route groups are also callable targets. Their runtime visibility is governed through the same callable-target bindings and scope policies used for public model names.
 
-An enabled route group owns its group key. If a legacy model name uses the same key, the route group
-takes precedence even when it has no active members; requests then receive a no-healthy-deployment
-response instead of bypassing the group policy. Disable or delete the route group to expose the
-same-named legacy model again.
+An enabled route group owns its group key.
+If a legacy model name uses the same key, the route group takes priority.
+This rule also applies when the group has no active members.
+In that condition, requests get a no-healthy-deployment response. They do not bypass the group policy.
+
+To expose the legacy model with the same name again, disable or delete the route group.
 
 Deleting a route group normally removes its callable-target bindings in the same transaction. If a
 same-named model deployment exists, those bindings are retained so the newly revealed model keeps
@@ -120,18 +122,20 @@ Context-capacity routing is available only for `chat` and `embedding` route grou
 rejects a context policy on image, audio, or rerank groups, including during validation,
 simulation, draft publication, rollback, and an incompatible route-group mode change.
 
-Open **Context capacity** in the guided policy editor to enable this constraint. Choose **Eligible
-instances only** to keep the normal strategy among deployments that fit, or **Prefer smallest
-sufficient** to use the smallest fitting context tier first and retain larger tiers as fallbacks.
-Selecting **Disabled** sends an explicit deletion marker; merely omitting the block preserves the
-stored policy for compatibility with older clients.
+To enable this constraint, open **Context capacity** in the guided policy editor.
+Select **Eligible instances only** to use the normal strategy among deployments with sufficient capacity.
+Alternatively, select **Prefer smallest sufficient**.
+This option uses the smallest sufficient context tier first and keeps larger tiers as fallbacks.
 
-Capacity comes from each deployment's **Context Window**, **Max Input Tokens**, and **Max Output
-Tokens** model metadata. Missing metadata is allowed by default so an upgrade does not silently
-remove existing members; the strict **Exclude** option is intended for groups whose metadata has
-been fully audited. The safety margin compensates for the gateway's fast approximate token count.
-Embedding deployment forms expose both **Context Window** and **Max Input Tokens**, and preserve
-those values during unrelated edits.
+The **Disabled** option sends an explicit deletion marker.
+An omitted block keeps the stored policy for compatibility with older clients.
+
+Capacity comes from each deployment's **Context Window**, **Max Input Tokens**, and **Max Output Tokens** metadata.
+By default, missing metadata does not exclude a deployment. This prevents upgrades from silently removing existing members.
+The strict **Exclude** option is for groups with fully reviewed metadata.
+The safety margin compensates for the gateway's fast approximate token count.
+Embedding forms show **Context Window** and **Max Input Tokens**. Unrelated edits keep these values.
+
 The feature is inactive when the policy control is disabled.
 
 ## Model-router Policies
@@ -256,21 +260,23 @@ document, including historical versions restored through rollback.
 
 ## Publication and Reload
 
-Draft publication and rollback are serialized per route group. Version allocation, archival of the
-previous publication, and activation of the replacement occur in one PostgreSQL transaction, and
-the database permits at most one published version per group. Rollback creates a new version and
-does not rewrite history. Publication and rollback revalidate the stored document against the
-current enabled membership and workload mode; stale versions return `409` without changing the
-published policy.
+Draft publication and rollback run serially for each route group.
+One PostgreSQL transaction allocates a version, archives the previous publication, and activates its replacement.
+The database permits at most one published version per group.
+Rollback creates a new version. It does not rewrite history.
 
-After commit, each replica invalidates its local snapshot and rebuilds a complete runtime generation
-from durable state before swapping it live. A local reload or cross-replica notification failure is
-reported as a post-commit warning; it does not mean that the already committed group, member, or
-policy mutation was rolled back. Redis notifications accelerate this process, while a PostgreSQL
-runtime revision poll reconciles missed notifications within 30 seconds by default. Re-read durable
-state before retrying a mutation.
-The Admin UI displays these warnings on create, update, delete, member, publish, and rollback
-results instead of reporting an unconditional success.
+Publication and rollback validate the stored document against the current enabled membership and workload mode again.
+Stale versions return `409` without a change to the published policy.
+
+After commit, each replica invalidates its local snapshot.
+It builds a complete runtime generation from durable state before it makes that generation active.
+A local reload or cross-replica notification failure produces a post-commit warning.
+The warning does not mean that the committed group, member, or policy change was reversed.
+Redis notifications make this process faster.
+A PostgreSQL runtime revision poll recovers missed notifications within 30 seconds by default.
+
+Read the durable state again before you retry a mutation.
+The Admin UI shows these warnings for create, update, delete, member, publish, and rollback results.
 
 ## Good Operating Pattern
 
@@ -296,10 +302,11 @@ editor. The simulation can use estimated input/output tokens, request tags, and 
 outcome is the default; failure outcomes pass through the same retry classification, retry budget,
 candidate ordering, and fallback decisions used by gateway requests.
 
-The policy shown in the editor is simulated as a complete replacement, matching validation and
-publication semantics. Clearing retry or timeout controls removes those overrides, and choosing
-**Inherit enabled** uses the route group's enabled membership rather than retaining the published
-policy's prior explicit subset.
+The simulation uses the policy in the editor as a full replacement.
+This matches validation and publication behavior.
+Empty retry or timeout controls remove those overrides.
+The **Inherit enabled** option uses the route group's enabled membership.
+It does not keep the published policy's previous explicit subset.
 
 The results distinguish:
 

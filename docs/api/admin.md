@@ -89,7 +89,10 @@ Relevant fields:
 
 `auth_header_format` must contain the exact `{api_key}` placeholder, and reserved header names such as `Content-Type` are rejected. If a deployment uses `named_credential_id` and also carries overlapping local connection fields, the named credential values win.
 
-List, detail, create, and update responses continue to redact secrets such as `api_key`. When custom upstream auth is configured, `connection_summary` may include the effective `auth_header_name` plus a compact `custom_auth_label` such as `X-API-Key` or `Authorization (Token)`, but not the rendered header value.
+List, detail, create, and update responses continue to redact secrets such as `api_key`.
+With custom upstream authentication, `connection_summary` can include the effective `auth_header_name` and a short `custom_auth_label`.
+Examples are `X-API-Key` and `Authorization (Token)`.
+It never includes the rendered header value.
 
 Model create and update payloads also accept these metadata fields:
 
@@ -99,7 +102,10 @@ Model create and update payloads also accept these metadata fields:
 
 `model_info.access_groups` must be an array of valid group keys. Keys are normalized to lowercase, must start with a letter or digit, and may contain lowercase letters, digits, `.`, `_`, or `-`. Access groups expand to the public `model_name`, not to a single deployment. When several deployments share the same `model_name`, keep their access groups identical so group expansion remains deterministic.
 
-Successful model create, update, and delete responses include a `warnings` array. A durable database mutation remains successful if its immediate local routing refresh fails; in that case the response contains a post-commit warning and background revision reconciliation repairs the replica. Re-read the deployment before retrying the mutation.
+Successful model create, update, and delete responses include a `warnings` array.
+A durable database change remains successful if its immediate local routing refresh fails.
+In this condition, the response includes a post-commit warning. Background revision reconciliation repairs the replica.
+Read the deployment again before you retry the mutation.
 
 Example inline model create payload:
 
@@ -312,17 +318,29 @@ Policy simulation accepts a bounded scenario (1–5000 iterations):
 }
 ```
 
-`input_tokens` defaults to `0`; an omitted or null `requested_output_tokens` uses the context
-policy's deployment/default output allowance. Supported assumed outcomes are `success`, `timeout`,
-`rate_limit`, and `unavailable`. Omitted
-deployments default to `success`. The response includes initial `selections`,
-`served_deployments`, `terminal_outcomes`, aggregate retry/fallback counts, eligibility
-`reason_counts`, and a bounded `sample_attempts` trace. `basis` is `live_state_dry_run`: the server
-pins one runtime generation and snapshots routing state before iterating, calls no provider, and
-does not mutate live routing state. When `policy` is present, it is the complete client-owned policy
-document rather than a patch: omitted `members` inherit the group's enabled membership, omitted
-`retry` and `timeouts` clear published overrides, and omitted `strategy` falls back to the route
-group's configured strategy.
+`input_tokens` defaults to `0`.
+An omitted or null `requested_output_tokens` uses the context policy's deployment or default output allowance.
+Supported assumed outcomes are `success`, `timeout`, `rate_limit`, and `unavailable`.
+Omitted deployments default to `success`.
+
+The response includes these results:
+
+- Initial `selections`.
+- `served_deployments` and `terminal_outcomes`.
+- Total retry and fallback counts.
+- Eligibility `reason_counts`.
+- A bounded `sample_attempts` trace.
+
+`basis` is `live_state_dry_run`.
+The server pins one runtime generation and takes a snapshot of routing state before the simulation.
+It calls no provider. It does not change live routing state.
+
+When present, `policy` is the full client-owned policy document, not a partial update.
+Omitted fields have these effects:
+
+- `members` inherits the group's enabled membership.
+- `retry` and `timeouts` clear published overrides.
+- `strategy` uses the route group's configured strategy.
 
 ID-addressed simulation verifies that the requested group still exists in its database
 snapshot. If the group was deleted before that snapshot, it returns 404, including when

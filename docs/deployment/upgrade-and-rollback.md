@@ -12,9 +12,13 @@ For the operator checklist, start with [Upgrade or roll back](../guides/deployme
    feature flags, and database migration state.
 3. Confirm the old version can run against the target release's expanded schema. If it cannot, the
    rollback point is before migration and requires database restore or a release-specific plan.
-4. Take a verified backup and confirm the restore procedure, available capacity, and on-call owners.
-5. Render and review the target manifests. Confirm operational routes remain private and replicas do
-   not execute migration bootstrap.
+4. Take a verified backup.
+   Confirm the restore procedure.
+   Confirm the available capacity and on-call owners.
+5. Render the target manifests.
+   Review the target manifests.
+   Confirm that operational routes remain private.
+   Confirm that replicas do not run database migrations at startup.
 6. Run representative smoke/load tests in a staging environment using the same migration sequence.
 
 ## Production sequence
@@ -26,9 +30,11 @@ For the operator checklist, start with [Upgrade or roll back](../guides/deployme
 5. Verify liveness, readiness, authenticated gateway traffic, streaming, admin access, audit/spend
    ingestion, queues, provider errors, and authorization denials.
 6. Increase traffic/replicas while watching latency, failure rate, saturation, and background lag.
-7. Enable new feature flags only after every old API and worker replica is drained and the release
-   runbook's compatibility checks pass.
-8. Record evidence and close the maintenance window only when alerts and backlogs are stable.
+7. Before you enable new feature flags, make sure that all previous API and worker replicas have drained.
+   Confirm that the release runbook's compatibility checks pass.
+   Enable the new feature flags.
+8. When alerts and backlogs are stable, record the evidence.
+   Close the maintenance window.
 
 ## Rollback decision
 
@@ -45,8 +51,10 @@ Stop and use a reviewed recovery plan when:
 
 ## Application rollback
 
-1. Stop rollout and preserve logs, migration output, current manifests, and incident timestamps.
-2. Disable new feature gates and stop incompatible writers/workers.
+1. Stop the rollout.
+   Keep logs, migration output, current manifests, and incident timestamps.
+2. Disable new feature gates.
+   Stop incompatible writers and workers.
 3. Restore the previous immutable image and configuration without re-running migration bootstrap.
 4. Verify readiness and the same success/denial smoke tests used during rollout.
 5. Monitor queues and durable outboxes for duplicate, stuck, or incompatible work.

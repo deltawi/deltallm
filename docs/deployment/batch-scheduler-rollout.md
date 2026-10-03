@@ -39,11 +39,11 @@ This runbook covers the embeddings batch scheduler rollout modes and the checks 
 
 ## Capacity Planning
 
-The scheduler keeps Postgres as the durable source of truth. Model capacity, queued work, in-flight
-work, and fair-share flow state are read from Postgres during worker claims; Redis remains an
-optional coordination/cache layer and is not required for claim correctness. This keeps degraded
-Redis behavior safe, but it means hot-model throughput is bounded by Postgres query latency,
-transaction latency, and available DB connections.
+The scheduler uses PostgreSQL as the durable source of truth.
+During worker claims, it reads model capacity, queued work, in-flight work, and fair-share flow state from PostgreSQL.
+Redis is an optional coordination and cache layer. Correct claims do not depend on Redis.
+Redis degradation is therefore safe for claims.
+PostgreSQL query latency, transaction latency, and available database connections limit throughput for models with high demand.
 
 Plan DB connections before increasing worker replicas:
 
@@ -81,10 +81,11 @@ legacy lock is acquired first, then the canonical lock, so rolling upgrades keep
 coordinated. While dual locking is enabled, legacy `hashtext` collision risk is still present; the
 canonical lock exists to make the eventual canonical-only cutover deterministic and auditable.
 
-Do not remove the dual-lock compatibility path until every batch-worker pod has completed one full
-rollout on the canonical-lock version and no rollback to the legacy-lock version remains planned.
-After that point, operators may set `embeddings_batch_advisory_lock_mode=canonical` to stop acquiring
-the legacy `hashtext` lock. Keep the default `dual` during rolling upgrades.
+Keep the dual-lock compatibility path until all batch-worker pods complete one full rollout on the canonical-lock version.
+A rollback to the legacy-lock version must no longer be planned.
+After these conditions are met, operators can set `embeddings_batch_advisory_lock_mode=canonical`.
+This stops acquisition of the legacy `hashtext` lock.
+Keep the default `dual` during rolling upgrades.
 
 ## Modes
 
@@ -173,9 +174,9 @@ Expected fields:
 - `fair_share.max_active_flows_per_decision` and `fair_share.max_candidate_jobs_per_flow` match the
   intended worker bounds.
 
-The admin status endpoint is useful for config and single-process smoke checks. In split API/worker
-deployments, the embedded metric samples come from the API process that served the request, so use
-Prometheus for cluster-wide worker scheduler decisions and latencies.
+The admin status endpoint supports configuration checks and smoke tests for one process.
+In split API/worker deployments, embedded metric samples come from the API process that served the request.
+Use Prometheus for worker scheduler decisions and latencies across the cluster.
 
 Check Prometheus metrics:
 
@@ -285,15 +286,29 @@ embeddings_batch_scheduler_shadow_mode: none
 
 - Metrics: `deltallm_batch_oldest_job_age_seconds`, `deltallm_batch_scheduler_oldest_wait_seconds`, `deltallm_batch_scheduler_decision_latency_seconds`, `deltallm_batch_model_group_deferrals_total`.
 - Admin endpoint: `/ui/api/batches/scheduler/status`, then `/ui/api/batches/scheduler/flows?model_group=<model>&service_tier=<tier>`.
-- Likely causes: no healthy deployment for the model group, capacity snapshot reports zero available items or work units, model group is excluded from fair-share, or API and worker scheduler modes diverged.
+- Possible causes:
+
+    - The model group has no healthy deployment.
+    - The capacity snapshot shows zero available items or work units.
+    - The model group is excluded from fair-share.
+    - API and worker scheduler modes differ.
+
 - Config mitigations: temporarily set `embeddings_batch_scheduler_mode=model_capacity_v1`, disable shadow with `embeddings_batch_scheduler_shadow_mode=none`, or enable model-capacity fail-open only after confirming provider health telemetry is stale.
-- Rollback threshold: oldest wait for a healthy model exceeds the previous stage by 2x for 15 minutes, or no claims occur for a model with queued work for 10 minutes.
+- Rollback thresholds:
+
+    - For 15 minutes, the oldest wait for a healthy model exceeds twice the previous stage's value.
+    - A model has queued work but receives no claims for 10 minutes.
 
 ### Healthy Models Idle While Another Model Is Saturated
 
 - Metrics: `deltallm_batch_model_capacity_slots`, `deltallm_batch_scheduler_decision_latency_seconds`, `deltallm_batch_scheduler_shadow_comparisons_total`.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
-- Likely causes: workers are still using FIFO or slice mode, capacity groups are missing for the idle model, or a saturated head-of-line model is not being skipped.
+- Possible causes:
+
+    - Workers still use FIFO or slice mode.
+    - The idle model has no capacity groups.
+    - The scheduler does not skip a saturated model at the front of the queue.
+
 - Config mitigations: advance only to `model_capacity_v1`, keep `fair_share_v1` or `smart_v1` in shadow, and verify worker ConfigMaps match the API ConfigMap.
 - Rollback threshold: idle healthy model utilization remains at zero while eligible queued jobs exist for 10 minutes after switching modes.
 
@@ -318,7 +333,12 @@ embeddings_batch_scheduler_shadow_mode: none
 - Metrics: `deltallm_batch_item_retries_total`, `deltallm_batch_item_retry_delay_seconds`, `deltallm_batch_microbatch_requeues_total`, `deltallm_batch_scheduler_oldest_wait_seconds`, `deltallm_batch_claim_blocked_decisions_total{reason_category="deferred_retry"}`.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
 - Likely causes: retry `not_before_at` gates are ignored, transient provider errors are classified too broadly, or microbatch isolation is repeatedly requeueing the same work.
-- Config mitigations: keep active mode at the last stable stage, disable shadow if logs are noisy, and tune retry delay or microbatch isolation settings before re-enabling smart mode.
+- Configuration actions:
+
+    1. Keep active mode at the last stable stage.
+    2. If logs contain excessive entries, disable shadow mode.
+    3. Before you enable smart mode again, adjust retry delay or microbatch isolation settings.
+
 - Rollback threshold: retry counters grow faster than successful item completions for 10 minutes, or the same batch is reclaimed more than twice without progress.
 
 ### Worker Crash Or Lease Expiry Causes Duplicate Work
@@ -338,7 +358,12 @@ embeddings_batch_scheduler_shadow_mode: none
 - Metrics: `deltallm_config_reload_events_total`, `deltallm_batch_scheduler_decision_latency_seconds`, `deltallm_batch_claim_empty_jobs_total`, `deltallm_batch_claim_blocked_decisions_total`, Redis client error logs, and batch completion counters.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
 - Likely causes: Redis outage, Redis latency, config pub/sub listener failure, lock TTL churn, or transient counter failures.
-- Config mitigations: verify the active stage still uses Postgres as source of truth, disable shadow mode if comparison logging amplifies error volume, and avoid enabling Redis-dependent optimizations until Redis is healthy.
+- Configuration actions:
+
+    1. Verify that the active stage still uses PostgreSQL as the source of truth.
+    2. If comparison logging increases error volume, disable shadow mode.
+    3. Keep Redis-dependent optimizations disabled until Redis is healthy.
+
 - Fallback check: dynamic config should still converge through the periodic DB poll; investigate pods that report `source="pubsub", result="listener_failed"` without later `source="poll"` samples.
 - Config convergence check:
   `count(count by (config_hash) (deltallm_batch_scheduler_config_info))` should return `1` after
@@ -350,8 +375,21 @@ embeddings_batch_scheduler_shadow_mode: none
 - Metrics: `deltallm_batch_scheduler_decision_latency_seconds`, DB pool saturation, transaction timeout logs, `deltallm_batch_claim_empty_jobs_total`, `deltallm_batch_claim_blocked_decisions_total`.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
 - Logs: `batch_work_claim_decision` includes representative `batch_id`, model group, tenant scope, head item work units, cap values, in-flight units, reason, and `diagnostic_source`. INFO logs are deduplicated; DB-backed diagnostic probes are throttled separately by `embeddings_batch_claim_diagnostic_interval_seconds` per worker process, with a short retry backoff after failed probes.
-- Likely causes: too many worker pods, high worker concurrency, broad fair-share scans, missing indexes for queue filters, long transactions, or finalization work competing with claim queries.
-- Config mitigations: reduce worker concurrency, scale the DB pool, lower `embeddings_batch_scheduler_max_active_flows_per_decision` or `embeddings_batch_scheduler_max_candidate_jobs_per_flow`, increase `embeddings_batch_claim_diagnostic_interval_seconds` or set `embeddings_batch_claim_diagnostics_enabled=false`, keep active mode at `model_capacity_v1`, and pause advancement to `fair_share_v1` or `smart_v1`.
+- Possible causes:
+
+    - Too many worker pods or high worker concurrency.
+    - Broad fair-share scans or missing indexes for queue filters.
+    - Long transactions or finalization work that competes with claim queries.
+
+- Configuration actions:
+
+    1. Reduce worker concurrency.
+    2. Adjust database pool capacity.
+    3. Lower `embeddings_batch_scheduler_max_active_flows_per_decision` or `embeddings_batch_scheduler_max_candidate_jobs_per_flow`.
+    4. Increase `embeddings_batch_claim_diagnostic_interval_seconds` or set `embeddings_batch_claim_diagnostics_enabled=false`.
+    5. Keep active mode at `model_capacity_v1`.
+    6. Stop advancement to `fair_share_v1` or `smart_v1`.
+
 - Rollback threshold: scheduler decision p95 is above 500 ms for 10 minutes, or DB transaction timeouts coincide with rising oldest queue wait.
 
 ### Finalization Backlog Blocks New Claims

@@ -61,11 +61,15 @@ Open a tier to work in its version workspace:
 - Active and archived versions are immutable. Choose **New draft** to clone the active version, or **Restore as draft** to clone an archived version into a new editable version. Restoring never rewrites history or moves the live pointer.
 - When more than one draft exists, choose one explicitly. The UI shows its creator, update time, and source version instead of silently opening another admin's work.
 - Activating a draft first shows a change preview and assignment impact. The activation is accepted only if both the draft revision and active-version pointer still match the preview.
-- If another admin changes the same draft, the save is rejected and the editor keeps the unsaved fields open for comparison with the latest server values.
+- If another administrator changes the same draft, the server rejects the save.
+  The editor keeps unsaved fields open for comparison with the latest server values.
 
 Tier creation creates the tier and Draft v1 atomically. Retrying the same submit after a lost response reuses the same idempotency key and returns the original tier instead of creating a duplicate.
 
-The catalog, model policies, pricing rows, capacity pools, and archived versions use server-backed pagination. Page-size controls are bounded, filters reset to the first page, and the capacity-pool picker performs a bounded lookup for the selected callable rather than loading the entire pool catalog.
+The catalog, model policies, pricing rows, capacity pools, and archived versions use server pagination.
+Page-size controls have limits. Filters return to the first page.
+The capacity-pool picker uses a bounded lookup for the selected callable target.
+It does not load the full pool catalog.
 
 ### Model Policy
 
@@ -99,7 +103,10 @@ Example:
 
 The primary tier is the normal package. Add-on tiers are useful for exceptions without creating a custom tier for every organization.
 
-An enabled assignment whose end time is still in the future, including a scheduled assignment that has not started yet, can only reference an enabled tier with an active version. Before disabling a tier, disable or end all of its live and scheduled assignments. Disabled or expired assignments remain as history and may continue to reference a disabled tier.
+An enabled assignment with a future end time can refer only to an enabled tier with an active version.
+This includes scheduled assignments that have not started.
+Before you disable a tier, disable or end all its live and scheduled assignments.
+Disabled or expired assignments remain as history. They can continue to refer to a disabled tier.
 
 ### Creating Organizations
 
@@ -113,11 +120,34 @@ Creation behavior follows the effective runtime mode:
 | `shadow` | A primary tier is recommended by default; its allowed models are mirrored into legacy Asset Access, and an explicit legacy migration exception remains available |
 | `disabled` | Legacy direct Asset Access remains available |
 
-Use a custom tier or clone an existing tier when one customer needs different model access, model limits, pricing, or capacity. Do not recreate that policy with organization fields. While an active tier is authoritative in `enforce`, the API rejects new organization-level per-model limit maps and organization Asset Access writes; organization-wide RPM/TPM/RPH/RPD/TPD hard caps remain editable.
+Use a custom tier or a copy of an existing tier for customer-specific model access, limits, pricing, or capacity.
+Do not create that policy again with organization fields.
 
-If an organization already had legacy per-model RPM/TPM maps before its tier was assigned, its Service Policy card shows a warning because those safety caps still apply alongside the tier. First reproduce any required limits on the tier, preview and activate them, then use **Clear legacy model caps**. The confirmation warns that clearing them before the tier is ready can increase allowed traffic.
+In `enforce` mode, an active tier controls the policy.
+The API rejects new organization-level per-model limit maps and organization Asset Access writes.
+You can still edit organization-wide RPM, TPM, RPH, RPD, and TPD hard caps.
 
-`shadow` evaluates the staged tier but does not enforce it. For a newly created tier-first organization, DeltaLLM atomically snapshots the selected active version's allowed callable targets into legacy Asset Access so requests continue to work. That legacy mirror remains editable and authoritative during rollout; it intentionally does not follow later tier activations, allowing the preview and mismatch telemetry to expose policy changes before enforcement. Creating a new legacy organization through the API in this mode requires `"legacy_policy_exception": true`, matching the explicit migration checkbox in the drawer. `disabled` also keeps legacy Asset Access authoritative even if an assignment has already been staged. Once mode is `enforce`, the tier becomes authoritative and the organization Asset Access editor is hidden.
+An organization can have legacy per-model RPM or TPM maps from before its tier assignment.
+Its Service Policy card shows a warning because those safety caps still apply with the tier.
+
+1. Put the necessary limits on the tier.
+2. Review the preview.
+3. Activate the limits.
+4. Select **Clear legacy model caps**.
+
+The confirmation warns that removal of these caps before the tier is ready can increase permitted traffic.
+
+In `shadow` mode, DeltaLLM evaluates the staged tier but does not enforce it.
+For a new tier-first organization, it copies the selected active version's permitted callable targets into legacy Asset Access.
+This copy is atomic, so requests can continue to operate.
+Legacy Asset Access remains editable and controls access during rollout.
+It does not change with later tier activations.
+The preview and mismatch telemetry can thus show policy changes before enforcement.
+
+In this mode, a new legacy organization requires `"legacy_policy_exception": true` through the API.
+This matches the explicit migration checkbox in the drawer.
+In `disabled` mode, legacy Asset Access still controls access, including when an assignment is staged.
+In `enforce` mode, the tier controls access. The organization Asset Access editor is hidden.
 
 The optional organization RPM, TPM, RPH, RPD, and TPD fields are global hard caps. They apply across all models, teams, and keys in addition to the tier's per-model controls. Leave them blank when no extra organization-wide ceiling is needed. Budgets, budget resets, and audit-content storage also remain organization settings.
 
@@ -257,23 +287,64 @@ The preview answers: what can this organization actually use?
 
 At runtime, DeltaLLM applies prompt templates, pre-call callbacks, and guardrails before it validates the final request and enforces tier model access, budgets, and rate limits. These transformations run once per request, including cacheable requests, so a rewritten model or prompt cannot bypass policy or use a stale cache identity. Streaming and cached responses retain any parallel-request lease until their final response body is sent.
 
-The simulation answers: would this request be allowed in an empty rate-limit window, what would it cost across the configured routes, and which tier, capacity-pool, legacy model, or organization hard cap would block it? Select the workload type that matches the configured routes, then enter the relevant usage: input and output tokens for chat; input tokens for embedding or rerank; input and generated images for image generation; text tokens, characters, audio tokens, or seconds for speech; and text tokens, audio tokens, or seconds for transcription. Embedding and rerank simulations reject non-zero completion tokens instead of counting an incompatible usage dimension.
+The simulation answers these questions:
+
+- Does the request pass in an empty rate-limit window?
+- What does it cost across the configured routes?
+- Which tier, capacity-pool, legacy model, or organization hard cap blocks it?
+
+To run the simulation, use these steps:
+
+1. Select the workload type that matches the configured routes.
+2. Enter the usage from the applicable row in this table.
+
+| Workload | Usage |
+| --- | --- |
+| Chat | Input and output tokens |
+| Embedding or rerank | Input tokens |
+| Image generation | Input and generated images |
+| Speech | Text tokens, characters, audio tokens, or seconds |
+| Transcription | Text tokens, audio tokens, or seconds |
+
+Embedding and rerank simulations reject non-zero completion tokens.
+They do not count an incompatible usage dimension.
 
 The calculated price has three states:
 
 - **Available**: every configured route has applicable pricing. The result is exact when all candidates agree and a range when their prices differ.
 - **Partial**: at least one route can be priced and at least one cannot. The displayed exact value or range covers only the priced routes and is not a complete route quote.
-- **Unavailable**: no reliable quote can be produced. Typical reasons include no configured routes, no applicable pricing, missing workload usage, mixed route workload types, or a selected workload type that does not match the routes.
+- **Unavailable**: the simulation cannot give a reliable quote.
+  Possible causes include missing routes, pricing, or workload usage.
+  Routes with different workload types can also cause this result.
+  The selected workload type must match the routes.
 
-An explicit zero price remains an available `$0` quote when it matches the supplied usage unit. An absent price is not treated as zero. For known token models without a regular deployment or tier token override, the built-in model catalog price is used and reported with source `default`; cache-only or batch-only metadata does not replace the regular sync quote. Once a regular input or output override is configured, every token dimension used by the simulation must resolve from that configured pricing chain, so an incomplete override is reported as unpriced instead of mixing it with the catalog. Unknown token models without complete applicable pricing are unavailable. Configure an explicit zero in the model or tier pricing when a route is intentionally free.
+An explicit zero price gives an available `$0` quote when it matches the supplied usage unit.
+A missing price does not mean zero.
+For known token models, the built-in model catalog supplies the price when no regular deployment or tier token override exists.
+The simulation reports this price with source `default`.
+Cache-only or batch-only metadata does not replace the regular synchronous quote.
+
+After a regular input or output override is set, the configured pricing chain must supply each token dimension in the simulation.
+If that override is incomplete, the simulation reports the route as unpriced.
+It does not add missing prices from the catalog.
+Unknown token models without complete applicable pricing are unavailable.
+
+For an intentionally free route, configure an explicit zero in the model or tier pricing.
 
 When the callable model is an alias, catalog fallback uses the resolved provider model. Runtime spend metadata records both names so operators can reconcile customer policy against provider cost without exposing the provider name as the public callable target.
 
 `pricing_sources` lists only sources that contributed fields to the calculated amount and can contain more than one value when tier and deployment fields are combined. Small positive token prices are displayed with additional decimal precision so they are not mistaken for zero.
 
-Displayed amounts are totals for the requested `request_count`. The quote contract also returns `per_request_amount`, or per-request minimum and maximum values for a range, so callers do not have to infer whether an amount is aggregate. For image requests with `input_images > 0`, an input-image price must resolve; an output-only image price is not silently applied as a zero input price.
+Displayed amounts are totals for the requested `request_count`.
+The quote also supplies `per_request_amount`. For a range, it supplies per-request minimum and maximum amounts.
+These fields identify the cost for one request.
+If `input_images > 0`, image requests must have an input-image price.
+An output-image price does not supply a zero input-image price.
 
-Transcription quotes apply the same provider billing rules as live traffic. For example, a provider minimum billable duration can make the quoted duration cost higher than the raw audio length, and routes using different providers can produce a range. The simulation does not query live routing health, current Redis counters, fair-share activity, or in-flight requests.
+Transcription quotes use the same provider billing rules as live traffic.
+A provider's minimum billable duration can increase the duration cost above the cost for the raw audio length.
+Routes that use different providers can give a price range.
+The simulation does not query live routing health, current Redis counters, fair-share activity, or in-flight requests.
 
 ## Efficient Tier Design
 

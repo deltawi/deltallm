@@ -14,11 +14,15 @@ as `active_requests:*`, `cooldown:*`, `failures:*`, `health:*`, `latency:*`, and
 new binaries must not run concurrently: they would make independent admission, cooldown, health,
 latency, and usage decisions against the same providers.
 
-The Helm chart marks v1 releases on the API ConfigMap and blocks upgrades from an unmarked legacy
-release while `routerStateSchemaCutover.enabled=true` unless the operator acknowledges the cutover
-and selects the `Recreate` strategy. Later v1-to-v1 upgrades detect the marker and retain their
-configured strategy. The acknowledgement is a safety gate, not a drain mechanism; set it only
-after every old API and batch-worker pod has stopped.
+The Helm chart marks v1 releases on the API ConfigMap.
+With `routerStateSchemaCutover.enabled=true`, the chart blocks upgrades from an unmarked legacy release unless the operator meets two conditions:
+
+- The operator acknowledges the cutover.
+- The operator selects the `Recreate` strategy.
+
+Later v1-to-v1 upgrades detect the marker and keep their configured strategy.
+The acknowledgement does not drain pods.
+Set it only after all previous API and batch-worker pods have stopped.
 
 !!! warning "Check your release notes"
     Use this runbook only when the release notes for your target version link to it. Old and new router schemas cannot safely run together.
@@ -54,9 +58,13 @@ after every old API and batch-worker pod has stopped.
      --set strategy.type=Recreate
    ```
 
-7. Confirm migrations completed before application readiness, then verify API and worker readiness,
-   provider health, namespaced Redis state, and a controlled gateway request before restoring
-   admission and autoscaling.
+7. Confirm that migrations completed before application readiness.
+8. Verify API and worker readiness.
+9. Verify provider health.
+10. Verify namespaced Redis state.
+11. Send a controlled gateway request.
+12. After these checks pass, restore admission.
+13. Restore autoscaling.
 
 The new key schema does not add Redis round trips. Admission and health transitions keep their
 existing Lua calls, while batch reads remain pipelines or `MGET` operations.

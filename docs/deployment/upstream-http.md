@@ -23,7 +23,10 @@ These defaults are a conservative production starting point. Streaming requests 
 
 `upstream_http_read_timeout_seconds` is the global provider read timeout when a deployment does not set `deltallm_params.timeout`. Deployment-level `timeout` values still override the read phase for that deployment, while connect, write, and pool timeouts remain explicit across upstream requests.
 
-Request duration can also be limited by the router failover wrapper timeout. Audio transcription defaults both the upstream read timeout and the failover wrapper timeout to `600` seconds when the deployment does not set `deltallm_params.timeout`; an explicit route-group timeout still takes priority for operators who need a stricter policy.
+The router failover wrapper timeout can also limit request duration.
+For audio transcription, the default upstream read timeout and failover wrapper timeout are each `600` seconds.
+These defaults apply when the deployment does not set `deltallm_params.timeout`.
+An explicit route-group timeout takes priority.
 
 The upstream HTTP settings are startup-time settings. DeltaLLM stores one startup snapshot and uses it for provider calls, live model discovery, MCP upstream calls, and health probes. Apply changes with a process restart or Kubernetes rollout; runtime config reloads do not rebuild the HTTP client or partially change timeout behavior.
 

@@ -87,10 +87,10 @@ Because the payload reveals deployment counts and state, expose it only to opera
 GET /health/fallback-events?limit=50
 ```
 
-Returns recent in-process fallback events. `limit` is capped at 200. This journal is bounded
-diagnostic history, not a durable audit log or cluster-wide event stream.
-For a context fallback selected before any provider attempt, `from_deployment` is `null` because
-the primary route group was rejected locally rather than represented by a failed deployment.
+The endpoint returns recent fallback events from the current process. `limit` has a maximum of 200.
+This bounded diagnostic history is not a durable audit log or a cluster-wide event stream.
+For a context fallback before the first provider attempt, `from_deployment` is `null`.
+In that condition, the gateway rejected the primary route group locally. No deployment failed.
 
 ## Prometheus metrics
 

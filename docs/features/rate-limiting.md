@@ -1,6 +1,9 @@
 # Rate Limiting
 
-DeltaLLM enforces rate limits through two independent systems that operate in sequence: **identity limits** (applied to the caller before routing) and **deployment limits** (applied to individual model backends during routing). Understanding the distinction matters when you have limits configured at multiple levels.
+DeltaLLM enforces rate limits through two independent systems in sequence.
+**Identity limits** apply to the caller before routing.
+**Deployment limits** apply to individual model backends during routing.
+These limits can apply at different levels.
 
 ---
 
@@ -46,7 +49,10 @@ Each level supports six rate limit dimensions across three time windows:
 
 A request must pass every configured scope and window. If **any single check** is over its limit, the request is rejected immediately with a `429` and no counters are modified.
 
-The check is **atomic**: a Redis Lua script validates all scopes and windows in a first pass, then increments all counters in a second pass only if every check passed. This prevents partial updates where one scope is charged but another fails.
+The check is **atomic**.
+A Redis Lua script first validates all scopes and windows.
+Only if all checks pass does it increment all counters in a second pass.
+Thus, a failure in one scope cannot leave another scope with a partial charge.
 
 ### System 2 — Deployment limits (model-level capacity)
 
@@ -97,11 +103,16 @@ A common pattern is to set a generous per-minute limit for burst tolerance while
 }
 ```
 
-In this example, the key can burst up to 60 requests in a single minute, but is capped at 500 requests total within any clock hour and 2,000 requests per UTC day.
+In this example, the key permits up to 60 requests in one minute.
+It also limits total requests to 500 per clock hour and 2,000 per UTC day.
 
 ### Token estimation
 
-Token counts are estimated from the raw request body before the provider call using a simple heuristic: **1 token per 4 characters** of the serialized JSON body. This is intentionally fast and slightly pessimistic. File uploads and multipart requests fall back to a minimal estimate of 1 token so RPM limits still apply even when TPM cannot be estimated accurately.
+Before the provider call, the gateway estimates tokens from the serialized JSON request body.
+It counts **1 token per 4 characters**.
+This fast estimate is deliberately slightly pessimistic.
+File uploads and multipart requests use a minimum estimate of 1 token.
+RPM limits thus still apply when an accurate TPM estimate is unavailable.
 
 ### Response headers
 
@@ -143,7 +154,9 @@ Retry-After: <seconds until window resets>
 
 The `param` and `code` fields identify which specific scope and window failed, which is useful for debugging when limits exist at multiple levels. For multi-window limits, the scope indicates the window that was exceeded (e.g., `key_rph` for hourly, `team_rpd` for daily).
 
-The `Retry-After` header reflects the reset time for the specific window that was exceeded — a per-hour violation will show a larger `Retry-After` value (up to 3600 seconds) than a per-minute violation (up to 60 seconds).
+The `Retry-After` header gives the reset time for the exceeded window.
+An hourly violation can give up to 3600 seconds.
+A minute-window violation can give up to 60 seconds.
 
 ### Limits are global, not per-model
 
@@ -153,7 +166,8 @@ The workaround is to issue separate API keys for different use cases, each with 
 
 ### Cache invalidation
 
-When an admin updates rate limits on a key, team, or organization through the admin API, the key validation cache is automatically invalidated. This ensures new limits take effect immediately on the next request — there is no delay or stale-cache window.
+An admin API change to key, team, or organization rate limits automatically invalidates the key validation cache.
+The next request uses the new limits immediately, with no stale-cache interval.
 
 ---
 
@@ -182,7 +196,8 @@ When `enable_pre_call_checks: true` is set:
 
 If `RateLimitAwareStrategy` is configured, it also soft-deprioritizes deployments above 90% utilization before they hit 100%, reducing the chance of hitting provider-side `429` errors.
 
-If a provider returns a `429` despite these checks, the `FailoverManager` can catch it and retry with a different deployment in the same group, if your route policy allows retries.
+A provider can return `429` despite these checks.
+If the route policy permits retries, `FailoverManager` can retry with a different deployment in the same group.
 
 ### Deployment limits vs identity limits
 
@@ -309,7 +324,9 @@ For a single request with this key:
 3. If all identity checks pass, the router picks a deployment. With `enable_pre_call_checks`, it checks whether the deployment is below its 500 RPM capacity.
 4. If the deployment is at capacity and there are no alternatives, the request fails with `503`. Otherwise it proceeds.
 
-The org, team, and user limits are shared caps — useful for ensuring one team cannot consume the entire org budget, but they only restrict the request when the tighter key-level limit alone would still allow it.
+Organization, team, and user limits are shared caps.
+They prevent one team from consuming the full organization allowance.
+They restrict a request only when the tighter key-level limit would still permit it.
 
 ---
 

@@ -75,8 +75,9 @@ when the prior binary is compatible with the migrated schema; there is no implie
 
 1. **Announce:** mark the old contract deprecated in docs, schema/response warnings where feasible,
    and release notes. Name the replacement and earliest removal version.
-2. **Overlap:** keep old and new behavior together for at least one normal release cycle when safe,
-   with tests for both and telemetry that can prove remaining use.
+2. **Overlap:** where safe, keep previous and new behavior together for at least one normal release cycle.
+   Keep tests for each version.
+   Use telemetry to identify remaining use.
 3. **Remove:** remove only in an allowed breaking release, publish migration and rollback boundaries,
    and delete obsolete generated reference entries/tests.
 

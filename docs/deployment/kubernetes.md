@@ -375,10 +375,11 @@ command: ["uvicorn"]
 args: ["src.main:app", "--host", "0.0.0.0", "--port", "4000"]
 ```
 
-The global command also applies to the chart's batch-worker Deployment; each role still receives
-its role-specific configuration. If a release calls for the organization-deletion coordinator or
-another special cutover, run that documented workflow instead of the generic command and keep its
-feature gate disabled until every required verification passes.
+The global command also applies to the chart's batch-worker Deployment.
+Each role receives its own configuration.
+If the release specifies a special cutover, use that procedure instead of the generic command.
+The organization-deletion coordinator is one example.
+Keep the feature gate disabled until all necessary verification passes.
 
 See [Database migrations](database-migrations.md) for the job manifest and ordering contract and
 [Upgrades and rollbacks](upgrade-and-rollback.md) for the complete release procedure.

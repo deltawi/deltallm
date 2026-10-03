@@ -37,7 +37,10 @@ All limits are optional. Only configured limits are enforced. Team limits act as
 
 ## Self-Service Key Policy
 
-Teams can allow their developers to create their own API keys without admin involvement. New teams start with self-service enabled by default in the create form, and you can review or tighten the policy later in the Team Detail page under the **Self-Service Keys** card (visible to team admins and above).
+Teams can let developers create their own API keys without administrator action.
+The create form enables self-service for new teams by default.
+Team administrators and higher roles can review the policy on the Team Detail page.
+Use the **Self-Service Keys** card to change the policy.
 
 When SSO self-registration is enabled, the configured `self_registration.default_team` is created automatically the first time an eligible user is provisioned. Its self-service key policy is seeded from config once, then remains editable from the Team Detail page.
 

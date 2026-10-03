@@ -1655,7 +1655,7 @@ class FallbackConfig(BaseModel):
 - Fallback chains execute in declared order
 - Context window fallbacks trigger on appropriate error
 - Content policy fallbacks trigger on content filter errors
-- Non-retryable errors don't trigger unnecessary retries
+- Non-retryable errors do not trigger unnecessary retries
 
 ---
 
@@ -1732,7 +1732,7 @@ class FallbackConfig(BaseModel):
 | Cooldown state inconsistency | Use Redis TTL for automatic expiration; periodic reconciliation |
 | Latency window overflow | Bounded window size with automatic pruning (5 min max) |
 | Health check costs | Configurable `health_check_model` for lightweight probes |
-| Tag routing empty pool | Return clear error; don't fall back silently |
+| Tag routing empty pool | Return clear error; do not fall back silently |
 | Priority routing exhaustion | Return None for exhausted pool; let caller handle |
 | Pre-call RPM/TPM estimation | Approximate based on request tokens; document limitations |
 

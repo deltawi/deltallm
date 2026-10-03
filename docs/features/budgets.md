@@ -55,7 +55,8 @@ Hard budgets can be enforced at these levels:
 API Key -> User -> Team -> Organization
 ```
 
-There is also support for team-per-model hard budgets, which is useful when one team can use several models but one of them needs its own cap.
+Team-per-model hard budgets are also supported.
+These budgets let a team use several models while it has a separate cap for one model.
 
 ## View Spend
 
@@ -102,7 +103,15 @@ Budget notifications require email delivery to be configured first.
 
 If an entity has both `budget_duration` and `budget_reset_at`, the runtime can reset tracked spend automatically when the reset window is reached. Durations use a positive integer up to `10000` followed by `h`, `d`, or `mo`, for example `1h`, `7d`, `30d`, and `1mo`.
 
-Organization monthly reset is available from the organization create page, organization list edit modal, and organization detail settings. Monthly reset timestamps are UTC. Monthly reset is lazy: it runs when budget enforcement checks the organization after the configured reset time. It clears the tracked organization spend counter and advances the next reset by calendar month. The selected UTC day of month is preserved; if the next month is shorter, the reset clamps for that month only, for example January 30 -> February 28 -> March 30. It does not carry unused budget forward.
+Organization monthly reset is available on the organization create page, list edit modal, and detail settings.
+Reset timestamps use UTC.
+The reset occurs when budget enforcement examines the organization after the configured reset time.
+It clears the tracked organization spend counter and advances the next reset by one calendar month.
+It does not carry unused budget forward.
+
+The reset keeps the selected UTC day of the month.
+If the next month is shorter, it uses that month's final day only for that reset.
+For example, the sequence is January 30, February 28, then March 30.
 
 ## Organization Soft Budgets
 

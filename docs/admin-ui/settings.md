@@ -11,7 +11,7 @@ and [General Settings](../configuration/general.md).
 ## Main sections
 
 - **General**: runtime log level
-- **Theme**: instance name, simple and expanded logos, favicon, primary and secondary action colours, and menu hover colour
+- **Theme**: instance name, simple and expanded logos, favicon, primary and secondary action colors, and menu hover color
 - **Routing & Reliability**: default strategy, retries, timeouts, and cooldowns
 - **Fallback Chains**: explicit fallback mappings
 - **Recent Fallback Events**: operational fallback review
@@ -25,7 +25,7 @@ Use Settings for platform-wide defaults. Do not use it for per-group routing beh
 The Theme tab is available only to platform administrators. Preview changes before saving them.
 **Discard changes** restores the last saved values in the form.
 
-**Reset to DeltaLLM defaults** changes the name and colours back to their original values and
+**Reset to DeltaLLM defaults** changes the name and colors back to their original values and
 permanently removes uploaded logos and the favicon. This cannot be undone from the Settings page.
 See [General Settings](../configuration/general.md#ui-branding) for supported file types, storage,
 and multi-instance behavior.

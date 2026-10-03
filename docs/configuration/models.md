@@ -85,12 +85,13 @@ After the initial seed, set `model_deployment_bootstrap_from_config` back to `fa
 | `model_info.tags` | No | Routing tags for deployment selection; not authorization |
 | `routing_state_incarnation` | Server-managed | Stable opaque identity used to fence provider-health generations; admin-created config deployments populate it automatically |
 
-Database-backed deployments derive their routing-state incarnation from the immutable creation
-timestamp. For `config_only` deployments created through the admin API, DeltaLLM persists an opaque
-incarnation and preserves it across ordinary updates. Existing hand-authored entries without the
-field use their deployment ID as a compatibility incarnation. If an operator manually deletes and
-later recreates an otherwise identical config-only deployment with the same ID, set a new opaque
-`routing_state_incarnation`; do not change it for metadata-only edits.
+Database-backed deployments derive their routing-state incarnation from the immutable creation timestamp.
+For `config_only` deployments created through the admin API, DeltaLLM stores an opaque incarnation.
+Ordinary updates keep that value.
+Existing entries written by hand without this field use their deployment ID as a compatibility incarnation.
+
+If you manually recreate an otherwise identical config-only deployment with the same ID, set a new opaque `routing_state_incarnation`.
+Do not change this value for metadata-only edits.
 
 ## Model-router Capability and Price Metadata
 
@@ -305,7 +306,11 @@ model_list:
         - low-latency
 ```
 
-In this example, granting the `beta` or `support` access group to an organization, team, key, or runtime user can make the `gpt-4o-mini` callable target visible to that scope. The `low-latency` tag is separate routing metadata: requests can use `metadata.tags` to prefer matching deployments, but tags do not grant access.
+In this example, the `beta` or `support` access group can make `gpt-4o-mini` visible to a scope.
+The scope can be an organization, team, key, or runtime user.
+The `low-latency` tag is separate routing metadata.
+Requests can use `metadata.tags` to prefer matching deployments.
+Tags do not grant access.
 
 Important behavior:
 
@@ -406,11 +411,19 @@ Sync chat microbatching is conservative:
 - grouping happens after routing, so only items resolved to the same deployment can be batched
 - non-message request parameters must match exactly; `require_homogeneous_params` must remain `true` when provided
 - streaming, MCP tools, function tools, complex response formats, and multiple choices fall back to per-item execution
-- whole microbatch calls use the normal failover path; each served deployment must have `mode: sync_microbatch`, support the chunk size and token cap, and expose a sync microbatch executor
-- if a served deployment does not satisfy sync microbatch requirements and there was no earlier retryable health-affecting microbatch failure, the worker degrades that chunk to bounded per-item execution without marking the unsupported deployment unhealthy
-- if the primary sync microbatch already failed with a retryable health-affecting error and failover then reaches an unsupported deployment, the worker preserves the primary failure and requeues the chunk instead of hiding that failure behind per-item fallback
+- Whole microbatch calls use the normal failover path.
+  Each served deployment must have `mode: sync_microbatch` and a synchronous microbatch executor.
+  It must support the chunk size and token cap.
+- A served deployment can fail to meet these requirements.
+  Without an earlier retryable microbatch failure that affects health, the worker uses bounded per-item execution for that chunk.
+  It does not mark the unsupported deployment unhealthy.
+- A primary microbatch failure can be retryable and affect health.
+  If failover then gets to an unsupported deployment, the worker keeps the primary failure and queues the chunk again.
+  It does not hide that failure with per-item fallback.
 - successful provider results must include per-item usage; aggregate-only usage is rejected for chat billing
-- mixed provider results persist successful items and fail or retry only the affected failed items; structured per-item `429`, `408`, and `5xx` provider errors are retryable under the normal batch retry policy
+- For mixed provider results, the worker stores successful items.
+  It fails or retries only the failed items.
+  Structured per-item `429`, `408`, and `5xx` provider errors permit retry under the normal batch retry policy.
 
 `max_in_flight` is enforced per worker replica. When running multiple Kubernetes
 replicas, multiply the configured value by the worker replica count when sizing

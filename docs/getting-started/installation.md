@@ -45,12 +45,13 @@ The project includes a `uv.lock` file, so `uv` is the recommended installer.
     pip install -r requirements.txt
     ```
 
-!!! note
-    The backend commands below use `uv run ...`. If you installed with `pip`, run the same commands without the `uv run` prefix.
+The backend commands below use `uv run ...`.
+If you installed with `pip`, run the same commands without the `uv run` prefix.
 
 ## 3. Configure environment variables
 
-Create an empty PostgreSQL database first, then export the variables DeltaLLM needs to start.
+1. Create an empty PostgreSQL database.
+2. Export the variables necessary for DeltaLLM startup.
 
 !!! warning "Generate the master key and salt key before you start"
     DeltaLLM will not start with placeholder values such as `change-me`.

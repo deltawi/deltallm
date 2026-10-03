@@ -34,10 +34,11 @@ Tip: check the effective `allowed_fails` value in the config your deployment act
 | `model_group_alias` | `{}` | Friendly names that map to real model groups |
 | `route_groups` | `[]` | File-defined route groups and membership |
 
-Each file-defined route group should declare one workload mode. For compatibility with older files,
-an omitted mode is inferred when all enabled, resolvable members have one deployment mode; an empty
-or unresolved legacy group falls back to `chat`. Mixed member modes are rejected. Declare `mode`
-explicitly for stable, warning-free configuration:
+Each file-defined route group should declare one workload mode.
+For compatibility, DeltaLLM can infer an omitted mode from enabled, resolvable members with the same deployment mode.
+An empty or unresolved legacy group defaults to `chat`.
+DeltaLLM rejects mixed member modes.
+Declare `mode` explicitly for stable configuration without warnings:
 
 ```yaml
 router_settings:
@@ -81,15 +82,16 @@ generation before attempting bounded, exact cleanup of retired health keys. Clea
 reported as degraded maintenance and does not make a persisted model mutation fail. Metadata-only
 changes such as weight and priority retain the existing health generation and state.
 
-Router state currently targets the standalone Redis topology created by application bootstrap;
-Redis Cluster is not supported by its multi-key admission and health-transition scripts.
-Every router key is scoped as `deltallm:<app_env>:v1:<router-capability>:<identifiers>`. This is a
-schema cutover from the previous unscoped ephemeral router keys: drain replicas running the old
-binary before sending traffic to namespaced replicas, and use the same drain procedure for
-rollback. Do not run the two key schemas concurrently because admission and cooldown ownership
-would be split. Helm operators must follow the
-[router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md); chart upgrades are
-blocked until the drain is acknowledged and `strategy.type=Recreate` is selected.
+Router state uses the standalone Redis topology created at application startup.
+Its multi-key admission and health-transition scripts do not support Redis Cluster.
+Each router key uses `deltallm:<app_env>:v1:<router-capability>:<identifiers>`.
+This schema replaces the previous unscoped temporary router keys.
+
+Before namespaced replicas receive traffic, drain replicas that run the previous binary.
+Use the same drain procedure for rollback.
+Do not run the two key schemas concurrently. They would use separate admission and cooldown ownership.
+For Helm, use the [router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md).
+Chart upgrades require drain acknowledgement and `strategy.type=Recreate`.
 
 ## Supported Strategies
 
@@ -164,10 +166,10 @@ Context routing is disabled unless a route-group policy contains a `context` obj
 existing deployment `model_info.max_tokens`, `model_info.max_input_tokens`, and
 `model_info.max_output_tokens` fields.
 
-For upgrade compatibility, existing non-positive values in those fields are treated as
-unknown capacity. New admin API and UI writes require positive integers; opening and
-saving a legacy deployment through the UI removes a non-positive sentinel unless the
-operator supplies a positive replacement.
+For upgrade compatibility, existing non-positive values in these fields mean unknown capacity.
+New admin API and UI writes require positive integers.
+When an operator opens and saves a legacy deployment, the UI removes a non-positive sentinel.
+The operator can supply a positive replacement.
 
 Policy writes distinguish omission from explicit deletion. Omitting `context` preserves the
 currently stored block so older clients do not erase policy they do not understand. Send
@@ -198,23 +200,31 @@ sufficient context tier while retaining larger eligible deployments for failover
 defaults to `allow` for upgrade compatibility; use `exclude` only after every member has accurate
 capacity metadata.
 
-The input estimate is computed once from the final normalized payload after prompt rendering,
-pre-call hooks, and guardrails. It is the gateway's fast character-based token estimate, not a
-provider tokenizer result, so keep a non-zero safety margin. Output demand uses the request's
-explicit `max_tokens`, then any output limit the selected provider adapter must send (including
-Anthropic's deployment `deltallm_params.max_tokens` or its 1024-token protocol default), then the
-deployment's `model_info.default_params.max_tokens`, then the policy default. Embeddings use zero
-output demand. Multi-phase MCP chat requests recompute demand between model phases and invalidate
-only their request-local candidate plan.
+The gateway computes the input estimate once from the final normalized payload.
+This occurs after prompt rendering, pre-call hooks, and guardrails.
+It uses a fast character-based token estimate, not a provider tokenizer.
+Keep a non-zero safety margin.
 
-Known insufficient capacity enters the existing `context_window_fallbacks` chain before any
-provider call. The initiating route group's context policy is applied to every deployment in that
-chain even when a fallback group has no context block. If no configured context fallback is
-eligible, the gateway returns `400` with code
-`context_length_exceeded`. If a capable deployment exists but is unhealthy or cooled down, the
-existing no-healthy-deployments `503` behavior remains. The filter adds no SQL, Redis, or network
-calls; it operates on the in-memory policy snapshot and deployment metadata after the router's
-existing batched state reads.
+Output demand uses the first available value in this order:
+
+1. The request's explicit `max_tokens`.
+2. The output limit that the selected provider adapter must send.
+   This includes Anthropic's deployment `deltallm_params.max_tokens` or its 1024-token protocol default.
+3. The deployment's `model_info.default_params.max_tokens`.
+4. The policy default.
+
+Embeddings use zero output demand.
+MCP chat requests with multiple model phases compute demand again between those phases.
+They invalidate only their request-local candidate plan.
+
+Known insufficient capacity enters the existing `context_window_fallbacks` chain before a provider call.
+The initiating route group's context policy applies to each deployment in that chain.
+This includes fallback groups without a context block.
+If no configured context fallback is eligible, the gateway returns `400` with code `context_length_exceeded`.
+If a capable deployment exists but is unhealthy or in cooldown, the existing no-healthy-deployments `503` behavior applies.
+
+The filter adds no SQL, Redis, or network calls.
+It uses the policy snapshot and deployment metadata in memory after the router's existing batched state reads.
 
 Review ownership, migration, rollback, and latency before you enable
 context-capacity routing in production.
@@ -265,13 +275,20 @@ context:
   safety_margin_tokens: 256
 ```
 
-The execution order is normalized prompt/hook/guardrail processing, authentication and caller
-admission, whole-response cache lookup, deterministic member filtering, bounded selector admission
-and classification, then normal answer placement/retry/failover. A cache hit skips classification
-and selector accounting entirely. The selector sees a bounded projection of the final prompt,
-recent context and structural features, not credentials, unrestricted metadata, tool schemas or
-attachment contents. That prompt content goes to the configured classifier's provider: qualify its
-data-handling policy and required routing tags before publishing.
+The execution sequence is:
+
+1. Normalized prompt, hook, and guardrail processing.
+2. Authentication and caller admission.
+3. Whole-response cache lookup.
+4. Deterministic member filtering.
+5. Bounded selector admission and classification.
+6. Normal answer placement, retry, and failover.
+
+A cache hit skips classification and selector accounting.
+The selector receives a bounded subset of the final prompt, recent context, and structural features.
+It does not receive credentials, unrestricted metadata, tool schemas, or attachment contents.
+This prompt content goes to the configured classifier's provider.
+Before publication, qualify that provider's data-handling policy and the necessary routing tags.
 
 Classification makes at most one provider attempt per external operation. Provider/parse/timeout
 or capacity failures select the configured safe lane; authentication, accounting and parent-deadline
@@ -300,14 +317,19 @@ If a team-model budget is configured, its maintained spend counter must exist. M
 data fails selector admission as accounting unavailable; repair/reconcile it through the existing
 billing owner before retrying. Admission never rebuilds counters by scanning spend history.
 
-Use the existing policy validate/draft/publish/history/rollback API endpoints. Invalid activation
-does not archive the working policy; active member/model changes are requalified transactionally.
-Publish `{"selector": null}` to disable selection, or roll back to a selector-free revision. Rolling
-back to a selector-bearing revision revalidates and reactivates it. Canary through a separately
-authorized group. Before rolling back binaries to pre-PR-4 versions, remove active selectors and
-drain in-flight operations; disposable runtime-cache envelopes use a new version and reload from
-the durable policy source. Equivalent policy reloads keep response-cache identity, while selector,
-lane, capability or fallback-dependency changes invalidate it naturally.
+Use the existing policy validate, draft, publish, history, and rollback API endpoints.
+Invalid activation does not archive the working policy.
+Active member and model changes receive qualification again in the transaction.
+
+To disable selection, publish `{"selector": null}` or roll back to a revision without a selector.
+Rollback to a revision with a selector validates and activates it again.
+Use a separately authorized group for the canary.
+Before binary rollback to a version from before PR 4, remove active selectors.
+Drain in-flight operations before that rollback.
+
+Disposable runtime-cache envelopes use a new version and reload from the durable policy source.
+Equivalent policy reloads keep response-cache identity.
+Selector, lane, capability, or fallback-dependency changes invalidate that identity.
 
 Internal Batch chat items select independently. Items whose group or configured
 normal/context/content-policy fallback topology contains a selector execute individually
@@ -323,11 +345,13 @@ Deterministic policy simulation does not run selectors. The guided editor and op
 evaluation are described in [Model router administration](model-router-admin.md).
 Streaming with managed MCP tools retains its existing unsupported error.
 
-Monitor bounded selector decision/default/termination counters, duration, terminal rank and
-escalation counters, and selector contribution to streaming TTFT. Detailed lane and policy identity
-stay in protected routing telemetry, not public selector headers. Investigate high defaults by
-checking classifier capacity, provider health, context/capability metadata and strict lane output;
-investigate missing spend through the durable pending-reconciliation state, not synthetic zeroes.
+Monitor bounded selector decision, default, termination, duration, terminal rank, and escalation metrics.
+Also monitor the selector's contribution to streaming TTFT.
+Detailed lane and policy identity stay in protected routing telemetry. Public selector headers do not expose them.
+
+For high default rates, examine classifier capacity, provider health, context and capability metadata, and strict lane output.
+For missing spend, examine the durable pending-reconciliation state.
+Do not substitute a zero value for unresolved spend.
 
 The complete design, bounds, compatibility behavior, rollout, and rollback order
 are part of the route-group model router contract.
@@ -349,58 +373,63 @@ deltallm_settings:
         - claude-3-sonnet
 ```
 
-Provider adapters select the specialized context-window and content-policy maps from known error
-envelope fields for chat, embeddings, images, rerank, speech, and transcription. OpenAI-compatible
-and Azure OpenAI responses or stream events that end with `finish_reason: content_filter` are also
-content-policy failures. Raw exception text and malformed provider bodies never activate a
-specialized chain. Explicit custom providers use generic status mapping unless they are declared as
-one of the supported OpenAI-compatible providers; an omitted provider retains the existing implicit
-OpenAI-compatible behavior. HTTP status still owns the public error type and health impact. A
-recognized context or policy classification on a 5xx response remains health-affecting but may try
-its specialized chain first; an unclassified 5xx uses the general chain, and 429 remains a rate-limit
-failure regardless of envelope text. A malformed JSON or response schema behind a nominally
-successful provider status is a health-affecting provider failure and may use the general
-`fallbacks` map; its upstream payload is never returned to the client. This includes empty chat
-choices, missing or mismatched embedding and rerank results, and empty speech audio. Unclassified
-provider client errors, such as `400`, `409`, or `422`, remain health-neutral, skip retrying the same
-deployment, and advance through the remaining eligible deployments and configured general fallback
-groups. If all candidates reject the request, DeltaLLM returns the final sanitized `400`. Known
-authentication, permission, missing-model, timeout, and rate-limit statuses retain their specialized
-behavior. Anthropic Messages responses classify
-`refusal` as content policy and `model_context_window_exceeded` as context window before returning a
-nominal success. Gemini accepts only documented success terminal reasons; policy terminals use the
-content-policy chain and unsupported, malformed, or unknown terminal reasons fail closed through
-the general chain. For Bedrock streams, the documented exception type is authoritative: throttling
-and service exceptions cannot be reclassified by message text, while validation exceptions may use
-the bounded provider-specific context/content markers.
+Provider adapters classify context-window and content-policy failures from known error envelope fields.
+This applies to chat, embeddings, images, rerank, speech, and transcription.
+OpenAI-compatible and Azure OpenAI responses or stream events with `finish_reason: content_filter` are content-policy failures.
+Raw exception text and malformed provider bodies never activate a specialized chain.
 
-No fallback starts after a streaming response frame has been sent. Provider role and metadata
-events are held in a bounded pre-commit buffer until output or a valid terminal event establishes a
-real response. For OpenAI-compatible streams, non-empty `reasoning`, `reasoning_content`, and
-`reasoning_details` deltas are output, just like content, refusals, and tool calls. The first such
-delta commits the response, releases buffered metadata in its original order, and prevents replay on
-another deployment. This lets OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock classified
-terminal events select a specialized fallback when they arrive before output. Empty, terminal-only,
-and truncated pre-output streams are malformed successes and may use the general fallback chain.
-After partial output has committed a response, a classified stop terminates that stream with the
-compatible `content_filter` or `length` finish reason instead of starting another provider attempt.
-Any other malformed committed stream is aborted, marked unhealthy, and never cached as a complete
-response. Exceeding the bounded pre-commit buffer with otherwise well-formed, unrecognized metadata
-is treated as a gateway compatibility failure: it returns the same sanitized provider-response error
-but does not cool down the deployment. A clean `[DONE]` marker after only unrecognized, non-empty
-delta fields follows the same health-neutral path. Before any response frame is sent, the router
-skips a same-deployment retry and tries the next eligible deployment once. If every eligible
-deployment returns only unrecognized output fields and reaches either boundary, the request fails
-with the sanitized provider-response error and none of those deployments is marked unhealthy. A
-buffer filled only with known metadata, such as repeated role-only deltas, is instead a malformed
-provider stream and affects health.
+Explicit custom providers use generic status mapping unless declared as supported OpenAI-compatible providers.
+An omitted provider keeps the existing implicit OpenAI-compatible behavior.
+HTTP status controls the public error type and health impact.
+A recognized context or policy classification on a `5xx` response still affects health.
+It can try its specialized chain first.
+An unclassified `5xx` uses the general chain. A `429` remains a rate-limit failure regardless of envelope text.
 
-For OpenAI-compatible streaming requests, DeltaLLM asks OpenAI-family and vLLM deployments for a
-final usage chunk even when the client did not request one; that internal chunk is hidden from the
-client. If the provider omits usage, fallback estimation deduplicates textual `reasoning`,
-`reasoning_content`, and `reasoning_details` aliases within each delta, then sums the deltas. Opaque
-reasoning details use a conservative payload-size estimate and are marked incomplete in usage
-metadata.
+Malformed JSON or response schemas with a nominally successful provider status are provider failures that affect health.
+They can use the general `fallbacks` map. The client never receives the upstream payload.
+Examples include empty chat choices, missing or mismatched embedding and rerank results, and empty speech audio.
+
+Unclassified provider client errors such as `400`, `409`, or `422` do not affect health.
+They skip retries on the same deployment and continue through remaining eligible deployments and configured general fallback groups.
+If all candidates reject the request, DeltaLLM returns the final sanitized `400`.
+Known authentication, permission, missing-model, timeout, and rate-limit statuses keep their specialized behavior.
+
+Anthropic Messages classifies `refusal` as content policy and `model_context_window_exceeded` as context window before it returns a nominal success.
+Gemini accepts only documented success terminal reasons. Policy terminals use the content-policy chain.
+Unsupported, malformed, or unknown terminal reasons fail closed through the general chain.
+For Bedrock streams, the documented exception type is authoritative.
+Message text cannot change the classification of throttling or service exceptions.
+Validation exceptions can use the bounded provider-specific context and content markers.
+
+No fallback starts after the gateway sends a streaming response frame.
+A bounded pre-commit buffer holds provider role and metadata events until output or a valid terminal event establishes a real response.
+For OpenAI-compatible streams, non-empty `reasoning`, `reasoning_content`, and `reasoning_details` deltas count as output.
+Content, refusals, and tool calls also count as output.
+The first such delta commits the response and releases buffered metadata in its original order.
+The gateway cannot then replay the request on another deployment.
+
+Before output, classified terminal events can select a specialized fallback for OpenAI-compatible, Azure OpenAI, Anthropic, and Bedrock providers.
+Empty, terminal-only, and truncated streams before output are malformed successes. They can use the general fallback chain.
+After partial output commits a response, a classified stop ends that stream with the compatible `content_filter` or `length` finish reason.
+It does not start another provider attempt.
+The gateway aborts other malformed committed streams and marks the deployment unhealthy.
+It never caches them as complete responses.
+
+Well-formed, unrecognized metadata can exceed the bounded pre-commit buffer.
+This is a gateway compatibility failure. It returns the sanitized provider-response error without a deployment cooldown.
+A clean `[DONE]` marker after only unrecognized, non-empty delta fields has the same health-neutral result.
+Before it sends a response frame, the router skips retries on the same deployment and tries the next eligible deployment once.
+
+Each eligible deployment can return only unrecognized output fields and reach one of these boundaries.
+If all do, the request fails with the sanitized provider-response error. None of those deployments becomes unhealthy.
+A buffer filled only with known metadata, such as repeated role-only deltas, is a malformed provider stream.
+That failure affects health.
+
+For OpenAI-compatible streams, DeltaLLM asks OpenAI-family and vLLM deployments for a final usage chunk.
+It does this even when the client did not request one. The internal chunk is hidden from the client.
+If the provider omits usage, fallback estimation removes duplicate textual `reasoning`, `reasoning_content`, and `reasoning_details` aliases within each delta.
+It then sums the deltas.
+Opaque reasoning details use a conservative payload-size estimate. Usage metadata marks these estimates incomplete.
 
 Each replica serializes durable config loads, subscriber application, publication, and rollback.
 Runtime reloads publish all three immutable maps as one generation, and publication is fenced by

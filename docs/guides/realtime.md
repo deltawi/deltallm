@@ -22,12 +22,22 @@ the API for reading supplied text verbatim.
 | Limits | Shared connection leases; key/user/team/org/model/tier request quotas per billable turn; bounded session duration, input, and events |
 | Credentials and permissions | Existing model grants and tier policies; route and prices pinned at admission; periodic revocation checks |
 
-The gateway rejects automatic VAD, budget-capped scopes, token/audio quota profiles,
-legacy key concurrency caps, configured guardrails, prompt references, hosted
-tools, image input, browser authentication, and alternative provider origins.
-These are explicit unsupported profiles, never silently bypassed controls. Shared
-Realtime and tier connection caps still apply to supported keys. Do not remove
-an organization's limits just to make a session connect.
+The gateway rejects these profiles and inputs:
+
+- Automatic VAD.
+- Scopes with budget caps.
+- Token or audio quota profiles.
+- Legacy key concurrency caps.
+- Configured guardrails.
+- Prompt references.
+- Hosted tools.
+- Image input.
+- Browser authentication.
+- Alternative provider origins.
+
+The gateway rejects unsupported profiles. It does not silently bypass their controls.
+Shared Realtime and tier connection caps still apply to supported keys.
+Do not remove an organization's limits to permit a session connection.
 
 ## Configure
 
@@ -207,8 +217,16 @@ Keep the spend worker running and retain pending accounting records throughout
 the upgrade. Rolling back should also disable new admissions and drain sessions;
 accepted receipts can continue settling with Realtime disabled.
 
-Before rollout, verify an exact-model conversation, text-to-audio, transcription,
-cancellation and disconnect; reconcile their provider usage; exercise Redis/database
-failure and multiple replicas; and measure latency and memory at the intended
-connection count. Live OpenAI qualification and capacity measurements are release
-checks, separate from the repository's deterministic and local-service tests.
+Before rollout, do these qualification steps:
+
+1. Verify a conversation with the exact model.
+2. Verify text-to-audio output.
+3. Verify transcription.
+4. Verify cancellation and disconnect behavior.
+5. Reconcile provider usage for these operations.
+6. Do tests with Redis and database failures.
+7. Do tests with multiple replicas.
+8. Measure latency and memory at the intended connection count.
+
+Live OpenAI qualification and capacity measurements are release checks.
+They are separate from the repository's deterministic tests and local-service tests.

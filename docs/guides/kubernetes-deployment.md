@@ -74,7 +74,12 @@ In another terminal, check the public liveness endpoint:
 curl http://localhost:4000/health/liveliness
 ```
 
-Sign in with the account stored in `deltallm-bootstrap-admin`. Add a model, create an application key, and send one test request before exposing the service to users.
+Before you give users access to the service, do these steps:
+
+1. Sign in with the account stored in `deltallm-bootstrap-admin`.
+2. Add a model.
+3. Create an application key.
+4. Send one test request.
 
 ## Next steps
 

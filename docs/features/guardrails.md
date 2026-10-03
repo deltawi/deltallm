@@ -209,7 +209,9 @@ Common settings:
 - `threshold`: score threshold for blocking
 - `fail_open`: allow traffic through if the external guardrail service is unavailable
 
-Lakera requires an API key. The admin UI now warns and blocks save if the key is blank, so you do not end up with a guardrail that silently skips checks.
+Lakera requires an API key.
+If the key is blank, the Admin UI shows a warning and blocks the save.
+This prevents a guardrail from silently skipping checks.
 
 ## How Scope Resolution Works
 

@@ -30,9 +30,10 @@ Expose only routes required by each listener:
 ## Identity and authorization
 
 - Generate unique master and salt keys; never deploy example or placeholder values.
-- Reserve the master key for initial setup and emergency recovery. Create application keys for
-  normal workloads, then use organization, team, user, and key access rules to limit the public
-  model names and route groups they can call. Add expiration, rate limits, and budgets as needed.
+- Use the master key only for initial setup and emergency recovery.
+  Create application keys for normal workloads.
+  Use organization, team, user, and key access rules to limit permitted public model names and route groups.
+  Add expiration, rate limits, and budgets as necessary.
 - Use SSO and MFA where supported for human administrators. Remove bootstrap passwords after
   enrollment and review role assignments regularly.
 - Separate organizations and teams according to real ownership boundaries. Test both allowed and
@@ -68,10 +69,17 @@ Expose only routes required by each listener:
 - Pin the DeltaLLM image by immutable digest and record the matching application/chart versions.
 - Scan application and dependency images, verify provenance available from your release process,
   and apply security updates through the tested upgrade workflow.
-- The current runtime image runs as root. Until a supported non-root image is available, enforce
-  strong pod/container isolation: drop all capabilities, deny privilege escalation, use the
-  default seccomp profile, avoid host mounts, and test a read-only root filesystem before relying
-  on it. Do not claim these controls are active unless your rendered workload proves them.
+- The current runtime image runs as root.
+    Until a supported non-root image is available, apply these pod and container controls:
+
+    1. Drop all capabilities.
+    2. Deny privilege escalation.
+    3. Use the default seccomp profile.
+    4. Do not use host mounts.
+    5. Before you rely on a read-only root filesystem, do a test with it.
+
+    State that these controls are active only when the rendered workload proves this.
+
 - Disable service-account token mounting unless the workload needs Kubernetes API access. Apply
   resource limits, topology controls, and narrowly scoped ingress/egress policy.
 

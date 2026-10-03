@@ -90,7 +90,18 @@ helm template deltallm deploy/kubernetes/helm --values values-production.yaml
 5. Confirm the delivery becomes `delivered` in the batch admin detail and terminal audit event.
 6. Expand API and worker replicas while watching the alerts below.
 
-During a rolling deployment, older binaries may still insert rows without the new ownership snapshot columns. New binaries repair those null fields on an idempotent terminal enqueue and immediately before bounded job cleanup. Cleanup excludes jobs with a known non-null ownership mismatch, then claims one safe job with a row lock, repairs missing ownership, verifies every retained snapshot using null-safe comparisons, and deletes that job's verified metadata in one transaction. The worker repeats this transaction up to its per-run scan limit and retains the committed count if a later job fails. A conflicting job remains available for investigation without pinning unrelated expired jobs behind it. A writer that already owns a job lock is skipped until the next pass. An unexpected post-claim mismatch rolls back only that job transaction. Repair never changes webhook payload material or the delivery retention timestamp.
+During a rolling deployment, older binaries can insert rows without the new ownership snapshot columns.
+New binaries repair these null fields during an idempotent terminal enqueue and immediately before bounded job cleanup.
+Cleanup excludes jobs with a known non-null ownership mismatch.
+For one safe job, one transaction acquires a row lock, repairs missing ownership, verifies retained snapshots, and deletes verified metadata.
+The snapshot checks use null-safe comparisons.
+
+The worker does this transaction again up to its per-run scan limit.
+If a later job fails, the worker keeps the committed count.
+A conflicting job remains available for investigation without blocking unrelated expired jobs.
+If a writer owns the job lock, cleanup skips that job until the next pass.
+An unexpected mismatch after claim rolls back only that job's transaction.
+Repair never changes webhook payload material or the delivery retention timestamp.
 
 Webhook retention cleanup deletes short pages until it drains the eligible rows or reaches `batch_webhook_cleanup_max_rows_per_run`. Set that budget above the expected number of webhook events expiring per garbage-collection interval and monitor cleanup logs if the budget is reached repeatedly.
 
@@ -110,7 +121,11 @@ Queue gauges are cluster-wide Postgres snapshots repeated by each scraping proce
 - To stop outbound delivery immediately, set `batch_webhook_worker_enabled=false` and leave `batch_webhook_observability_enabled=true` on at least one scraped process. Durable queued/retrying/processing rows remain in Postgres and resume after workers are re-enabled; processing rows become reclaimable after their leases expire.
 - Do not remove or rotate the encryption key while rows created with it remain active. The current format does not support a key ring.
 - A code rollback must retain the webhook schema. Do not reverse the migration while active or retained rows exist.
-- Operator replay grants a failed row a fresh attempt budget while preserving the original event ID and request body. Replay scheduling and its required admin audit event commit in the same database transaction; if the audit write fails, the delivery remains failed and can be retried safely. Receivers must continue deduplicating by event ID.
+- Operator replay gives a failed row a new attempt budget.
+  It keeps the original event ID and request body.
+  Replay scheduling and its required admin audit commit in one database transaction.
+  If the audit write fails, the delivery remains failed and permits a safe retry.
+  Receivers must continue to remove duplicate events by event ID.
 - Batch metadata cleanup proceeds independently of webhook delivery state. Each outbox row retains the batch ownership scope needed for delivery, inspection, and replay after the job row is removed.
 
 ## Troubleshooting

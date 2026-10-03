@@ -374,25 +374,29 @@ router_settings:
 - `cooldown_time`: how long a failing deployment stays out of rotation
 - `allowed_fails`: how many failures are allowed before cooldown starts
 
-Failover owns health bookkeeping for routed provider attempts. Each health-affecting attempt is
-recorded once against the deployment that was actually called; authentication, policy, budget,
-guardrail, local gateway-capacity, and cancellation failures do not penalize a provider.
+Failover owns health records for routed provider attempts.
+It records each attempt that affects health once against the deployment it called.
+Authentication, policy, budget, guardrail, local gateway-capacity, and cancellation failures do not penalize a provider.
 
-Cooldown expiry moves an unhealthy deployment into bounded recovery instead of leaving it
-permanently excluded. Shared Redis admits one owner-scoped half-open request at a time. A success
-clears the cooldown and failure state; a failed half-open request immediately starts a new
-cooldown. This request-driven recovery works even when background health checks are disabled.
-When background checks are enabled, duplicate registry members are probed once per interval and
-the probe claim is coordinated across gateway replicas. Operator-issued manual cooldowns remain
-authoritative until their TTL expires. After any automatic or manual cooldown, only the
-owner-scoped half-open request or probe may restore health; stale in-flight successes and failures
-cannot override that recovery decision. Manual health checks use a separate short-lived probe claim
-but contend for the same recovery token, so they can run on demand without racing an active
-background or request-driven recovery. A concurrent manual recovery returns HTTP `409`.
+Cooldown expiry puts an unhealthy deployment into bounded recovery.
+Shared Redis permits one owner-scoped half-open request at a time.
+Success clears the cooldown and failure state. A failed half-open request immediately starts a new cooldown.
+This recovery works even with background health checks disabled.
 
-Streaming attempts keep the same single health owner, but once response bytes have been emitted a
-router-health persistence failure cannot replace the stream or suppress usage, spend, audit, and
-cleanup finalization. Those update failures are logged and counted separately for reconciliation.
+With background checks enabled, duplicate registry members receive one probe per interval.
+Gateway replicas coordinate the probe claim.
+An operator's manual cooldown remains authoritative until its TTL expires.
+After an automatic or manual cooldown, only the owner-scoped half-open request or probe can restore health.
+Stale in-flight successes and failures cannot override that decision.
+
+Manual health checks use a separate short-lived probe claim but compete for the same recovery token.
+They can run on demand without concurrent background or request-driven recovery.
+A concurrent manual recovery returns HTTP `409`.
+
+Streaming attempts keep the same single health owner.
+After response bytes are sent, a router-health persistence failure cannot replace the stream.
+It cannot suppress usage, spend, audit, or cleanup finalization.
+The system logs and counts these update failures separately for reconciliation.
 
 All router keys are built as `deltallm:<app_env>:v1:<router-capability>:<identifiers>`. Mutable
 provider-health keys also include an opaque deployment generation; active admission, usage, and
@@ -401,22 +405,25 @@ neither routing state nor claim ownership. Generation values are digests and nev
 credentials. This changes no hot-path call count: attempt admission and health transitions remain
 one Lua round trip each, and batch reads remain one pipeline or `MGET`.
 
-Health hashes have a rolling 30-day retention period. Each health transition refreshes that TTL,
-and a cooldown longer than 30 days extends retention through the cooldown plus the failure window.
-Adding or removing a deployment ID, changing that ID's model/provider parameters, or recreating it
-publishes a new immutable registry generation with isolated health, failure, cooldown, recovery,
-and probe keys. In-flight attempts and probes retain the retired generation, so their late outcomes
-cannot affect the replacement. Exact deletion of retired health keys is bounded best-effort cleanup
-after publication; cleanup failure is observable but cannot corrupt or fail the new configuration,
-and retained keys expire by TTL. Changes limited to `model_info`, such as weight or priority,
-preserve health history. Admission owners, active counts, usage, and latency are not generation
-scoped or deleted.
+Health hashes have a rolling 30-day retention period. Each health transition refreshes that TTL.
+A cooldown longer than 30 days extends retention through the cooldown plus the failure window.
 
-This namespace is a schema cutover from the earlier raw router keys. Drain replicas running the old
-binary before namespaced replicas accept traffic, and use the same drain procedure for rollback;
-mixed binaries would otherwise maintain separate admission and cooldown state. The
-[router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md) documents the guarded
-Helm upgrade and rollback sequence.
+A deployment ID addition, removal, or recreation publishes a new immutable registry generation.
+Changes to that ID's model or provider parameters do the same.
+The new generation has separate health, failure, cooldown, recovery, and probe keys.
+In-flight attempts and probes keep the retired generation. Their late outcomes cannot affect the replacement.
+Changes limited to `model_info`, such as weight or priority, keep health history.
+
+After publication, bounded best-effort cleanup deletes exact retired health keys.
+A cleanup failure is observable. It cannot corrupt or fail the new configuration.
+Retained keys expire by TTL.
+Admission owners, active counts, usage, and latency are not scoped to a generation and are not deleted.
+
+This namespace replaces the previous raw router key schema.
+Before namespaced replicas accept traffic, drain replicas that run the previous binary.
+Use the same drain procedure for rollback.
+Mixed binaries would maintain separate admission and cooldown state.
+The [router Redis v1 schema cutover](../deployment/router-state-schema-cutover.md) gives the guarded Helm upgrade and rollback sequence.
 
 During a Redis outage, `redis_degraded_mode: fail_open` uses bounded process-local health state and
 reports the router backend as degraded; it does not claim that state is cluster-wide. After Redis
@@ -461,36 +468,36 @@ deltallm_settings:
   context-capacity metadata proves that locally before a provider attempt
 - `content_policy_fallbacks`: used when a provider rejects the content for policy reasons
 
-The provider adapter classifies context-window and content-policy failures from documented provider
-error fields before the error reaches the router. The same adapter classifiers are used by chat,
-embeddings, images, rerank, speech, and transcription. OpenAI-compatible and Azure OpenAI response
-envelopes and stream events with `finish_reason: content_filter` are treated as content-policy
-failures rather than successful empty responses. The router does not infer either condition from
-arbitrary exception text or an unstructured response body. Explicit custom providers use generic
-status mapping unless they are in the supported OpenAI-compatible provider set; the existing
-provider-omitted default remains OpenAI-compatible. HTTP status owns the public error type and
-deployment-health impact, while a trusted adapter classification owns specialized fallback
-selection. A recognized context or policy failure returned with a 5xx status therefore remains
-health-affecting and may try its specialized chain before the general chain. Unclassified 5xx
-responses use the general chain, and 429 remains rate-limit classified regardless of envelope text.
-Provider `408` responses use the timeout path. Unclassified provider `401`, `403`, and `404`
-responses indicate unhealthy deployment credentials, permissions, or model configuration and use
-the general fallback chain; a trusted context-window or content-policy classification still remains
-a terminal request failure.
-Malformed JSON or response schemas behind a nominally successful provider status are also
-health-affecting general failures, and the upstream payload is never returned to the client. Empty
-chat choices, missing or mismatched embedding and rerank results, and empty speech audio are
-malformed successes. An unclassified provider client error, such as `400`, `409`, or `422`, remains
-health-neutral, skips retrying the same deployment, and advances through the remaining eligible
-deployments and configured general fallback groups. If all candidates reject the request, DeltaLLM
-returns the final sanitized `400`. Known authentication, permission, missing-model, timeout, and
-rate-limit statuses retain their specialized behavior. Anthropic `refusal` and
-`model_context_window_exceeded` success
-stop reasons select the content-policy and context-window chains respectively. Gemini policy
-terminal reasons select the content-policy chain; unsupported, malformed, and unknown terminal
-reasons fail closed through the general chain instead of becoming successful empty responses.
-Bedrock stream exception types retain their documented meaning even when their message contains a
-context or policy marker; only validation-like exceptions use those message allowlists.
+Provider adapters classify context-window and content-policy failures from documented provider error fields before the router receives the error.
+Chat, embeddings, images, rerank, speech, and transcription use the same adapter classifiers.
+OpenAI-compatible and Azure OpenAI responses or stream events with `finish_reason: content_filter` are content-policy failures, not successful empty responses.
+The router does not infer these conditions from arbitrary exception text or an unstructured response body.
+
+Explicit custom providers use generic status mapping unless they belong to the supported OpenAI-compatible provider set.
+An omitted provider keeps the existing OpenAI-compatible default.
+HTTP status controls the public error type and deployment-health impact.
+A trusted adapter classification selects the specialized fallback.
+A recognized context or policy failure with `5xx` still affects health. It can try its specialized chain before the general chain.
+Unclassified `5xx` responses use the general chain. A `429` remains a rate-limit failure regardless of envelope text.
+
+Provider `408` responses use the timeout path.
+Unclassified provider `401`, `403`, and `404` responses indicate unhealthy credentials, permissions, or model configuration.
+They use the general fallback chain.
+A trusted context-window or content-policy classification still remains a terminal request failure.
+
+Malformed JSON or response schemas with a nominally successful provider status are general failures that affect health.
+The client never receives the upstream payload.
+Empty chat choices, missing or mismatched embedding and rerank results, and empty speech audio are malformed successes.
+An unclassified provider client error such as `400`, `409`, or `422` does not affect health.
+It skips retries on the same deployment and continues through remaining eligible deployments and configured general fallback groups.
+If all candidates reject the request, DeltaLLM returns the final sanitized `400`.
+
+Known authentication, permission, missing-model, timeout, and rate-limit statuses keep their specialized behavior.
+Anthropic `refusal` and `model_context_window_exceeded` success stop reasons select the content-policy and context-window chains, respectively.
+Gemini policy terminal reasons select the content-policy chain.
+Unsupported, malformed, and unknown terminal reasons fail closed through the general chain. They do not become successful empty responses.
+Bedrock stream exception types keep their documented meaning even when the message has a context or policy marker.
+Only validation-like exceptions use those message allowlists.
 
 Streaming fallback is allowed only before the first downstream response frame. Provider role and
 metadata events are held in a bounded pre-commit buffer until output or a valid terminal event
@@ -511,12 +518,12 @@ no output, such as role-only deltas, remains a malformed provider stream and fol
 health-affecting general fallback path. Non-empty `reasoning`, `reasoning_content`, and
 `reasoning_details` are recognized output and commit immediately.
 
-All three maps are immutable members of one routing-runtime generation. Each replica serializes the
-durable config load, subscriber application, generation publication, and rollback. Publication is
-fenced by the complete generation identity, so a slower reload cannot overwrite a newer grant or
-route snapshot even when both use the same route revision. A validation or subscriber failure leaves
-requests on the previous complete generation. A request that has already started remains pinned to
-the generation it acquired, including all of its fallback maps.
+All three maps are immutable members of one routing-runtime generation.
+Each replica serializes durable configuration load, subscriber application, generation publication, and rollback.
+The full generation identity fences publication.
+A slower reload cannot overwrite a newer grant or route snapshot, including when they have the same route revision.
+A validation or subscriber failure keeps requests on the previous complete generation.
+A started request keeps its acquired generation, including all fallback maps.
 
 ## Advanced Routing Controls
 

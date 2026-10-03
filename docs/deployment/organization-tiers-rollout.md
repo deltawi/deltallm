@@ -26,11 +26,28 @@ Before deploying:
 
 The migration does not convert existing organizations, model access, prices, or rate limits into tiers. Existing behavior remains authoritative until an admin creates assignments and changes the runtime mode. This makes the release opt-in and avoids a required data backfill.
 
-New creation behavior is mode-aware: `enforce` requires a primary tier, `shadow` defaults to a tier but retains an explicit legacy migration exception, and `disabled` preserves legacy creation. Existing organizations are never assigned or migrated silently. The historically supported POST upsert also remains non-migrating: updating an existing organization by ID in `enforce` does not invent a tier assignment, while a genuinely new ID still requires one. For tier-managed creation, the organization row, primary assignment, and cache-invalidation outbox row commit atomically. Because tier decisions are observational in `shadow`, creation also mirrors the selected tier version's allowed callable targets into legacy Asset Access inside that transaction. This keeps the new organization usable while producing meaningful shadow comparisons; the mirror is not refreshed when a later tier version is published.
+The mode controls new organization creation:
+
+- `enforce` requires a primary tier.
+- `shadow` defaults to a tier but permits an explicit legacy migration exception.
+- `disabled` keeps legacy creation.
+
+The system never silently assigns or migrates existing organizations.
+The supported POST upsert also does not migrate an existing organization.
+In `enforce`, an update by existing ID does not create a tier assignment. A new ID still requires one.
+For tier-managed creation, the organization row, primary assignment, and cache-invalidation outbox row commit atomically.
+
+In `shadow`, tier decisions are observational.
+The creation transaction copies the selected tier version's permitted callable targets into legacy Asset Access.
+The new organization remains usable while shadow comparisons show policy differences.
+Publication of a later tier version does not refresh that copy.
 
 Request-time policy is evaluated against the final normalized payload. Prompt templates, pre-call callbacks, and guardrails run once; validation, model access, budget checks, rate admission, and cache-key generation then use the resulting model and content. A callback therefore cannot rewrite a request to a model that the organization is not allowed to use. Parallel-request leases remain held until the final response body is sent, including streaming and cached responses, and are released on disconnect or cancellation.
 
-Tier pricing keeps both the public callable model and the resolved provider model in spend metadata. When a deployment aliases a public name such as `premium-chat` to a catalogued provider model, catalog fallback pricing uses the provider model while access policy and customer-facing metadata continue to use the public name.
+Tier pricing keeps the public callable model and resolved provider model in spend metadata.
+A deployment can map a public name such as `premium-chat` to a provider model in the catalog.
+Catalog fallback pricing uses that provider model.
+Access policy and customer metadata continue to use the public name.
 
 ## Prerequisites
 
@@ -136,11 +153,39 @@ curl -sS -X POST "$DELTALLM_URL/ui/api/organizations/$ORGANIZATION_ID/tier-polic
 
 Set `billing_mode` to the route workload (`chat`, `embedding`, `rerank`, `image_generation`, `audio_speech`, or `audio_transcription`) and supply its matching usage fields. Audio modes accept `prompt_tokens` and `completion_tokens` in addition to their character, audio-token, or duration usage. Provider-specific transcription rules, including minimum billable durations, are applied independently to each configured route.
 
-Treat `calculated_price.status` as part of the quote contract: `available` covers every configured route, `partial` excludes one or more unpriced routes, and `unavailable` means no reliable quote exists. `unpriced_candidate_count` covers routes whose pricing was evaluated but could not produce a price; `unevaluated_candidate_count` covers routes skipped because of an unsupported, mixed, or mismatched workload type. In particular, `reason: no_configured_routes` is not a zero-cost quote. Missing prices are never interpreted as zero: configure an explicit zero for the matching usage unit when a route is intentionally free. Known token models can use catalog pricing with source `default` when no regular token override exists; cache-only and sync-irrelevant batch fields do not suppress that fallback. A partial regular input/output override must cover every used token dimension and is never completed from the catalog. Unknown models require complete deployment or tier pricing. Image usage with input images likewise requires an input-image price even when an output-image price exists. Embedding and rerank quotes reject non-zero completion tokens. `pricing_sources` contains only the tier, deployment, or default fields that contributed to the displayed price. Static checks also include the organization's global and legacy per-model hard caps, matching request-time enforcement.
+`calculated_price.status` has these meanings:
+
+- `available`: the quote includes each configured route.
+- `partial`: the quote excludes one or more unpriced routes.
+- `unavailable`: no reliable quote exists.
+
+`unpriced_candidate_count` counts routes whose pricing evaluation could not produce a price.
+`unevaluated_candidate_count` counts routes skipped because of unsupported, mixed, or mismatched workload types.
+The result `reason: no_configured_routes` does not mean zero cost.
+For an intentionally free route, configure an explicit zero for the matching usage unit.
+The simulation never treats missing prices as zero.
+
+Known token models can use catalog pricing with source `default` when no regular token override exists.
+Cache-only fields and batch fields unrelated to synchronous pricing do not suppress that fallback.
+A partial regular input/output override must supply each used token dimension.
+The simulation does not fill its missing values from the catalog.
+Unknown models require complete deployment or tier pricing.
+
+Usage with input images requires an input-image price, including when an output-image price exists.
+Embedding and rerank quotes reject non-zero completion tokens.
+`pricing_sources` includes only tier, deployment, or default fields that contributed to the displayed price.
+Static checks also include the organization's global and legacy per-model hard caps.
+These checks match enforcement at request time.
 
 For aliased deployments, verify that runtime spend metadata contains the expected `callable_model` and `provider_model`. A default catalog price must resolve from the provider model; tier and deployment overrides still take precedence.
 
-`amount_scope` is `aggregate`: `amount`, `minimum_amount`, and `maximum_amount` cover the full `request_count`. Use `per_request_amount`, `per_request_minimum_amount`, and `per_request_maximum_amount` when presenting a unit quote. The simulator uses configured routes but does not evaluate their current health or predict which route will serve a request. Runtime spend metadata uses `billing_status: unpriced` plus `missing_pricing_fields` when observed usage cannot be priced completely; do not interpret the numeric zero sentinel on such an event as an intentionally free request.
+`amount_scope` is `aggregate`.
+The fields `amount`, `minimum_amount`, and `maximum_amount` apply to the full `request_count`.
+For a unit quote, use `per_request_amount`, `per_request_minimum_amount`, and `per_request_maximum_amount`.
+The simulator uses configured routes. It does not evaluate current health or predict which route will serve a request.
+
+If observed usage cannot receive a complete price, runtime spend metadata contains `billing_status: unpriced` and `missing_pricing_fields`.
+Do not treat the numeric zero sentinel on that event as an intentionally free request.
 
 Inspect live capacity state:
 
@@ -149,9 +194,16 @@ curl -sS "$DELTALLM_URL/ui/api/tier-capacity/dashboard?top_org_limit=20&pool_lim
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
 ```
 
-The dashboard reports the current 60-second window, RPM/TPM saturation, active organizations, top organization usage, temporary boost TTLs, and fair-share/pool limit hits. Check `live_data.status` before interpreting those values: failed Redis sections are listed in `live_data.failed_sections`, and unavailable numeric values are returned as `null` rather than a misleading zero.
+The dashboard reports the current 60-second window, RPM/TPM saturation, active organizations, and highest organization usage.
+It also reports temporary boost TTLs and fair-share or pool limit hits.
+Before you use these values, examine `live_data.status`.
+The field `live_data.failed_sections` lists failed Redis sections.
+Unavailable numeric values are `null`, not zero.
 
-Static `hard_cap` admissions emit the same capacity request and saturation metrics as advanced strategies. A rejected RPM or TPM admission records its dashboard heatmap entry in the same Lua transaction that rejects the request, without incrementing the rejected rate counter. Active-organization and fair-share decision metrics remain specific to `weighted_fair` and `reserved_burst`.
+Static `hard_cap` admissions emit the same capacity request and saturation metrics as advanced strategies.
+An RPM or TPM rejection records its dashboard heatmap entry in the same Lua transaction.
+It does not increment the rejected rate counter.
+Active-organization and fair-share decision metrics remain specific to `weighted_fair` and `reserved_burst`.
 
 Prometheus capacity counters are aggregated by pool, model, tier, scope, and outcome. They do not expose an `organization_id` label, which keeps long-running series cardinality bounded. Use the admin capacity dashboard for bounded per-organization top-consumer and limit-hit diagnostics.
 

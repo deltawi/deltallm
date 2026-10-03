@@ -27,10 +27,12 @@ Create the template with three services:
 | `Redis` | Railway Redis service | Referenced by the app through `REDIS_URL` and `DELTALLM_REDIS_URL` |
 
 !!! warning "Evaluation exposure"
-    The checked-in template uses a public application domain and `/health/readiness` as its
-    platform health check. DeltaLLM does not authenticate the readiness payload. Treat this as an
-    evaluation tradeoff; a production design must put detailed readiness and `/metrics` on a
-    private operational route while preserving a coarse liveness probe for the platform.
+    The repository template uses a public application domain.
+    Its platform health check uses `/health/readiness`.
+    DeltaLLM does not authenticate the readiness response.
+    This arrangement is for evaluation.
+    For production, put detailed readiness and `/metrics` on a private operational route.
+    Keep a coarse liveness probe available to the platform.
 
 Use the published Docker image for a fully CLI-driven template setup. Use a GitHub repo source only when Railway's GitHub integration can fetch the repository; otherwise `templates create` can reject the source during generation.
 
@@ -84,7 +86,10 @@ Variable notes:
 - `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD` create the initial browser-login admin account.
 - `DELTALLM_CONFIG_PATH` should stay `/app/config.example.yaml` on Railway unless you build a custom image with a different bundled config file.
 - Use an initial admin password with at least 12 characters so the first-login password-change flow can complete cleanly.
-- Do not include `OPENAI_API_KEY` as a blank template variable unless you want Railway to require it during every template deploy. Add provider credentials through the Admin UI after deployment, or add `OPENAI_API_KEY` to the service variables later if you want the starter `gpt-4o-mini` deployment to be usable immediately.
+- Railway requires `OPENAI_API_KEY` on each template deployment if you include it as a blank template variable.
+  Add that blank variable only if you want this requirement.
+  You can add provider credentials through the Admin UI after deployment.
+  To use the starter `gpt-4o-mini` deployment immediately, add `OPENAI_API_KEY` to the service variables.
 
 ## First Deploy
 
@@ -178,4 +183,6 @@ After the app is running:
 4. Create model deployments or update the starter `gpt-4o-mini` deployment.
 5. Re-run `/v1/models` and a chat completion check.
 
-For production-oriented deployments with dedicated batch workers, shared artifact storage, custom domains, and stricter operational controls, create a separate template rather than extending this evaluation template.
+For production, create a separate template with the necessary operational controls.
+This includes dedicated batch workers, shared artifact storage, and custom domains.
+Keep these changes separate from this evaluation template.

@@ -132,11 +132,16 @@ Size** is required and must be at least `2`.
 
 ## Access Groups
 
-The model form includes an **Access Groups** field for authorization grouping. Enter group keys such as `beta` or `support` when scopes should be able to grant access to a set of callable targets instead of selecting each model separately.
+The model form has an **Access Groups** field for authorization groups.
+An access group lets a scope grant access to a set of callable targets.
+This removes the need to select each model separately.
+To use this function, enter group keys such as `beta` or `support`.
 
 Access groups are attached to the public model name, not a single provider deployment. If several deployments share the same `model_name`, keep their access group lists identical so group expansion remains deterministic.
 
-Do not use access groups for routing. Deployment tags remain routing metadata and can be matched by request `metadata.tags`; tags do not make a model visible to an organization, team, key, or user.
+Do not use access groups for routing.
+Deployment tags are routing metadata. Requests can match them with `metadata.tags`.
+Tags do not give an organization, team, key, or user access to a model.
 
 ## What the Table Tells You
 

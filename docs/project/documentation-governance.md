@@ -54,10 +54,12 @@ audience: developers | operators | administrators | contributors
 ---
 ```
 
-Add `applies_to` when guidance is version-specific and `last_reviewed` only when a named review
-cadence owns that date. Do not add dates that nobody will maintain. Metadata adoption for existing
-pages is incremental; the required structural baseline is an H1, navigation entry, valid links, and
-an explicit audience/prerequisite where the task needs one.
+Add `applies_to` for guidance that applies to specific versions.
+Add `last_reviewed` only when a named review process owns that date.
+Do not add dates that nobody will maintain.
+Existing pages receive metadata gradually.
+Each page requires an H1, navigation entry, and valid links.
+Where necessary, it must also identify the audience and prerequisites.
 
 ## Page types and style
 
@@ -72,13 +74,19 @@ common word when it is accurate, keep sentences focused on one idea, and explain
 terms before relying on them. Navigation labels should describe an action or a clear subject rather
 than mirror an internal component name.
 
-Do not mix an exhaustive field catalog into a tutorial or bury production failure behavior in a UI
-caption. Split pages when one file serves multiple reader intents or exceeds roughly 500 lines; the
-health report flags size for review without failing solely on length.
+Keep full field catalogs separate from tutorials.
+Put production failure behavior in the procedure or reference, not only in a UI caption.
+Split a page when it serves different reader tasks or exceeds approximately 500 lines.
+The health report marks large pages for review. Length alone does not fail the check.
 
-For every Admin UI procedure, state the page and required access, the organization or team affected,
-whether the change is shared or limited to one scope, and how the reader can confirm it worked. When
-access changes, include one intentional denied check where practical.
+For each Admin UI procedure, identify these items:
+
+- The page and necessary access.
+- The affected organization or team.
+- Whether the change is shared or limited to one scope.
+- The result that confirms success.
+
+For access changes, include an intentional denial check where practical.
 
 ## Quality gates and metrics
 
