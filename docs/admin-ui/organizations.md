@@ -30,11 +30,12 @@ organization. See
 
 Platform administrators see a **Danger zone** on the organization overview. **Delete organization** first shows the complete impact, requires the exact organization name and an explicit running-work acknowledgement, then schedules durable cleanup. Access is revoked immediately; permanent deletion waits for the configured recovery window.
 
-The same panel shows cleanup progress, restore while the operation remains reversible, and retry if
-automatic cleanup exhausts its attempts. Organization owners and organization administrators see
-the existing job for their organization and can choose **Delete permanently now** or **Retry
-cleanup**; they cannot start deletion or restore it. See [Organization
-Deletion](../features/organization-deletion.md) for retained history and operational behavior.
+The same panel shows cleanup progress.
+It offers restore while the operation is reversible, and retry after automatic cleanup uses all its attempts.
+Organization owners and organization administrators can see the existing job for their organization.
+They can select **Delete permanently now** or **Retry cleanup**.
+They cannot start deletion or restore the organization.
+See [Organization Deletion](../features/organization-deletion.md) for retained history and operational behavior.
 
 The organization header and list show the authoritative lifecycle state:
 
@@ -70,7 +71,9 @@ Organization asset access defines the parent access universe. Grant direct calla
 
 If the organization uses tiers, the active tier assignment can define the organization's model package. Team, API key, and runtime user Asset Access can still narrow that tier package. Asset Access also remains the control surface for route groups. See [Tiers](tiers.md#tiers-and-asset-access) for examples.
 
-Access-group grants are valid even before a group has current model members. When a model is later labelled with that group and the runtime reloads, the organization can receive the new callable target without adding another direct binding.
+Access-group grants are valid before a group has model members.
+A model can later receive that group label.
+After runtime reload, the organization can receive the new callable target without another direct binding.
 
 Use organization grants deliberately:
 

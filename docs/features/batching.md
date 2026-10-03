@@ -1,6 +1,11 @@
 # Batch API And Production Setup
 
-Process large volumes of embedding or non-streaming chat completion requests asynchronously. Upload a JSONL file, create a batch, and download results when the job completes. This is ideal when you have thousands of requests to run and don't need results in real time.
+The Batch API processes large numbers of embedding or non-streaming chat completion requests asynchronously.
+It is suitable for thousands of requests when immediate results are not necessary.
+
+1. Upload a JSONL file.
+2. Create a batch.
+3. When the job completes, download the results.
 
 This page is the main batch reference. It covers the public API, worker behavior, production configuration, scheduler sizing, monitoring, and troubleshooting.
 
@@ -646,9 +651,9 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_scheduler_max_candidate_jobs_per_flow` | `50` | Bound candidate job reads per active flow |
 | `embeddings_batch_small_job_fast_lane_enabled` | `false` | Leave disabled unless rank-based `smart_v1` scheduling is not enough |
 
-The scheduler counts a healthy deployment's configured capacity normally. An unhealthy deployment
-whose cooldown has expired contributes exactly one temporary slot for the shared half-open recovery
-attempt; it does not expose its full configured capacity until that attempt succeeds.
+The scheduler counts a healthy deployment's configured capacity normally.
+An unhealthy deployment with an expired cooldown contributes exactly one temporary slot for the shared half-open recovery attempt.
+Its full configured capacity becomes available only after that attempt succeeds.
 
 #### Lease and heartbeat
 
@@ -689,7 +694,15 @@ Completed batches and their artifacts are automatically cleaned up by a backgrou
 | `batch_webhook_delivery_retention_days` | `30` | Days to keep delivered and failed webhook rows for inspection and replay history |
 | `batch_webhook_cleanup_max_rows_per_run` | `10000` | Maximum terminal webhook rows deleted per garbage-collection run across bounded pages |
 
-Webhook cleanup uses the same bounded garbage-collection loop. It drains short database pages until no eligible rows remain or `batch_webhook_cleanup_max_rows_per_run` is reached, so operators can size cleanup throughput without holding one large transaction. Only `delivered` and `failed` rows older than the webhook retention cutoff are removed. Queued, retrying, and processing rows are never removed by retention cleanup. Webhook rows snapshot the batch team and organization ownership, so delivery, scoped inspection, and replay remain available after the independent batch metadata and artifact cleanup removes the job.
+Webhook cleanup uses the same bounded garbage-collection loop.
+It processes short database pages until no eligible rows remain or it reaches `batch_webhook_cleanup_max_rows_per_run`.
+Operators can thus set cleanup throughput without one large transaction.
+Cleanup removes only `delivered` and `failed` rows older than the webhook retention cutoff.
+It never removes queued, retrying, or processing rows.
+
+Webhook rows keep a snapshot of the batch team and organization ownership.
+Batch metadata and artifact cleanup can remove the job independently.
+Delivery, scoped inspection, and replay remain available through the webhook ownership snapshot.
 
 In Kubernetes production deployments, prefer a split worker deployment over running these worker loops inside every API/UI pod. In shared mode, upper-bound executor pressure is roughly `api replicas * embeddings_batch_worker_concurrency`. In split mode, it becomes `batchWorker replicas * embeddings_batch_worker_concurrency`, so gateway and UI traffic can scale independently from batch throughput.
 
@@ -699,7 +712,9 @@ For the full settings reference, see [Configuration > General](../configuration/
 
 When the batch worker processes embedding items, it normally sends one upstream HTTP request per item. Embedding micro-batching groups compatible items into a single upstream call, reducing HTTP round trips and improving throughput.
 
-Chat completion batch jobs default to bounded per-item concurrency. For vLLM, this is usually the preferred mode because vLLM performs continuous batching inside the serving engine while DeltaLLM keeps one canonical response, usage record, and spend record per batch item.
+Chat completion batch jobs use bounded per-item concurrency by default.
+This is usually the preferred mode for vLLM, which uses continuous batching in its serving engine.
+DeltaLLM keeps one canonical response, usage record, and spend record per batch item.
 
 ### How it works
 
@@ -744,9 +759,16 @@ Multi-input arrays already contain multiple embeddings in a single request and a
 
 ### Failure recovery
 
-If a grouped upstream request returns a response shape that cannot be split safely, the worker falls back to executing each item individually. This ensures a single bad grouped response does not corrupt the entire group. Retryable overload, timeout, and no-healthy-deployment errors are requeued first; repeated grouped failures reduce the future chunk size before falling back to single-item execution.
+If the worker cannot safely divide a grouped upstream response, it executes each item separately.
+This prevents one bad grouped response from corrupting the full group.
+Retryable overload, timeout, and no-healthy-deployment errors return to the queue first.
+Repeated grouped failures reduce future chunk size before the worker uses single-item execution.
 
-When a model group has no healthy deployments, workers also create a short-lived backpressure deferral. With Redis available, this deferral is shared across worker instances so newly claimed items for that model group are quickly requeued without calling the router or upstream provider. If Redis is unavailable, the worker falls back to a local in-process deferral and still uses Postgres retry scheduling as the source of truth.
+When a model group has no healthy deployments, workers create a short backpressure deferral.
+With Redis available, worker instances share this deferral.
+Newly claimed items for that model group quickly return to the queue without a router or provider call.
+If Redis is unavailable, the worker uses a local deferral in process memory.
+PostgreSQL retry scheduling remains the authoritative source.
 
 ### Production recommendation
 
@@ -804,11 +826,40 @@ model_list:
         require_homogeneous_params: true
 ```
 
-The worker groups only after routing, and only when items share the same deployment, provider, API base, public model, deployment model, failover context, and non-message request parameters. If `require_homogeneous_params` is provided, it must remain `true`. Requests with streaming, MCP tools, function tools, complex response formats, multiple choices, or token pressure above the configured cap fall back to per-item execution.
+The worker groups items only after routing.
+The items must have the same deployment, provider, API base, public model, and deployment model.
+They must also have the same failover context and non-message request parameters.
+If supplied, `require_homogeneous_params` must remain `true`.
 
-Sync microbatch calls use the same deployment failover path as ordinary chat requests. Before sending a grouped request to any served deployment, the worker checks that deployment's own `chat_batching.mode`, chunk-size limit, token cap, and sync microbatch executor. If the primary deployment fails and a fallback deployment also supports the requested sync microbatch, the fallback response is persisted with the fallback deployment's provider, API base, and pricing metadata. If the served deployment cannot run the requested sync microbatch and no earlier retryable health-affecting microbatch failure occurred, the worker degrades to bounded per-item execution without marking that deployment unhealthy. If the primary deployment already failed with a retryable health-affecting error before failover reaches an unsupported deployment, the worker requeues the chunk using the primary failure so health and retry semantics are preserved.
+The worker uses per-item execution for requests with these features:
 
-Successful microbatch results are persisted and billed per item. If a provider result is missing per-item usage, that item fails instead of using aggregate usage. Mixed success and failure results persist successful items and fail or retry only the affected failed items. Structured per-item provider errors with retryable status codes such as `429`, `408`, or `5xx` are classified by the normal batch retry policy; unstructured provider item errors remain terminal invalid-request failures. Provider-owned messages and nested payloads are discarded before persistence. Error artifacts and batch UI item responses are assembled from an allowlist of stable fields and messages, including for historical rows, so upstream bodies, credentials, URLs, and arbitrary exception text are not returned through `error_file_id` or the batch detail APIs.
+- Streaming.
+- MCP tools or function tools.
+- Complex response formats.
+- Multiple choices.
+- Token pressure above the configured cap.
+
+Synchronous microbatch calls use the same deployment failover path as ordinary chat requests.
+Before a grouped request, the worker examines the served deployment's `chat_batching.mode`, chunk-size limit, token cap, and synchronous microbatch executor.
+If the primary fails, a compatible fallback deployment can process the microbatch.
+The worker stores the fallback response with that deployment's provider, API base, and pricing metadata.
+
+A served deployment can lack support for the requested microbatch.
+Without an earlier retryable microbatch failure that affects health, the worker uses bounded per-item execution.
+It does not mark that unsupported deployment unhealthy.
+If the primary already had a retryable failure that affects health, the worker returns the chunk to the queue with that failure.
+This keeps the primary failure's health and retry behavior.
+
+The worker stores and bills successful microbatch results per item.
+If a result lacks per-item usage, that item fails. The worker does not substitute total usage.
+For mixed results, it stores successful items and fails or retries only failed items.
+The normal batch retry policy classifies structured per-item errors such as `429`, `408`, or `5xx`.
+Unstructured provider item errors remain terminal invalid-request failures.
+
+Before persistence, the worker discards provider-owned messages and nested payloads.
+Error artifacts and batch UI item responses use an allowlist of stable fields and messages.
+This also applies to historical rows.
+The `error_file_id` output and batch detail APIs exclude upstream bodies, credentials, URLs, and arbitrary exception text.
 
 Operators can inspect and then irreversibly sanitize provider-owned text already stored on terminal
 batch items with `scripts/sanitize_batch_item_errors.py`. Supply the database URL through
@@ -894,11 +945,26 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_webhook_lease_recoveries_total` | Counter | Processing leases recovered for retry or terminalized after final-attempt expiry |
 | `deltallm_batch_webhook_replays_total` | Counter | Operator replay requests by bounded result |
 
-Queue gauges are Postgres-backed cluster-wide snapshots emitted by processes with `batch_webhook_observability_enabled=true`. The observer does not require the encryption key, delivery worker, or garbage collector, so queue state remains visible when outbound delivery is disabled or misconfigured. Aggregate replicated gauges with `max` rather than `sum`. Counters and histograms are process-local and must be summed across all processes that produce them: delivery, retry, and lease metrics originate on workers, while operator replay metrics originate on API processes. Webhook logs contain safe identifiers, status class, bounded reason, attempts, and duration; they never contain the URL, secret, headers, request body, caller metadata, or encrypted configuration.
+Processes with `batch_webhook_observability_enabled=true` emit queue gauges from PostgreSQL snapshots for the full cluster.
+The observer does not require the encryption key, delivery worker, or garbage collector.
+Queue state remains visible when outbound delivery is disabled or incorrectly configured.
+
+Combine replicated gauges with `max`, not `sum`.
+Sum process-local counters and histograms across all processes that produce them.
+Delivery, retry, and lease metrics come from workers. Operator replay metrics come from API processes.
+
+Webhook logs contain safe identifiers, status class, bounded reason, attempts, and duration.
+They never contain the URL, secret, headers, request body, caller metadata, or encrypted configuration.
 
 ### Claim decision logs
 
-Batch workers emit structured `batch_work_claim_decision` records when a work-slice claim is empty or blocked by model capacity, tenant fair-share caps, oversized head items, deferred retries, or lease contention.
+Batch workers emit structured `batch_work_claim_decision` records for empty work-slice claims.
+They also emit these records when a claim is blocked by these conditions:
+
+- Model capacity or tenant fair-share caps.
+- Oversized head items.
+- Deferred retries.
+- Lease contention.
 
 The production log policy is intentionally bounded:
 
@@ -907,7 +973,10 @@ The production log policy is intentionally bounded:
 - DB-backed diagnostic probes are separately throttled per worker process before repository diagnostics run. Fresh probes set `diagnostic_source="db"`; suppressed probes reuse low-cardinality cached reason context with `diagnostic_source="cached"` or fall back to scheduler context. Failed diagnostic probes use a short retry backoff instead of consuming the full normal probe interval.
 - `WARNING` is reserved for diagnostic failures or invalid worker state, not ordinary capacity limits.
 
-Tune DB probe cost with `embeddings_batch_claim_diagnostics_enabled`, `embeddings_batch_claim_diagnostic_interval_seconds`, and `embeddings_batch_claim_diagnostic_max_keys`. Use `deltallm_batch_claim_blocked_decisions_total` for alerting and dashboards. Use structured log fields for high-cardinality context such as `batch_id`, `tenant_scope_id`, `head_item_work_units`, cap values, and in-flight units; high-cardinality fields are included only when fresh scheduler or DB context is available.
+Control database probe cost with `embeddings_batch_claim_diagnostics_enabled`, `embeddings_batch_claim_diagnostic_interval_seconds`, and `embeddings_batch_claim_diagnostic_max_keys`.
+Use `deltallm_batch_claim_blocked_decisions_total` for alerts and dashboards.
+Use structured logs for high-cardinality context: `batch_id`, `tenant_scope_id`, `head_item_work_units`, cap values, and in-flight units.
+These fields appear only when fresh scheduler or database context is available.
 
 ### Gateway policy
 
@@ -940,7 +1009,7 @@ Tune DB probe cost with `embeddings_batch_claim_diagnostics_enabled`, `embedding
 
 ### What to watch
 
-- **`deltallm_batch_oldest_item_age_seconds{status="pending"}`** growing indicates the worker can't keep up. Increase `worker_concurrency` or add instances.
+- **`deltallm_batch_oldest_item_age_seconds{status="pending"}`** growing indicates the worker cannot keep up. Increase `worker_concurrency` or add instances.
 - **`deltallm_batch_oldest_job_age_seconds{status="queued"}`** growing for one model group indicates model capacity, provider health, or tenant fairness is constraining progress.
 - **`deltallm_batch_scheduler_config_info`** should show one active mode, shadow mode, and config hash across worker pods. More than one tuple after a config change means workers have not converged.
 - **`deltallm_batch_scheduler_decision_latency_seconds`** p95 should usually stay below `250ms`. Sustained higher latency means scheduler queries or database contention need attention.
@@ -951,7 +1020,7 @@ Tune DB probe cost with `embeddings_batch_claim_diagnostics_enabled`, `embedding
 - **`deltallm_batch_artifact_failures_total`** indicates storage issues. Check disk space (local) or S3 credentials/connectivity.
 - **`deltallm_batch_policy_rejected_total`** increasing usually means current auth, model access, budget, callback, or guardrail policy is rejecting batch items.
 - **`deltallm_batch_policy_retryable_failures_total`** increasing usually means batch workers are hitting distributed rate-limit or max-parallel pressure.
-- **`deltallm_batch_microbatch_isolation_fallback_total`** increasing after enabling micro-batching may indicate the provider doesn't handle multi-input requests well. Consider reducing `upstream_max_batch_inputs`.
+- **`deltallm_batch_microbatch_isolation_fallback_total`** increasing after enabling micro-batching may indicate the provider does not handle multi-input requests well. Consider reducing `upstream_max_batch_inputs`.
 - **`deltallm_batch_chat_microbatch_fallbacks_total`** increasing after enabling chat `sync_microbatch` means items are being protected by compatibility checks or no executor is available.
 - **`deltallm_batch_model_group_deferrals_total`** increasing means workers are seeing temporary model-group unavailability. Check deployment health and router cooldown state.
 - **`deltallm_batch_stale_lease_sweeper_runs_total{status="error"}`** should stay at zero. Reclaimed rows should be rare in healthy steady state.

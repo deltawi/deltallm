@@ -1,8 +1,8 @@
 # Providers
 
-DeltaLLM supports native provider adapters and OpenAI-compatible upstreams. Configure a model
-deployment with a provider, upstream model ID, credentials, and optional API base; applications
-then call the deployment name or route group through DeltaLLM.
+DeltaLLM supports native provider adapters and OpenAI-compatible upstreams.
+Configure a model deployment with a provider, upstream model ID, credentials, and optional API base.
+Applications then call the deployment name or route group through DeltaLLM.
 
 ## Choose an integration path
 

@@ -230,11 +230,48 @@ Platform administrators can update the installation-wide appearance from the **T
 
 Logo and favicon files are managed from **Settings > Theme**, not from file configuration. The service accepts PNG, JPEG, WebP, and SVG files, plus ICO for favicons, with a 2 MB limit per asset. SVG files containing scripts, executable attributes, document type/entity declarations, embedded documents, or external resource references are rejected. Asset bytes are stored in PostgreSQL `BYTEA` columns; the dynamic configuration contains only the versioned internal asset reference.
 
-The supplied colours are base colours, not a request to use one fixed text colour. DeltaLLM derives normal, hover, foreground, and soft-surface tokens at runtime so button labels and branded text retain WCAG AA contrast. Very light primary or secondary colours are adjusted for visible control boundaries, and a menu hover colour that would disappear against the white navigation background is adjusted slightly. A full wordmark falls back to the configured mark and instance name when it cannot load. When no custom logo assets are configured, the built-in Delta mark and wordmark are used. Failed logo assets receive one delayed retry and become eligible again after branding is saved or refreshed; a failed custom favicon falls back to the built-in favicon.
+The supplied colors are base colors. They do not specify one fixed text color.
+DeltaLLM derives normal, hover, foreground, and soft-surface tokens at runtime.
+This keeps WCAG AA contrast for button labels and branded text.
+DeltaLLM adjusts very light primary or secondary colors to keep control boundaries visible.
+It also adjusts a menu hover color if that color would disappear against the white navigation background.
 
-Theme values saved in the Admin UI are persisted as dynamic database overrides and take precedence over file configuration until changed again. **Reset to DeltaLLM defaults** writes explicit factory database overrides (`DeltaLLM`, `#5B50D6`, `#8B7CFF`, and `#F7F5FF`) and clears every custom asset reference. It does not remove the database override to reveal branding from YAML. The reset and deletion of all uploaded logo and favicon BLOBs commit in one serialized transaction, so a rejected transaction cannot expose a partially reset theme. When audit logging is enabled, the endpoint requires a synchronous reset-attempt audit record before it performs the irreversible deletion. Outcome audit records are best effort and never change an already committed reset.
+If a full wordmark cannot load, DeltaLLM uses the configured mark and instance name.
+If no custom logo assets are configured, it uses the built-in Delta mark and wordmark.
+Failed logo assets get one delayed retry.
+A branding save or refresh permits another attempt.
+If a custom favicon fails, DeltaLLM uses the built-in favicon.
 
-Asset BLOB changes and their versioned theme references commit in the same serialized database transaction. PostgreSQL is authoritative. After commit, Redis broadcasts a small wake-up message so each healthy replica can refresh its in-memory asset cache; the existing database poll, every 30 seconds by default, remains the recovery path when pub/sub delivery or a process-local apply fails. A reset response with `reconciliation_pending: true` therefore means the reset is durable but the responding process could not apply it immediately; the browser still uses the committed branding returned by the server. Persistent database or process failures can delay convergence beyond the poll interval. Public asset reads are served from replica memory with ETags and immutable caching, so normal page rendering does not query PostgreSQL. Theme-only updates refresh application identity without rebuilding model and routing runtime state. Clients load only the public branding projection, never the broader settings payload, and an already-open browser refreshes it when the page regains focus or visibility. During the initial request, the UI shows a neutral loading state and does not render default DeltaLLM branding before the configured branding is known; if that request fails or exceeds three seconds, the built-in defaults are used.
+The Admin UI stores theme values as dynamic database overrides.
+These values take priority over file configuration until they change again.
+**Reset to DeltaLLM defaults** writes explicit factory overrides: `DeltaLLM`, `#5B50D6`, `#8B7CFF`, and `#F7F5FF`.
+It also clears each custom asset reference.
+It does not remove the database override to expose branding from YAML.
+
+The reset and deletion of all uploaded logo and favicon BLOBs commit in one serialized transaction.
+A rejected transaction cannot expose a partially reset theme.
+With audit logging enabled, the endpoint requires a synchronous reset-attempt audit record before the irreversible deletion.
+Outcome audit records are best effort. They never change a committed reset.
+
+Asset BLOB changes and their versioned theme references commit in the same serialized database transaction.
+PostgreSQL is the authoritative source.
+After commit, Redis sends a notification so each healthy replica can refresh its memory cache.
+The database poll runs every 30 seconds by default.
+It recovers changes if a notification fails or a process cannot apply an update.
+Persistent database or process failures can delay synchronization beyond this interval.
+
+A reset response with `reconciliation_pending: true` means that the reset is durable.
+The responding process could not apply it immediately.
+The browser still uses the committed branding in the server response.
+Replicas serve public assets from memory with ETags and immutable caching.
+Normal page rendering does not query PostgreSQL.
+Theme-only updates refresh application identity without a rebuild of model and routing runtime state.
+
+Clients load only the public branding data, not the full settings payload.
+An open browser refreshes these data when the page becomes focused or visible again.
+During the initial request, the UI shows a neutral loading state.
+It does not show default DeltaLLM branding before the configured branding is known.
+If the request fails or takes more than three seconds, the UI uses the built-in defaults.
 
 ## Authentication Settings
 
@@ -277,7 +314,14 @@ Recommended steady state:
 | `organization_deletion_retry_initial_seconds` | `5` | Initial automatic retry delay |
 | `organization_deletion_retry_max_seconds` | `300` | Maximum automatic retry delay |
 
-Keep the lifecycle staleness bound short because it is the maximum time an already-cached active organization may remain authorized after another replica schedules deletion. Each process refreshes a singleton lifecycle generation in the background; authenticated requests use matching cached snapshots without another database round trip and fail closed if that background snapshot becomes stale. The deletion request also performs best-effort immediate invalidation, while PostgreSQL and the durable invalidation outbox provide the authoritative transition.
+Keep the lifecycle staleness bound short.
+It limits how long a cached active organization can remain authorized after another replica schedules deletion.
+Each process refreshes one lifecycle generation in the background.
+Authenticated requests use matching cached snapshots without another database call.
+If the background snapshot becomes stale, requests fail closed.
+
+The deletion request also attempts immediate invalidation on a best-effort basis.
+PostgreSQL and the durable invalidation outbox control the authoritative transition.
 
 Deploy lifecycle-aware code with `organization_deletion_requests_enabled: false` first. After every API and worker replica reports lifecycle protocol v2 and a fresh lifecycle snapshot, set it to `true` and roll the API deployment. Disable this setting before a rollback. Never roll back to lifecycle-unaware code while an organization is inactive or a deletion job is unfinished.
 
@@ -355,7 +399,14 @@ These settings control the shared outbound HTTP client used for upstream provide
 | `upstream_http_max_keepalive_connections` | `100` | Maximum idle keep-alive connections retained per process |
 | `upstream_http_keepalive_expiry_seconds` | `60` | How long an idle keep-alive connection is retained |
 
-Per-deployment `deltallm_params.timeout` overrides the provider read timeout for that deployment. Without an explicit deployment timeout, DeltaLLM uses `upstream_http_read_timeout_seconds` so production operators can tune streaming and long-running provider calls globally. Connect, write, and pool timeouts remain explicit so slow connection establishment and local connection pool pressure fail predictably instead of looking like provider slowness. Background health checks cap their pool wait below the health-check wrapper timeout so local pool pressure is reported as gateway capacity instead of marking a provider deployment unhealthy.
+A deployment's `deltallm_params.timeout` overrides its provider read timeout.
+Without this value, DeltaLLM uses `upstream_http_read_timeout_seconds`.
+This lets production operators set a global timeout for streaming and long provider calls.
+Connect, write, and pool timeouts remain explicit.
+They distinguish slow connections and local pool pressure from provider response delays.
+
+Background health checks limit pool wait to less than the health-check wrapper timeout.
+Local pool pressure thus reports gateway capacity failure. It does not mark a provider deployment unhealthy.
 
 For production sizing, see [Upstream HTTP Tuning](../deployment/upstream-http.md).
 
@@ -420,18 +471,19 @@ Recommended rollout:
 
 If `email_enabled: true`, `email_base_url` must be an absolute `http://` or `https://` URL. DeltaLLM fails email bootstrap when it is missing or relative.
 
-Delivery claims are fenced with a worker ID, a unique claim token, and a renewable
-lease. A transport failure after bytes may have reached the provider moves the row
-to `delivery_unknown`; it is never retried automatically. A platform administrator
-must confirm the provider result, then resolve it as `sent` or `failed` through
-`POST /ui/api/email/outbox/{email_id}/resolve-delivery`. Required delivery-audit
-records move to `blocked` after retry exhaustion, fail readiness, and can be replayed
-after investigation through
-`POST /ui/api/email/outbox/{email_id}/delivery-audit/replay`. Both operator actions
-persist their required audit in the same database transaction as the state change.
-Email enablement and worker lifecycle, capacity, lease, startup, and shutdown
-settings are startup-only; the admin settings API returns `409 restart_required`
-when a dynamic update attempts to change them.
+Delivery claims use a worker ID, a unique claim token, and a renewable lease for fencing.
+A transport failure can occur after bytes reach the provider.
+In that condition, the row moves to `delivery_unknown`. The system does not retry it automatically.
+
+1. As a platform administrator, confirm the provider result.
+2. Resolve the row as `sent` or `failed` through `POST /ui/api/email/outbox/{email_id}/resolve-delivery`.
+
+Required delivery-audit records move to `blocked` after all retry attempts fail. They cause readiness to fail.
+After investigation, a platform administrator can replay them through `POST /ui/api/email/outbox/{email_id}/delivery-audit/replay`.
+Each operator action stores its required audit and state change in the same database transaction.
+
+Email enablement and worker lifecycle, capacity, lease, startup, and shutdown settings apply only at startup.
+The admin settings API returns `409 restart_required` for a dynamic update to these settings.
 
 ## Cache Settings
 
@@ -543,7 +595,10 @@ general_settings:
 
 When enabled, `default_org.id`, `default_team.id`, and at least one `allowed_domains` entry are required for `sso_allowed_domain`.
 
-The config values seed records only during provisioning. DeltaLLM does not continuously reconcile those records, so platform admins can later edit the organization, team, memberships, asset access, budgets, and limits through the Admin UI or API without config reloads reverting those changes.
+The configuration values create initial records only during provisioning.
+DeltaLLM does not continuously reconcile those records.
+Platform administrators can later edit the organization, team, memberships, asset access, budgets, and limits through the Admin UI or API.
+Configuration reloads do not reverse those changes.
 
 ## Governance Notification Settings
 
@@ -647,7 +702,30 @@ Audit events are written to Postgres and can be queried via the Admin Audit API.
 | `audit_metadata_retention_days` | `365` | Default retention for audit events (metadata) |
 | `audit_payload_retention_days` | `90` | Default retention for audit payloads (request/response bodies when stored) |
 
-With durable ingestion enabled, required audit and prompt-render events never use the in-memory queue. Prompt renders and their best-effort resolution audit share one policy-aware enqueue transaction: one lock-only SQL statement followed by one batched policy/capacity decision and insert statement using a fresh PostgreSQL snapshot. At capacity, required writes fail closed with a controlled `503`; best-effort events are explicitly dropped and counted after their non-reserved capacity is exhausted. A best-effort audit dependency failure is also counted and dropped without changing request or external-side-effect correctness, while required persistence remains fail-closed. In `legacy` mode, required records are persisted synchronously while only best-effort records use the bounded compatibility queue. Exhausted required outbox records remain `blocked`, consume capacity, and require platform-admin replay after investigation. Organization content-policy changes take a database advisory lock, redact active and blocked envelopes when storage is disabled, and publish on an application/environment/schema-scoped Redis channel so every replica evicts its local policy cache. The database policy check remains authoritative if Redis is unavailable. Readiness checks the dedicated telemetry pool and expected workers; repeated worker failures remain readiness-fatal even while the supervised loop attempts recovery.
+With durable ingestion enabled, required audit and prompt-render events never use the memory queue.
+Prompt renders and their best-effort resolution audit use one enqueue transaction that obeys content policy.
+Its first SQL statement only acquires locks.
+The next statement uses a fresh PostgreSQL snapshot for the batched policy and capacity decision and insert.
+
+At capacity, required writes fail closed with a controlled `503`.
+After non-reserved capacity is full, the system drops and counts best-effort events.
+It also drops and counts best-effort audit events after a dependency failure.
+This does not change request correctness or external side effects.
+Required persistence still fails closed.
+
+In `legacy` mode, required records use synchronous persistence.
+Only best-effort records use the bounded compatibility queue.
+Required outbox records with no remaining retries stay `blocked` and consume capacity.
+After investigation, a platform administrator must replay these records.
+
+Organization content-policy changes acquire a database advisory lock.
+If storage is disabled, the transaction redacts active and blocked envelopes.
+The application publishes a notification on a Redis channel scoped to the application, environment, and schema.
+Each replica then removes its local policy cache entry.
+The database policy check remains authoritative if Redis is unavailable.
+
+Readiness examines the dedicated telemetry pool and expected workers.
+Repeated worker failures keep readiness failed while the supervised loop attempts recovery.
 
 Apply the telemetry migrations and follow the [durable telemetry rollout](../deployment/telemetry-ingestion-rollout.md) before changing either ingestion mode.
 

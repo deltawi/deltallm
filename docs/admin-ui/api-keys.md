@@ -69,11 +69,17 @@ Self-service users cannot see or manage keys owned by other users through the My
 
 Keys normally inherit the callable-target universe from their team. Use key-level restriction when an integration needs a smaller model set than the team owns.
 
-In restrict mode, a key can select direct callable targets and access groups that are already visible through the team. Selecting an access group grants the key the callable targets currently in that group, and future matching targets after runtime reload, as long as the team and organization also allow them.
+In restrict mode, a key can select direct callable targets and access groups already visible through the team.
+An access-group grant gives the key access to the group's current callable targets.
+After runtime reload, it also includes new matching targets.
+The team and organization must permit each target.
 
 Self-service keys follow the team's self-service policy and ownership rules. They still inherit the team asset boundary; admins can use the full key editor when a production integration needs explicit key-level narrowing.
 
-For self-registered sandbox users, the default team policy is the main guardrail for personal key creation. The key must stay within the sandbox team, the current user becomes the owner, and the requested key budget, expiry, and rate limits must satisfy the team's self-service policy. Runtime requests still pass through the normal organization, team, runtime user, and key-level budget and rate-limit checks.
+The default team policy controls personal key creation for self-registered sandbox users.
+The key must remain within the sandbox team. The current user becomes its owner.
+The requested budget, expiry, and rate limits must obey the team's self-service policy.
+Runtime requests still use the normal budget and rate-limit checks for the organization, team, runtime user, and key.
 
 ## Important behavior
 

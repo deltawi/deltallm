@@ -108,9 +108,11 @@ If you want to expose only some tools, set `tool_allowlist`.
 
 Use a scoped API key that belongs to the bound organization, team, or API key scope for the runtime verification steps below.
 
-The master key is still useful for operator setup, but it bypasses normal MCP visibility rules and is not the right key for validating end-user access.
+The master key is useful for operator setup. It bypasses normal MCP visibility rules.
+Do not use it to verify access for application users.
 
-If you do not already have a scoped key in that scope, create one first from the [Admin UI: API Keys](../admin-ui/api-keys.md) page or the `/ui/api/keys` admin API.
+If the scope has no scoped key, create one first.
+Use the [Admin UI: API Keys](../admin-ui/api-keys.md) page or the `/ui/api/keys` admin API.
 
 ## 5. Set a tool policy
 

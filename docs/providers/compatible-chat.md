@@ -47,12 +47,13 @@ sources. You can enter another valid upstream chat model ID.
 
 ## Regional endpoints
 
-An explicit `api_base` overrides the default. For Qwen, use the endpoint and
-API key for the same region/workspace. Workspace endpoints have the form
-`https://{workspace}.{region}.maas.aliyuncs.com/compatible-mode/v1`.
-Tencent also offers regional TokenHub endpoints. Use TokenHub API keys and the
-model or enabled service ID supplied by Tencent; legacy Hunyuan SecretId/SecretKey
-credentials are not the authentication mechanism for this integration.
+An explicit `api_base` overrides the default.
+For Qwen, use an endpoint and API key from the same region and workspace.
+Workspace endpoints have the form `https://{workspace}.{region}.maas.aliyuncs.com/compatible-mode/v1`.
+
+Tencent also offers regional TokenHub endpoints.
+Use TokenHub API keys and the model or enabled service ID from Tencent.
+This integration does not use legacy Hunyuan SecretId/SecretKey credentials.
 
 DeltaLLM removes only the selected provider prefix: `deepseek/deepseek-v4-flash`
 becomes `deepseek-v4-flash`. Vendor-owned IDs such as
@@ -137,16 +138,19 @@ uses HTTP/1.1 and zero idle connections to prevent TLS reuse across hostnames
 sharing an IP. This adds one TCP/TLS setup per control request; inference pooling
 is unchanged. There is no switch to restore unsafe reuse.
 
-Each process admits at most 32 operations and 32 waiters, with a 100 ms queue
-limit, at most 2 seconds for DNS, and a 10-second total operation deadline. Pool
-acquisition uses at most 80% of the deadline remaining after admission and DNS,
-respecting any shorter configured pool timeout. This lets local pool exhaustion
-be classified before the total deadline expires. The direct control pool remains
-limited to 100 active connections. Maximum discovery concurrency is
-`32 × API processes × maximum API replicas`. Responses are limited
-to 2 MiB after decompression and 500 models (Qwen: one page of 100). Policy or
-local-capacity denial returns the catalog with a warning and does not penalize
-deployment health. Z.ai discovery remains catalog-only with zero DNS/HTTP calls.
+Each process permits at most 32 operations and 32 waiters.
+The queue wait limit is 100 ms. DNS has a maximum of 2 seconds.
+The full operation has a 10-second deadline.
+
+Pool acquisition uses at most 80% of the deadline remaining after admission and DNS.
+A shorter configured pool timeout takes priority.
+This permits classification of local pool exhaustion before the total deadline expires.
+The direct control pool remains limited to 100 active connections.
+Maximum discovery concurrency is `32 × API processes × maximum API replicas`.
+
+Responses are limited to 2 MiB after decompression and 500 models (Qwen: one page of 100).
+Policy or local-capacity denial returns the catalog with a warning and does not penalize deployment health.
+Z.ai discovery remains catalog-only with zero DNS/HTTP calls.
 
 Monitor `deltallm_provider_discovery_total{outcome}` and
 `deltallm_provider_discovery_seconds` for policy/capacity failures and latency.

@@ -1,8 +1,9 @@
 # Production Checklist
 
-Complete this checklist before shifting production traffic. Record an owner and evidence for every
-item; a checked box without a link to configuration, a test result, or an operational record is not
-a release control.
+Complete this checklist before you send production traffic to the deployment.
+Record an owner for each item.
+For each item, add a link to configuration, a test result, or an operational record.
+A selected checkbox without this evidence is not sufficient for release.
 
 ## Release and architecture
 

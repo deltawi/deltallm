@@ -1,6 +1,9 @@
 # Organization Deletion
 
-Organization deletion is an asynchronous, durable control-plane workflow. A platform administrator starts it from an organization's **Overview** page in the admin UI. Organization owners and organization administrators cannot start or restore deletion, but they can inspect an existing deletion, waive its remaining recovery window, and retry its cleanup for an organization they administer.
+Organization deletion is an asynchronous, durable control-plane procedure.
+A platform administrator starts it from the organization's **Overview** page in the Admin UI.
+Organization owners and organization administrators cannot start deletion or restore the organization.
+For an organization they administer, they can inspect an existing deletion, waive its remaining recovery window, and retry cleanup.
 
 ## Lifecycle
 
@@ -12,13 +15,30 @@ The workflow uses four organization states:
 4. `deletion_failed` — cleanup exhausted its automatic retries and requires an organization owner,
    organization administrator, or platform administrator to retry it.
 
-The request transaction creates the durable deletion job, changes the organization state, increments the fleet-wide lifecycle generation, writes an audit event, and enqueues cache invalidation atomically. API-key, JWT, and custom authentication paths reject inactive organizations. Each process refreshes the global generation in the background and compares it with the lifecycle snapshot already carried by cached API-key auth. The steady-state data plane therefore performs no additional lifecycle database call; a rare generation mismatch triggers a single-flighted organization lookup. Requests fail closed when the background generation becomes older than the configured staleness bound. PostgreSQL remains authoritative.
+One request transaction atomically completes these changes:
+
+- It creates the durable deletion job.
+- It changes the organization state.
+- It increments the lifecycle generation for all replicas.
+- It writes an audit event.
+- It queues cache invalidation.
+
+API-key, JWT, and custom authentication reject inactive organizations.
+Each process refreshes the global generation in the background.
+It compares that generation with the lifecycle snapshot in cached API-key authentication.
+Steady-state requests thus need no additional lifecycle database call.
+A rare generation mismatch triggers an organization lookup that coalesces simultaneous requests.
+
+Requests fail closed when the background generation exceeds the configured staleness bound.
+PostgreSQL remains authoritative.
 
 ## Administrator flow
 
-The UI first loads a server-generated impact preview. Its confirmation token binds the organization
-lifecycle and destructive scope, while naturally changing operational and retained-history counts
-remain informational and are rechecked by the locked request transaction. The administrator must:
+The UI first loads an impact preview from the server.
+Its confirmation token binds the organization lifecycle and destructive scope.
+Operational and retained-history counts can change. These counts are informational.
+The locked request transaction examines them again.
+The administrator must:
 
 - inspect counts for teams, credentials, memberships, invitations, approvals, and owned assets;
 - transfer or unbind organization-owned MCP servers, prompt templates, and route groups that are
@@ -36,13 +56,14 @@ The page then shows the durable job phase and progress. Refreshing or switching 
 
 Restore is available only before the recovery deadline and before the worker enters an irreversible phase. Restore reactivates access but does not recreate cancelled invitations, approvals, batch work, or email deliveries.
 
-An organization owner, organization administrator, or platform administrator may choose **Delete
-permanently now** while restore is still available. The administrator must re-enter the exact
-organization name and explicitly acknowledge that the remaining recovery period will be waived.
-This moves the durable deadline to the current time and
-wakes a waiting job, but it does not skip active-batch shutdown, ownership classification, cleanup
-phases, fencing, or the final inventory check. The waiver and its previous deadline are recorded in
-the audit log. A failed job must first be rescheduled with **Retry cleanup**.
+An organization owner, organization administrator, or platform administrator can select **Delete permanently now** while restore remains available.
+The administrator must enter the exact organization name again.
+The administrator must also explicitly acknowledge the loss of the remaining recovery period.
+
+This moves the durable deadline to the current time and wakes a waiting job.
+It does not skip active-batch shutdown, ownership classification, cleanup phases, fencing, or the final inventory check.
+The audit log records the waiver and previous deadline.
+For a failed job, first select **Retry cleanup**.
 
 The equivalent API action is:
 
@@ -99,9 +120,9 @@ must use an audited data-repair procedure to add or correct the explicit ownersh
 a fresh preview.
 
 Batch jobs, create sessions, and webhook deliveries use an immutable organization snapshot.
-Legacy rows that can be resolved only through a current team, API key, or user relationship are
-reported as **batch records missing ownership** and block deletion until the coordinated migration
-job backfills them in bounded, retryable pages.
+Some legacy rows have ownership only through a current team, API key, or user relationship.
+The system reports these as **batch records missing ownership**.
+They block deletion until the coordinated migration job backfills them in bounded pages with retry support.
 
 ## Worker safety
 
@@ -146,11 +167,14 @@ them before application binaries with the checked-in coordinator:
 python -m src.organization_deletion_migrations deploy --schema ./prisma/schema.prisma
 ```
 
-The coordinator recognizes only the allowlisted organization-deletion migrations and exact index
-definitions. On retry it removes matching invalid indexes concurrently, marks only a matching
-failed Prisma migration as rolled back, redeploys, performs the bounded ownership backfill, and
-verifies every required migration and index. An unexpected index definition fails closed for
-operator review. Do not invoke this repair path from API startup or let replicas race it.
+The coordinator accepts only allowlisted organization-deletion migrations and exact index definitions.
+On retry, it removes matching invalid indexes concurrently.
+It marks only a matching failed Prisma migration as rolled back, then deploys again.
+It does the bounded ownership backfill and verifies each necessary migration and index.
+An unexpected index definition fails closed for operator review.
+
+Do not start this repair from API startup.
+Do not let replicas run it concurrently.
 
 For a release rehearsal, point the checked-in upgrade verifier at a disposable PostgreSQL database whose name contains `organization_deletion_migration_test`:
 
@@ -159,9 +183,10 @@ ORGANIZATION_DELETION_MIGRATION_TEST_DATABASE_URL=postgresql://.../deltallm_orga
   bash scripts/verify_organization_deletion_migration.sh
 ```
 
-The script resets only that explicitly marked database. It verifies an upgrade from the preceding
-migration with existing organization/team data, validates the concurrent indexes, then resets once
-more and verifies a fresh installation of the full migration set.
+The script resets only the explicitly marked database.
+It verifies an upgrade from the preceding migration with existing organization and team data.
+It validates concurrent indexes, then resets the database again.
+It verifies a fresh installation of the full migration set.
 
 ## Configuration
 

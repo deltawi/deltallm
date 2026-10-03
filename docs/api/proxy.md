@@ -88,12 +88,15 @@ with the matching tool result:
 System, user, and tool messages still require non-null `content`. Use
 `POST /v1/chat/completions`, not the legacy `POST /v1/completions`, for tool-calling requests.
 
-Provider error bodies are bounded and never returned verbatim. Encoded error bodies are kept opaque
-and classified from trusted status and `Retry-After` metadata instead of being decompressed; bounded
-identity bodies may also contribute provider-specific classifications. Before response commit,
-DeltaLLM uses the sanitized classification for retry and failover. After a streaming response has
-emitted content, it never retries: a provider failure closes the OpenAI-compatible stream without a
-`[DONE]` marker, so clients must treat a missing terminal marker as an incomplete response.
+Provider error bodies have size limits. DeltaLLM never returns them verbatim.
+The gateway does not decompress encoded error bodies.
+It classifies these errors with trusted status and `Retry-After` metadata.
+Bounded identity bodies can also supply provider-specific classifications.
+Before response commit, DeltaLLM uses the sanitized classification for retry and failover.
+
+After a streaming response sends content, DeltaLLM does not retry it.
+A provider failure closes the OpenAI-compatible stream without a `[DONE]` marker.
+Clients must treat a missing terminal marker as an incomplete response.
 
 #### Streaming accounting
 
@@ -103,12 +106,12 @@ writer and required audit before forwarding `[DONE]` (or the translated
 connection to EOF. Content tokens are still delivered immediately. This ordering
 applies to Chat, Completions, Responses, and the Messages-compatible wrapper.
 
-With `general_settings.spend_ingestion_mode: outbox` (required for model-router
-selectors), the answer charge must be durably accepted before the terminal marker.
-If that acceptance fails, required audit fails, or finalization exceeds the request
-deadline, the stream ends without a successful terminal marker; already generated
-tokens may still be chargeable. Durable acceptance does not mean that the background
-worker has already applied every reporting/ledger update.
+Model-router selectors require `general_settings.spend_ingestion_mode: outbox`.
+In this mode, durable accounting must accept the answer charge before the terminal marker.
+The stream ends without a successful terminal marker if this acceptance or required audit fails.
+This also occurs if finalization exceeds the request deadline.
+The provider can still charge for tokens already generated.
+Durable acceptance does not mean that the background worker completed each reporting or ledger update.
 
 The default `legacy` spend mode is also awaited, but its existing writer logs and
 swallows database-write failures and does not atomically update all ledgers.
@@ -234,7 +237,10 @@ POST /v1/audio/transcriptions
 
 This endpoint accepts multipart form data.
 
-Public transcription requests remain OpenAI-compatible even when the selected deployment is ElevenLabs. For ElevenLabs, DeltaLLM sends the uploaded audio to native `POST /v1/speech-to-text`, maps public `language` to `language_code`, maps `temperature`, and reshapes the provider response back into the requested public response format.
+Public transcription requests remain OpenAI-compatible when the selected deployment is ElevenLabs.
+DeltaLLM sends uploaded audio to the native `POST /v1/speech-to-text` endpoint.
+It maps public `language` to `language_code` and maps `temperature`.
+It converts the provider response to the requested public response format.
 
 ```bash
 curl http://localhost:8000/v1/audio/transcriptions \

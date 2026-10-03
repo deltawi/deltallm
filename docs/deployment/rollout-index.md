@@ -3,7 +3,11 @@
 These runbooks cover changes that need extra care during particular upgrades. They are not a general installation sequence.
 
 !!! warning "Check the release notes first"
-    Use a runbook only when the release notes for your target version link to it. Confirm the source and target versions, rehearse the change in staging, take a verified backup, and name the person who can stop or reverse the rollout.
+    Use a runbook only when the release notes for your target version link to it.
+    Confirm the source and target versions.
+    Do a trial of the change in staging.
+    Take a verified backup.
+    Identify the person who can stop or reverse the rollout.
 
 | Runbook | Use it when the release notes mention | Main risk |
 | --- | --- | --- |

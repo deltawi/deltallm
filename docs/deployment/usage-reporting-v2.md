@@ -25,7 +25,10 @@ Team and personal usage views depend on immutable API-key owner snapshots. They 
      ON "deltallm_spendlog_events"("start_time", "id");
    ```
 
-3. Deploy the release to every gateway and batch worker. Startup applies the owner columns, immutable batch-snapshot markers, compatibility triggers, and retry-safe transactional index migrations. Schema and index lock acquisition is capped at five seconds, so a busy table fails deployment instead of waiting indefinitely or queuing gateway writes behind the migration.
+3. Deploy the release to each gateway and batch worker.
+   Startup applies owner columns, immutable batch-snapshot markers, compatibility triggers, and transactional index migrations with retry support.
+   Schema and index lock acquisition has a five-second limit.
+   A busy table causes deployment failure instead of an indefinite wait or a queue of gateway writes behind the migration.
 
    If the owner-scope migration times out, allow the blocking transaction to finish or schedule the migration for a quieter window. The migration is atomic and does not need manual schema cleanup. Mark only that failed attempt rolled back, then rerun deployment:
 
@@ -61,12 +64,30 @@ Team and personal usage views depend on immutable API-key owner snapshots. They 
    DATABASE_URL='postgresql://...' uv run python scripts/check_spend_reporting_v2_readiness.py
    ```
 
-   A zero exit status and `"ready": true` confirm that all migrations completed, snapshot-completeness columns have their fail-safe defaults, required indexes are valid, and rolling-compatibility ownership triggers are enabled. Upgraded writers mark snapshots complete even when a key is deliberately ownerless, so steady-state traffic bypasses compatibility lookups. Existing batch sessions and jobs remain unattributed instead of being assigned to a later key owner. The check deliberately does not infer fleet versions; confirm that separately in your deployment platform.
-6. Confirm every gateway and batch worker is on this release, then set `spend_reporting_v2_enabled: true` and perform a configuration rollout.
-7. Sign in as a regular user and verify that **Usage** shows only **Your usage**. Verify a team administrator can switch between team and personal views, and an organization owner can switch between organization and personal views.
+   A zero exit status and `"ready": true` confirm these conditions:
+
+   - All migrations completed.
+   - Snapshot-completeness columns have fail-safe defaults.
+   - Required indexes are valid.
+   - Ownership triggers for compatibility during rolling upgrades are enabled.
+
+   Upgraded writers mark snapshots complete even when a key is intentionally ownerless.
+   Steady-state traffic thus skips compatibility lookups.
+   Existing batch sessions and jobs remain unattributed. They do not receive a later key owner.
+   This check does not infer replica versions.
+6. Confirm in the deployment platform that each gateway and batch worker uses this release.
+7. Set `spend_reporting_v2_enabled: true`.
+8. Deploy the configuration change.
+9. Sign in as a regular user.
+10. Verify that **Usage** shows only **Your usage**.
+11. Verify that a team administrator can switch between team and personal views.
+12. Verify that an organization owner can switch between organization and personal views.
 
 ## Rollback
 
-Set `spend_reporting_v2_enabled: false` first. This immediately hides team and personal views while keeping platform and organization reporting available. Keep the additive columns, indexes, and compatibility triggers in place during a code rollback; removing them while older and newer writers overlap can permanently lose owner attribution.
+First, set `spend_reporting_v2_enabled: false`.
+This immediately hides team and personal views. Platform and organization reporting remain available.
+During code rollback, keep the added columns, indexes, and compatibility triggers.
+Their removal while older and newer writers run together can permanently lose owner attribution.
 
 Historical spend rows whose owner was not recorded remain unattributed. Do not backfill them from current API-key ownership because keys can be transferred or deleted after the request occurred.

@@ -14,6 +14,11 @@ Use this checklist with the deployment owner, database owner, and monitoring own
    that the [rollback decision](../deployment/upgrade-and-rollback.md#rollback-decision) remains
    valid. Execute rollback only if the documented decision threshold is met.
 
-Rehearse the full rollback in staging before the maintenance window. The production upgrade is
-complete when migration evidence predates the rollout, every replica uses the pinned image, tests
-pass, alerts remain stable, and the rollback readiness check has been recorded.
+Before the maintenance window, do a full rollback trial in staging.
+The production upgrade is complete when all these conditions are true:
+
+- The migration evidence has a timestamp before the rollout.
+- Each replica uses the pinned image.
+- The tests pass.
+- The alerts remain stable.
+- The operator recorded the rollback readiness check.

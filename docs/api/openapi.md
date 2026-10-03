@@ -20,8 +20,9 @@ not appropriate for the deployment.
 
 ## Regenerate locally
 
-The Prisma client must exist because the application imports its typed repositories, but schema
-generation does not start the FastAPI lifespan or connect to PostgreSQL, Redis, or providers.
+The application imports typed repositories, so the Prisma client must exist.
+Schema generation does not start the FastAPI lifespan.
+It does not connect to PostgreSQL, Redis, or providers.
 
 ```bash
 uv sync --frozen --extra docs
@@ -35,6 +36,7 @@ To verify without modifying the artifact:
 uv run python scripts/docs/export_openapi.py --check
 ```
 
-The exporter rejects missing and duplicate operation IDs. OpenAPI documents the schemas that
-routes declare; control-plane operations that still accept untyped dictionaries require
-separate backend typing work before a generator can infer stronger field contracts.
+The exporter rejects missing and duplicate operation IDs.
+OpenAPI documents the schemas that routes declare.
+Some control-plane operations still accept untyped dictionaries.
+These operations need backend types before a generator can give more specific field contracts.

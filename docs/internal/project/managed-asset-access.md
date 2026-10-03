@@ -993,11 +993,16 @@ the Docker application on port 4002. Run `20260928070052` passed all of the foll
 
 ### Definition of done
 
-This remediation is complete only when all six findings have regression coverage, the focused and
-full verification gates pass, platform model discovery matches actual tier invocation, no stale grant
-can mutate a platform model, access warnings reach the user, old writers cannot recreate stale binding
-state, invalid audiences never produce a 500 or partial policy, and no legacy record has been deleted
-without separate approval.
+This remediation is complete only when all these conditions are true:
+
+- All six findings have regression coverage.
+- The focused and full verification gates pass.
+- Platform model discovery matches actual tier invocation.
+- No stale grant can change a platform model.
+- Access warnings get to the user.
+- Previous writers cannot create stale binding state again.
+- Invalid audiences never produce a `500` response or a partial policy.
+- No legacy record was deleted without separate approval.
 
 ## Alternatives rejected
 

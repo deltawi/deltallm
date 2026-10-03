@@ -31,10 +31,9 @@ Platform role changes persist across SSO sign-ins. The configured
 it does not override promotions or demotions made here. Disabling an account
 also prevents SSO login until the account is reactivated.
 
-SSO default-team enrollment fills missing memberships and preserves existing
-organization and team roles. First-time SSO linking to an existing account
-requires the identity provider to verify the account's email; a known provider
-subject can continue signing in with its stored permissions.
+SSO default-team enrollment adds missing memberships. It keeps existing organization and team roles.
+Before the first SSO link to an existing account, the identity provider must verify the account's email.
+A known provider subject can continue to sign in with its stored permissions.
 
 ## Invitations
 

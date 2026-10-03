@@ -1,13 +1,19 @@
 # Anthropic Messages Endpoint
 
-DeltaLLM exposes an Anthropic Messages API-compatible endpoint at `POST /v1/messages`. Requests are converted to the gateway's canonical chat format and routed through the same deployment routing, budgets, rate limits, and failover as `/v1/chat/completions`, so the target model can be served by any configured provider — not only Anthropic.
+DeltaLLM provides an Anthropic Messages API-compatible endpoint at `POST /v1/messages`.
+DeltaLLM converts requests to its standard chat format.
+It uses the same deployment routing, budgets, rate limits, and failover as `/v1/chat/completions`.
+The target model can use a configured provider other than Anthropic.
 
 ## Authentication
 
 The endpoint uses the same authentication as every other proxy endpoint: `Authorization: Bearer YOUR_API_KEY`.
 
-!!! note
-    The Anthropic SDKs send the API key in an `x-api-key` header by default, which this endpoint does **not** accept. Configure your client to send a bearer token instead. With the Python SDK: `Anthropic(auth_token="YOUR_API_KEY", base_url="http://localhost:8000")`.
+The Anthropic SDKs send the API key in an `x-api-key` header by default.
+This endpoint does not accept that header.
+
+Configure your client to send a bearer token.
+For the Python SDK, use `Anthropic(auth_token="YOUR_API_KEY", base_url="http://localhost:8000")`.
 
 ## Example
 
@@ -56,17 +62,25 @@ Errors use the Anthropic error envelope:
 }
 ```
 
-Every failure before the response starts—including authentication, request validation, rate
-limits, budget exhaustion, and upstream/provider failures—uses this envelope. Provider response
-bodies and messages are never forwarded. DeltaLLM maps the gateway status to the Anthropic error
-type (`authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`,
-`overloaded_error`, or `api_error`) and preserves a valid `Retry-After` header for rate limits.
+Each failure before the response starts uses this envelope.
+This includes authentication, request validation, rate limits, budget exhaustion, and upstream or provider failures.
+DeltaLLM never forwards provider response bodies or messages.
+It maps the gateway status to an Anthropic error type:
 
-Gateway-level errors return the same HTTP status codes as the OpenAI-compatible endpoints. An
-unclassified upstream `401`, `403`, or `404` is treated as a deployment/configuration failure so
-another healthy deployment can be tried; if failover is exhausted, the client receives a sanitized
-`503 overloaded_error`. A trusted content-policy or context-window classification remains a
-terminal `400 invalid_request_error`.
+- `authentication_error`.
+- `permission_error`.
+- `not_found_error`.
+- `rate_limit_error`.
+- `overloaded_error`.
+- `api_error`.
+
+For rate limits, DeltaLLM keeps a valid `Retry-After` header.
+
+Gateway errors use the same HTTP status codes as the OpenAI-compatible endpoints.
+An unclassified upstream `401`, `403`, or `404` is a deployment or configuration failure.
+DeltaLLM can try another healthy deployment.
+After all failover attempts fail, the client receives a sanitized `503 overloaded_error`.
+A trusted content-policy or context-window classification remains a terminal `400 invalid_request_error`.
 
 If a provider fails after a streaming `200` response has already emitted content, DeltaLLM does not
 retry or replace the response. It emits one sanitized Anthropic `event: error` frame and closes the

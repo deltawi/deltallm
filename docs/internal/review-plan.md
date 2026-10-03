@@ -65,12 +65,12 @@
 
 **Checklist**:
 - [ ] Router handles all error cases from providers (timeout, rate limit, auth failure)
-- [ ] Failover chains don't create infinite loops
+- [ ] Failover chains do not create infinite loops
 - [ ] Cooldown state is consistent in multi-instance deployments
-- [ ] Health checks don't cause cascading failures
+- [ ] Health checks do not cause cascading failures
 - [ ] Provider adapters properly sanitize input before forwarding
 - [ ] Retry logic has exponential backoff and jitter
-- [ ] Timeout handling doesn't leave hanging connections
+- [ ] Timeout handling does not leave hanging connections
 
 **Assigned to**: reviewer2
 
@@ -89,7 +89,7 @@
 
 **Checklist**:
 - [ ] Cache key correctly incorporates all relevant request parameters
-- [ ] Cache doesn't return stale data after model updates
+- [ ] Cache does not return stale data after model updates
 - [ ] Streaming responses are properly assembled before caching
 - [ ] Redis backend handles connection failures gracefully
 - [ ] Cache TTL is respected across all backends
@@ -114,11 +114,11 @@
 
 **Checklist**:
 - [ ] Guardrails run in correct order (pre-call, post-call)
-- [ ] Exceptions in guardrails don't crash the request pipeline
-- [ ] PII detection doesn't have bypass vulnerabilities
+- [ ] Exceptions in guardrails do not crash the request pipeline
+- [ ] PII detection does not have bypass vulnerabilities
 - [ ] Prompt injection detection has adequate coverage
 - [ ] Guardrail failures have configurable fail-open/fail-closed behavior
-- [ ] Log mode doesn't accidentally expose sensitive data
+- [ ] Log mode does not accidentally expose sensitive data
 
 **Assigned to**: reviewer2
 
@@ -142,8 +142,8 @@
 - [ ] Budget enforcement is race-condition free
 - [ ] Spend updates are atomic
 - [ ] Budget reset logic handles timezone correctly
-- [ ] Soft budget alerts don't spam
-- [ ] Spend logs can't be tampered with
+- [ ] Soft budget alerts do not spam
+- [ ] Spend logs cannot be tampered with
 
 **Assigned to**: reviewer1
 
@@ -166,7 +166,7 @@
 - [ ] Redis failures gracefully degrade to in-memory counters
 - [ ] Rate limit windows reset correctly
 - [ ] Parallel request limits work correctly
-- [ ] Error responses don't leak sensitive info
+- [ ] Error responses do not leak sensitive info
 - [ ] All middleware handles exceptions without hanging
 
 **Assigned to**: reviewer2
@@ -184,12 +184,12 @@
 | Main App | `src/main.py` | ~400 |
 
 **Checklist**:
-- [ ] Secret resolution doesn't log sensitive values
+- [ ] Secret resolution does not log sensitive values
 - [ ] Invalid config fails fast with clear errors
 - [ ] Environment variable interpolation handles missing vars
-- [ ] Dynamic config reload doesn't cause race conditions
+- [ ] Dynamic config reload does not cause race conditions
 - [ ] Config precedence (file vs DB) is correct
-- [ ] Hot reload doesn't lose in-flight requests
+- [ ] Hot reload does not lose in-flight requests
 
 **Assigned to**: reviewer1
 

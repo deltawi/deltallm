@@ -1,12 +1,12 @@
-# Check or add your first model
+# Find or add your first model {#check-or-add-your-first-model}
 
 A model in DeltaLLM points to an AI provider and one of its models. Your application calls the
 public name you choose, while DeltaLLM keeps the provider details and credentials separate.
 
-## Check for the sample model
+## Find the sample model {#check-for-the-sample-model}
 
-If you used the Docker starter configuration, it may have added a model named `gpt-4o-mini` for
-you. Check the available models:
+The Docker starter configuration can add a model named `gpt-4o-mini`.
+Get the list of available models:
 
 ```bash
 curl http://localhost:4002/v1/models \
@@ -24,13 +24,16 @@ Use these steps if the model list is empty or you want to use a different provid
 
 1. Open `http://localhost:4002` in your browser.
 2. Sign in with the administrator email and password from your `.env` file.
-3. Open **AI Gateway**, then **Models**.
-4. Select **Add model**.
-5. Enter a public name. Use `gpt-4o-mini` if you want to follow the examples in this guide.
-6. Choose the provider and enter the provider's model name.
-7. Add the provider API key or choose a saved provider credential.
-8. Keep the type set to **Chat** for a normal text model.
-9. Save the model and wait for it to show as healthy.
+3. Open **AI Gateway**.
+4. Open **Models**.
+5. Select **Add model**.
+6. Enter a public name. Use `gpt-4o-mini` to use the examples in this guide.
+7. Select the provider.
+8. Enter the provider's model name.
+9. Add the provider API key or select a saved provider credential.
+10. Keep the type set to **Chat** for a standard text model.
+11. Save the model.
+12. Wait until the model shows a healthy status.
 
 Run the model-list command again. The response should include the public name you chose.
 

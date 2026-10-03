@@ -28,11 +28,16 @@ timeouts of 100–5,000 ms, and input limits of 256–32,768 characters. Every
 selected answer member needs a lane; every lane needs an enabled member.
 Routing may escalate to higher ranks, never silently downgrade.
 
-Choosing a selector enables known-capacity context filtering when previously
-disabled. Publication still uses the canonical server-side qualification checks:
-enabled chat members, positive context limits, explicit chat capabilities,
-classifier pricing and RPM/TPM limits, plus healthy selector billing/outbox and
-shared admission dependencies. A selector report does not replace these checks.
+A selector enables context filtering with known capacity if this filtering was disabled.
+Publication still uses the standard server qualification checks:
+
+- Enabled chat members.
+- Positive context limits.
+- Explicit chat capabilities.
+- Classifier pricing and RPM/TPM limits.
+- Healthy selector billing, outbox, and shared admission dependencies.
+
+A selector report does not replace these checks.
 See [router configuration](router.md#model-router-policy-contract) for runtime details.
 
 If no selector is offered, check the search and configured chat deployments.

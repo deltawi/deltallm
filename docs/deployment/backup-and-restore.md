@@ -1,8 +1,11 @@
 # Backup and Restore
 
-Backups are useful only when they are complete, protected, retained, and repeatedly restored. Set
-recovery-point and recovery-time objectives from business requirements, then configure the
-database and object stores to meet them.
+A backup must be complete and protected. The retention period must meet business requirements.
+Regular restore tests show that the backup remains usable.
+
+1. Set the recovery-point objective from business requirements.
+2. Set the recovery-time objective from business requirements.
+3. Configure the database and object stores to meet these objectives.
 
 ## What to protect
 
@@ -19,17 +22,25 @@ configuration can also be part of the recovery scope. Name an owner for each sys
 
 ## PostgreSQL backup example
 
-Run the database vendor's supported backup tooling from an isolated operator environment. Configure
-a PostgreSQL service named `deltallm-production` and keep its password in a protected password file,
-not in the command or shell history. For a portable logical backup:
+Use the database vendor's supported backup tools in an isolated operator environment.
+
+1. Configure a PostgreSQL service named `deltallm-production`.
+2. Put its password in a protected password file.
+3. Keep the password out of commands and shell history.
+
+For a portable logical backup, use this command:
 
 ```bash
 PGSERVICE=deltallm-production \
   pg_dump --format=custom --file=deltallm-<timestamp>.dump
 ```
 
-Encrypt the artifact, record its checksum and source database/version, and move it to access-
-controlled storage with retention protection. A successful command is not restore evidence.
+1. Encrypt the backup file.
+2. Record its checksum.
+3. Record the source database and its version.
+4. Move the file to storage with access controls and retention protection.
+
+A successful backup command does not prove that you can restore the database.
 
 ## Restore rehearsal
 
@@ -42,25 +53,35 @@ PGSERVICE=deltallm-restore-test \
   deltallm-<timestamp>.dump
 ```
 
-Then:
+After the restore, do these steps:
 
-1. restrict the restored environment from provider, email, webhook, MCP, and other external egress;
-2. use separate test secrets and disable background side effects;
-3. run the application version compatible with the backup's schema;
-4. verify migration history, representative tenant/key/model records, and table counts;
-5. run authenticated read-only and synthetic gateway checks with test providers;
-6. measure recovery time and record any manual steps; and
-7. destroy or re-protect restored sensitive data according to policy.
+1. Block external connections from the restored environment to providers, email services, webhooks, MCP servers, and other external systems.
+2. Use separate test secrets.
+3. Disable background side effects.
+4. Run the application version that is compatible with the backup's schema.
+5. Examine the migration history.
+6. Examine representative tenant, key, and model records.
+7. Verify table counts.
+8. Do authenticated read-only checks with test providers.
+9. Do synthetic gateway checks with test providers.
+10. Measure the recovery time.
+11. Record the manual steps.
+12. Delete the restored sensitive data or restore its protection, as specified by policy.
 
 ## Production recovery
 
-1. Declare the incident, stop writers/workers, and record the recovery point selected.
-2. Restore to a new database instance or provider-managed recovery target.
-3. Validate database consistency and migration compatibility before changing application secrets.
-4. Bring up a quarantined application replica with external side effects disabled and run checks.
-5. Switch traffic only after approval, then re-enable workers and integrations deliberately.
-6. Reconcile requests, batch jobs, callbacks, audit/spend outboxes, and provider side effects that
-   occurred after the recovery point. Database recovery cannot undo external provider actions.
+1. Declare the incident.
+2. Stop writers and workers.
+3. Record the selected recovery point.
+4. Restore to a new database instance or a recovery target that the provider manages.
+5. Before you change application secrets, verify database consistency and migration compatibility.
+6. Start an isolated application replica with external side effects disabled.
+7. Do the recovery checks.
+8. After approval, switch traffic to the restored application.
+9. Enable the workers and integrations again.
+10. Reconcile requests, batch jobs, callbacks, audit and spend outboxes, and provider side effects that occurred after the recovery point.
 
-Rotate credentials if the incident involved unauthorized backup access. Record actual recovery
-point/time results and feed gaps back into the [production checklist](production-checklist.md).
+Database recovery cannot reverse external provider actions.
+If the incident included unauthorized backup access, replace the credentials.
+Record the actual recovery point and recovery time.
+Update the [production checklist](production-checklist.md) with the identified gaps.

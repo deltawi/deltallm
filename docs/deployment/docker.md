@@ -11,10 +11,11 @@ working commands.
 | `single` | One API container with bundled PostgreSQL and Redis | Evaluation only |
 | `ha` | Two API containers behind Nginx on one host | Multi-instance behavior test; **not** high availability |
 
-The `ha` profile demonstrates load balancing and shared state, but Nginx, PostgreSQL, Redis,
-storage, and both application containers still share one Docker host and failure domain. It
-uses plain HTTP and development-oriented service exposure. Each application container also
-runs the image's migration bootstrap before starting.
+The `ha` profile shows load balancing and shared state on one Docker host.
+Nginx, PostgreSQL, Redis, storage, and the two application containers share that host.
+A host failure can stop all these components.
+The profile uses plain HTTP and exposes services for development.
+Each application container runs the image's database migrations before application startup.
 
 ## Why it is not a production reference
 

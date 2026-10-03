@@ -1,8 +1,8 @@
 # Life of a Request
 
-DeltaLLM evaluates inference requests in a deliberate order so transformations cannot bypass
-authorization, cache hits cannot bypass policy, and streaming resources remain owned until
-the response finishes.
+DeltaLLM evaluates inference requests in a specified order.
+This prevents transformations from bypassing authorization and cache hits from bypassing policy.
+The request keeps ownership of streaming resources until the response finishes.
 
 This page follows the text-generation path. Other inference endpoints reuse the same core
 invariants but may have endpoint-specific validation or provider translation.
@@ -78,10 +78,11 @@ The request pins the current routing generation, resolves the requested model or
 and selects an eligible deployment. A provider adapter owns provider-specific authentication,
 payload translation, response translation, and error mapping.
 
-Retries and failover are bounded by the configured deadline and classification rules. The
-gateway does not retry arbitrary side effects. For a stream, failover is allowed only before
-the first validated downstream chunk; after bytes reach the client, the gateway preserves the
-stream outcome instead of replacing it with another provider response.
+Configured deadlines and classification rules limit retries and failover.
+The gateway does not retry arbitrary side effects.
+For a stream, failover can occur only before the first validated downstream chunk.
+After the client receives bytes, the gateway keeps the stream outcome.
+It does not replace that outcome with another provider response.
 
 See [Routing and failover](../features/routing.md) for strategies and failure behavior.
 

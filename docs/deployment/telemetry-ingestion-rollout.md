@@ -19,8 +19,16 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 2. Provision database headroom for `telemetry_db_pool_size` connections per process. These connections are separate from `db_pool_size`; size the database for the sum across all replicas.
 3. Configure Redis for prompt cache freshness and multi-replica audit policy invalidation. PostgreSQL advisory locks and the policy-change transaction remain the privacy correctness boundary; audit content writes do not rely on Pub/Sub delivery.
 4. Verify the server-owned spend event identity, Prisma transaction-client detection, blocked-event replay, and claim-token fencing tests before enabling spend producers.
-5. Set the pod termination grace period above both `telemetry_shutdown_drain_timeout_seconds` and, when email is enabled, `email_worker_shutdown_drain_timeout_seconds` (the Helm default is 30 seconds for both 20-second deadlines) so cancellation and connection cleanup can finish before `SIGKILL`.
-6. Keep both ingestion modes on `legacy` until every API and worker replica runs a version that acquires telemetry admission locks in a lock-only transaction statement and reads capacity or content policy in the following statement. An older waiter can retain a pre-lock PostgreSQL snapshot, so outbox mode is not safe during a mixed-version rollout.
+5. Set the pod termination grace period above `telemetry_shutdown_drain_timeout_seconds`.
+   If email is enabled, also set it above `email_worker_shutdown_drain_timeout_seconds`.
+   The Helm default is 30 seconds. Each shutdown deadline defaults to 20 seconds.
+   This permits cancellation and connection cleanup before `SIGKILL`.
+6. Keep the audit and spend ingestion modes on `legacy` until all replicas use the corrected admission sequence.
+   This requirement includes API and worker replicas.
+   The corrected version acquires telemetry admission locks in a transaction statement that only acquires locks.
+   It reads capacity or content policy in the next statement.
+   An older waiter can retain a PostgreSQL snapshot from before the lock.
+   Outbox mode is not safe while these versions operate together.
 
 ## Audit and prompt-render rollout
 
@@ -43,16 +51,43 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 After the P0 migration, lock-snapshot concurrency tests, and fixed-binary rollout are complete:
 
 1. Start with `spend_ingestion_overload_policy: sync_fallback`, a conservative `spend_ingestion_batch_size`, and `spend_ingestion_max_pending_events` sized for the tolerated outage window.
-2. Confirm no replica with the same-statement admission implementation remains. Then enable outbox mode on one canary and verify a claimed batch creates one bulk spend-event insert, at most one deterministic update per ledger entity type, and one bulk acknowledgement in the same transaction.
+2. Confirm that no replica with the same-statement admission implementation remains.
+   Enable outbox mode on one canary.
+   Verify that a claimed batch completes all these writes in one transaction:
+
+   - One bulk spend-event insert.
+   - At most one deterministic update per ledger entity type.
+   - One bulk acknowledgement.
+
 3. Compare the spend-event total with key, user, team, organization, and team-model ledger deltas. Retries must not increment a ledger twice.
 4. Increase the canary share while watching request-pool saturation and the dedicated telemetry pool independently.
 5. Roll all replicas only after the oldest-event age returns to normal after an induced worker pause.
 
-The exact-spend migration is expand-only. New writers populate `NUMERIC(38,18)` columns and the legacy float columns in the same statement; exact accumulators fall back to the existing float only on their first post-migration update. Do not run an unbounded table-wide backfill as release DDL. Backfill old event rows later with a supervised, primary-key-paginated job, reconcile exact and legacy totals, switch readers only after reconciliation, and remove float columns in a separate contract release.
+The exact-spend migration only adds schema elements.
+New writers populate `NUMERIC(38,18)` columns and the legacy float columns in the same statement.
+Each exact accumulator uses the existing float only on its first update after migration.
+
+Do not run an unbounded backfill of the full table as release DDL.
+Use this sequence for the later data migration:
+
+1. Backfill existing event rows with a supervised job that uses primary-key pagination.
+2. Reconcile the exact totals with the legacy totals.
+3. After reconciliation, switch readers to the exact columns.
+4. Remove float columns in a separate contract release.
 
 Test-email delivery results use the email row as their durable reconciliation source. A terminal provider result and `delivery_audit_status='pending'` are committed together, after which workers claim the audit with a fenced renewable lease and stable event ID. Audit retry must never move the email back to `queued` or `retrying`; rows with unresolved required audit are excluded from retention cleanup. Exhausted delivery audits move to `blocked`, make email-worker readiness fail, and require an investigated platform-admin replay through `POST /ui/api/email/outbox/{email_id}/delivery-audit/replay`.
 
-External email sends are not automatically retried after an ambiguous transport result or after a successful provider call whose database acknowledgement failed. Once the fenced delivery lease expires, those rows move to `delivery_unknown` and remain excluded from automatic claims and retention cleanup. Confirm the message state with the configured provider, then use `POST /ui/api/email/outbox/{email_id}/resolve-delivery` with `{"resolution":"sent"}` or `{"resolution":"failed"}`. Resolution and its required operator audit commit atomically. Never resolve an uncertain row as failed merely to force a resend; create a new server-owned email event only after establishing that the provider did not accept the original.
+The system does not automatically retry external email sends after an ambiguous transport result.
+It also does not retry a successful provider call whose database acknowledgement failed.
+After the fenced delivery lease expires, these rows move to `delivery_unknown`.
+Automatic claims and retention cleanup exclude these rows.
+
+1. Confirm the message state with the configured provider.
+2. Use `POST /ui/api/email/outbox/{email_id}/resolve-delivery` with `{"resolution":"sent"}` or `{"resolution":"failed"}`.
+
+The resolution and its necessary operator audit commit atomically.
+Do not resolve an uncertain row as failed only to force another send.
+Create a new server-owned email event only after you establish that the provider did not accept the original.
 
 ## Alerts and overload behavior
 

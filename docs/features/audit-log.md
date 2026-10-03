@@ -28,21 +28,23 @@ DeltaLLM records:
 
 The audit log is meant for operational review, security investigations, and compliance workflows.
 
-For production, set `audit_ingestion_mode: outbox`. In the default `legacy` mode,
-required audit events and prompt-render records are persisted synchronously and
-fail closed when persistence is unavailable; only best-effort audit events use the
-bounded, non-durable compatibility queue. Durable required events retain a
-server-owned ID, use renewable fenced claims, and move to `blocked` instead of
-being deleted after retry exhaustion. Platform admins can replay an investigated
-blocked record through the telemetry-ingestion replay endpoint documented in the
-[rollout guide](../deployment/telemetry-ingestion-rollout.md). The replay mutation
-and its required operator audit commit in the same database transaction.
-Best-effort audit is explicitly non-authoritative: queue capacity or an audit
-dependency outage drops and counts that audit record without changing a request,
-MCP tool, notification, or callback result. Required audit remains fail-closed
-with a controlled service-unavailable response. MCP tool attempts are required
-audit events: if the audit service is unavailable, the gateway rejects the attempt
-before invoking the remote tool transport.
+For production, set `audit_ingestion_mode: outbox`.
+In the default `legacy` mode, the system stores required audit events and prompt-render records synchronously.
+It fails closed when persistence is unavailable.
+Only best-effort audit events use the bounded, non-durable compatibility queue.
+
+Durable required events keep a server-owned ID and use renewable fenced claims.
+After all retry attempts fail, these events move to `blocked`. The system does not delete them.
+Platform administrators can replay an investigated blocked record through the telemetry-ingestion replay endpoint.
+See the [rollout guide](../deployment/telemetry-ingestion-rollout.md).
+The replay and its required operator audit commit in the same database transaction.
+
+Best-effort audit records are not authoritative.
+If queue capacity or an audit dependency is unavailable, the system drops and counts the best-effort record.
+This does not change a request, MCP tool, notification, or callback result.
+Required audit still fails closed with a controlled service-unavailable response.
+MCP tool attempts require audit events.
+If the audit service is unavailable, the gateway rejects the attempt before it calls the remote tool transport.
 
 ### Self-Service Key Audit Actions
 
@@ -122,7 +124,10 @@ Audit payloads are handled differently depending on the event type:
 
 - control-plane payloads are redacted for sensitive values such as passwords, tokens, and secrets
 - data-plane payload content is stored only when the organization has `audit_content_storage_enabled = true`
-- disabling content storage and redacting active or blocked outbox envelopes commit in one PostgreSQL transaction; legacy and durable writers take the same organization policy lock, read policy in a fresh statement after acquiring it, and durable workers scrub claimed envelopes before completion
+- One PostgreSQL transaction disables content storage and redacts active or blocked outbox envelopes.
+  Legacy and durable writers acquire the same organization policy lock.
+  After lock acquisition, they read policy in a fresh statement.
+  Durable workers also remove prohibited content from claimed envelopes before completion.
 - Redis invalidation removes stale policy-cache entries across replicas, but privacy correctness does not depend on Pub/Sub availability
 - when content storage is disabled, the event is still recorded but request and response bodies are omitted or marked redacted
 

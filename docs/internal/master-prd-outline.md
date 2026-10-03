@@ -1352,7 +1352,7 @@ model_list:
   - Bedrock: converse API tool format
   - Cohere: `tools` parameter
 - Normalize all provider responses back to OpenAI `tool_calls` format.
-- Handle parallel tool calls where supported; map to sequential for providers that don't support it.
+- Handle parallel tool calls where supported; map to sequential for providers that do not support it.
 
 #### Acceptance Criteria
 1. Tool definitions in OpenAI format work with all supported providers.
