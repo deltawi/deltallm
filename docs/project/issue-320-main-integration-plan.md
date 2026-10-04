@@ -64,7 +64,10 @@ Accepted performance code: `cc3113bd`
   v2 budget and recovery authority. Prove mixed-feature recovery before removing
   the temporary checks. Legacy mode must retain every current main feature.
 - [ ] Slice 9: port pre-issued permits and local lease dispatch.
-- [ ] Slice 9: add the inactive fenced-permit schema and prove current grant parity.
+- [x] Slice 9: add the inactive fenced-permit schema and prove current grant parity.
+- [ ] Slice 9: batch refill and claim work across subjects with a fixed database-call
+  bound. Do not copy the source branch's sequential subject loop.
+- [ ] Slice 9: put permit persistence in a small typed repository owner.
 - [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
   missing-owner rejection when adding local or remote accounting clients.
 - [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
@@ -77,6 +80,37 @@ Accepted performance code: `cc3113bd`
 - [ ] Run fresh and upgrade migration verification for the complete integrated chain.
 - [ ] Run the 50, 100, 200, and short 500 RPS ladder on one clean kind image.
 - [ ] Run the ten-minute 500 RPS qualification only after the short ladder passes.
+
+## Slice 9a: inactive permit foundation
+
+This step copies the fenced-permit migration from `0ac46791` without changes. It
+adds the matching Prisma fields and migration checks. The runtime does not select
+permit allocation yet. Assigned grants, HTTP and cache admission, terminal writes,
+reporting, and current main's legacy features keep their existing owners.
+
+Seven new real-PostgreSQL cases prove assigned-grant parity, unique fenced claims,
+duplicate settlement, owner and ordinal rejection, two-replica hard-budget limits,
+and release of unused grants. The source branch's sequential database call per
+subject is not copied. The next step must give refill and claim batches a fixed
+database-call bound and put permit persistence in a small typed repository.
+
+Verification:
+
+- Focused permit and native accounting checks: 37 passed.
+- Full real-PostgreSQL lane: 522 passed, with no required-service skips.
+- Fresh install, upgrade from `v0.1.42`, and shared-feature migration checks: all
+  passed with 109 migrations. The verifier removed its disposable databases.
+- Migration-verifier and dependency-lane regressions: 34 passed.
+- Full collection: 7,076 tests in one lane each: 4,567 hermetic, 1,645 app, 522
+  PostgreSQL, 105 Redis, and 237 Helm.
+- Prisma client generation, Ruff, format checks, and `git diff --check`: passed.
+
+Logs are in `/private/tmp/issue320-slice9a-postgres.log`,
+`/private/tmp/issue320-slice9a-postgres-full.log`,
+`/private/tmp/issue320-slice9a-migrations.log`, and
+`/private/tmp/issue320-slice9a-collection.log`.
+
+Slice 9 is not complete. This result is not gateway load qualification.
 
 ## Slice 1 source decisions
 

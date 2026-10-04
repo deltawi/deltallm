@@ -157,3 +157,34 @@ audit queries, notifications, and operator tools read the accounting event/windo
 models directly, and after a release proves no consumer depends on legacy counters or
 outboxes. That removal needs its own migration and parity evidence; this change does
 not silently create a second long-term ledger.
+
+## Inactive permit foundation
+
+The clean replay adds the fenced permit schema before it adds a permit runtime.
+Existing grants keep `dispatch_mode='assigned'`. Existing operations have no permit
+ordinal or fence. No setting selects the new functions yet. The current admission,
+finalization, readiness, reporting, and recovery owners remain unchanged.
+
+The new allocation function uses the existing budget allocator. It reserves money
+and partition slots for one exact subject and one owner. A claim must match its
+generation, owner, grant, fence, ordinal, allowance, and frozen request. PostgreSQL
+enforces the unique grant ordinal. A replay does not return a dispatch token.
+Claimed work uses the current terminal acknowledgement and recovery path. Expiry
+releases unclaimed capacity only after claimed operations have settled.
+
+This schema does not permit local provider dispatch. Each claim still needs a
+durable acknowledgement. Redis and process memory cannot create money or slots.
+The migration adds columns, constraints, and functions without a data backfill.
+Apply it through the normal migration role during a bounded maintenance window;
+adding constraints takes table locks. Rollback leaves the additive schema in place
+and keeps the existing assigned-grant writer. Do not drop retained economic records.
+
+The next runtime step must batch refill and claim work across subjects. The source
+branch's sequential database call per subject is not copied. One request batch must
+have a fixed database-call bound, stable cross-subject lock order, bounded local
+state, and exact recovery identities. Typed permit persistence belongs in a separate
+repository owner, not in the growing protocol repository. Bootstrap must select one
+admission owner; a failed permit must never fall through to assigned admission.
+
+The permit schema stays inactive until these safety checks pass. Removing assigned
+admission also requires new gateway load evidence and a reviewed rollback window.

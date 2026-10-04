@@ -629,6 +629,8 @@ model DeltaLLM_BillingOperation {
   request_fingerprint       String?
   accounting_state          String?
   accounting_grant_id       String?
+  accounting_permit_ordinal Int?
+  accounting_grant_fence_token String? @db.Uuid
   provisional_debit_exact   Decimal?  @db.Decimal(38, 18)
   final_event_sequence      BigInt?
 
@@ -640,6 +642,7 @@ model DeltaLLM_BillingOperation {
   @@index([created_at, operation_id], map: "deltallm_billing_operations_time_idx")
   @@index([team_id, created_at, operation_id], map: "deltallm_billing_operations_team_time_idx")
   @@index([accounting_generation, accounting_state, expires_at, operation_id], map: "deltallm_billing_operations_accounting_recovery_idx")
+  @@unique([accounting_grant_id, accounting_permit_ordinal], map: "deltallm_billing_operation_permit_ordinal_key")
   @@map("deltallm_billing_operations")
 }
 
@@ -733,6 +736,9 @@ model DeltaLLM_AccountingGrant {
   subject_key          String
   accounting_partition Int
   state                String
+  dispatch_mode        String   @default("assigned")
+  fence_token          String?  @unique(map: "deltallm_accounting_grant_fence_token_key") @db.Uuid
+  unit_allowance_exact Decimal? @db.Decimal(38, 18)
   allocated_exact      Decimal  @db.Decimal(38, 18)
   consumed_exact       Decimal  @default(0) @db.Decimal(38, 18)
   settled_exact        Decimal  @default(0) @db.Decimal(38, 18)

@@ -979,9 +979,20 @@ BEGIN
         AND column_name IN (
           'accounting_protocol','accounting_generation','accounting_partition',
           'request_fingerprint','accounting_state','accounting_grant_id','provisional_debit_exact',
-          'final_event_sequence'
-        )) <> 8 THEN
+          'final_event_sequence','accounting_permit_ordinal','accounting_grant_fence_token'
+        )) <> 10 THEN
     RAISE EXCEPTION 'accounting operation columns are missing';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_accounting_grants'
+        AND column_name IN ('dispatch_mode','fence_token','unit_allowance_exact')) <> 3
+     OR NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid='deltallm_billing_operations'::regclass
+          AND conname='deltallm_billing_operation_permit_ordinal_key'
+          AND contype='u'
+     ) THEN
+    RAISE EXCEPTION 'accounting permit schema is missing';
   END IF;
   IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
@@ -1001,6 +1012,8 @@ BEGIN
      OR to_regprocedure('deltallm_accounting_ensure_grants_batch(bigint,text,integer,integer,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_reserve_grant_batch(bigint,text,integer,integer,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_permit_grant(bigint,text,uuid,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_claim_permit_batch(bigint,text,text,uuid,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_pending_legacy_work()') IS NULL
      OR to_regprocedure('deltallm_accounting_finalize_grant_batch(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_reconcile_expired_grants(bigint,integer)') IS NULL
