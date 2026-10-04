@@ -422,7 +422,12 @@
       "properties": {
         "model_list": { "type": "array" },
         "router_settings": { "type": "object" },
-        "deltallm_settings": { "type": "object" },
+        "deltallm_settings": {
+          "type": "object",
+          "properties": {
+            "guardrails": { "type": "array", "maxItems": 32 }
+          }
+        },
         "general_settings": {
           "type": "object",
           "additionalProperties": true,
@@ -588,6 +593,17 @@
             "auth_fallback_timeout_seconds": {"type": "number", "minimum": 0.01, "maximum": 30},
             "auth_fallback_cache_timeout_seconds": {"type": "number", "minimum": 0.001, "maximum": 1},
             "auth_fallback_cache_max_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576},
+            "callback_max_pending": {"default": 128, "maximum": 4096, "minimum": 1, "type": "integer"},
+            "callback_max_concurrency": {"default": 4, "maximum": 64, "minimum": 1, "type": "integer"},
+            "callback_max_payload_bytes": {"default": 262144, "maximum": 16777216, "minimum": 1024, "type": "integer"},
+            "callback_max_bytes": {"default": 8388608, "maximum": 134217728, "minimum": 1024, "type": "integer"},
+            "callback_timeout_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 60, "type": "number"},
+            "callback_shutdown_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 30, "type": "number"},
+            "guardrail_max_concurrency": {"default": 2, "maximum": 32, "minimum": 1, "type": "integer"},
+            "guardrail_max_pending": {"default": 8, "maximum": 256, "minimum": 1, "type": "integer"},
+            "guardrail_max_bytes": {"default": 33554432, "maximum": 268435456, "minimum": 1024, "type": "integer"},
+            "guardrail_timeout_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 60, "type": "number"},
+            "guardrail_shutdown_seconds": {"default": 5, "exclusiveMinimum": 0, "maximum": 30, "type": "number"},
             "gateway_ingress_enabled": { "type": "boolean" },
             "gateway_ingress_max_active": { "type": "integer", "minimum": 1, "maximum": 100000 },
             "gateway_ingress_max_waiters": { "type": "integer", "minimum": 0, "maximum": 10000 },
@@ -604,6 +620,8 @@
             "telemetry_db_pool_timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 60 },
             "telemetry_worker_startup_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 60 },
             "telemetry_shutdown_drain_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 300 },
+            "spend_operation_intents_enabled": { "type": "boolean", "default": false },
+            "spend_settlement_db_pool_size": { "type": "integer", "minimum": 1, "maximum": 99, "default": 1 },
             "spend_ingestion_mode": { "type": "string", "enum": ["legacy", "outbox"] },
             "spend_ingestion_batch_size": { "type": "integer", "minimum": 1, "maximum": 500 },
             "spend_ingestion_flush_interval_ms": { "type": "integer", "minimum": 10, "maximum": 10000 },

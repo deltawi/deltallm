@@ -461,6 +461,7 @@ class SpendIngestionRepository:
                 last_replayed_by = $2, updated_at = NOW()
             WHERE event_id = $1
               AND status IN ('blocked', 'failed')
+              AND (operation_state IS NULL OR operation_state='accepted')
             RETURNING event_id
             """,
             event_id,

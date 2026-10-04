@@ -64,6 +64,8 @@ class PricingResolution:
     tier_pricing_applied: bool = False
     tier_pricing_policy_mode: str | None = None
     tier_pricing_fields: tuple[str, ...] = field(default_factory=tuple)
+    catalog_pricing_frozen: bool = False
+    catalog_token_pricing: ModelPricing | None = None
 
     def spend_metadata(
         self,
@@ -116,17 +118,12 @@ class PricingResolution:
         if billing is not None:
             metadata["billing"] = _billing_metadata(billing)
             billing_metadata = metadata["billing"]
-            if (
-                missing_pricing_fields is None
-                and billing_metadata.get("missing_pricing_fields")
-            ):
+            if missing_pricing_fields is None and billing_metadata.get("missing_pricing_fields"):
                 metadata["missing_pricing_fields"] = list(
                     billing_metadata["missing_pricing_fields"]
                 )
             metadata["billing_status"] = (
-                "unpriced"
-                if billing_metadata.get("unpriced_reason") is not None
-                else "priced"
+                "unpriced" if billing_metadata.get("unpriced_reason") is not None else "priced"
             )
         if provider_billing is not None:
             metadata["provider_billing"] = _billing_metadata(provider_billing)
@@ -237,9 +234,11 @@ def resolve_token_quote_pricing(
             request_only=True,
         )
 
-    selected_mode_fields_present = sync_fields_present or (
-        requested_mode == "batch" and batch_fields_present
-    ) or cache_fields_present
+    selected_mode_fields_present = (
+        sync_fields_present
+        or (requested_mode == "batch" and batch_fields_present)
+        or cache_fields_present
+    )
     if request_price is not None and not selected_mode_fields_present:
         return TokenQuotePricing(
             pricing=ModelPricing(cost_per_request=effective_request_price),
@@ -248,8 +247,16 @@ def resolve_token_quote_pricing(
             request_only=True,
         )
 
-    catalog_pricing = get_model_pricing(resolution.provider_model or model)
-    if catalog_pricing is None and resolution.provider_model != model:
+    catalog_pricing = (
+        resolution.catalog_token_pricing
+        if resolution.catalog_pricing_frozen
+        else get_model_pricing(resolution.provider_model or model)
+    )
+    if (
+        not resolution.catalog_pricing_frozen
+        and catalog_pricing is None
+        and resolution.provider_model != model
+    ):
         # Azure/custom deployment identifiers are often not catalog model
         # names. Preserve the public-name fallback only when the served model
         # itself cannot be priced.
@@ -409,12 +416,8 @@ def resolve_token_quote_pricing(
         pricing=ModelPricing(
             input_cost_per_token=resolved_rates.get("input_cost_per_token", 0.0),
             output_cost_per_token=resolved_rates.get("output_cost_per_token", 0.0),
-            input_cost_per_token_cache_hit=cache_rates.get(
-                "input_cost_per_token_cache_hit"
-            ),
-            output_cost_per_token_cache_hit=cache_rates.get(
-                "output_cost_per_token_cache_hit"
-            ),
+            input_cost_per_token_cache_hit=cache_rates.get("input_cost_per_token_cache_hit"),
+            output_cost_per_token_cache_hit=cache_rates.get("output_cost_per_token_cache_hit"),
             cost_per_request=effective_request_price,
         ),
         pricing_fields_used=tuple(dict.fromkeys(fields_used)),
@@ -553,7 +556,9 @@ def resolve_tier_pricing(
         )
     )
 
-    source: PricingSource = "tier" if tier_pricing_applied else _fallback_source(provider_model_info)
+    source: PricingSource = (
+        "tier" if tier_pricing_applied else _fallback_source(provider_model_info)
+    )
     customer_tier_keys = (
         _customer_tier_keys(tier_policy_service, organization_id)
         if tier_policy_service_mode != "disabled"
@@ -701,7 +706,9 @@ def _tier_snapshot_stale(tier_policy_service: Any | None) -> bool:
     return bool(getattr(tier_policy_service, "snapshot_stale", False))
 
 
-def _tier_unavailable_reason(tier_policy_service: Any | None, organization_id: str | None) -> str | None:
+def _tier_unavailable_reason(
+    tier_policy_service: Any | None, organization_id: str | None
+) -> str | None:
     resolver = getattr(tier_policy_service, "resolve_unavailable_decision", None)
     if callable(resolver):
         try:
@@ -731,9 +738,7 @@ def _provider_model_info(
 def _configured_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(
         sorted(
-            key
-            for key in _PRICING_KEYS
-            if key in model_info and model_info.get(key) is not None
+            key for key in _PRICING_KEYS if key in model_info and model_info.get(key) is not None
         )
     )
 
@@ -765,11 +770,7 @@ def _pricing_field_source_for_view(
     pricing_view: PricingView,
 ) -> PricingSource:
     if pricing_view == "provider":
-        return (
-            "deployment"
-            if field_name in resolution.provider_pricing_fields
-            else "default"
-        )
+        return "deployment" if field_name in resolution.provider_pricing_fields else "default"
     return _pricing_field_source(resolution, field_name)
 
 
@@ -811,7 +812,11 @@ def _customer_tier_keys(
 
 
 def _fallback_source(model_info: Mapping[str, Any]) -> PricingSource:
-    return "deployment" if any(key in model_info and model_info.get(key) is not None for key in _PRICING_KEYS) else "default"
+    return (
+        "deployment"
+        if any(key in model_info and model_info.get(key) is not None for key in _PRICING_KEYS)
+        else "default"
+    )
 
 
 def _billing_metadata(result: BillingResult | Mapping[str, Any]) -> dict[str, Any]:

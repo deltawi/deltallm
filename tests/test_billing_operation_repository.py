@@ -32,7 +32,7 @@ async def test_reservation_locks_operation_then_accounts_then_capacity_with_four
     assert len(statements) == 4
     assert "set_config('statement_timeout'" in statements[0]
     assert "INSERT INTO deltallm_billing_operations" in statements[1]
-    assert "ON CONFLICT (operation_id) DO NOTHING RETURNING" in statements[1]
+    assert "ON CONFLICT DO NOTHING RETURNING" in statements[1]
     assert "deltallm_adjust_operation_hold" in statements[2]
     assert "pending_count=pending_count+1" in statements[3]
     assert result.selector_state is ComponentState.RESERVED
@@ -123,3 +123,17 @@ async def test_transaction_start_timeout_keeps_production_cap_and_never_retries(
     context.__aexit__.assert_not_awaited()
     tx.query_raw.assert_not_awaited()
     tx.execute_raw.assert_not_awaited()
+
+
+async def test_selector_receipt_uses_settlement_allocation_without_admission_capacity():
+    operation = make_operation()
+    tx, context = transaction_mock([[], [{"operation_id": "accepted"}]])
+    admission, settlement = MagicMock(), MagicMock()
+    settlement.tx.return_value = context
+    repository = BillingOperationRepository(admission, settlement_db=settlement)
+    await repository._accept_receipt(
+        operation, component="selector", payload={}, expires_at=deadline()
+    )
+    admission.tx.assert_not_called()
+    settlement.tx.assert_called_once()
+    assert tx.query_raw.await_count == 2

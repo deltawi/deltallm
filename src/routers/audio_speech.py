@@ -16,7 +16,7 @@ from fastapi.responses import Response
 
 from src.billing.audio_usage import normalize_speech_usage
 from src.billing.cost import compute_billing_result
-from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
+from src.billing.tier_pricing import attach_pricing_metadata
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key
@@ -44,7 +44,11 @@ from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.spend_operation import (
+    billing_write_context,
+    durable_provider_call,
+    operation_pricing,
+)
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
     attach_route_decision,
@@ -209,9 +213,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         ),
         callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
         creator_model_access_snapshot=routing_runtime.creator_model_access_snapshot,
-        creator_route_group_access_snapshot=(
-            routing_runtime.creator_route_group_access_snapshot
-        ),
+        creator_route_group_access_snapshot=(routing_runtime.creator_route_group_access_snapshot),
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),
@@ -227,9 +229,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         await release_preflight_capacity(request)
         raise
 
-    callback_manager: CallbackManager = getattr(
-        request.app.state, "callback_manager", CallbackManager()
-    )
+    callback_manager: CallbackManager = request.app.state.callback_manager
     try:
         await check_and_acquire_rate_limits_for_payload(
             request,
@@ -265,7 +265,13 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         result, served_deployment = await routing_runtime.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
-            execute=lambda dep: _execute_tts(request, payload, dep),
+            execute=lambda dep: durable_provider_call(
+                request,
+                model=payload.model,
+                call_type="audio_speech",
+                deployment=dep,
+                execute=lambda: _execute_tts(request, payload, dep),
+            ),
             return_deployment=True,
             on_attempt=track_attempt,
             routing_context=request_context,
@@ -297,12 +303,11 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             mode="audio_speech",
             usage=usage,
         )
-        pricing = resolve_deployment_tier_pricing(
+        pricing = operation_pricing(
+            request,
             auth=auth,
             model=payload.model,
             deployment=served_deployment,
-            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-            mode="sync",
         )
         billing = compute_billing_result(
             mode="audio_speech",
@@ -347,7 +352,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_spend(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -449,7 +454,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -510,7 +515,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_request_failure(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,

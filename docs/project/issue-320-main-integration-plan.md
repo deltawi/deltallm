@@ -40,7 +40,11 @@ Accepted performance code: `cc3113bd`
 - [x] Slice 3: port dependency capacity ownership and startup arithmetic.
 - [x] Slice 4: port capacity schema and durable admission foundations.
 - [x] Slice 5: port budget and prompt hot-path reductions.
-- [ ] Slice 6: port spend recovery, deadlines, and bounded work.
+- [x] Slice 6: apply the spend-recovery schema, fixtures, and implementation.
+- [x] Slice 6: preserve realtime recovery and the shared billing transaction owner.
+- [x] Slice 6: apply request deadlines and bounded callback and guardrail work.
+- [x] Slice 6: verify fresh, last-release, and shared-feature migrations.
+- [x] Slice 6: port spend recovery, deadlines, and bounded work.
 - [ ] Slice 7: port readiness, drain, and Kubernetes capacity contracts.
 - [ ] Slice 8: port accounting protocol v2 and atomic grant admission.
 - [ ] Slice 9: port pre-issued permits and local lease dispatch.
@@ -142,6 +146,60 @@ This uses the same pinned engine and avoids repeated Python-wrapper startup.
 Its output is in `/private/tmp/issue320-slice5-native-migration-verification.log`.
 Five disposable databases left by the interrupted and superseded checks were
 removed after the complete rerun passed.
+
+## Slice 6 source decisions
+
+The spend schema comes from `6708948d`. Spend recovery comes from merge
+`4d75b560`. Request deadlines and bounded work come from merge `4d856670`.
+The replay uses the first parent of each merge.
+
+The integration keeps current main's realtime recovery, settings, managed assets,
+and documentation structure. Admission and settlement use main's shared billing
+transaction helper. The production transaction budget remains 250 ms.
+
+Python 3.14 exposed a cancelled-thread waiter that retained a payload through an
+error log. The executor now waits for its owned future through `asyncio.wait`.
+It reads the result only after completion. A cancelled caller does not cancel
+the owned thread. The existing ownership and payload-release tests cover this
+change. The SQL race fixture now patches the budget in its actual owner, the
+shared transaction helper. Its two-second functional-test budget is unchanged.
+
+The two large historical sample directories were not copied. They are not
+regression inputs. The design and deployment pages record this decision.
+New load evidence is still required for the complete integration.
+
+## Slice 6 verification
+
+- Python 3.11 matches CI and the production image.
+- Focused application, component, configuration, and Helm checks: 1,417 passed.
+- Real PostgreSQL spend and realtime checks: 78 passed, with no skips. This run
+  includes the separate environment for the pinned official realtime SDK.
+- Full Redis lane: 102 passed. The memory-isolation check first skipped because
+  its service variables were absent. The configured check then passed.
+- Python 3.14 bounded-work and transaction regressions: 19 passed after the fix.
+- Prisma client generation: passed.
+- Fresh install, upgrade from `v0.1.42`, and shared-feature migration checks:
+  passed with all 104 migrations and the realtime compatibility fixtures.
+- Full test collection: 6,714 tests in exactly one lane each. Counts are 4,348
+  hermetic, 1,637 app, 475 PostgreSQL, 103 Redis, and 151 Helm.
+- Settings reference: current, with all 368 fields.
+- Helm lint and template: base, evaluation, and production profiles passed with
+  an existing test secret. Rendering without a required secret failed as designed.
+- Ruff check and format: all 91 changed Python files passed.
+- `git diff HEAD --check`: passed.
+- Full application lane: all 1,637 tests passed.
+- SQL probe: passed with 100,000 history rows, 10,000 retained outbox rows,
+  and 1,000 expired operations. Admission used one transaction and three SQL
+  statements. Receipt acceptance used one transaction and two statements.
+  Recovery used the expiry index and a row-bound update.
+- Bounded callback and blocking-work probe: passed. Its raw result is in
+  `/private/tmp/issue320-slice6-request-work.json`.
+
+Logs are in `/private/tmp/issue320-slice6-python311-focused-tests.log`,
+`/private/tmp/issue320-slice6-python311-postgres-tests.log`,
+`/private/tmp/issue320-slice6-full-app-tests.log`,
+`/private/tmp/issue320-slice6-full-redis-tests.log`, and
+`/private/tmp/issue320-slice6-migration-verification.log`.
 
 ## Slices 2 and 3 source decisions
 

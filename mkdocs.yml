@@ -187,6 +187,10 @@ nav:
           - Capacity partition protocol: design/pr4-capacity-partitions.md
           - Budget and prompt performance: deployment/budget-prompt-performance.md
           - Budget and prompt design: design/pr5-budget-prompts.md
+          - Spend recovery design: design/pr6-spend-recovery.md
+          - Spend recovery: deployment/spend-recovery.md
+          - Request deadlines: deployment/request-deadlines.md
+          - Deadline and bounded-work design: design/pr7-deadlines-bounded-work.md
           - Provider connection tuning: deployment/upstream-http.md
           - Upgrade and rollback behavior: deployment/upgrade-and-rollback.md
           - Release-specific rollouts: deployment/rollout-index.md

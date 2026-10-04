@@ -15,8 +15,8 @@ from src.models.errors import (
     ProxyError,
 )
 from src.routers.audit_helpers import emit_audit_event
-from src.routers.utils import fire_and_forget
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.spend_operation import billing_write_context
+from src.billing.spend_operations import SpendPersistenceUnavailable
 
 _REQUEST_LOG_EMITTED_ATTR = "_request_log_emitted"
 _REQUEST_FAILURE_CONTEXT_ATTR = "_request_failure_context"
@@ -88,15 +88,13 @@ def mark_request_log_emitted(request: Request) -> None:
     setattr(request.state, _REQUEST_LOG_EMITTED_ATTR, True)
 
 
-async def enqueue_request_log_write(
-    request: Request, coro: Awaitable[None], *, wait_for_completion: bool = False
-) -> None:
+async def enqueue_request_log_write(request: Request, coro: Awaitable[None]) -> None:
+    """Finalization belongs to the request in both legacy and durable modes."""
     mark_request_log_emitted(request)
-    service = getattr(request.app.state, "spend_tracking_service", None)
-    if wait_for_completion or bool(getattr(service, "durable_ingestion_enabled", False)):
+    try:
         await coro
-        return
-    fire_and_forget(coro)
+    except Exception:
+        raise SpendPersistenceUnavailable() from None
 
 
 async def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
@@ -117,7 +115,7 @@ async def maybe_log_proxy_error(request: Request, exc: ProxyError) -> None:
     await enqueue_request_log_write(
         request,
         spend_tracking_service.log_request_failure(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request.headers.get("x-request-id") or "",
             api_key=getattr(auth, "api_key", None) or "anonymous",
             user_id=getattr(auth, "user_id", None),
@@ -185,7 +183,7 @@ async def maybe_log_request_validation_failure(
     await enqueue_request_log_write(
         request,
         spend_tracking_service.log_request_failure(
-            event_id=get_or_create_billing_event_id(request),
+            **billing_write_context(request),
             request_id=request.headers.get("x-request-id") or "",
             api_key=getattr(auth, "api_key", None) or "anonymous",
             user_id=getattr(auth, "user_id", None),

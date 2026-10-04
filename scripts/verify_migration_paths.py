@@ -949,6 +949,16 @@ def _verify_pr5_budgets(prisma: str, database_url: str) -> None:
     )
 
 
+def _pr6_fixture(prisma: str, database_url: str, schema: Path, phase: str) -> None:
+    filename = {"seed": "pr6_spend_seed.sql", "verify": "pr6_spend_verify.sql"}[phase]
+    _db_execute(
+        prisma,
+        schema=schema,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures" / filename).read_text(),
+    )
+
+
 def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> None:
     suffix = uuid.uuid4().hex[:12]
     fresh_name = f"deltallm_migration_verify_{suffix}_fresh"
@@ -969,6 +979,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _verify_fresh_database(prisma, fresh_url)
         _verify_operation_reservations(prisma, fresh_url)
         _verify_pr5_budgets(prisma, fresh_url)
+        _pr6_fixture(prisma, fresh_url, CURRENT_SCHEMA, "verify")
 
         with tempfile.TemporaryDirectory(prefix="deltallm-migration-base-") as temp:
             temp_root = Path(temp)
@@ -976,6 +987,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             _migrate(prisma, schema=base_schema, database_url=upgrade_url)
             _seed_upgrade_fixture(prisma, upgrade_url, base_schema)
             _seed_pr5_budgets(prisma, upgrade_url, base_schema)
+            _pr6_fixture(prisma, upgrade_url, base_schema, "seed")
             _db_execute(
                 prisma,
                 schema=base_schema,
@@ -1010,6 +1022,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             _migrate(prisma, schema=shared_schema, database_url=shared_url)
             _seed_shared_migration_fixture(prisma, shared_url, shared_schema)
             _seed_pr5_budgets(prisma, shared_url, shared_schema)
+            _pr6_fixture(prisma, shared_url, shared_schema, "seed")
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
         _verify_upgrade_database(prisma, upgrade_url)
         _db_execute(
@@ -1032,6 +1045,8 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
                     REPO_ROOT / "scripts/migration_fixtures/realtime_billing_verify.sql"
                 ).read_text(),
             )
+        _pr6_fixture(prisma, upgrade_url, CURRENT_SCHEMA, "verify")
+        _pr6_fixture(prisma, shared_url, CURRENT_SCHEMA, "verify")
     finally:
         primary_error = sys.exc_info()[1]
         cleanup_errors: list[subprocess.CalledProcessError] = []

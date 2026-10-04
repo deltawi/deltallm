@@ -10,10 +10,14 @@ from src.router.selection.runtime import SelectorExecutionFactory
 from src.router.runtime_generation import RoutingRuntimeGenerationStore
 
 
-def test_selector_composition_reuses_spend_owner_and_tracks_worker_health():
+@pytest.mark.parametrize("reserved_settlement", [False, True])
+def test_selector_composition_reuses_spend_owner_and_tracks_worker_health(reserved_settlement):
     spend = SimpleNamespace(
         db=object(),
         worker_db=object(),
+        operations=SimpleNamespace(settlement=SimpleNamespace(db=object()))
+        if reserved_settlement
+        else None,
         config=SimpleNamespace(
             enabled=True, worker_enabled=True, max_pending_events=100, max_attempts=10
         ),
@@ -32,6 +36,9 @@ def test_selector_composition_reuses_spend_owner_and_tracks_worker_health():
     assert isinstance(state.selector_execution_factory, SelectorExecutionFactory)
     assert isinstance(spend.operation_recovery, BillingOperationRecovery)
     assert spend.operation_recovery.selector_events_only
+    assert state.selector_execution_factory._billing.settlement_db is (
+        spend.operations.settlement.db if reserved_settlement else spend.db
+    )
     state.route_group_repository.selector_activation_check()
     spend.worker_health.ready = False
     with pytest.raises(BillingOperationUnavailable):

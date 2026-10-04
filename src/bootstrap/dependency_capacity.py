@@ -9,6 +9,7 @@ from src.config import (
     resolve_database_settings,
     resolve_telemetry_database_settings,
 )
+from src.spend_operation_settings import SpendOperationAllocation
 from src.database_settings import DatabaseAllocationSettings
 from src.db.allocation_config import resolve_allocation_settings
 from src.redis_runtime import RedisLimits, startup_setting
@@ -20,6 +21,7 @@ class DependencyAllocationSnapshot:
     redis: RedisLimits
     control_connections: int
     telemetry_connections: int
+    spend_operations: SpendOperationAllocation
 
     @classmethod
     def build(cls, config: AppConfig, settings: Settings) -> Self:
@@ -39,6 +41,9 @@ class DependencyAllocationSnapshot:
             redis=RedisLimits.from_settings(general, settings),
             control_connections=database.pool_size,
             telemetry_connections=telemetry.pool_size if telemetry is not None else 0,
+            spend_operations=SpendOperationAllocation.resolve(
+                general, settings, telemetry_connections=telemetry.pool_size if telemetry else 0
+            ),
         )
 
     def validate_effective(self, config: AppConfig, settings: Settings) -> None:

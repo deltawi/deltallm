@@ -11,6 +11,8 @@ from src.billing.operation_reservation import BillingOperationUnavailable
 if TYPE_CHECKING:
     from prisma import Prisma
 
+DB_BUDGET_SECONDS = 0.25
+
 
 @asynccontextmanager
 async def billing_transaction(db: Prisma, expires_at: float) -> AsyncIterator[Prisma]:
@@ -18,7 +20,7 @@ async def billing_transaction(db: Prisma, expires_at: float) -> AsyncIterator[Pr
     now = asyncio.get_running_loop().time()
     if not math.isfinite(expires_at) or expires_at <= now:
         raise BillingOperationUnavailable()
-    remaining = min(expires_at - now, 0.25)
+    remaining = min(expires_at - now, DB_BUDGET_SECONDS)
     try:
         async with asyncio.timeout(remaining):
             async with db.tx(

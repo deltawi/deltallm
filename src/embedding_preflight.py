@@ -49,11 +49,7 @@ async def run_embedding_preflight(
 
     auth = request.state.user_api_key
     await acquire_preflight_capacity(request, auth=auth)
-    callback_manager: CallbackManager = getattr(
-        request.app.state,
-        "callback_manager",
-        CallbackManager(),
-    )
+    callback_manager: CallbackManager = request.app.state.callback_manager
     request_data = payload.model_dump(exclude_none=True)
     request_data = await callback_manager.execute_pre_call_hooks(
         user_api_key_dict=auth.model_dump(mode="json"),
@@ -86,9 +82,7 @@ async def run_embedding_preflight(
         ),
         callable_target_grant_snapshot=routing_runtime.authorization_snapshot,
         creator_model_access_snapshot=routing_runtime.creator_model_access_snapshot,
-        creator_route_group_access_snapshot=(
-            routing_runtime.creator_route_group_access_snapshot
-        ),
+        creator_route_group_access_snapshot=(routing_runtime.creator_route_group_access_snapshot),
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
         tier_policy_mode=get_tier_policy_mode_from_app(request.app),

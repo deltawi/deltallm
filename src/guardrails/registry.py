@@ -3,6 +3,10 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+from src.blocking_work import BlockingWorkExecutor
+from src.guardrails.presidio import PresidioGuardrail
+from src.request_work_settings import MAX_GUARDRAILS
+
 from src.guardrails.base import CustomGuardrail, GuardrailAction, GuardrailMode
 
 
@@ -57,20 +61,31 @@ def resolve_guardrail_names(
 
 
 class GuardrailRegistry:
-    def __init__(self) -> None:
+    def __init__(self, executor: BlockingWorkExecutor | None = None) -> None:
+        self.executor = executor
         self._guardrails: dict[str, CustomGuardrail] = {}
-        self._by_mode: dict[GuardrailMode, list[CustomGuardrail]] = {mode: [] for mode in GuardrailMode}
+        self._config_managed_names: set[str] = set()
+        self._by_mode: dict[GuardrailMode, list[CustomGuardrail]] = {
+            mode: [] for mode in GuardrailMode
+        }
 
     def register(self, guardrail: CustomGuardrail) -> None:
+        if guardrail.name not in self._guardrails and len(self._guardrails) >= MAX_GUARDRAILS:
+            raise ValueError(f"At most {MAX_GUARDRAILS} guardrails may be registered")
+        if isinstance(guardrail, PresidioGuardrail) and self.executor is not None:
+            guardrail.executor = self.executor
         if guardrail.name in self._guardrails:
             self.unregister(guardrail.name)
         self._guardrails[guardrail.name] = guardrail
         self._by_mode[guardrail.mode].append(guardrail)
 
     def unregister(self, name: str) -> None:
+        self._config_managed_names.discard(name)
         existing = self._guardrails.pop(name, None)
         if existing is not None:
-            self._by_mode[existing.mode] = [g for g in self._by_mode[existing.mode] if g.name != name]
+            self._by_mode[existing.mode] = [
+                g for g in self._by_mode[existing.mode] if g.name != name
+            ]
 
     def get(self, name: str) -> CustomGuardrail | None:
         return self._guardrails.get(name)
@@ -90,7 +105,9 @@ class GuardrailRegistry:
         override_guardrails: list[str] | None = None,
     ) -> list[CustomGuardrail]:
         if override_guardrails is not None:
-            return [self._guardrails[name] for name in override_guardrails if name in self._guardrails]
+            return [
+                self._guardrails[name] for name in override_guardrails if name in self._guardrails
+            ]
 
         global_defaults = [g.name for g in self.get_default_guardrails()]
 
@@ -99,7 +116,11 @@ class GuardrailRegistry:
         key_metadata = key_data.get("metadata")
 
         raw_key_guardrails = key_data.get("guardrails")
-        key_guardrails = [str(n) for n in raw_key_guardrails] if isinstance(raw_key_guardrails, list) and raw_key_guardrails else None
+        key_guardrails = (
+            [str(n) for n in raw_key_guardrails]
+            if isinstance(raw_key_guardrails, list) and raw_key_guardrails
+            else None
+        )
 
         has_scoped_config = (
             _extract_guardrail_config(org_metadata) is not None
@@ -122,8 +143,23 @@ class GuardrailRegistry:
         return [self._guardrails[name] for name in resolved_names if name in self._guardrails]
 
     def load_from_config(self, config: list[Any]) -> None:
-        for guardrail_config in config:
-            item = guardrail_config.model_dump(mode="python") if hasattr(guardrail_config, "model_dump") else dict(guardrail_config)
+        if len(config) > MAX_GUARDRAILS:
+            raise ValueError(f"At most {MAX_GUARDRAILS} guardrails may be configured")
+        items = [
+            item.model_dump(mode="python") if hasattr(item, "model_dump") else dict(item)
+            for item in config
+        ]
+        names = {item["guardrail_name"] for item in items}
+        replacement = {
+            name: item
+            for name, item in self._guardrails.items()
+            if name not in self._config_managed_names
+        }
+        if len(names | replacement.keys()) > MAX_GUARDRAILS:
+            raise ValueError(f"At most {MAX_GUARDRAILS} guardrails may be registered")
+        # Construct a complete generation before publication. A failed reload
+        # preserves the previous policy; removed engines lose their registry owner.
+        for item in items:
             name = item["guardrail_name"]
             params = dict(item.get("deltallm_params") or {})
 
@@ -136,10 +172,20 @@ class GuardrailRegistry:
             default_on = bool(params.pop("default_on", True))
 
             guardrail_cls = self._import_class(class_path)
-            instance = guardrail_cls(name=name, mode=mode, default_on=default_on, action=action, **params)
+            instance = guardrail_cls(
+                name=name, mode=mode, default_on=default_on, action=action, **params
+            )
             if not isinstance(instance, CustomGuardrail):
                 raise TypeError(f"Guardrail '{class_path}' must inherit CustomGuardrail")
-            self.register(instance)
+            if isinstance(instance, PresidioGuardrail) and self.executor is not None:
+                instance.executor = self.executor
+            replacement[name] = instance
+        self._guardrails = replacement
+        self._by_mode = {
+            mode: [item for item in replacement.values() if item.mode == mode]
+            for mode in GuardrailMode
+        }
+        self._config_managed_names = names
 
     @staticmethod
     def _import_class(class_path: str) -> type:
@@ -156,7 +202,9 @@ class GuardrailRegistry:
             except Exception as exc:
                 last_err = exc
 
-        raise ImportError(f"Could not import guardrail class '{class_path}': {last_err}") from last_err
+        raise ImportError(
+            f"Could not import guardrail class '{class_path}': {last_err}"
+        ) from last_err
 
 
 guardrail_registry = GuardrailRegistry()

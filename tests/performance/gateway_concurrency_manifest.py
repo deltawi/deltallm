@@ -17,8 +17,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.database_settings import DatabaseAllocationSettings
+from src.spend_operation_settings import SpendOperationAllocation, SpendOperationSettings
 from src.ingress import IngressLimits
 from src.services.auth_fallback import AuthFallbackLimits
+from src.request_work_settings import RequestWorkSettings, resolve_request_work_settings
 
 
 class ServerManifest(BaseModel):
@@ -41,8 +43,10 @@ class ServerManifest(BaseModel):
     redis_version: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+){0,2}$")
     profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     database_allocations: DatabaseAllocationSettings | None = None
+    spend_operations: SpendOperationAllocation | None = None
     ingress: IngressLimits | None = None
     auth_fallback: AuthFallbackLimits | None = None
+    request_work: RequestWorkSettings | None = None
     image_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     cpu_limit_cores: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     memory_limit_mib: int | None = Field(default=None, gt=0)
@@ -70,7 +74,12 @@ async def local_manifest(api_processes: int) -> ServerManifest:
     profile = yaml.safe_load(profile_path.read_text())["general_settings"]
     # Resolve only the explicit, nonsecret budget allowlist. Loading the entire
     # application config would unnecessarily resolve provider/master credentials.
-    budget_fields = set(DatabaseAllocationSettings.model_fields) | {
+    budget_fields = (
+        set(DatabaseAllocationSettings.model_fields)
+        | set(RequestWorkSettings.model_fields)
+        | set(SpendOperationSettings.model_fields)
+        | {"spend_ingestion_mode", "spend_ingestion_worker_enabled", "telemetry_db_pool_size"}
+    ) | {
         prefix + field.name
         for prefix, model in (
             ("gateway_ingress_", IngressLimits),
@@ -113,12 +122,16 @@ async def local_manifest(api_processes: int) -> ServerManifest:
         redis_version=redis_version,
         profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest(),
         database_allocations=resolve_allocation_settings(general, environment),
+        spend_operations=SpendOperationAllocation.resolve(
+            general, environment, telemetry_connections=profile["telemetry_db_pool_size"]
+        ),
         ingress=IngressLimits.from_settings(general, environment),
         auth_fallback=AuthFallbackLimits(
             **startup_field_values(
                 AuthFallbackLimits(), general, environment, prefix="auth_fallback_"
             )
         ),
+        request_work=resolve_request_work_settings(general, environment),
     )
 
 
