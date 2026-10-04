@@ -2,11 +2,19 @@
 {{- $capacity := .Values.dependencyCapacity -}}
 {{- $api := (include "deltallm.apiConfigYaml" . | fromYaml).general_settings -}}
 {{- $worker := (include "deltallm.batchWorkerConfigYaml" . | fromYaml).general_settings -}}
+{{- $accountingWorker := dict -}}
+{{- if .Values.accountingWorker.enabled -}}
+{{- $accountingWorker = (include "deltallm.accountingWorkerConfigYaml" . | fromYaml).general_settings -}}
+{{- end -}}
 {{- $apiReplicas := ternary .Values.autoscaling.maxReplicas .Values.replicaCount .Values.autoscaling.enabled -}}
 {{- $workerReplicas := ternary .Values.batchWorker.autoscaling.maxReplicas .Values.batchWorker.replicaCount .Values.batchWorker.autoscaling.enabled -}}
+{{- $accountingWorkerReplicas := ternary .Values.accountingWorker.autoscaling.maxReplicas .Values.accountingWorker.replicaCount .Values.accountingWorker.autoscaling.enabled -}}
 {{- $roles := list (dict "name" "api" "config" $api "replicas" $apiReplicas "processes" $capacity.apiProcessesPerPod) -}}
 {{- if .Values.batchWorker.enabled -}}
 {{- $roles = append $roles (dict "name" "batchWorker" "config" $worker "replicas" $workerReplicas "processes" $capacity.batchWorkerProcessesPerPod) -}}
+{{- end -}}
+{{- if .Values.accountingWorker.enabled -}}
+{{- $roles = append $roles (dict "name" "accountingWorker" "config" $accountingWorker "replicas" $accountingWorkerReplicas "processes" $capacity.accountingWorkerProcessesPerPod) -}}
 {{- end -}}
 {{- $extended := $capacity.extended -}}
 {{- $dbTotal := add $capacity.postgresqlReservedConnections $extended.postgresqlMigrationConnections $extended.postgresqlOtherConnections -}}
@@ -22,14 +30,20 @@
 {{- fail (printf "%s must be a finite connection count between 1 and 10000" $name) -}}
 {{- end -}}
 {{- end -}}
-{{- if $g.spend_operation_intents_enabled -}}
+{{- if and $g.spend_operation_intents_enabled (not $g.accounting_protocol_enabled) -}}
 {{- if or (ne $g.spend_ingestion_mode "outbox") (not $g.spend_ingestion_worker_enabled) (ge (int $g.spend_settlement_db_pool_size) (int $g.telemetry_db_pool_size)) -}}
 {{- fail "Spend operation intents require outbox, its worker, and telemetry slots for admission and settlement" -}}
 {{- end -}}
 {{- end -}}
 {{- $db := add $g.db_pool_size $g.db_foreground_pool_size -}}
-{{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") -}}
-{{- $db = add $db $g.telemetry_db_pool_size $g.telemetry_worker_db_pool_size -}}
+{{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") $g.accounting_protocol_enabled -}}
+{{- $db = add $db $g.telemetry_db_pool_size -}}
+{{- $spendWorker := and (eq $g.spend_ingestion_mode "outbox") $g.spend_ingestion_worker_enabled -}}
+{{- $auditWorker := and $g.audit_enabled (eq $g.audit_ingestion_mode "outbox") $g.audit_ingestion_worker_enabled -}}
+{{- $projectionWorker := and $g.accounting_protocol_enabled $g.accounting_projection_worker_enabled -}}
+{{- if or $spendWorker $auditWorker $projectionWorker -}}
+{{- $db = add $db $g.telemetry_worker_db_pool_size -}}
+{{- end -}}
 {{- end -}}
 {{- $pools := dict "postgresql" $db "redisCritical" $g.redis_critical_max_connections "redisCache" (add $g.redis_cache_max_connections $g.redis_bulk_max_connections) "upstreamHttp" (mul $g.upstream_http_max_connections (add 1 $extended.proxyPoolsPerClient)) "controlHttp" (mul 100 (add 1 $extended.proxyPoolsPerClient)) "auxiliaryHttp" $extended.auxiliaryHttpConnectionsPerProcess -}}
 {{- $report := dict "maxReplicas" $role.replicas "processesPerPod" $role.processes "steadyProcesses" (mul $role.replicas $role.processes) "peakProcesses" $processes "pools" $pools -}}
@@ -59,12 +73,12 @@
 {{- if gt $redisCriticalBudget (int $capacity.redisMaxClients) -}}
 {{- fail (printf "Peak Redis connection budget %d exceeds declared maximum %d" $redisTotal (int $capacity.redisMaxClients)) -}}
 {{- end -}}
-{{- range $env := concat .Values.env .Values.batchWorker.env -}}
+{{- range $env := concat .Values.env .Values.batchWorker.env .Values.accountingWorker.env -}}
 {{- if has $env.name (list "WEB_CONCURRENCY" "UVICORN_WORKERS" "DELTALLM_DB_POOL_SIZE" "DELTALLM_TELEMETRY_DB_POOL_SIZE") -}}
 {{- fail (printf "%s is owned by dependencyCapacity and rendered pool settings" $env.name) -}}
 {{- end -}}
 {{- end -}}
-{{- range $argument := concat .Values.command .Values.args .Values.batchWorker.command .Values.batchWorker.args -}}
+{{- range $argument := concat .Values.command .Values.args .Values.batchWorker.command .Values.batchWorker.args .Values.accountingWorker.command .Values.accountingWorker.args -}}
 {{- if or (eq $argument "--workers") (eq $argument "-w") (hasPrefix "--workers=" $argument) -}}
 {{- fail "Worker count flags are owned by dependencyCapacity; set the declared process counts" -}}
 {{- end -}}

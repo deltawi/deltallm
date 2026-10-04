@@ -44,6 +44,7 @@ from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 from src.telemetry.spend_operation import (
     billing_write_context,
     durable_provider_call,
@@ -268,6 +269,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             execute=lambda dep: durable_provider_call(
                 request,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="audio_speech",
                 deployment=dep,
                 execute=lambda: _execute_tts(request, payload, dep),
@@ -361,6 +363,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="audio_speech",
                 usage=usage,
                 cost=request_cost,
@@ -463,6 +466,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="audio_speech",
                 metadata=attach_route_decision(
                     {
@@ -524,6 +528,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="audio_speech",
                 metadata=attach_route_decision(
                     {

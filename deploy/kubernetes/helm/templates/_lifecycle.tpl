@@ -31,20 +31,23 @@
 {{- end -}}
 {{- if $managed.enabled -}}
 {{- $command := list "python" "-m" "src.server" -}}
-{{- range $override := list .Values.command .Values.batchWorker.command -}}
+{{- range $override := list .Values.command .Values.batchWorker.command .Values.accountingWorker.command -}}
 {{- if and $override (ne (toJson $override) (toJson $command)) -}}
 {{- fail "managed lifecycle requires the image command or python -m src.server" -}}
 {{- end -}}
 {{- end -}}
-{{- if or .Values.args .Values.batchWorker.args -}}
+{{- if or .Values.args .Values.batchWorker.args .Values.accountingWorker.args -}}
 {{- fail "managed lifecycle uses HOST/PORT; custom process arguments require the development opt-out" -}}
 {{- end -}}
-{{- if or (ne (int .Values.dependencyCapacity.apiProcessesPerPod) 1) (ne (int .Values.dependencyCapacity.batchWorkerProcessesPerPod) 1) -}}
-{{- fail "managed lifecycle requires one process per pod for both roles" -}}
+{{- if or (ne (int .Values.dependencyCapacity.apiProcessesPerPod) 1) (ne (int .Values.dependencyCapacity.batchWorkerProcessesPerPod) 1) (ne (int .Values.dependencyCapacity.accountingWorkerProcessesPerPod) 1) -}}
+{{- fail "managed lifecycle requires one process per pod for every role" -}}
 {{- end -}}
 {{- include "deltallm.validateLifecycleRole" (dict "root" . "role" "api" "general" (include "deltallm.apiConfigYaml" . | fromYaml).general_settings) -}}
 {{- if .Values.batchWorker.enabled -}}
 {{- include "deltallm.validateLifecycleRole" (dict "root" . "role" "worker" "general" (include "deltallm.batchWorkerConfigYaml" . | fromYaml).general_settings) -}}
+{{- end -}}
+{{- if .Values.accountingWorker.enabled -}}
+{{- include "deltallm.validateLifecycleRole" (dict "root" . "role" "accountingWorker" "general" (include "deltallm.accountingWorkerConfigYaml" . | fromYaml).general_settings) -}}
 {{- end -}}
 {{- end -}}
 {{- if $managed.production -}}

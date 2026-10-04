@@ -24,6 +24,7 @@
       "required": [
         "apiProcessesPerPod",
         "batchWorkerProcessesPerPod",
+        "accountingWorkerProcessesPerPod",
         "retiringGenerations",
         "postgresqlMaxConnections",
         "postgresqlReservedConnections",
@@ -38,6 +39,11 @@
           "maximum": 32
         },
         "batchWorkerProcessesPerPod": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "accountingWorkerProcessesPerPod": {
           "type": "integer",
           "minimum": 1,
           "maximum": 32
@@ -492,6 +498,58 @@
         }
       }
     },
+    "accountingWorker": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "autoscaling": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage", "targetMemoryUtilizationPercentage", "scaleDownStabilizationSeconds", "oldestEventAge"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "maxReplicas": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "scaleDownStabilizationSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 },
+            "oldestEventAge": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "metricName", "targetAverageValue"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "metricName": { "type": "string", "minLength": 1 },
+                "targetAverageValue": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" }
+              }
+            }
+          }
+        },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "priorityClassName": { "type": "string" },
+        "command": { "type": "array" },
+        "args": { "type": "array" },
+        "env": { "type": "array" },
+        "envFrom": { "type": "array" },
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" },
+        "resources": { "type": "object", "additionalProperties": true },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array" },
+        "config": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "general_settings": {"$ref": "#/properties/config/properties/general_settings"}
+          }
+        }
+      }
+    },
     "dependencyWait": {
       "type": "object",
       "additionalProperties": true,
@@ -766,6 +824,26 @@
             "telemetry_db_pool_timeout_seconds": { "type": "integer", "minimum": 0, "maximum": 60 },
             "telemetry_worker_startup_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 60 },
             "telemetry_shutdown_drain_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 300 },
+            "accounting_protocol_enabled": { "type": "boolean" },
+            "accounting_protocol_generation": { "type": "integer", "minimum": 1 },
+            "accounting_microbatch_max_size": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "accounting_microbatch_dwell_ms": { "type": "integer", "minimum": 0, "maximum": 50 },
+            "accounting_reservation_max_pending": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "accounting_finalization_max_pending": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "accounting_statement_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 2000 },
+            "accounting_reservation_ack_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 5000 },
+            "accounting_finalization_ack_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 5000 },
+            "accounting_hot_path_db_pool_size": { "type": "integer", "minimum": 1, "maximum": 32 },
+            "accounting_max_provider_attempts": { "type": "integer", "minimum": 1, "maximum": 128 },
+            "accounting_grants_enabled": { "type": "boolean" },
+            "accounting_grant_target_operations": { "type": "integer", "minimum": 1, "maximum": 1024 },
+            "accounting_grant_ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "accounting_projection_worker_enabled": { "type": "boolean" },
+            "accounting_projection_batch_size": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "accounting_projection_max_concurrent_partitions": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "accounting_projection_lease_seconds": { "type": "integer", "minimum": 5, "maximum": 300 },
+            "accounting_projection_poll_interval_ms": { "type": "integer", "minimum": 10, "maximum": 10000 },
+            "accounting_projection_maintenance_interval_ms": { "type": "integer", "minimum": 100, "maximum": 60000 },
             "spend_operation_intents_enabled": { "type": "boolean", "default": false },
             "spend_settlement_db_pool_size": { "type": "integer", "minimum": 1, "maximum": 99, "default": 1 },
             "spend_ingestion_mode": { "type": "string", "enum": ["legacy", "outbox"] },
@@ -975,7 +1053,8 @@
               "type": "string",
               "enum": [
                 "api",
-                "batchWorker"
+                "batchWorker",
+                "accountingWorker"
               ]
             }
           }

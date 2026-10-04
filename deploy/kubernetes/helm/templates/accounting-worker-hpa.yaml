@@ -1,0 +1,40 @@
+{{- if and .Values.accountingWorker.enabled .Values.accountingWorker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "deltallm.accountingWorkerFullname" . }}
+  labels:
+    {{- include "deltallm.accountingWorkerLabels" . | nindent 4 }}
+spec:
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.accountingWorker.autoscaling.scaleDownStabilizationSeconds }}
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "deltallm.accountingWorkerFullname" . }}
+  minReplicas: {{ .Values.accountingWorker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.accountingWorker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.accountingWorker.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.accountingWorker.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- if .Values.accountingWorker.autoscaling.oldestEventAge.enabled }}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.accountingWorker.autoscaling.oldestEventAge.metricName }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.accountingWorker.autoscaling.oldestEventAge.targetAverageValue | quote }}
+    {{- end }}
+{{- end }}

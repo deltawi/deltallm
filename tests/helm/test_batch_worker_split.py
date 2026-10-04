@@ -922,6 +922,7 @@ def test_migration_job_default_uses_coordinated_migration_runner_without_db_push
     assert job["metadata"]["name"].startswith("deltallm-migrate-")
     container = job["spec"]["template"]["spec"]["containers"][0]
     assert container["command"] == ["python", "-m", "src.prisma_bootstrap"]
+    assert container["resources"]["limits"]["memory"] == "2Gi"
     migrate_args = " ".join(container["args"])
     assert "--schema ./prisma/schema.prisma" in migrate_args
     assert "prisma db push" not in migrate_args

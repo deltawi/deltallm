@@ -25,6 +25,7 @@ def base(**settings):
     )
     state = SimpleNamespace(
         settings=Settings(),
+        accounting_protocol_enabled=general.accounting_protocol_enabled,
         governance_invalidation_service=SimpleNamespace(
             worker_health=WorkerHealth(WorkerState.READY)
         ),
@@ -50,6 +51,14 @@ def base(**settings):
         ({"audit_enabled": True, "audit_ingestion_mode": "outbox"}, "audit_ingestion_worker"),
         ({"spend_ingestion_mode": "outbox"}, "spend_ingestion_worker"),
         ({"email_enabled": True}, "email_outbox_worker"),
+        ({"accounting_protocol_enabled": True}, "accounting_protocol"),
+        (
+            {
+                "accounting_protocol_enabled": True,
+                "accounting_projection_worker_enabled": True,
+            },
+            "accounting_projection_worker",
+        ),
         ({"cache_invalidation_worker_enabled": True}, "cache_invalidation_worker"),
         ({"organization_deletion_worker_enabled": True}, "organization_deletion_worker"),
         (

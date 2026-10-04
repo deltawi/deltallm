@@ -50,13 +50,25 @@ Accepted performance code: `cc3113bd`
 - [x] Slice 7: begin realtime cleanup before generic request cancellation.
 - [x] Slice 7: verify the shared lifecycle, deployment, and real-dependency gates.
 - [x] Slice 7: port readiness, drain, and Kubernetes capacity contracts.
-- [ ] Slice 8: port accounting protocol v2 and atomic grant admission.
-- [ ] Slice 8: check current main's realtime accounting against the new authority.
-- [ ] Slice 8: use the validated, transformed request for cost bounds, including
+- [x] Slice 8: port accounting protocol v2 and atomic grant admission.
+- [x] Slice 8: check current main's realtime accounting against the new authority.
+- [x] Slice 8: use the validated, transformed request for cost bounds, including
   multiple outputs. Do not parse the original request body again.
-- [ ] Slice 8: keep one accounting bootstrap owner and remove new policy from
+- [x] Slice 8: keep one accounting bootstrap owner and remove new policy from
   large composition modules.
+- [x] Slice 8: put charged cache hits through the same admission and terminal owner.
+- [x] Slice 8: probe the actual accounting pool and active generation for readiness.
+- [x] Slice 8: reject preparation and activation while legacy billing work is pending.
+- [x] Slice 8: reject unmigrated realtime, batch, and selector writers when v2 is on.
+- [ ] Before merge: add typed realtime, batch, and selector adapters to the shared
+  v2 budget and recovery authority. Prove mixed-feature recovery before removing
+  the temporary checks. Legacy mode must retain every current main feature.
 - [ ] Slice 9: port pre-issued permits and local lease dispatch.
+- [ ] Slice 9: add the inactive fenced-permit schema and prove current grant parity.
+- [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
+  missing-owner rejection when adding local or remote accounting clients.
+- [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
+- [ ] Slice 9: keep protocol construction in the small accounting bootstrap owner.
 - [ ] Slice 10: port the terminal journal and compact acknowledgement path.
 - [ ] Slice 11: split accounting transport and projection roles.
 - [ ] Slice 12: port bounded worker runtimes, economic settlement, and recovery limits.
@@ -310,6 +322,112 @@ This change must add no SQL, Redis, or network call.
 Accounting construction must move to a small bootstrap owner. The existing spend
 module is already above the size guard. New accounting audit and cost-bound policy
 must use separate typed modules, not new concerns in that large file.
+
+## Slice 8 source decisions
+
+This slice replays `ab4837e9`, `718fac95`, `062ab0c4`, `7986e1c7`, and `4b204a37`.
+Current main's realtime schema, provider library versions, capacity checks, and
+documentation structure remain in place. The historical accounting plan was not
+copied. This file owns clean-replay progress.
+
+Accounting construction now has one small bootstrap owner. Cost-bound and terminal
+audit policy also have separate typed owners. Cost bounds use the final validated
+payload. They cover multiple chat outputs, embedding inputs, images, speech
+characters, and rerank documents. Unbounded audio pricing fails closed in v2.
+These calculations add no database, Redis, or network call.
+
+The replay found a paid-cache bypass: a cache hit had no provider dispatch and thus
+no v2 reservation. Charged cache hits now reserve their known charge and use the
+existing terminal owner. Success requires both acknowledgements. Budget rejection
+stays HTTP 429; local capacity rejection stays HTTP 503. Cache fees and provider
+cost metadata keep their existing contracts.
+
+Readiness now checks the accounting pool and active generation, not only Prisma.
+The direct pool remains within the declared telemetry allocation. The isolated
+accounting probe now uses the same direct pool with two connections per process.
+It no longer measures the superseded Prisma request transport.
+
+The additive cutover migration has one database-owned check for pending realtime,
+spend, selector, and batch work. Preparation uses the same check and activation
+owner. Operators must stop legacy writers first. This is not an online cutover
+fence. A first attempt used an obsolete main batch status; the new, unshared
+migration rolled back fully. The failed marker was cleared on the private test
+database, and the corrected migration then passed all upgrade paths. No shared
+or historical migration was changed.
+
+Realtime, batch, and selector billing do not yet share v2 budget authority.
+The temporary startup and Helm checks prevent those combinations. They do not
+remove features from legacy mode. Shared adapters remain required before merge.
+Capacity rendering now checks the accounting-worker role only when it is enabled.
+The regression tests retain main's batch storage and realtime capacity assertions.
+
+The final review found another fallback gap. A configured v2 service that is absent
+or invalid must not select legacy provider execution or cache charging. One HTTP-edge
+resolver now rejects both paths. One admission result mapper serves provider calls
+and cache hits. Neither change adds a dependency call. The new accounting modules
+use bounded typed contracts without `Any`. A regression also limits new functions
+and modules to the repository's size targets.
+
+## Slice 9 integration checks
+
+The source change `0ac46791` includes permits, local dispatch, terminal journal,
+HTTP accounting transport, read models, metrics snapshots, and routing reductions.
+It must not overwrite the clean replay's accounting bootstrap, final cost bounds,
+paid-cache admission, or missing-owner checks. These owners remain shared.
+
+The source also selects the v2 reporting view by default. That view combines legacy
+records with v2 facts and removes duplicate event IDs. Thus the switch alone does
+not hide legacy charges. The clean replay must prove parity for main's tenant,
+owner, cost, and deletion contracts. It must also retain all v2 history after a
+rollback. A reporting default must not change until those checks pass.
+
+## Slice 8 verification
+
+- Full hermetic and Helm gates: 4,804 passed. Counts are 4,567 hermetic and 237 Helm.
+- Full application gate: 1,645 passed.
+- Full PostgreSQL gate: 515 passed, with no skips. Redis and the pinned official
+  realtime SDK were present for the current-main compatibility tests.
+- Full real-Redis gate: 105 passed, with no skips. Three separate memory domains
+  were present for the cache-eviction test.
+- Full collection: 7,069 tests, each in exactly one dependency lane.
+- Native accounting tests: 30 passed. They cover grant concurrency, idempotency,
+  uncertainty, native deadlines, readiness, and all pending legacy billing lanes.
+- Fresh install, `v0.1.42` upgrade, and shared-feature upgrade: passed with 108
+  migrations. The verifier removed its disposable databases.
+- Paid-cache and missing-owner regressions: passed. Rejection occurs before a
+  cached success or provider execution, with the existing error contract.
+- All 77 changed Python files: Ruff check and format passed.
+- Frozen lock, generated dependency export, 400-field settings reference, and
+  effective capacity documentation: passed.
+- Base, evaluation, production, and accounting evaluation Helm lint and template:
+  passed. No secret was put in a rendered artifact.
+- Base and optional Presidio images: build and offline, non-root, read-only smoke
+  checks passed. The 1 GiB migration CLI check and blocked-shutdown checks passed.
+- `git diff HEAD --check`: passed.
+
+The final image IDs are
+`sha256:46486b7e532e1d9ff5d5e08fa1b30602150426533f407a5b645ed14c3f18e284`
+and `sha256:226cd6d75a24691a3a1e813d1883a0cedee8a6c7df7659450d289a57822681bd`.
+
+The isolated native accounting probe ran each mode at 50 RPS for ten seconds with
+two processes. Direct-window and grant modes each completed all 500 operations.
+Each operation used one admission call and one terminal call. Both modes left exact
+committed balances and zero reserved or provisional balance. Direct p95/p99 were
+26.35/56.84 ms; grant p95/p99 were 28.78/44.00 ms. This is an accounting probe, not
+a 500 RPS run or a gateway qualification. It excludes HTTP, Redis, providers, and
+projection. Raw samples are in `/private/tmp/issue320-slice8-accounting-probe-final`.
+
+Final logs are `/private/tmp/issue320-slice8-final-components.log`,
+`/private/tmp/issue320-slice8-final-app.log`,
+`/private/tmp/issue320-slice8-final-postgres.log`, and
+`/private/tmp/issue320-slice8-final-redis.log`. Image smoke outputs are in
+`/private/tmp/issue320-slice8-final-image-smoke` and
+`/private/tmp/issue320-slice8-final-presidio-smoke`.
+
+The first broader run found validation of a disabled accounting role and one
+shutdown fixture timeout under concurrent build pressure. The final full run kept
+the original assertions and timeouts and passed. All temporary v2 compatibility
+checks remain until the shared adapters pass their own recovery tests.
 
 ## Slices 2 and 3 source decisions
 

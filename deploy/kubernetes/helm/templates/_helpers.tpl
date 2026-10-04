@@ -73,6 +73,30 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
+{{- define "deltallm.accountingWorkerName" -}}
+{{- $base := include "deltallm.name" . | trunc 45 | trimSuffix "-" -}}
+{{- printf "%s-accounting-worker" $base -}}
+{{- end -}}
+
+{{- define "deltallm.accountingWorkerFullname" -}}
+{{- $base := include "deltallm.fullname" . | trunc 45 | trimSuffix "-" -}}
+{{- printf "%s-accounting-worker" $base -}}
+{{- end -}}
+
+{{- define "deltallm.accountingWorkerSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "deltallm.accountingWorkerName" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: accounting-worker
+{{- end -}}
+
+{{- define "deltallm.accountingWorkerLabels" -}}
+helm.sh/chart: {{ include "deltallm.chart" . }}
+{{ include "deltallm.accountingWorkerSelectorLabels" . }}
+app.kubernetes.io/part-of: {{ include "deltallm.name" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{- define "deltallm.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "deltallm.fullname" .) .Values.serviceAccount.name -}}

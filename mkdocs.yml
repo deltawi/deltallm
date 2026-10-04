@@ -193,6 +193,8 @@ nav:
           - Budget and prompt design: design/pr5-budget-prompts.md
           - Spend recovery design: design/pr6-spend-recovery.md
           - Spend recovery: deployment/spend-recovery.md
+          - Accounting protocol v2: deployment/accounting-v2.md
+          - Accounting protocol v2 design: design/accounting-protocol-v2.md
           - Request deadlines: deployment/request-deadlines.md
           - Deadline and bounded-work design: design/pr7-deadlines-bounded-work.md
           - Provider connection tuning: deployment/upstream-http.md

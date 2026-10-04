@@ -52,10 +52,17 @@ def dependency_probes(state: State) -> dict[str, Probe]:
         getattr(state, "spend_ingestion_mode", "legacy"),
         getattr(state, "audit_ingestion_mode", "legacy"),
     }:
-        databases.update(
-            telemetry_database="telemetry_prisma_manager",
-            telemetry_worker_database="telemetry_worker_prisma_manager",
-        )
+        databases["telemetry_database"] = "telemetry_prisma_manager"
+    if getattr(state, "accounting_protocol_enabled", False):
+        databases["telemetry_database"] = "telemetry_prisma_manager"
+
+        async def accounting() -> object:
+            service = getattr(state, "accounting_protocol_service", None)
+            return False if service is None else await service.readiness_probe()
+
+        probes["accounting_database"] = accounting
+    if getattr(state, "telemetry_worker_database_required", False):
+        databases["telemetry_worker_database"] = "telemetry_worker_prisma_manager"
     if getattr(state, "spend_operation_intents_enabled", False):
         databases["telemetry_settlement_database"] = "telemetry_settlement_prisma_manager"
     for name, manager_name in databases.items():
@@ -147,6 +154,23 @@ def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
             "email_outbox_worker",
             "email_outbox_worker",
             bool(general.email_enabled and general.email_worker_enabled),
+        ),
+        (
+            "accounting_protocol",
+            "accounting_protocol_service",
+            bool(getattr(state, "accounting_protocol_enabled", False)),
+        ),
+        (
+            "accounting_projection_worker",
+            "accounting_projection_worker",
+            bool(
+                startup_setting(
+                    general,
+                    state.settings,
+                    "accounting_projection_worker_enabled",
+                    False,
+                )
+            ),
         ),
     )
     inventory = [

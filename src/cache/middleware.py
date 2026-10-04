@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.billing.pricing import normalize_gateway_cache_hit_usage
+from src.billing.money import canonical_money
 from src.billing.tier_pricing import (
     attach_pricing_metadata,
     resolve_tier_pricing,
@@ -39,7 +40,8 @@ from src.routers.text_adapters import (
 )
 from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import enqueue_request_log_write, maybe_log_proxy_error
-from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.cache_accounting import reserve_cached_charge
+from src.telemetry.spend_operation import billing_write_context
 
 from .backends.base import CacheBackend, CacheEntry
 from .execution_eligibility import ResponseCacheEligibility, ResponseCacheOutcome
@@ -284,6 +286,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 endpoint=endpoint,
             )
             return response
+        except ProxyError as exc:
+            return proxy_error_response(exc)
         finally:
             if not bool(getattr(request.state, "_rate_limit_lifecycle_managed", False)):
                 await _release_rate_limits(request)
@@ -418,6 +422,16 @@ class CacheMiddleware(BaseHTTPMiddleware):
             cache_hit=True,
         )
         request_cost = customer_billing.billing.cost
+        await reserve_cached_charge(
+            request,
+            auth=auth,
+            model=model,
+            call_type=call_type,
+            pricing=pricing,
+            exact_charge=canonical_money(request_cost),
+            provider=api_provider,
+            deployment_id=entry.deployment_id or "cache",
+        )
         if has_cache_hit_only_pricing(pricing.provider_model_info):
             avoided_billing = resolve_token_billing_result(
                 pricing,
@@ -490,7 +504,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
         await enqueue_request_log_write(
             request,
             request.app.state.spend_tracking_service.log_spend(
-                event_id=get_or_create_billing_event_id(request),
+                **billing_write_context(request),
                 request_id=request.headers.get("x-request-id") or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,

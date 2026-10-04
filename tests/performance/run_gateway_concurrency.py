@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter
+from contextlib import AsyncExitStack
 import json
 from pathlib import Path
 import re
@@ -28,14 +29,19 @@ from tests.performance.gateway_concurrency_fixture import (
     MODEL,
     fixture_key,
 )
+from tests.performance.gateway_concurrency_diagnostics import (
+    DependencyDiagnosticsRecorder,
+    KubernetesResourceRecorder,
+)
 from tests.performance.gateway_concurrency_dependencies import local_dependencies, require_local_url
-from tests.performance.gateway_concurrency_metrics import MetricsRecorder
+from tests.performance.gateway_concurrency_metrics import MetricSource, MetricsRecorder
 from tests.performance.gateway_concurrency_manifest import read_manifest
 
 ERROR_CODES = {
     "gateway_draining",
     "request_deadline_exceeded",
     "gateway_work_unavailable",
+    "edge_unavailable",
     "gateway_ingress_full",
     "gateway_ingress_buffer_full",
     "gateway_request_body_too_large",
@@ -115,17 +121,37 @@ def in_flight_series(run: RunResult) -> list[dict[str, float]]:
     return points
 
 
-async def measure(args: argparse.Namespace) -> dict[str, object]:
+async def measure(
+    args: argparse.Namespace,
+    *,
+    resource_recorder: KubernetesResourceRecorder | None = None,
+) -> dict[str, object]:
     if not 0 < args.rate <= 200 or not 5 <= args.duration <= 600:
         raise ValueError("Use rates up to 200 RPS and durations from 5 to 600 seconds")
     manifest = read_manifest(args.server_manifest)
     endpoint = require_local_url(args.url, schemes={"http"})
-    urls = [require_local_url(url, schemes={"http"}) for url in args.metrics_url]
-    if len(urls) != manifest.api_processes:
+    api_urls = [require_local_url(url, schemes={"http"}) for url in args.metrics_url]
+    if len(api_urls) != manifest.api_processes:
         raise ValueError("Provide one metrics endpoint for every declared API process")
+    worker_urls = [
+        require_local_url(url, schemes={"http"})
+        for url in getattr(args, "accounting_worker_metrics_url", [])
+    ]
+    if len(worker_urls) != getattr(manifest, "accounting_worker_processes", 0):
+        raise ValueError(
+            "Provide one metrics endpoint for every declared accounting-worker process"
+        )
+    metric_sources = [
+        MetricSource(url=url, role="api", process=index) for index, url in enumerate(api_urls)
+    ] + [
+        MetricSource(url=url, role="accounting_worker", process=index)
+        for index, url in enumerate(worker_urls)
+    ]
     key = fixture_key()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = args.output_dir / f"metrics-{uuid4().hex}.jsonl"
+    diagnostics_path = args.output_dir / f"dependencies-{uuid4().hex}.jsonl"
+    dependency_recorder: DependencyDiagnosticsRecorder | None = None
     async with local_dependencies() as dependencies:
         db, redis = dependencies.database, dependencies.redis
         async with httpx.AsyncClient(
@@ -176,7 +202,16 @@ async def measure(args: argparse.Namespace) -> dict[str, object]:
                     f"Workload precheck failed: HTTP {warmup.status_code}, {warmup.error}"
                 )
             before = await dependency_counts(db, redis)
-            async with MetricsRecorder(urls, metrics_path) as recorder:
+            async with AsyncExitStack() as stack:
+                recorder = await stack.enter_async_context(
+                    MetricsRecorder(metric_sources, metrics_path)
+                )
+                if getattr(args, "dependency_diagnostics", False):
+                    dependency_recorder = await stack.enter_async_context(
+                        DependencyDiagnosticsRecorder(db, redis, diagnostics_path)
+                    )
+                if resource_recorder is not None:
+                    await stack.enter_async_context(resource_recorder)
                 arrival_start = perf_counter() - recorder.started
                 run = await recorder.run_workload(
                     lambda: run_constant_arrival(
@@ -192,6 +227,7 @@ async def measure(args: argparse.Namespace) -> dict[str, object]:
         sample.status_code is not None and 200 <= sample.status_code < 300 and sample.error is None
         for sample in run.samples
     )
+    source_evidence = recorder.evidence()
     report.update(
         {
             "label": args.label,
@@ -206,6 +242,22 @@ async def measure(args: argparse.Namespace) -> dict[str, object]:
             "metrics_file": metrics_path.name,
             "metrics_arrival_start_offset_seconds": arrival_start,
             "metrics_scrape_errors": recorder.errors,
+            "metrics_sources": source_evidence,
+            "dependency_diagnostics_file": (
+                diagnostics_path.name if dependency_recorder is not None else None
+            ),
+            "dependency_diagnostic_snapshots": (
+                dependency_recorder.snapshots if dependency_recorder is not None else 0
+            ),
+            "dependency_diagnostic_errors": (
+                dependency_recorder.errors if dependency_recorder is not None else 0
+            ),
+            "resource_diagnostics_file": (
+                resource_recorder.output.name if resource_recorder is not None else None
+            ),
+            "resource_evidence": (
+                resource_recorder.evidence() if resource_recorder is not None else None
+            ),
             "client_in_flight": in_flight_series(run),
             "error_counts": dict(Counter(sample.error for sample in run.samples if sample.error)),
             "dependency_call_deltas_including_background": {
@@ -215,7 +267,38 @@ async def measure(args: argparse.Namespace) -> dict[str, object]:
             "qualification": "baseline_only",
         }
     )
+    diagnostic_failures: list[str] = []
+    if getattr(args, "diagnostic_gate", False):
+        if dependency_recorder is None:
+            diagnostic_failures.append("dependency_diagnostics_missing")
+        elif dependency_recorder.snapshots < 2:
+            diagnostic_failures.append("dependency_diagnostics_incomplete")
+        if resource_recorder is None:
+            diagnostic_failures.append("resource_diagnostics_missing")
+        else:
+            resource_evidence = resource_recorder.evidence()
+            if resource_evidence["snapshots"] < 2 or resource_evidence["missing_required_roles"]:
+                diagnostic_failures.append("resource_diagnostics_incomplete")
+        if any(source["successful_scrapes"] < 2 for source in source_evidence):
+            diagnostic_failures.append("insufficient_metrics_samples")
+        if any(
+            source["source_role"] == "accounting_worker"
+            and not source["accounting_metrics_observed"]
+            for source in source_evidence
+        ):
+            diagnostic_failures.append("accounting_worker_metrics_missing")
+        if any(
+            sample.status_code == 500 and sample.error == "unclassified_http_error"
+            for sample in run.samples
+        ):
+            diagnostic_failures.append("unclassified_http_500")
+        report["diagnostic_failures"] = diagnostic_failures
+        report["qualification"] = (
+            "diagnostic_passed" if not diagnostic_failures else "diagnostic_failed"
+        )
     raw_path, summary_path = write_results(run, report, args.output_dir)
+    if diagnostic_failures and getattr(args, "raise_on_diagnostic_failure", True):
+        raise ValueError(f"Diagnostic evidence gate failed; see {summary_path}")
     return {"summary": str(summary_path), "raw": str(raw_path), **report}
 
 
@@ -223,6 +306,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:59440/v1/chat/completions")
     parser.add_argument("--metrics-url", action="append", required=True)
+    parser.add_argument("--accounting-worker-metrics-url", action="append", default=[])
+    parser.add_argument("--diagnostic-gate", action="store_true")
+    parser.add_argument("--dependency-diagnostics", action="store_true")
     parser.add_argument("--label", choices=("before", "after"), required=True)
     parser.add_argument("--rate", type=float, default=50)
     parser.add_argument("--duration", type=float, default=600)

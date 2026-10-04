@@ -122,6 +122,7 @@ async def test_readiness_requires_each_new_database_allocation(
 ):
     if allocation == "telemetry_worker":
         test_app.state.audit_ingestion_mode = "outbox"
+        test_app.state.telemetry_worker_database_required = True
         test_app.state.telemetry_prisma_manager = database_manager(
             SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
         )
@@ -174,6 +175,7 @@ async def test_readiness_probes_all_dependency_allocations_concurrently(client, 
 
     test_app.state.redis.ping = probe("redis")
     test_app.state.audit_ingestion_mode = "outbox"
+    test_app.state.telemetry_worker_database_required = True
     for name in (
         "prisma_manager",
         "foreground_prisma_manager",

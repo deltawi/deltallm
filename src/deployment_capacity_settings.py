@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 class DeploymentCapacitySettings(BaseModel):
     deployment_capacity_path: str | None = Field(default=None, min_length=1, max_length=1024)
-    deployment_capacity_role: Literal["api", "batchWorker"] = "api"
+    deployment_capacity_role: Literal["api", "batchWorker", "accountingWorker"] = "api"
 
 
 def resolve_capacity_settings(

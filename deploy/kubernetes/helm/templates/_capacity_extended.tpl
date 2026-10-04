@@ -11,7 +11,8 @@
 {{- $peakPods := 0 -}}
 {{- range $name, $role := $report.roles -}}
 {{- $peakPods = add $peakPods (div $role.peakProcesses $role.processesPerPod) -}}
-{{- $g := (include (ternary "deltallm.apiConfigYaml" "deltallm.batchWorkerConfigYaml" (eq $name "api")) $root | fromYaml).general_settings -}}
+{{- $configTemplate := ternary "deltallm.apiConfigYaml" (ternary "deltallm.accountingWorkerConfigYaml" "deltallm.batchWorkerConfigYaml" (eq $name "accountingWorker")) (eq $name "api") -}}
+{{- $g := (include $configTemplate $root | fromYaml).general_settings -}}
 {{- $realtime := default (dict) (get $g "realtime") -}}
 {{- if and $e.enabled (get $realtime "enabled") -}}
 {{- $sockets := int (get $realtime "max_connections") -}}
@@ -24,10 +25,13 @@
 {{- end -}}
 {{- end -}}
 {{- $engines := 2 -}}
-{{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") -}}
-{{- $engines = 4 -}}
-{{- if $g.spend_operation_intents_enabled -}}{{- $engines = 5 -}}{{- end -}}
-{{- end -}}
+{{- $telemetry := or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") $g.accounting_protocol_enabled -}}
+{{- $spendWorker := and (eq $g.spend_ingestion_mode "outbox") $g.spend_ingestion_worker_enabled -}}
+{{- $auditWorker := and $g.audit_enabled (eq $g.audit_ingestion_mode "outbox") $g.audit_ingestion_worker_enabled -}}
+{{- $projectionWorker := and $g.accounting_protocol_enabled $g.accounting_projection_worker_enabled -}}
+{{- if $telemetry -}}{{- $engines = add $engines 1 -}}{{- end -}}
+{{- if or $spendWorker $auditWorker $projectionWorker -}}{{- $engines = add $engines 1 -}}{{- end -}}
+{{- if and $g.spend_operation_intents_enabled (not $g.accounting_protocol_enabled) -}}{{- $engines = add $engines 1 -}}{{- end -}}
 {{- $p := $role.pools -}}
 {{/* Prisma's HTTPX client uses the default 100-connection ceiling per engine. */}}
 {{- $pythonFD := add $p.upstreamHttp $p.controlHttp $p.auxiliaryHttp $p.redisCritical $p.redisCache (mul $engines 100) $fd.inboundConnectionsPerProcess $fd.otherPerProcess $fd.headroomPerProcess -}}
@@ -58,7 +62,8 @@
 {{- $tpm = add $tpm (include "deltallm.capacityProduct" (list $attempts $domain.tokensPerAttempt) | int64) -}}
 {{/* Conservatively allow all upstream transports to target each failover domain. */}}
 {{- $concurrent = add $concurrent (mul $role.peakProcesses $role.pools.upstreamHttp) -}}
-{{- $g := (include (ternary "deltallm.apiConfigYaml" "deltallm.batchWorkerConfigYaml" (eq $roleName "api")) $root | fromYaml).general_settings -}}
+{{- $configTemplate := ternary "deltallm.apiConfigYaml" (ternary "deltallm.accountingWorkerConfigYaml" "deltallm.batchWorkerConfigYaml" (eq $roleName "accountingWorker")) (eq $roleName "api") -}}
+{{- $g := (include $configTemplate $root | fromYaml).general_settings -}}
 {{- $realtime := default (dict) (get $g "realtime") -}}
 {{- if get $realtime "enabled" -}}
 {{- $concurrent = add $concurrent (mul $role.peakProcesses (int (get $realtime "max_connections"))) -}}

@@ -35,7 +35,10 @@ class DeploymentCapacityContract:
             raise RuntimeError("Deployment capacity report does not govern this process role")
         policy = CapacityRuntimePolicy.from_general(config.general_settings)
         if report.production:
-            policy.validate_production()
+            policy.validate_production(
+                role=allocation.deployment_capacity_role,
+                accounting_worker_present="accountingWorker" in report.roles,
+            )
         return cls(allocation, report, policy)
 
     def validate(

@@ -10,9 +10,22 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from src.config import GeneralSettings, Settings
 from src.config_runtime.dynamic import DynamicConfigManager, DynamicConfigRestartRequiredError
-from src.redis_runtime import AllocatedRedisPool, RedisLimits, build_redis_client
+from src.redis_runtime import (
+    AllocatedRedisPool,
+    ObservedPipeline,
+    RedisLimits,
+    _command_family,
+    build_redis_client,
+)
 
 pytestmark = [pytest.mark.hermetic, pytest.mark.asyncio]
+
+
+async def test_redis_command_metrics_use_bounded_families():
+    assert _command_family("EVALSHA") == "lua"
+    assert _command_family("GET") == "read"
+    assert _command_family("SET") == "write"
+    assert _command_family("attacker-controlled-command") == "other"
 
 
 class FakeConnection:
@@ -182,6 +195,14 @@ async def test_existing_endpoint_selection_is_preserved_while_durable_limits_app
     try:
         assert client.connection_pool.connection_kwargs["host"] == "file-redis"
         assert client.connection_pool.max_connections == 7
+    finally:
+        await client.aclose()
+
+
+async def test_allocated_client_uses_observed_pipeline():
+    client = build_redis_client(Settings(), GeneralSettings(), allocation="critical")
+    try:
+        assert isinstance(client.pipeline(transaction=False), ObservedPipeline)
     finally:
         await client.aclose()
 

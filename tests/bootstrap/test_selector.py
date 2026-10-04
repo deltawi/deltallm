@@ -13,6 +13,7 @@ from src.router.runtime_generation import RoutingRuntimeGenerationStore
 @pytest.mark.parametrize("reserved_settlement", [False, True])
 def test_selector_composition_reuses_spend_owner_and_tracks_worker_health(reserved_settlement):
     spend = SimpleNamespace(
+        accounting=None,
         db=object(),
         worker_db=object(),
         operations=SimpleNamespace(settlement=SimpleNamespace(db=object()))
@@ -52,7 +53,9 @@ def test_selector_cannot_start_without_durable_spend_worker(
 ):
     state = State()
     state.routing_runtime_generation_store = RoutingRuntimeGenerationStore()
-    spend = SimpleNamespace(config=SimpleNamespace(enabled=enabled, worker_enabled=worker))
+    spend = SimpleNamespace(
+        accounting=None, config=SimpleNamespace(enabled=enabled, worker_enabled=worker)
+    )
     monkeypatch.setattr(
         "src.bootstrap.selector.require_routing_runtime_generation",
         lambda _: SimpleNamespace(selectors=selectors),
@@ -70,3 +73,24 @@ def test_selector_cannot_start_without_durable_spend_worker(
             SimpleNamespace(selectors={"selected": object()})
         )
     assert state.routing_runtime_generation_store.require_snapshot() is previous
+
+
+@pytest.mark.parametrize("selectors", [{}, {"selected": object()}])
+def test_v2_cannot_activate_a_legacy_selector_writer(monkeypatch, selectors):
+    state = State({"routing_runtime_generation_store": RoutingRuntimeGenerationStore()})
+    spend = SimpleNamespace(accounting=object())
+    monkeypatch.setattr(
+        "src.bootstrap.selector.require_routing_runtime_generation",
+        lambda _: SimpleNamespace(selectors=selectors),
+    )
+    if selectors:
+        with pytest.raises(RuntimeError, match="shared selector billing adapter"):
+            configure_selector_execution(state, spend)
+    else:
+        configure_selector_execution(state, spend)
+        assert state.selector_execution_factory is None
+    state.routing_runtime_generation_store.replace(SimpleNamespace(selectors={}))
+    with pytest.raises(BillingOperationUnavailable):
+        state.routing_runtime_generation_store.replace(
+            SimpleNamespace(selectors={"selected": object()})
+        )

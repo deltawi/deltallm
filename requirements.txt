@@ -11,6 +11,8 @@ anyio==4.12.1
     #   watchfiles
 async-timeout==5.0.1 ; python_full_version < '3.11.3'
     # via redis
+asyncpg==0.31.0
+    # via deltallm-core-api
 boto3==1.42.84
     # via deltallm-core-api
 botocore==1.42.84

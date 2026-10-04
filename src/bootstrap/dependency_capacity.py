@@ -22,6 +22,7 @@ class DependencyAllocationSnapshot:
     redis: RedisLimits
     control_connections: int
     telemetry_connections: int
+    telemetry_worker_connections: int
     spend_operations: SpendOperationAllocation
     deployment: DeploymentCapacityContract | None = None
 
@@ -31,18 +32,47 @@ class DependencyAllocationSnapshot:
         database = resolve_database_settings(config, settings)
         if database is None:
             raise RuntimeError("Database allocations require an explicit database URL")
-        telemetry_enabled = any(
+        accounting_enabled = bool(
+            startup_setting(general, settings, "accounting_protocol_enabled", False)
+        )
+        telemetry_enabled = accounting_enabled or any(
             startup_setting(general, settings, field, "legacy") == "outbox"
             for field in ("audit_ingestion_mode", "spend_ingestion_mode")
+        )
+        telemetry_worker_enabled = (
+            (
+                startup_setting(general, settings, "spend_ingestion_mode", "legacy") == "outbox"
+                and startup_setting(general, settings, "spend_ingestion_worker_enabled", True)
+            )
+            or (
+                bool(startup_setting(general, settings, "audit_enabled", True))
+                and startup_setting(general, settings, "audit_ingestion_mode", "legacy") == "outbox"
+                and startup_setting(general, settings, "audit_ingestion_worker_enabled", True)
+            )
+            or (
+                accounting_enabled
+                and startup_setting(
+                    general,
+                    settings,
+                    "accounting_projection_worker_enabled",
+                    False,
+                )
+            )
         )
         telemetry = (
             resolve_telemetry_database_settings(config, settings) if telemetry_enabled else None
         )
+        database_allocations = resolve_allocation_settings(general, settings)
         return cls(
-            database=resolve_allocation_settings(general, settings),
+            database=database_allocations,
             redis=RedisLimits.from_settings(general, settings),
             control_connections=database.pool_size,
             telemetry_connections=telemetry.pool_size if telemetry is not None else 0,
+            telemetry_worker_connections=(
+                database_allocations.telemetry_worker_db_pool_size
+                if telemetry_worker_enabled
+                else 0
+            ),
             spend_operations=SpendOperationAllocation.resolve(
                 general, settings, telemetry_connections=telemetry.pool_size if telemetry else 0
             ),
@@ -53,7 +83,7 @@ class DependencyAllocationSnapshot:
         if self.deployment is not None:
             database = self.control_connections + self.database.db_foreground_pool_size
             if self.telemetry_connections:
-                database += self.telemetry_connections + self.database.telemetry_worker_db_pool_size
+                database += self.telemetry_connections + self.telemetry_worker_connections
             self.deployment.validate(
                 config,
                 settings,

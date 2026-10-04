@@ -10,7 +10,7 @@ from typing import Literal
 from prometheus_client import Counter, Gauge, Histogram
 from pydantic import SecretStr
 from redis.asyncio import ConnectionPool, Redis
-from redis.asyncio.client import PubSub
+from redis.asyncio.client import Pipeline, PubSub
 from redis.asyncio.connection import parse_url
 from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -39,6 +39,47 @@ _acquisition = Histogram(
     ["allocation"],
     registry=_registry,
 )
+_round_trips = Counter(
+    "deltallm_redis_command_round_trips_total",
+    "Redis client network round trips by bounded command family",
+    ["allocation", "family", "outcome"],
+    registry=_registry,
+)
+_round_trip_seconds = Histogram(
+    "deltallm_redis_command_round_trip_seconds",
+    "Redis client command duration including pool acquisition and network time",
+    ["allocation", "family", "outcome"],
+    buckets=[0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1],
+    registry=_registry,
+)
+_pipeline_commands = Histogram(
+    "deltallm_redis_pipeline_commands",
+    "Commands carried by one Redis pipeline network round trip",
+    ["allocation"],
+    buckets=[1, 2, 4, 8, 16, 32, 64, 128, 256],
+    registry=_registry,
+)
+
+_READ_COMMANDS = frozenset({"GET", "MGET", "HGET", "HMGET", "EXISTS", "TTL", "PTTL", "SCAN"})
+_WRITE_COMMANDS = frozenset(
+    {"SET", "SETEX", "PSETEX", "DEL", "UNLINK", "INCR", "INCRBY", "EXPIRE", "HSET", "ZADD"}
+)
+
+
+def _command_family(command: object) -> str:
+    name = str(command).split(" ", 1)[0].upper()
+    if name in {"EVAL", "EVALSHA", "SCRIPT"}:
+        return "lua"
+    if name in _READ_COMMANDS:
+        return "read"
+    if name in _WRITE_COMMANDS:
+        return "write"
+    return "other"
+
+
+def _observe_round_trip(*, allocation: str, family: str, outcome: str, started: float) -> None:
+    _round_trips.labels(allocation, family, outcome).inc()
+    _round_trip_seconds.labels(allocation, family, outcome).observe(perf_counter() - started)
 
 
 def startup_setting(general: object, settings: object, field: str, default: object):
@@ -141,7 +182,58 @@ class AllocatedPubSub(PubSub):
                 yield message
 
 
+class ObservedPipeline(Pipeline):
+    async def execute(self, raise_on_error: bool = True):
+        allocation = getattr(self.connection_pool, "allocation", "unknown")
+        command_count = len(self.command_stack)
+        started = perf_counter()
+        outcome = "error"
+        try:
+            result = await super().execute(raise_on_error=raise_on_error)
+            outcome = "success"
+            return result
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            _pipeline_commands.labels(allocation).observe(command_count)
+            _observe_round_trip(
+                allocation=allocation,
+                family="pipeline",
+                outcome=outcome,
+                started=started,
+            )
+
+
 class AllocatedRedis(Redis):
+    async def execute_command(self, *args, **options):
+        allocation = getattr(self.connection_pool, "allocation", "unknown")
+        family = _command_family(args[0] if args else "unknown")
+        started = perf_counter()
+        outcome = "error"
+        try:
+            result = await super().execute_command(*args, **options)
+            outcome = "success"
+            return result
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            _observe_round_trip(
+                allocation=allocation,
+                family=family,
+                outcome=outcome,
+                started=started,
+            )
+
+    def pipeline(self, transaction: bool = True, shard_hint: str | None = None) -> Pipeline:
+        return ObservedPipeline(
+            self.connection_pool,
+            self.response_callbacks,
+            transaction,
+            shard_hint,
+        )
+
     def pubsub(self, **kwargs) -> PubSub:
         return AllocatedPubSub(
             self.connection_pool, event_dispatcher=self._event_dispatcher, **kwargs

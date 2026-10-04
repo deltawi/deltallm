@@ -83,8 +83,8 @@
 {{- $root := .root -}}
 {{- $extraEnv := default (list) .extraEnv -}}
 {{- $worker := default false .worker -}}
-{{- $processes := ternary $root.Values.dependencyCapacity.batchWorkerProcessesPerPod $root.Values.dependencyCapacity.apiProcessesPerPod $worker -}}
-{{- $configTemplate := ternary "deltallm.batchWorkerConfigYaml" "deltallm.apiConfigYaml" $worker -}}
+{{- $processes := default (ternary $root.Values.dependencyCapacity.batchWorkerProcessesPerPod $root.Values.dependencyCapacity.apiProcessesPerPod $worker) .processes -}}
+{{- $configTemplate := default (ternary "deltallm.batchWorkerConfigYaml" "deltallm.apiConfigYaml" $worker) .configTemplate -}}
 {{- $general := (include $configTemplate $root | fromYaml).general_settings -}}
 {{- $databaseEnv := include "deltallm.databaseEnv" $root -}}
 {{- $redisEnv := include "deltallm.redisEnv" $root -}}

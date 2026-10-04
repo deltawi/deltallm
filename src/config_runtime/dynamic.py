@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src.database_settings import DATABASE_ALLOCATION_FIELDS
+from src.accounting_settings import ACCOUNTING_PROTOCOL_FIELDS
 from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import RequestWorkSettings
 from src.lifecycle_settings import LifecycleSettings
@@ -63,6 +64,7 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
 
 _STARTUP_ONLY_GENERAL_SETTINGS = (
     DATABASE_ALLOCATION_FIELDS
+    | ACCOUNTING_PROTOCOL_FIELDS
     | frozenset(RequestWorkSettings.model_fields)
     | frozenset(LifecycleSettings.model_fields)
     | frozenset(DeploymentCapacitySettings.model_fields)
@@ -70,6 +72,7 @@ _STARTUP_ONLY_GENERAL_SETTINGS = (
         {
             "realtime",
             "spend_ingestion_worker_enabled",
+            "audit_ingestion_worker_enabled",
             "spend_operation_intents_enabled",
             "spend_settlement_db_pool_size",
             "budget_notifications_enabled",
@@ -551,7 +554,8 @@ class DynamicConfigManager:
                     or field_name in RequestWorkSettings.model_fields
                     or field_name in LifecycleSettings.model_fields
                     or field_name in DeploymentCapacitySettings.model_fields
-                    or field_name == "spend_ingestion_worker_enabled"
+                    or field_name
+                    in {"spend_ingestion_worker_enabled", "audit_ingestion_worker_enabled"}
                 )
                 and field_name in (current.model_fields_set ^ candidate.model_fields_set)
             )

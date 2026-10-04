@@ -215,6 +215,27 @@ general_settings:
   telemetry_db_pool_timeout_seconds: 2
   telemetry_worker_startup_timeout_seconds: 5
   telemetry_shutdown_drain_timeout_seconds: 20
+  # Accounting v2 replaces lifecycle write amplification with one batched
+  # reservation ACK before dispatch and one batched terminal ACK.
+  accounting_protocol_enabled: false
+  accounting_protocol_generation: 1
+  accounting_microbatch_max_size: 8
+  accounting_microbatch_dwell_ms: 2
+  accounting_reservation_max_pending: 4096
+  accounting_finalization_max_pending: 8192
+  accounting_statement_timeout_ms: 250
+  accounting_finalization_ack_timeout_ms: 2000
+  accounting_max_provider_attempts: 3
+  accounting_grants_enabled: true
+  accounting_grant_target_operations: 32
+  accounting_grant_ttl_seconds: 30
+  # Run this only in the dedicated accounting worker process/Deployment.
+  accounting_projection_worker_enabled: false
+  accounting_projection_batch_size: 64
+  accounting_projection_max_concurrent_partitions: 4
+  accounting_projection_lease_seconds: 30
+  accounting_projection_poll_interval_ms: 50
+  accounting_projection_maintenance_interval_ms: 1000
   audit_ingestion_mode: legacy
   audit_ingestion_worker_enabled: true
   audit_ingestion_batch_size: 100

@@ -67,12 +67,22 @@ async def _init_audit_runtime(app: Any, cfg: Any, runtime: AuditRuntime) -> Audi
         if ingestion_mode == "outbox"
         else app.state.foreground_prisma_manager.client
     )
+    worker_enabled = bool(
+        _startup_setting(
+            cfg.general_settings,
+            settings,
+            "audit_ingestion_worker_enabled",
+            True,
+        )
+    )
     worker_db_client = (
         app.state.telemetry_worker_prisma_manager.client
-        if ingestion_mode == "outbox"
+        if ingestion_mode == "outbox" and worker_enabled
         else app.state.prisma_manager.client
+        if ingestion_mode != "outbox"
+        else None
     )
-    if worker_db_client is None:
+    if worker_enabled and worker_db_client is None:
         raise RuntimeError("Audit workers require their database allocation")
     repository = AuditRepository(audit_db_client)
     service = AuditService(
@@ -89,11 +99,7 @@ async def _init_audit_runtime(app: Any, cfg: Any, runtime: AuditRuntime) -> Audi
         ),
         ingestion_config=AuditIngestionConfig(
             enabled=ingestion_mode == "outbox",
-            worker_enabled=bool(
-                _startup_setting(
-                    cfg.general_settings, settings, "audit_ingestion_worker_enabled", True
-                )
-            ),
+            worker_enabled=worker_enabled,
             batch_size=int(
                 _startup_setting(cfg.general_settings, settings, "audit_ingestion_batch_size", 100)
             ),

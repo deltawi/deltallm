@@ -14,6 +14,10 @@ def configure_selector_execution(state: State, spend: SpendIngestionService) -> 
     """Extend the existing spend lifecycle; no extra client, pool, queue or worker."""
     state.selector_execution_factory = None
     state.routing_runtime_generation_store.set_selector_activation_check(_unavailable)
+    if spend.accounting is not None:
+        if require_routing_runtime_generation(state).selectors:
+            raise RuntimeError("Accounting v2 requires a shared selector billing adapter")
+        return
     if not spend.config.enabled or not spend.config.worker_enabled:
         if require_routing_runtime_generation(state).selectors:
             raise RuntimeError("selector activation requires durable spend outbox and its worker")

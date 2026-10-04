@@ -22,6 +22,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
+from src.accounting_settings import AccountingProtocolSettings
 from src.database_settings import DatabaseAllocationSettings
 from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
@@ -548,6 +549,7 @@ class UIBrandingUpdatePayload(BaseModel):
 class GeneralSettings(
     DatabaseAllocationSettings,
     SpendOperationSettings,
+    AccountingProtocolSettings,
     RequestWorkSettings,
     LifecycleSettings,
     DeploymentCapacitySettings,
@@ -1166,6 +1168,7 @@ class Settings(
     BaseSettings,
     DatabaseAllocationSettings,
     SpendOperationSettings,
+    AccountingProtocolSettings,
     RequestWorkSettings,
     LifecycleSettings,
     DeploymentCapacitySettings,

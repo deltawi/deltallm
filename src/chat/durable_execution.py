@@ -7,6 +7,7 @@ from fastapi import Request
 from src.chat.executor import OpenedStream, execute_chat, open_stream_with_first_chunk
 from src.models.requests import ChatCompletionRequest
 from src.router.router import Deployment
+from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 from src.telemetry.spend_operation import durable_provider_call
 
 
@@ -16,6 +17,7 @@ async def execute_durable_chat(
     return await durable_provider_call(
         request,
         model=payload.model,
+        bounds=validated_provider_request_bounds(payload),
         call_type="completion",
         deployment=deployment,
         execute=lambda: execute_chat(request, payload, deployment),
@@ -28,6 +30,7 @@ async def open_durable_stream(
     return await durable_provider_call(
         request,
         model=payload.model,
+        bounds=validated_provider_request_bounds(payload),
         call_type="completion",
         deployment=deployment,
         execute=lambda: open_stream_with_first_chunk(request, payload, deployment),

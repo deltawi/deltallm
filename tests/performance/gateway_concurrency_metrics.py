@@ -9,7 +9,7 @@ import json
 import math
 from pathlib import Path
 from time import perf_counter
-from typing import TextIO, TypeVar
+from typing import Literal, TextIO, TypeVar
 
 import httpx
 from prometheus_client.parser import text_string_to_metric_families
@@ -30,6 +30,10 @@ HISTOGRAMS = (
     "deltallm_ingress_queue_seconds",
     "deltallm_auth_fallback_seconds",
     "deltallm_database_allocation_seconds",
+    "deltallm_accounting_batch_size",
+    "deltallm_accounting_batch_seconds",
+    "deltallm_accounting_queue_wait_seconds",
+    "deltallm_accounting_database_call_seconds",
     "deltallm_bounded_work_seconds",
     "deltallm_readiness_refresh_seconds",
     "deltallm_shutdown_phase_seconds",
@@ -73,6 +77,12 @@ ALLOWED_NAMES = {
     "deltallm_auth_fallback_events_total",
     "deltallm_database_allocation_occupied",
     "deltallm_database_allocation_events_total",
+    "deltallm_accounting_queue_depth",
+    "deltallm_accounting_failures_total",
+    "deltallm_accounting_reservation_decisions_total",
+    "deltallm_accounting_projection_actions_total",
+    "deltallm_accounting_projection_backlog",
+    "deltallm_accounting_projection_oldest_event_age_seconds",
 } | {name + suffix for name in HISTOGRAMS for suffix in ("_bucket", "_count", "_sum")}
 LABEL_VALUES = {
     "stage": {
@@ -99,7 +109,7 @@ LABEL_VALUES = {
         "telemetry_worker_database",
         "telemetry_settlement_database",
     },
-    "queue": {"audit", "spend"},
+    "queue": {"audit", "spend", "reservation", "finalization"},
     "phase": PHASES
     | {phase.value for phase in AcceptancePhase}
     | {
@@ -114,6 +124,8 @@ LABEL_VALUES = {
         "cancellation",
         "workers",
         "close",
+        "queue",
+        "database",
     },
     "outcome": OUTCOMES
     | {
@@ -162,6 +174,10 @@ LABEL_VALUES = {
         "bytes",
         "payload",
         "close_failed",
+        "queue_full",
+        "queue_closed",
+        "incomplete_result",
+        "invalid_result",
     },
     "allocation": {
         "inference",
@@ -176,7 +192,20 @@ LABEL_VALUES = {
         "callback_resources",
         "guardrail",
     },
-    "operation": {"query", "finish"},
+    "operation": {
+        "query",
+        "finish",
+        "admit_grant",
+        "ensure_grants",
+        "reserve_grant",
+        "reserve_direct",
+        "recover_reservation",
+        "finalize_grant",
+        "finalize_direct",
+        "recover_finalization",
+    },
+    "decision": {"dispatch", "replay", "budget_exhausted", "capacity_exhausted"},
+    "action": {"recovered", "window_rolled", "event_projected", "iteration"},
     "response": {"started", "not_started"},
     "integration": {"prometheus", "langfuse", "opentelemetry", "s3", "custom"},
 }
@@ -187,6 +216,19 @@ class MetricValue:
     name: str
     labels: dict[str, str]
     value: float
+
+
+@dataclass(frozen=True)
+class MetricSource:
+    url: str
+    role: Literal["api", "accounting_worker"]
+    process: int
+
+    def __post_init__(self) -> None:
+        if self.role not in ("api", "accounting_worker"):
+            raise ValueError("unsupported metrics source role")
+        if not 0 <= self.process < 16:
+            raise ValueError("metrics source process must be between zero and fifteen")
 
 
 def select_metrics(text: str, *, buckets: bool = True) -> list[MetricValue]:
@@ -221,16 +263,25 @@ def _safe_labels(labels: dict[str, str]) -> bool:
 
 
 class MetricsRecorder:
-    def __init__(self, urls: list[str], output: Path) -> None:
-        if not 1 <= len(urls) <= 16:
-            raise ValueError("provide one to sixteen distinct per-process metrics endpoints")
+    def __init__(self, sources: list[str | MetricSource], output: Path) -> None:
+        if not 1 <= len(sources) <= 32:
+            raise ValueError("provide one to thirty-two distinct per-process metrics endpoints")
+        self.sources = [
+            source
+            if isinstance(source, MetricSource)
+            else MetricSource(url=source, role="api", process=index)
+            for index, source in enumerate(sources)
+        ]
+        urls = [source.url for source in self.sources]
         if len(set(urls)) != len(urls):
             raise ValueError("metrics endpoints must be distinct")
-        self.urls = urls
         self.output = output
         self.started = 0.0
         self.snapshots = 0
         self.errors = 0
+        self.successful_scrapes = [0] * len(self.sources)
+        self.failed_scrapes = [0] * len(self.sources)
+        self.metric_names = [set[str]() for _ in self.sources]
         self._bytes_written = 0
         self._file: TextIO | None = None
         self._client: httpx.AsyncClient | None = None
@@ -299,17 +350,30 @@ class MetricsRecorder:
         if self.snapshots >= MAX_SNAPSHOTS:
             raise ValueError("metrics snapshot budget exceeded")
         results = await asyncio.gather(
-            *(self._read(url, buckets=buckets) for url in self.urls), return_exceptions=True
+            *(self._read(source.url, buckets=buckets) for source in self.sources),
+            return_exceptions=True,
         )
         offset = perf_counter() - self.started
         for index, result in enumerate(results):
+            source = self.sources[index]
             if isinstance(result, BaseException) or not result:
                 self.errors += 1
-                record = {"offset_seconds": offset, "source": index, "error": "scrape_failed"}
-            else:
+                self.failed_scrapes[index] += 1
                 record = {
                     "offset_seconds": offset,
                     "source": index,
+                    "source_role": source.role,
+                    "source_process": source.process,
+                    "error": "scrape_failed",
+                }
+            else:
+                self.successful_scrapes[index] += 1
+                self.metric_names[index].update(item.name for item in result)
+                record = {
+                    "offset_seconds": offset,
+                    "source": index,
+                    "source_role": source.role,
+                    "source_process": source.process,
                     "samples": [asdict(item) for item in result],
                 }
             line = json.dumps(record, sort_keys=True) + "\n"
@@ -319,6 +383,21 @@ class MetricsRecorder:
             self._file.write(line)
         self._file.flush()
         self.snapshots += 1
+
+    def evidence(self) -> list[dict[str, object]]:
+        return [
+            {
+                "source": index,
+                "source_role": source.role,
+                "source_process": source.process,
+                "successful_scrapes": self.successful_scrapes[index],
+                "failed_scrapes": self.failed_scrapes[index],
+                "accounting_metrics_observed": any(
+                    name.startswith("deltallm_accounting_") for name in self.metric_names[index]
+                ),
+            }
+            for index, source in enumerate(self.sources)
+        ]
 
     async def _run(self) -> None:
         while not self._stop.is_set():

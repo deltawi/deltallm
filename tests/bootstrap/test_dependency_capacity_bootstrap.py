@@ -18,6 +18,7 @@ def test_effective_snapshot_preserves_file_and_environment_precedence():
     snapshot = DependencyAllocationSnapshot.build(initial, settings)
     assert snapshot.control_connections == 7
     assert snapshot.telemetry_connections == 3
+    assert snapshot.telemetry_worker_connections == 5
     assert snapshot.database.db_foreground_pool_size == 4
     assert snapshot.redis.critical_max_connections == 5
     assert snapshot.redis.cache_max_connections == 2
@@ -45,3 +46,35 @@ def test_switching_enabled_telemetry_owner_does_not_add_pools():
     initial = build_app_config({"general_settings": {"audit_ingestion_mode": "outbox"}})
     effective = build_app_config({"general_settings": {"spend_ingestion_mode": "outbox"}})
     DependencyAllocationSnapshot.build(initial, settings).validate_effective(effective, settings)
+
+
+def test_accounting_api_does_not_allocate_a_worker_pool_without_worker_ownership():
+    settings = Settings(database_url="postgresql://fixture:fixture@fixture/db")
+    api = build_app_config(
+        {
+            "general_settings": {
+                "accounting_protocol_enabled": True,
+                "accounting_projection_worker_enabled": False,
+                "spend_ingestion_worker_enabled": False,
+                "audit_ingestion_worker_enabled": False,
+            }
+        }
+    )
+    worker = build_app_config(
+        {
+            "general_settings": {
+                "accounting_protocol_enabled": True,
+                "accounting_projection_worker_enabled": True,
+                "spend_ingestion_mode": "outbox",
+                "audit_ingestion_mode": "outbox",
+            }
+        }
+    )
+
+    api_snapshot = DependencyAllocationSnapshot.build(api, settings)
+    worker_snapshot = DependencyAllocationSnapshot.build(worker, settings)
+
+    assert api_snapshot.telemetry_connections == 5
+    assert api_snapshot.telemetry_worker_connections == 0
+    assert worker_snapshot.telemetry_connections == 5
+    assert worker_snapshot.telemetry_worker_connections == 5

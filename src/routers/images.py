@@ -39,6 +39,7 @@ from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 from src.telemetry.spend_operation import (
     billing_write_context,
     durable_provider_call,
@@ -220,6 +221,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             execute=lambda dep: durable_provider_call(
                 request,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 deployment=dep,
                 execute=lambda: _execute_image_generation(request, payload, dep),
@@ -298,6 +300,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 usage=usage,
                 cost=request_cost,
@@ -410,6 +413,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 metadata=attach_route_decision(
                     {
@@ -471,6 +475,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="image_generation",
                 metadata=attach_route_decision(
                     {

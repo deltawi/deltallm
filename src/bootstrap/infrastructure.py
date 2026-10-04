@@ -35,6 +35,7 @@ from src.db.client import (
     telemetry_settlement_prisma_manager,
 )
 from src.db.allocation_config import DatabasePolicy
+from src.db.accounting_pool import accounting_postgres_manager
 from src.db.email import EmailOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
@@ -208,11 +209,23 @@ async def _init_infrastructure_runtime(
     )
     app.state.spend_ingestion_mode = spend_ingestion_mode
     app.state.audit_ingestion_mode = audit_ingestion_mode
-    durable_telemetry_enabled = spend_ingestion_mode == "outbox" or audit_ingestion_mode == "outbox"
+    accounting_protocol_enabled = bool(
+        _startup_setting(
+            cfg.general_settings,
+            settings,
+            "accounting_protocol_enabled",
+            False,
+        )
+    )
+    app.state.accounting_protocol_enabled = accounting_protocol_enabled
+    durable_telemetry_enabled = startup_allocations.telemetry_connections > 0
+    telemetry_worker_enabled = startup_allocations.telemetry_worker_connections > 0
     telemetry_database_connected = False
     app.state.telemetry_prisma_manager = telemetry_prisma_manager
+    app.state.accounting_postgres_manager = accounting_postgres_manager
     app.state.telemetry_worker_prisma_manager = telemetry_worker_prisma_manager
     app.state.telemetry_settlement_prisma_manager = telemetry_settlement_prisma_manager
+    app.state.telemetry_worker_database_required = telemetry_worker_enabled
     app.state.spend_operation_intents_enabled = False
     if durable_telemetry_enabled:
         telemetry_database_settings = resolve_telemetry_database_settings(cfg, settings)
@@ -223,42 +236,92 @@ async def _init_infrastructure_runtime(
             settings,
             telemetry_connections=telemetry_database_settings.pool_size,
         )
-        app.state.spend_operation_intents_enabled = operation_allocation.enabled
-        if operation_allocation.enabled:
+        legacy_operation_intents_enabled = (
+            operation_allocation.enabled and not accounting_protocol_enabled
+        )
+        settlement_connections = (
+            operation_allocation.settlement_connections if legacy_operation_intents_enabled else 0
+        )
+        accounting_connections = (
+            int(
+                _startup_setting(
+                    cfg.general_settings,
+                    settings,
+                    "accounting_hot_path_db_pool_size",
+                    2,
+                )
+            )
+            if accounting_protocol_enabled
+            else 0
+        )
+        if accounting_connections + settlement_connections >= telemetry_database_settings.pool_size:
+            raise RuntimeError(
+                "accounting and settlement pools must leave at least one telemetry connection"
+            )
+        app.state.spend_operation_intents_enabled = legacy_operation_intents_enabled
+        if legacy_operation_intents_enabled:
             resources.push_async_callback(telemetry_settlement_prisma_manager.disconnect)
             await telemetry_settlement_prisma_manager.connect(
                 telemetry_database_settings,
                 policy=DatabasePolicy.build(
                     database_allocations,
                     "telemetry_settlement",
-                    operation_allocation.settlement_connections,
+                    settlement_connections,
                 ),
             )
             if telemetry_settlement_prisma_manager.client is None:
                 raise RuntimeError("Spend recovery requires its settlement allocation")
+        if accounting_protocol_enabled:
+            accounting_statement_seconds = (
+                float(
+                    _startup_setting(
+                        cfg.general_settings,
+                        settings,
+                        "accounting_statement_timeout_ms",
+                        250,
+                    )
+                )
+                / 1000.0
+            )
+            resources.push_async_callback(accounting_postgres_manager.disconnect)
+            await accounting_postgres_manager.connect(
+                telemetry_database_settings,
+                pool_size=accounting_connections,
+                acquisition_seconds=database_allocations.db_acquisition_timeout_seconds,
+                statement_seconds=accounting_statement_seconds,
+                lock_seconds=min(
+                    database_allocations.db_lock_timeout_seconds,
+                    accounting_statement_seconds,
+                ),
+            )
+            if accounting_postgres_manager.client is None:
+                raise RuntimeError("accounting protocol requires its direct PostgreSQL pool")
         resources.push_async_callback(telemetry_prisma_manager.disconnect)
         await telemetry_prisma_manager.connect(
             telemetry_database_settings,
             policy=DatabasePolicy.build(
                 database_allocations,
                 "telemetry",
-                telemetry_database_settings.pool_size - operation_allocation.settlement_connections,
+                telemetry_database_settings.pool_size
+                - settlement_connections
+                - accounting_connections,
             ),
         )
         if telemetry_prisma_manager.client is None:
             raise RuntimeError("durable telemetry ingestion requires the Prisma client")
         telemetry_database_connected = True
-        resources.push_async_callback(telemetry_worker_prisma_manager.disconnect)
-        await telemetry_worker_prisma_manager.connect(
-            telemetry_database_settings,
-            policy=DatabasePolicy.build(
-                database_allocations,
-                "telemetry_worker",
-                database_allocations.telemetry_worker_db_pool_size,
-            ),
-        )
-        if telemetry_worker_prisma_manager.client is None:
-            raise RuntimeError("Durable telemetry requires its worker database allocation")
+        if telemetry_worker_enabled:
+            resources.push_async_callback(telemetry_worker_prisma_manager.disconnect)
+            await telemetry_worker_prisma_manager.connect(
+                telemetry_database_settings,
+                policy=DatabasePolicy.build(
+                    database_allocations,
+                    "telemetry_worker",
+                    startup_allocations.telemetry_worker_connections,
+                ),
+            )
+            if telemetry_worker_prisma_manager.client is None:
+                raise RuntimeError("Durable telemetry requires its worker database allocation")
 
     ui_branding_asset_service = UIBrandingAssetService(prisma_manager.client)
     await ui_branding_asset_service.initialize(cfg)

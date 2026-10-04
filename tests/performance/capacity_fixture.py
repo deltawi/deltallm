@@ -81,7 +81,38 @@ def capacity_release(cluster: LifecycleCluster, values: Path, *extra: str) -> No
     )
 
 
-def install_edge(cluster: LifecycleCluster) -> None:
+def install_direct_api(cluster: LifecycleCluster, *, node_port: int) -> None:
+    """Expose ready API pods without adding a synthetic proxy queue to the profile."""
+
+    if not 30000 <= node_port <= 32767:
+        raise ValueError("capacity API NodePort is outside the Kubernetes range")
+    cluster.apply(
+        [
+            {
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {"name": "capacity-api-direct"},
+                "spec": {
+                    "type": "NodePort",
+                    "selector": {
+                        "app.kubernetes.io/instance": "gateway",
+                        "app.kubernetes.io/component": "api",
+                    },
+                    "ports": [
+                        {
+                            "name": "http",
+                            "port": 4000,
+                            "targetPort": "http",
+                            "nodePort": node_port,
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+
+def install_edge(cluster: LifecycleCluster, *, node_port: int | None = None) -> None:
     """At most 24 connections per API IP per edge process; no backend reuse."""
     config = f"""global
   maxconn 512
@@ -145,6 +176,11 @@ backend api
         8080,
         volumeMounts=[{"name": "config", "mountPath": "/usr/local/etc/haproxy", "readOnly": True}],
     )
+    if node_port is not None:
+        if not 30000 <= node_port <= 32767:
+            raise ValueError("capacity edge NodePort is outside the Kubernetes range")
+        edge[0]["spec"]["type"] = "NodePort"
+        edge[0]["spec"]["ports"][0]["nodePort"] = node_port
     edge[1]["spec"]["strategy"] = {"type": "Recreate"}
     edge[1]["spec"]["template"]["spec"]["volumes"] = [
         {"name": "config", "configMap": {"name": "capacity-edge"}}

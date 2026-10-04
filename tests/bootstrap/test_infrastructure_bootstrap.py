@@ -34,11 +34,22 @@ def test_telemetry_startup_mode_uses_env_only_when_config_is_implicit() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_startup", [False, True])
-@pytest.mark.parametrize("durable,operations", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize(
+    "durable,operations,accounting",
+    [
+        (False, False, False),
+        (True, False, False),
+        (True, True, False),
+        (False, False, True),
+        (True, True, True),
+    ],
+)
 async def test_init_and_shutdown_infrastructure_runtime(
-    monkeypatch: pytest.MonkeyPatch, fail_startup, durable, operations
+    monkeypatch: pytest.MonkeyPatch, fail_startup, durable, operations, accounting
 ) -> None:
     created: dict[str, object] = {}
+    telemetry_required = durable or operations or accounting
+    telemetry_worker_required = durable or operations
 
     class FakeDynamicConfigManager:
         def __init__(self, *, db_client, redis_client, file_config, defer_updates) -> None:  # noqa: ANN001
@@ -62,6 +73,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
                     audit_ingestion_mode="outbox" if durable else "legacy",
                     spend_ingestion_mode="outbox" if operations else "legacy",
                     spend_operation_intents_enabled=operations,
+                    accounting_protocol_enabled=accounting,
                     provider_discovery_allow_http=False,
                     provider_discovery_allowed_ports=[443],
                     provider_discovery_allowed_private_cidrs=[],
@@ -131,6 +143,21 @@ async def test_init_and_shutdown_infrastructure_runtime(
             self.connected = True
             self.database_settings = database_settings
             self.policy = policy
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+
+    class FakeAccountingManager:
+        def __init__(self) -> None:
+            self.client = "accounting-db-client"
+            self.connected = False
+            self.disconnected = False
+            self.kwargs = None
+
+        async def connect(self, database_settings, **kwargs) -> None:  # noqa: ANN001
+            self.connected = True
+            self.database_settings = database_settings
+            self.kwargs = kwargs
 
         async def disconnect(self) -> None:
             self.disconnected = True
@@ -226,6 +253,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
                 audit_ingestion_mode="outbox" if durable else "legacy",
                 spend_ingestion_mode="outbox" if operations else "legacy",
                 spend_operation_intents_enabled=operations,
+                accounting_protocol_enabled=accounting,
                 database_url="postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db?schema=public",
                 db_pool_size=20,
                 db_pool_timeout=30,
@@ -281,6 +309,10 @@ async def test_init_and_shutdown_infrastructure_runtime(
     ):
         monkeypatch.setattr("src.bootstrap.infrastructure." + name, FakePrismaManager())
     monkeypatch.setattr(
+        "src.bootstrap.infrastructure.accounting_postgres_manager",
+        FakeAccountingManager(),
+    )
+    monkeypatch.setattr(
         "src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt"
     )  # noqa: ARG005
     monkeypatch.setattr("src.upstream_http.httpx.AsyncClient", FakeHTTPClient)
@@ -331,9 +363,12 @@ async def test_init_and_shutdown_infrastructure_runtime(
         assert created["critical_redis"].closed
         assert created["cache_redis"].closed
         assert app.state.foreground_prisma_manager.disconnected
-        assert app.state.telemetry_prisma_manager.disconnected is durable
-        assert app.state.telemetry_worker_prisma_manager.disconnected is durable
-        assert app.state.telemetry_settlement_prisma_manager.disconnected is operations
+        assert app.state.telemetry_prisma_manager.disconnected is telemetry_required
+        assert app.state.telemetry_worker_prisma_manager.disconnected is telemetry_worker_required
+        assert app.state.telemetry_settlement_prisma_manager.disconnected is (
+            operations and not accounting
+        )
+        assert app.state.accounting_postgres_manager.disconnected is accounting
         assert created["bulk_redis"].closed
         assert created["dynamic"].closed
         assert app.state.prisma_manager.disconnected
@@ -354,6 +389,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
         "postgresql://env-user:env-pass@env-host:5432/env-db?connection_limit=25&pool_timeout=45"
     )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
+    assert app.state.telemetry_worker_database_required is telemetry_worker_required
     assert app.state.ui_branding_asset_service.db_client == "db-client"
     assert app.state.ui_branding_asset_service.initialized_with is app.state.app_config
     assert app.state.dynamic_config_manager.subscribers == [
@@ -403,17 +439,27 @@ async def test_init_and_shutdown_infrastructure_runtime(
         ("telemetry_worker_prisma_manager", "telemetry_worker"),
     ):
         manager = getattr(app.state, name)
-        assert manager.connected is durable
-        assert manager.disconnected is durable
-        if durable:
+        required = telemetry_required if allocation == "telemetry" else telemetry_worker_required
+        assert manager.connected is required
+        assert manager.disconnected is required
+        if required:
             assert manager.policy.allocation == allocation
             assert manager.policy.connections == (
-                4 if operations and allocation == "telemetry" else 5
+                4
+                if operations and not accounting and allocation == "telemetry"
+                else 3
+                if accounting and allocation == "telemetry"
+                else 5
             )
-    assert app.state.telemetry_settlement_prisma_manager.connected is operations
-    assert app.state.telemetry_settlement_prisma_manager.disconnected is operations
-    if operations:
+    legacy_operations = operations and not accounting
+    assert app.state.telemetry_settlement_prisma_manager.connected is legacy_operations
+    assert app.state.telemetry_settlement_prisma_manager.disconnected is legacy_operations
+    if legacy_operations:
         assert app.state.telemetry_settlement_prisma_manager.policy.connections == 1
+    assert app.state.accounting_postgres_manager.connected is accounting
+    assert app.state.accounting_postgres_manager.disconnected is accounting
+    if accounting:
+        assert app.state.accounting_postgres_manager.kwargs["pool_size"] == 2
     assert runtime.bulk_redis_client.closed is True
     assert app.state.bulk_redis is runtime.bulk_redis_client
     assert runtime.bulk_redis_client is not runtime.redis_client

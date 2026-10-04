@@ -30,6 +30,7 @@ class ServerManifest(BaseModel):
     server_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     server_python: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
     api_processes: int = Field(ge=1, le=16)
+    accounting_worker_processes: int = Field(default=0, ge=0, le=16)
     host_cpu_count: int | None = Field(ge=1)
     main_db_pool_size: int = Field(ge=1)
     telemetry_db_pool_size: int = Field(ge=1)
@@ -60,7 +61,9 @@ def read_manifest(path: Path) -> ServerManifest:
     return ServerManifest.model_validate_json(path.read_text())
 
 
-async def local_manifest(api_processes: int) -> ServerManifest:
+async def local_manifest(
+    api_processes: int, accounting_worker_processes: int = 0
+) -> ServerManifest:
     import yaml
 
     from src.config import GeneralSettings, Settings, _resolve_env_token
@@ -109,6 +112,7 @@ async def local_manifest(api_processes: int) -> ServerManifest:
         server_source_sha256=digest.hexdigest(),
         server_python=sys.version.split()[0],
         api_processes=api_processes,
+        accounting_worker_processes=accounting_worker_processes,
         host_cpu_count=os.cpu_count(),
         main_db_pool_size=profile["db_pool_size"],
         telemetry_db_pool_size=profile["telemetry_db_pool_size"],
@@ -138,8 +142,9 @@ async def local_manifest(api_processes: int) -> ServerManifest:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-processes", type=int, default=1)
+    parser.add_argument("--accounting-worker-processes", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    manifest = asyncio.run(local_manifest(args.api_processes))
+    manifest = asyncio.run(local_manifest(args.api_processes, args.accounting_worker_processes))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest.model_dump(mode="json"), indent=2) + "\n")

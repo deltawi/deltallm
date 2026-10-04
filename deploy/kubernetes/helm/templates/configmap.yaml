@@ -2,6 +2,15 @@
 {{- $root := .root -}}
 {{- $cfg := .config -}}
 {{- $generalSettings := deepCopy (default (dict) $cfg.general_settings) -}}
+{{- if $generalSettings.accounting_protocol_enabled -}}
+{{- $realtime := default (dict) $generalSettings.realtime -}}
+{{- if $realtime.enabled -}}
+{{- fail "Accounting v2 requires a shared Realtime billing adapter" -}}
+{{- end -}}
+{{- if $generalSettings.embeddings_batch_enabled -}}
+{{- fail "Accounting v2 requires a shared batch billing adapter" -}}
+{{- end -}}
+{{- end -}}
 {{- if $root.Values.dependencyCapacity.extended.enabled -}}
 {{- $_ := set $generalSettings "deployment_capacity_path" "/app/capacity/report.json" -}}
 {{- $_ := set $generalSettings "deployment_capacity_role" .role -}}
@@ -62,6 +71,10 @@ general_settings:
 {{- $apiDefaults := dict "general_settings" (dict "cache_invalidation_worker_enabled" false "organization_deletion_worker_enabled" false "embeddings_batch_worker_enabled" false "embeddings_batch_completion_outbox_worker_enabled" false "batch_webhook_worker_enabled" false "batch_webhook_observability_enabled" false "embeddings_batch_gc_enabled" false "embeddings_batch_create_session_cleanup_enabled" false "embeddings_batch_scheduler_backfill_enabled" false "embeddings_batch_stale_lease_sweeper_enabled" false) -}}
 {{- $apiConfig = mergeOverwrite $apiConfig $apiDefaults -}}
 {{- end -}}
+{{- if .Values.accountingWorker.enabled -}}
+{{- $accountingApiDefaults := dict "general_settings" (dict "accounting_projection_worker_enabled" false "spend_ingestion_worker_enabled" false "audit_ingestion_worker_enabled" false) -}}
+{{- $apiConfig = mergeOverwrite $apiConfig $accountingApiDefaults -}}
+{{- end -}}
 {{- $apiValues := default (dict) (get .Values "api") -}}
 {{- $apiConfig = mergeOverwrite $apiConfig (default (dict) (get $apiValues "config")) -}}
 {{ include "deltallm.configYaml" (dict "root" . "config" $apiConfig "role" "api") }}
@@ -89,6 +102,32 @@ general_settings:
 {{- end -}}
 {{- $workerConfig = mergeOverwrite $workerConfig $workerOverrides -}}
 {{ include "deltallm.configYaml" (dict "root" . "config" $workerConfig "role" "batchWorker") }}
+{{- end -}}
+{{- define "deltallm.accountingWorkerConfigYaml" -}}
+{{- $workerConfig := deepCopy .Values.config -}}
+{{- $workerDefaults := dict "general_settings" (dict
+    "accounting_protocol_enabled" true
+    "accounting_projection_worker_enabled" true
+    "audit_enabled" true
+    "audit_ingestion_mode" "outbox"
+    "audit_ingestion_worker_enabled" true
+    "spend_ingestion_mode" "outbox"
+    "spend_ingestion_worker_enabled" true
+    "cache_invalidation_worker_enabled" false
+    "organization_deletion_worker_enabled" false
+    "embeddings_batch_worker_enabled" false
+    "embeddings_batch_completion_outbox_worker_enabled" false
+    "batch_webhook_worker_enabled" false
+    "batch_webhook_observability_enabled" false
+    "embeddings_batch_gc_enabled" false
+    "embeddings_batch_create_session_cleanup_enabled" false
+    "embeddings_batch_scheduler_backfill_enabled" false
+    "embeddings_batch_stale_lease_sweeper_enabled" false
+) -}}
+{{- $workerConfig = mergeOverwrite $workerConfig $workerDefaults -}}
+{{- $accountingValues := default (dict) (get .Values "accountingWorker") -}}
+{{- $workerConfig = mergeOverwrite $workerConfig (default (dict) (get $accountingValues "config")) -}}
+{{ include "deltallm.configYaml" (dict "root" . "config" $workerConfig "role" "accountingWorker") }}
 {{- end -}}
 {{- define "deltallm.validateBatchConfig" -}}
 {{- $apiConfig := include "deltallm.apiConfigYaml" . | fromYaml -}}
@@ -193,6 +232,21 @@ general_settings:
 {{- fail "terminationGracePeriodSeconds must be greater than email_worker_shutdown_drain_timeout_seconds when the email worker is enabled" -}}
 {{- end -}}
 {{- include "deltallm.validateSchedulerConfig" (dict "role" "api" "general" $apiGeneral) -}}
+{{- if .Values.accountingWorker.enabled -}}
+{{- if not (get $apiGeneral "accounting_protocol_enabled") -}}
+{{- fail "accountingWorker.enabled requires accounting_protocol_enabled=true on API pods" -}}
+{{- end -}}
+{{- $accountingConfig := include "deltallm.accountingWorkerConfigYaml" . | fromYaml -}}
+{{- $accountingGeneral := default (dict) (get $accountingConfig "general_settings") -}}
+{{- if or (not (get $accountingGeneral "accounting_protocol_enabled")) (not (get $accountingGeneral "accounting_projection_worker_enabled")) (ne (get $accountingGeneral "audit_ingestion_mode") "outbox") (not (get $accountingGeneral "audit_ingestion_worker_enabled")) (ne (get $accountingGeneral "spend_ingestion_mode") "outbox") (not (get $accountingGeneral "spend_ingestion_worker_enabled")) -}}
+{{- fail "accounting worker requires protocol v2, its projection worker, and durable spend/audit outbox workers" -}}
+{{- end -}}
+{{- if ne (int64 (get $apiGeneral "accounting_protocol_generation")) (int64 (get $accountingGeneral "accounting_protocol_generation")) -}}
+{{- fail "API and accounting worker must use the same accounting_protocol_generation" -}}
+{{- end -}}
+{{- else if and (get $apiGeneral "accounting_protocol_enabled") (not (get $apiGeneral "accounting_projection_worker_enabled")) -}}
+{{- fail "accounting_protocol_enabled requires an accounting projection worker" -}}
+{{- end -}}
 {{- if .Values.batchWorker.enabled -}}
 {{- $workerConfig := include "deltallm.batchWorkerConfigYaml" . | fromYaml -}}
 {{- $workerGeneral := default (dict) (get $workerConfig "general_settings") -}}
@@ -227,4 +281,16 @@ metadata:
 data:
   config.yaml: |
 {{ include "deltallm.batchWorkerConfigYaml" . | indent 4 }}
+{{- end }}
+{{- if .Values.accountingWorker.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deltallm.accountingWorkerFullname" . }}-config
+  labels:
+    {{- include "deltallm.accountingWorkerLabels" . | nindent 4 }}
+data:
+  config.yaml: |
+{{ include "deltallm.accountingWorkerConfigYaml" . | indent 4 }}
 {{- end }}

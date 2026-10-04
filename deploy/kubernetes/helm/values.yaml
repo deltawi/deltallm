@@ -188,6 +188,51 @@ batchWorker:
   # are filled for missing keys, then this map is applied last.
   config: {}
 
+# Dedicated compatibility projection and expired-reservation recovery role.
+# API pods retain reservation/finalization microbatchers but do not run this loop.
+accountingWorker:
+  enabled: false
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    scaleDownStabilizationSeconds: 300
+    oldestEventAge:
+      enabled: false
+      metricName: deltallm_accounting_projection_oldest_event_age_seconds
+      targetAverageValue: "5"
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  command: []
+  args: []
+  env: []
+  envFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  # This role does not serve gateway traffic. Keep its control/foreground pools
+  # small while preserving dedicated admission and worker pools for projection.
+  config:
+    general_settings:
+      db_pool_size: 4
+      db_foreground_pool_size: 1
+      telemetry_db_pool_size: 5
+      telemetry_worker_db_pool_size: 5
+
 dependencyWait:
   enabled: true
   timeoutSeconds: 180
@@ -379,6 +424,26 @@ config:
     telemetry_db_pool_timeout_seconds: 2
     telemetry_worker_startup_timeout_seconds: 5
     telemetry_shutdown_drain_timeout_seconds: 20
+    accounting_protocol_enabled: false
+    accounting_protocol_generation: 1
+    accounting_microbatch_max_size: 8
+    accounting_microbatch_dwell_ms: 2
+    accounting_reservation_max_pending: 4096
+    accounting_finalization_max_pending: 8192
+    accounting_statement_timeout_ms: 250
+    accounting_reservation_ack_timeout_ms: 1000
+    accounting_finalization_ack_timeout_ms: 2000
+    accounting_hot_path_db_pool_size: 2
+    accounting_max_provider_attempts: 3
+    accounting_grants_enabled: true
+    accounting_grant_target_operations: 32
+    accounting_grant_ttl_seconds: 30
+    accounting_projection_worker_enabled: false
+    accounting_projection_batch_size: 64
+    accounting_projection_max_concurrent_partitions: 4
+    accounting_projection_lease_seconds: 30
+    accounting_projection_poll_interval_ms: 50
+    accounting_projection_maintenance_interval_ms: 1000
     audit_ingestion_mode: legacy
     audit_ingestion_worker_enabled: true
     audit_ingestion_batch_size: 100
@@ -553,7 +618,7 @@ migrationJob:
       memory: 512Mi
     limits:
       cpu: 1000m
-      memory: 1Gi
+      memory: 2Gi
   command: [python, -m, src.prisma_bootstrap]
   args: [--schema, ./prisma/schema.prisma, --max-attempts, "30", --sleep-seconds, "2"]
   env: []
@@ -589,6 +654,7 @@ redis:
 dependencyCapacity:
   apiProcessesPerPod: 1
   batchWorkerProcessesPerPod: 1
+  accountingWorkerProcessesPerPod: 1
   retiringGenerations: 1
   postgresqlMaxConnections: 1000
   postgresqlReservedConnections: 20

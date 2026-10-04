@@ -1,6 +1,7 @@
 """The destructive acceptance helper must stay inside its owned kind fixture."""
 
 import json
+from pathlib import Path
 from subprocess import CompletedProcess
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -10,8 +11,10 @@ import pytest
 import yaml
 
 from tests.performance.lifecycle_cluster import LifecycleCluster
+from tests.performance.capacity_fixture import install_direct_api
 from tests.performance.lifecycle_fixtures import chart_values
 from tests.performance import lifecycle_recovery
+from tests.performance import run_capacity_acceptance
 
 
 def test_event_timeline_fields_cannot_be_overwritten(tmp_path):
@@ -36,6 +39,93 @@ def test_pr8_lifecycle_fixture_does_not_inherit_pr9_capacity_path(tmp_path):
         assert values["config"]["general_settings"]["gateway_ingress_enabled"] is False
     finally:
         cluster.directory.cleanup()
+
+
+def test_kind_nodeport_mapping_is_bounded_and_loopback_only(tmp_path, monkeypatch):
+    cluster = LifecycleCluster(tmp_path, nodes=2, port_mappings={30080: 59440})
+    commands = []
+
+    def run(*command, **options):
+        commands.append((command, options))
+        if command[-1] == "version":
+            return CompletedProcess(command, 0, "kind v0.31.0")
+        return CompletedProcess(command, 0, "")
+
+    monkeypatch.setattr(cluster, "run", run)
+    monkeypatch.setattr(cluster, "kubectl", lambda *args, **options: CompletedProcess(args, 0, ""))
+    try:
+        with cluster.owned("deltallm:test"):
+            config_path = next(
+                option
+                for command, _ in commands
+                for index, option in enumerate(command)
+                if index and command[index - 1] == "--config"
+            )
+            config = yaml.safe_load(Path(config_path).read_text())
+            assert config["nodes"][0]["extraPortMappings"] == [
+                {
+                    "containerPort": 30080,
+                    "hostPort": 59440,
+                    "listenAddress": "127.0.0.1",
+                    "protocol": "TCP",
+                }
+            ]
+    finally:
+        cluster.directory.cleanup()
+
+
+@pytest.mark.parametrize("mappings", ({29999: 59440}, {30080: 80}, {30080: 59440, 30081: 59440}))
+def test_kind_nodeport_mapping_rejects_unsafe_values(tmp_path, mappings):
+    with pytest.raises(ValueError, match="port mappings"):
+        LifecycleCluster(tmp_path, port_mappings=mappings)
+
+
+def test_direct_api_nodeport_has_no_synthetic_proxy_queue():
+    cluster = SimpleNamespace(apply=Mock())
+
+    install_direct_api(cluster, node_port=30080)
+
+    (documents,) = cluster.apply.call_args.args
+    service = documents[0]
+    assert service["metadata"]["name"] == "capacity-api-direct"
+    assert service["spec"]["type"] == "NodePort"
+    assert service["spec"]["ports"][0]["nodePort"] == 30080
+    assert service["spec"]["selector"]["app.kubernetes.io/component"] == "api"
+
+
+@pytest.mark.parametrize("node_port", [29999, 32768])
+def test_direct_api_nodeport_rejects_unsafe_values(node_port):
+    with pytest.raises(ValueError, match="outside the Kubernetes range"):
+        install_direct_api(SimpleNamespace(apply=Mock()), node_port=node_port)
+
+
+@pytest.mark.asyncio
+async def test_edge_readiness_retries_early_transport_disconnects(monkeypatch):
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def get(self, url):
+            self.calls += 1
+            if self.calls == 1:
+                raise httpx.RemoteProtocolError("edge is not ready")
+            return httpx.Response(503 if self.calls == 2 else 200)
+
+    client = Client()
+    monkeypatch.setattr(run_capacity_acceptance.httpx, "AsyncClient", lambda **kwargs: client)
+
+    async def no_sleep(seconds):
+        assert seconds == 2
+
+    monkeypatch.setattr(run_capacity_acceptance.asyncio, "sleep", no_sleep)
+    await run_capacity_acceptance.wait_edge("http://127.0.0.1:59440")
+    assert client.calls == 3
 
 
 @pytest.fixture

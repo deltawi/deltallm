@@ -42,6 +42,7 @@ from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 from src.telemetry.spend_operation import (
     billing_write_context,
     durable_provider_call,
@@ -65,6 +66,7 @@ from src.services.audit_service import (
 )
 from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
+from src.billing.accounting_protocol import AccountingOperationHandle
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 
@@ -152,6 +154,11 @@ async def _emit_embedding_audit_event(
     completion_tokens: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    if isinstance(
+        getattr(request.state, "spend_operation_handle", None),
+        AccountingOperationHandle,
+    ):
+        return
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
     if audit_service is None:
         return
@@ -313,6 +320,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             execute=lambda dep: durable_provider_call(
                 request,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="embedding",
                 deployment=dep,
                 execute=lambda: _execute_embedding(request, payload, dep),
@@ -428,6 +436,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="embedding",
                 usage=usage,
                 cost=request_cost,
@@ -569,6 +578,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="embedding",
                 metadata=error_metadata,
                 cache_hit=bool(getattr(request.state, "cache_hit", False)),
@@ -643,6 +653,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=payload.model,
+                bounds=validated_provider_request_bounds(payload),
                 call_type="embedding",
                 metadata=error_metadata,
                 cache_hit=bool(getattr(request.state, "cache_hit", False)),

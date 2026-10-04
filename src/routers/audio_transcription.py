@@ -45,6 +45,7 @@ from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
+from src.billing.provider_allowance import ProviderRequestBounds
 from src.telemetry.spend_operation import (
     billing_write_context,
     durable_provider_call,
@@ -302,6 +303,7 @@ async def audio_transcriptions(
                 request,
                 model=model,
                 call_type="audio_transcription",
+                bounds=ProviderRequestBounds(),
                 deployment=dep,
                 execute=lambda: _execute_stt(
                     request,

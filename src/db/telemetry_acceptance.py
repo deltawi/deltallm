@@ -34,6 +34,10 @@ class TelemetryDatabaseUnavailable(RuntimeError):
     """The producer has no configured durable database client."""
 
 
+class DatabasePoolAcquisitionTimeout(TimeoutError):
+    """A dedicated database pool could not provide a connection in time."""
+
+
 class AcceptanceFailure(StrEnum):
     CANCELLED = "cancelled"
     DEADLINE = "deadline_exceeded"
@@ -76,6 +80,8 @@ def _classify_direct_failure(exc: BaseException) -> AcceptanceFailure:
         return AcceptanceFailure.DATABASE_UNAVAILABLE
     if isinstance(exc, httpx.PoolTimeout):
         return AcceptanceFailure.CLIENT_POOL_TIMEOUT
+    if isinstance(exc, DatabasePoolAcquisitionTimeout):
+        return AcceptanceFailure.POOL_TIMEOUT
     if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
         return AcceptanceFailure.DEADLINE
     if isinstance(exc, TransactionExpiredError):
@@ -104,6 +110,21 @@ def _classify_direct_failure(exc: BaseException) -> AcceptanceFailure:
             return AcceptanceFailure.CONNECTION
     if isinstance(exc, ValueError):
         return AcceptanceFailure.INVALID_INPUT
+    sqlstate = getattr(exc, "sqlstate", None)
+    if sqlstate == "55P03":
+        return AcceptanceFailure.LOCK_TIMEOUT
+    if sqlstate == "57014":
+        return AcceptanceFailure.STATEMENT_CANCELLED
+    if isinstance(sqlstate, str) and sqlstate.startswith("08"):
+        return AcceptanceFailure.CONNECTION
+    if type(exc).__module__.startswith("asyncpg") and type(exc).__name__ in {
+        "ClientCannotConnectError",
+        "ConnectionDoesNotExistError",
+        "ConnectionFailureError",
+        "InterfaceError",
+        "PostgresConnectionError",
+    }:
+        return AcceptanceFailure.CONNECTION
     return AcceptanceFailure.UNKNOWN
 
 

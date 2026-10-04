@@ -62,9 +62,15 @@ async def wait_edge(url: str) -> None:
     async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
         async with asyncio.timeout(120):
             while True:
-                response = await client.get(url + "/health/readiness")
-                if response.status_code == 200:
-                    return
+                try:
+                    response = await client.get(url + "/health/readiness")
+                    if response.status_code == 200:
+                        return
+                except httpx.HTTPError:
+                    # Direct NodePort and port-forward fixtures can accept TCP
+                    # before the edge has a ready backend. Retry within the
+                    # bounded readiness deadline without exporting transport text.
+                    pass
                 await asyncio.sleep(2)
 
 

@@ -31,7 +31,13 @@ LOAD_KEY = "sk-concurrency-pr8-local-only-000000000000"
 
 class LifecycleCluster:
     def __init__(
-        self, output: Path, *, kind: str = "kind", purpose: str = "pr8", nodes: int = 1
+        self,
+        output: Path,
+        *,
+        kind: str = "kind",
+        purpose: str = "pr8",
+        nodes: int = 1,
+        port_mappings: dict[int, int] | None = None,
     ) -> None:
         self.output = output.resolve()
         self.output.mkdir(parents=True, exist_ok=True)
@@ -39,6 +45,13 @@ class LifecycleCluster:
         if nodes not in (1, 2):
             raise ValueError("Lifecycle fixtures support one or two owned kind nodes")
         self.nodes = nodes
+        self.port_mappings = dict(port_mappings or {})
+        if (
+            any(not 30000 <= container <= 32767 for container in self.port_mappings)
+            or any(not 1024 <= host <= 65535 for host in self.port_mappings.values())
+            or len(set(self.port_mappings.values())) != len(self.port_mappings)
+        ):
+            raise ValueError("kind port mappings require distinct NodePorts and host ports")
         if not re.fullmatch(r"[a-z0-9-]{1,24}", purpose):
             raise ValueError("Invalid owned test cluster purpose")
         self.name = "deltallm-" + purpose + "-" + uuid4().hex[:8]
@@ -142,14 +155,27 @@ class LifecycleCluster:
             raise ValueError(f"Acceptance requires kind {KIND_VERSION}")
         try:
             extra: tuple[str, ...] = ()
-            if self.nodes == 2:
+            if self.nodes == 2 or self.port_mappings:
                 config = Path(self.directory.name) / "kind-config.yaml"
+                nodes: list[dict[str, object]] = [{"role": "control-plane"}]
+                if self.port_mappings:
+                    nodes[0]["extraPortMappings"] = [
+                        {
+                            "containerPort": container,
+                            "hostPort": host,
+                            "listenAddress": "127.0.0.1",
+                            "protocol": "TCP",
+                        }
+                        for container, host in sorted(self.port_mappings.items())
+                    ]
+                if self.nodes == 2:
+                    nodes.append({"role": "worker"})
                 config.write_text(
                     yaml.safe_dump(
                         {
                             "kind": "Cluster",
                             "apiVersion": "kind.x-k8s.io/v1alpha4",
-                            "nodes": [{"role": "control-plane"}, {"role": "worker"}],
+                            "nodes": nodes,
                         }
                     )
                 )

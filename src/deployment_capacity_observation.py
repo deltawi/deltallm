@@ -124,7 +124,7 @@ def observe_capacity(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, default=Path("/app/capacity/report.json"))
-    parser.add_argument("--role", choices=("api", "batchWorker"), default="api")
+    parser.add_argument("--role", choices=("api", "batchWorker", "accountingWorker"), default="api")
     args = parser.parse_args()
     try:
         result = observe_capacity(args.report, role=args.role)

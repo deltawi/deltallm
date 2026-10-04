@@ -19,6 +19,8 @@ class CapacityRuntimePolicy(BaseModel):
     spend_ingestion_mode: str
     spend_ingestion_worker_enabled: bool
     spend_operation_intents_enabled: bool
+    accounting_protocol_enabled: bool
+    accounting_projection_worker_enabled: bool
     model_deployment_source: str
     model_deployment_bootstrap_from_config: bool
     upstream_http_max_connections: int
@@ -33,14 +35,21 @@ class CapacityRuntimePolicy(BaseModel):
     def from_general(cls, general: BaseModel) -> "CapacityRuntimePolicy":
         return cls.model_validate(general.model_dump(include=set(cls.model_fields)))
 
-    def validate_production(self) -> None:
+    def validate_production(
+        self, *, role: str = "api", accounting_worker_present: bool = False
+    ) -> None:
+        owns_durable_workers = not accounting_worker_present or role == "accountingWorker"
+        durable_workers_ready = not owns_durable_workers or (
+            self.audit_ingestion_worker_enabled
+            and self.spend_ingestion_worker_enabled
+            and (not self.accounting_protocol_enabled or self.accounting_projection_worker_enabled)
+        )
         required = (
             self.gateway_ingress_enabled,
             self.gateway_preflight_capacity_enabled,
             self.audit_enabled,
-            self.audit_ingestion_worker_enabled,
-            self.spend_ingestion_worker_enabled,
-            self.spend_operation_intents_enabled,
+            durable_workers_ready,
+            self.spend_operation_intents_enabled or self.accounting_protocol_enabled,
             self.redis_degraded_mode == "fail_closed",
             self.budget_enforcement_query_mode == "combined",
             self.audit_ingestion_mode == self.spend_ingestion_mode == "outbox",

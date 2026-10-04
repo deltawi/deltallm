@@ -957,6 +957,75 @@ $reservation_verify$;
     )
 
 
+def _verify_accounting_protocol(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql="""
+DO $accounting_verify$
+BEGIN
+  IF (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name IN (
+        'deltallm_accounting_protocols','deltallm_accounting_partitions',
+        'deltallm_accounting_budget_windows','deltallm_accounting_reservations',
+        'deltallm_accounting_events','deltallm_accounting_projection_checkpoints',
+        'deltallm_accounting_grants','deltallm_accounting_grant_windows'
+      )) <> 8 THEN
+    RAISE EXCEPTION 'accounting protocol tables are missing';
+  END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_billing_operations'
+        AND column_name IN (
+          'accounting_protocol','accounting_generation','accounting_partition',
+          'request_fingerprint','accounting_state','accounting_grant_id','provisional_debit_exact',
+          'final_event_sequence'
+        )) <> 8 THEN
+    RAISE EXCEPTION 'accounting operation columns are missing';
+  END IF;
+  IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_accounting_grants'
+        AND column_name='accounting_partition' AND data_type='integer'
+  ) OR NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid='deltallm_accounting_grants'::regclass AND contype='f'
+        AND pg_get_constraintdef(oid) LIKE
+          '%(protocol_name, generation, accounting_partition)%deltallm_accounting_partitions%'
+  ) THEN
+    RAISE EXCEPTION 'accounting grant capacity lease is missing';
+  END IF;
+  IF to_regprocedure('deltallm_accounting_reserve_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_finalize_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_grant_subject(jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_ensure_grants_batch(bigint,text,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reserve_grant_batch(bigint,text,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_pending_legacy_work()') IS NULL
+     OR to_regprocedure('deltallm_accounting_finalize_grant_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reconcile_expired_grants(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reconcile_grants(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_reconcile_expired(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_resolve_provisional(bigint,text,numeric,jsonb,text)') IS NULL
+     OR to_regprocedure('deltallm_accounting_roll_windows(bigint,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_sync_budget(text,text,numeric,numeric,text,timestamp without time zone,jsonb)') IS NULL THEN
+    RAISE EXCEPTION 'accounting protocol functions are missing';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN (
+        'deltallm_accounting_key_budget_policy',
+        'deltallm_accounting_user_budget_policy',
+        'deltallm_accounting_team_budget_policy',
+        'deltallm_accounting_organization_budget_policy',
+        'deltallm_accounting_team_model_budget_policy'
+      )) <> 5 THEN
+    RAISE EXCEPTION 'accounting budget policy triggers are missing';
+  END IF;
+END
+$accounting_verify$;
+""",
+    )
+
+
 def _seed_pr5_budgets(prisma: str, database_url: str, schema: Path) -> None:
     _db_execute(
         prisma,
@@ -1004,6 +1073,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _migrate(prisma, schema=CURRENT_SCHEMA, database_url=fresh_url)
         _verify_fresh_database(prisma, fresh_url)
         _verify_operation_reservations(prisma, fresh_url)
+        _verify_accounting_protocol(prisma, fresh_url)
         _verify_pr5_budgets(prisma, fresh_url)
         _pr6_fixture(prisma, fresh_url, CURRENT_SCHEMA, "verify")
 
@@ -1060,6 +1130,8 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _verify_shared_migration_database(prisma, shared_url)
         _verify_operation_reservations(prisma, upgrade_url)
         _verify_operation_reservations(prisma, shared_url)
+        _verify_accounting_protocol(prisma, upgrade_url)
+        _verify_accounting_protocol(prisma, shared_url)
         _verify_pr5_budgets(prisma, upgrade_url)
         _verify_pr5_budgets(prisma, shared_url)
         for database_url in (fresh_url, upgrade_url, shared_url):

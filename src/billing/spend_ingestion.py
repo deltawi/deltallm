@@ -18,6 +18,9 @@ from src.billing.fallback_gate import (
     FallbackGateFull,
     FallbackGateTimedOut,
 )
+from src.billing.accounting_protocol import AccountingOperationHandle
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting_finalization import AccountingSpendFinalizer
 from src.billing.money import money_string
 from src.billing.spend_operation_service import SpendOperationService
 from src.billing.spend_operations import OperationHandle, SpendPersistenceUnavailable
@@ -113,6 +116,7 @@ class SpendIngestionService:
         worker_db_client: Any | None = None,
         operation_recovery: BillingOperationRecovery | None = None,
         operations: SpendOperationService | None = None,
+        accounting: AccountingProtocolService | None = None,
     ) -> None:
         self.db = db_client
         self.worker_db = worker_db_client if worker_db_client is not None else db_client
@@ -124,6 +128,8 @@ class SpendIngestionService:
         self.operation_recovery = operation_recovery
         self.realtime_recovery: RealtimeBillingRecovery | None = None
         self.operations = operations
+        self.accounting = accounting
+        self._accounting_finalizer = AccountingSpendFinalizer(accounting)
         self.repository = SpendIngestionRepository(db_client)
         self._running = False
         self._wake = asyncio.Event()
@@ -331,6 +337,13 @@ class SpendIngestionService:
     async def log_spend(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
         operation = kwargs.pop("operation", None)
+        if isinstance(operation, AccountingOperationHandle):
+            await self._finalize_accounting_spend(
+                operation,
+                event_id=event_id,
+                payload=kwargs,
+            )
+            return
         if operation is not None:
             if (
                 not isinstance(operation, OperationHandle)
@@ -356,6 +369,13 @@ class SpendIngestionService:
     async def log_request_failure(self, **kwargs: Any) -> None:
         event_id = kwargs.pop("event_id", None)
         operation = kwargs.pop("operation", None)
+        if isinstance(operation, AccountingOperationHandle):
+            await self._finalize_accounting_failure(
+                operation,
+                event_id=event_id,
+                payload=kwargs,
+            )
+            return
         if operation is not None:
             if (
                 not isinstance(operation, OperationHandle)
@@ -381,6 +401,16 @@ class SpendIngestionService:
             or (exc.__class__.__name__ if exc is not None else None)
         )
         await self._enqueue("request_failure", payload, event_id=event_id)
+
+    async def _finalize_accounting_spend(
+        self, operation: AccountingOperationHandle, *, event_id: object, payload: dict[str, Any]
+    ) -> None:
+        await self._accounting_finalizer.log_spend(operation, event_id=event_id, payload=payload)
+
+    async def _finalize_accounting_failure(
+        self, operation: AccountingOperationHandle, *, event_id: object, payload: dict[str, Any]
+    ) -> None:
+        await self._accounting_finalizer.log_failure(operation, event_id=event_id, payload=payload)
 
     async def log_spend_once(self, **kwargs: Any) -> Any:
         return await self.writer.log_spend_once(**kwargs)

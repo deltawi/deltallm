@@ -88,6 +88,14 @@ class _ShadowMetricsPolicyRepository:
         ], 1
 
 
+def test_prometheus_cache_metrics_reuses_registered_collectors():
+    first = PrometheusCacheMetrics(cache_type="memory")
+    second = PrometheusCacheMetrics(cache_type="redis")
+
+    first.write(endpoint="chat", model="model-a")
+    second.error(operation="read")
+
+
 async def test_metrics_endpoint_exposes_request_and_usage_metrics(client, test_app):
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}

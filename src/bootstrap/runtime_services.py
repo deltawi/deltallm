@@ -11,6 +11,12 @@ from typing import Any
 from src.blocking_work import BlockingWorkExecutor
 from src.request_work_settings import resolve_request_work_settings
 from src.bootstrap.spend_operations import build_spend_operations
+from src.bootstrap.accounting import (
+    resolve_accounting_settings,
+    start_accounting_protocol,
+    start_accounting_projection,
+)
+from src.redis_runtime import startup_setting as _runtime_setting
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.selector import configure_selector_execution
 from src.billing import (
@@ -22,6 +28,8 @@ from src.billing import (
     SpendTrackingService,
 )
 from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
+from src.billing.accounting_projection import AccountingProjectionWorker
+from src.billing.accounting_service import AccountingProtocolService
 from src.db.budget_notifications import BudgetNotificationRepository
 from src.callbacks import CallbackManager
 from src.guardrails.middleware import GuardrailMiddleware
@@ -62,33 +70,11 @@ class RuntimeServicesRuntime:
     guardrail_executor: BlockingWorkExecutor | None = None
     tier_policy_service: Any | None = None
     spend_ingestion_service: SpendIngestionService | None = None
+    accounting_protocol_service: AccountingProtocolService | None = None
+    accounting_projection_worker: AccountingProjectionWorker | None = None
     prompt_registry_service: PromptRegistryService | None = None
     budget_notification_worker: BudgetNotificationWorker | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
-
-
-_MISSING = object()
-
-
-def _runtime_setting(
-    general_settings: Any,
-    settings: Any,
-    field_name: str,
-    default: Any,
-) -> Any:
-    value = _explicit_general_setting(general_settings, field_name)
-    if value is not _MISSING:
-        return value
-    return getattr(settings, field_name, default)
-
-
-def _explicit_general_setting(general_settings: Any, field_name: str) -> Any:
-    if general_settings is None:
-        return _MISSING
-    fields_set = getattr(general_settings, "model_fields_set", None)
-    if fields_set is not None and field_name not in fields_set:
-        return _MISSING
-    return getattr(general_settings, field_name, _MISSING)
 
 
 async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
@@ -388,6 +374,20 @@ async def _init_runtime_services(
         "client",
         None,
     )
+    accounting_db_client = getattr(
+        getattr(app.state, "accounting_postgres_manager", None),
+        "client",
+        None,
+    )
+    accounting_config = resolve_accounting_settings(general_settings, settings)
+    accounting_service = start_accounting_protocol(
+        accounting_config,
+        client=accounting_db_client,
+        owner_id=f"{socket.gethostname()}:{os.getpid()}:accounting-api",
+    )
+    runtime.accounting_protocol_service = accounting_service
+    app.state.accounting_protocol_service = accounting_service
+    app.state.accounting_max_provider_attempts = accounting_config.accounting_max_provider_attempts
     if spend_ingestion_mode == "outbox" and telemetry_db_client is None:
         raise RuntimeError("spend outbox mode requires the dedicated telemetry database pool")
     spend_db_client = (
@@ -395,12 +395,22 @@ async def _init_runtime_services(
         if spend_ingestion_mode == "outbox"
         else app.state.foreground_prisma_manager.client
     )
+    spend_worker_enabled = bool(
+        _runtime_setting(
+            general_settings,
+            settings,
+            "spend_ingestion_worker_enabled",
+            True,
+        )
+    )
     spend_worker_db_client = (
         app.state.telemetry_worker_prisma_manager.client
-        if spend_ingestion_mode == "outbox"
+        if spend_ingestion_mode == "outbox" and spend_worker_enabled
         else app.state.prisma_manager.client
+        if spend_ingestion_mode != "outbox"
+        else None
     )
-    if spend_worker_db_client is None:
+    if spend_worker_enabled and spend_worker_db_client is None:
         raise RuntimeError("Spend workers require their database allocation")
     app.state.spend_ledger_service = SpendLedgerService(spend_db_client)
     spend_writer = SpendTrackingService(
@@ -408,10 +418,11 @@ async def _init_runtime_services(
         ledger=app.state.spend_ledger_service,
     )
     spend_ingestion_service = SpendIngestionService(
-        operations=build_spend_operations(app.state),
+        operations=None if accounting_service is not None else build_spend_operations(app.state),
         db_client=spend_db_client,
         worker_db_client=spend_worker_db_client,
         writer=spend_writer,
+        accounting=accounting_service,
         config=SpendIngestionConfig(
             enabled=spend_ingestion_mode == "outbox",
             batch_size=int(
@@ -431,9 +442,7 @@ async def _init_runtime_services(
             max_attempts=int(
                 _runtime_setting(general_settings, settings, "spend_ingestion_max_attempts", 10)
             ),
-            worker_enabled=bool(
-                _runtime_setting(general_settings, settings, "spend_ingestion_worker_enabled", True)
-            ),
+            worker_enabled=spend_worker_enabled,
             max_pending_events=int(
                 _runtime_setting(
                     general_settings, settings, "spend_ingestion_max_pending_events", 100_000
@@ -529,6 +538,15 @@ async def _init_runtime_services(
     runtime.spend_ingestion_service = spend_ingestion_service
     await spend_ingestion_service.start()
     app.state.spend_tracking_service = spend_ingestion_service
+    projection_worker = await start_accounting_projection(
+        accounting_config,
+        client=getattr(getattr(app.state, "telemetry_worker_prisma_manager", None), "client", None),
+        owner_id=f"{socket.gethostname()}:{os.getpid()}:accounting-projection",
+        general=general_settings,
+        settings=settings,
+    )
+    runtime.accounting_projection_worker = projection_worker
+    app.state.accounting_projection_worker = projection_worker
     budget_notification_repository = BudgetNotificationRepository(app.state.prisma_manager.client)
     budget_notification_worker = None
     notifications_enabled = bool(getattr(general_settings, "budget_notifications_enabled", False))
@@ -610,6 +628,10 @@ async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
         prompt_shutdown = getattr(runtime.prompt_registry_service, "shutdown", None)
         if callable(prompt_shutdown):
             cleanup.push_async_callback(prompt_shutdown)
+        if runtime.accounting_projection_worker is not None:
+            cleanup.push_async_callback(runtime.accounting_projection_worker.stop)
+        if runtime.accounting_protocol_service is not None:
+            cleanup.push_async_callback(runtime.accounting_protocol_service.close)
         # Independent bounded drains overlap, before dependencies close. Adding
         # optional alerts must not add eleven seconds to the spend drain budget.
         drains = [
