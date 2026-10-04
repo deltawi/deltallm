@@ -200,7 +200,9 @@ async def test_expired_subject_releases_memory_without_creating_money_locally():
 
 async def test_pruning_has_a_fixed_scan_bound():
     repository = FakePermitRepository()
-    owner = bank(repository)
+    # Keep 1000 live subjects so this test exercises scan count, not the separate
+    # retained-byte capacity rejection.
+    owner = bank(repository, max_retained_bytes=16 * 1024 * 1024)
     for _ in range(4):
         await owner.reserve_batch([reservation() for _ in range(250)], expires_at=deadline())
     original = owner._usable

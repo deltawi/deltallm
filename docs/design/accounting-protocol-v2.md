@@ -255,11 +255,30 @@ worker recovers claimed work and releases proven unused money and slots after
 expiry. Closing the bank rejects new work, waits for its owned call, and clears
 local state. It does not release money that might belong to a durable operation.
 
-The bank caps subjects and grant size. Capacity rejection does not evict a live
-grant. Expiry cleanup checks at most 256 subjects per refill; it does not scan the
-whole configured bank on the request event loop. Subject and available-permit
-gauges use fixed lane labels. Action counters contain no tenant, owner, or fence
+The bank caps subjects, retained cursor bytes, and grant size. Capacity rejection
+does not evict a live grant. Expiry cleanup checks at most 256 subjects per refill;
+it does not scan the whole configured bank on the request event loop. Subject and
+available-permit gauges use fixed lane labels. Action counters contain no tenant,
+owner, or fence
 values. Grant representations also hide the grantee because it contains a fence.
+
+The inactive bank has an 8 MiB retained-state budget per lane. The constructor
+accepts a budget from one byte to 64 MiB; this is not a new runtime setting. Each
+cursor uses a conservative charge: 8,192 bytes for its bounded objects and grant
+metadata, four bytes per financial-subject character, and 2,048 bytes plus four
+bytes per scope-ID character for each window reference. Four bytes covers Unicode
+characters. The grant's two identifiers each have a 256-character contract bound.
+The fixed charge covers those identifiers and the cursor's model and number state.
+This is a retained-state capacity limit, not a process RSS measurement.
+
+A cold batch checks both entry and byte capacity before database allocation. A
+large subject can be rejected while a smaller subject in the same batch succeeds.
+The byte check does not add a database call or serialize audit and pricing bodies.
+The bank retains only the financial subject and funded grant. Expiry, exhausted
+grants, uncertain acknowledgements, and close remove each byte charge once. The
+byte gauge uses the same fixed lane label. With `L` lanes and `P` processes that
+own banks, the default retained-state budget is `L * P * 8 MiB`, in addition to
+queues, issued leases, clients, and other process memory.
 
 Subject identity includes the generation, budget references, full budget scope,
 model, and allowance text. For example, `1` and `1.0` are numerically equal, but
@@ -272,8 +291,8 @@ records the commit, file hashes, and dirty-worktree state. It counts refill, cla
 recovery, and terminal calls. This probe excludes HTTP, Redis, provider latency,
 and compatibility projection. It is not gateway RPS qualification.
 
-Activation still requires full allocator plan checks, a byte budget for retained
-state, the supervised local-dispatch and recovery owners, and clean-image gateway
+Activation still requires a separate entry and byte budget for issued leases,
+the supervised local-dispatch and recovery owners, and clean-image gateway
 qualification. Fewer refills alone do not remove the per-request claim or terminal
 acknowledgement.
 

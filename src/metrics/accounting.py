@@ -80,6 +80,12 @@ accounting_permit_available = Gauge(
     ["lane"],
     registry=get_prometheus_registry(),
 )
+accounting_permit_retained_bytes = Gauge(
+    "deltallm_accounting_permit_bank_retained_bytes",
+    "Conservative retained-state byte charge in each bounded local permit bank",
+    ["lane"],
+    registry=get_prometheus_registry(),
+)
 accounting_projection_actions = Counter(
     "deltallm_accounting_projection_actions_total",
     "Accounting recovery, rollover, and compatibility projection results",
@@ -135,9 +141,12 @@ def increment_accounting_permit_action(action: str, outcome: str, *, count: int 
     accounting_permit_actions.labels(action=action, outcome=outcome).inc(max(0, int(count)))
 
 
-def set_accounting_permit_bank(lane: int, *, subjects: int, available: int) -> None:
+def set_accounting_permit_bank(
+    lane: int, *, subjects: int, available: int, retained_bytes: int
+) -> None:
     accounting_permit_subjects.labels(lane=str(lane)).set(max(0, subjects))
     accounting_permit_available.labels(lane=str(lane)).set(max(0, available))
+    accounting_permit_retained_bytes.labels(lane=str(lane)).set(max(0, retained_bytes))
 
 
 def increment_accounting_projection(action: str, outcome: str, value: int = 1) -> None:

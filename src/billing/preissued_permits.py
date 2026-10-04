@@ -48,6 +48,25 @@ class PermitSubject:
     allowance: Decimal
     allowance_key: str
 
+    @property
+    def retained_bytes(self) -> int:
+        # Charge four bytes per character, plus fixed space for the bounded
+        # cursor, grant, model dictionaries, numbers, and window objects. This
+        # is a conservative retained-state budget, not a process RSS measure.
+        values = (
+            self.api_key,
+            self.user_id,
+            self.team_id,
+            self.organization_id,
+            self.model,
+            self.allowance_key,
+        )
+        return (
+            8192
+            + 4 * sum(len(value) for value in values if value is not None)
+            + sum(2048 + 4 * len(window.scope_id) for window in self.windows)
+        )
+
     @classmethod
     def from_reservation(cls, item: AccountingReservation) -> PermitSubject:
         attribution = item.attribution
@@ -67,6 +86,7 @@ class PermitSubject:
 @dataclass(slots=True)
 class _GrantCursor:
     grant: PreissuedPermitGrant
+    retained_bytes: int
     next_ordinal: int = 0
 
     @property
@@ -84,6 +104,7 @@ class PreissuedPermitBank:
         target_operations: int,
         max_operations: int,
         max_subjects: int,
+        max_retained_bytes: int = 8 * 1024 * 1024,
         minimum_validity_seconds: float = 0.1,
         lane: int = 0,
     ) -> None:
@@ -91,6 +112,8 @@ class PreissuedPermitBank:
             raise ValueError("permit operation bounds are invalid")
         if not 1 <= max_subjects <= 100_000:
             raise ValueError("permit subject capacity must be between 1 and 100000")
+        if not 1 <= max_retained_bytes <= 64 * 1024 * 1024:
+            raise ValueError("permit byte capacity must be between 1 and 67108864")
         if not 0 <= minimum_validity_seconds <= 5:
             raise ValueError("permit minimum validity must be between 0 and 5 seconds")
         if not 0 <= lane <= 63:
@@ -99,10 +122,12 @@ class PreissuedPermitBank:
         self._target_operations = target_operations
         self._max_operations = max_operations
         self._max_subjects = max_subjects
+        self._max_retained_bytes = max_retained_bytes
         self._minimum_validity = timedelta(seconds=minimum_validity_seconds)
         self._lane = lane
         self._cursors: OrderedDict[PermitSubject, _GrantCursor] = OrderedDict()
         self._available = 0
+        self._retained_bytes = 0
         self._lock = asyncio.Lock()
         self._closed = False
         self._refresh_metrics()
@@ -114,6 +139,10 @@ class PreissuedPermitBank:
     @property
     def available_permits(self) -> int:
         return self._available
+
+    @property
+    def retained_bytes(self) -> int:
+        return self._retained_bytes
 
     async def reserve_batch(
         self, reservations: Sequence[AccountingReservation], *, expires_at: float
@@ -170,6 +199,7 @@ class PreissuedPermitBank:
         async with self._lock:
             self._cursors.clear()
             self._available = 0
+            self._retained_bytes = 0
             self._refresh_metrics()
 
     def _collect(
@@ -209,12 +239,7 @@ class PreissuedPermitBank:
         *,
         expires_at: float,
     ) -> None:
-        if len(self._cursors) + len(pending) > self._max_subjects:
-            self._prune_expired()
-        subjects = list(pending)[: max(0, self._max_subjects - len(self._cursors))]
-        for subject in tuple(pending):
-            if subject not in subjects:
-                _deny(pending.pop(subject), ReserveDecision.CAPACITY_EXHAUSTED, results)
+        subjects = self._refill_subjects(pending, results)
         if not subjects:
             return
         allocations = [
@@ -246,13 +271,38 @@ class PreissuedPermitBank:
                 or grant.operation_limit > allocation.target_operations
             ):
                 raise ValueError("permit refill returned a different contract")
-            cursor = _GrantCursor(grant)
+            cursor = _GrantCursor(grant, subject.retained_bytes)
             if not self._usable(cursor):
                 _deny(pending.pop(subject), ReserveDecision.CAPACITY_EXHAUSTED, results)
                 continue
             self._cursors[subject] = cursor
             self._available += cursor.remaining
+            self._retained_bytes += cursor.retained_bytes
         increment_accounting_permit_action("refill", "success", count=len(allocations))
+
+    def _refill_subjects(
+        self,
+        pending: dict[PermitSubject, list[AccountingReservation]],
+        results: dict[UUID, DispatchPermit],
+    ) -> list[PermitSubject]:
+        requested_bytes = sum(subject.retained_bytes for subject in pending)
+        if (
+            len(self._cursors) + len(pending) > self._max_subjects
+            or self._retained_bytes + requested_bytes > self._max_retained_bytes
+        ):
+            self._prune_expired()
+        available_entries = self._max_subjects - len(self._cursors)
+        available_bytes = self._max_retained_bytes - self._retained_bytes
+        subjects = []
+        for subject in tuple(pending):
+            size = subject.retained_bytes
+            if available_entries <= 0 or size > available_bytes:
+                _deny(pending.pop(subject), ReserveDecision.CAPACITY_EXHAUSTED, results)
+                continue
+            subjects.append(subject)
+            available_entries -= 1
+            available_bytes -= size
+        return subjects
 
     def _usable(self, cursor: _GrantCursor) -> bool:
         return (
@@ -264,6 +314,7 @@ class PreissuedPermitBank:
         cursor = self._cursors.pop(subject, None)
         if cursor is not None:
             self._available -= cursor.remaining
+            self._retained_bytes -= cursor.retained_bytes
             increment_accounting_permit_action("retire", "success")
 
     def _prune_expired(self) -> None:
@@ -279,7 +330,10 @@ class PreissuedPermitBank:
 
     def _refresh_metrics(self) -> None:
         set_accounting_permit_bank(
-            self._lane, subjects=self.active_subjects, available=self.available_permits
+            self._lane,
+            subjects=self.active_subjects,
+            available=self.available_permits,
+            retained_bytes=self.retained_bytes,
         )
 
 

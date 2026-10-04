@@ -71,9 +71,12 @@ Accepted performance code: `cc3113bd`
 - [x] Slice 9: add the bounded permit bank and test partial grants, cancellation,
   expiry, shutdown, and the warm-path call bound before bootstrap can select it.
 - [x] Slice 9: profile all SQL inside the grant allocator before permit activation.
-- [ ] Slice 9: cap retained cursor and issued-lease state by bytes as well as entries.
+- [x] Slice 9: verify the retained cursor byte budget with the required gates.
+- [ ] Slice 9: cap issued-lease state by bytes as well as entries before activation.
 - [ ] Slice 9: prove local-lease funding, unused-suffix return, expiry, and conservative
   owner-loss recovery before local dispatch can run.
+- [ ] Slice 9: separate the local dispatch deadline from the terminal recovery
+  deadline. Keep dispatch within the funded budget period and refill TTL.
 - [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
   missing-owner rejection when adding local or remote accounting clients.
 - [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
@@ -86,6 +89,109 @@ Accepted performance code: `cc3113bd`
 - [ ] Run fresh and upgrade migration verification for the complete integrated chain.
 - [ ] Run the 50, 100, 200, and short 500 RPS ladder on one clean kind image.
 - [ ] Run the ten-minute 500 RPS qualification only after the short ladder passes.
+- [ ] Complete the requested final 50, 100, 200, and 500 RPS tests on reproducible
+  kind. Record each result separately. Do not treat native SQL probes as gateway
+  qualification.
+
+## Final qualification request
+
+The user requested the complete 50, 100, 200, and 500 RPS series after integration.
+Use one clean commit and image, the pinned kind tools, and the fixed local provider
+mock. Do not use Rancher. Keep replicas, resources, pool limits, workload, and
+pass/fail limits the same across rates. First run the short ladder to detect unsafe
+capacity or accounting failures. Then run the ten-minute measurement at each rate.
+Any pause between rates must be recorded and must wait for accounting to drain.
+There is no cooling pause inside a measurement window.
+
+Keep raw allowed samples and a source/image/configuration manifest in a new
+evidence directory. Report offered and received throughput, successes, status and
+error counts, p50/p95/p99, gateway and provider time, queue and in-flight trends,
+dependency calls, and accounting reconciliation. A successful HTTP response alone
+does not prove a correct charge. Record a failure as a failure. A short run does
+not replace the ten-minute qualification. If a run reveals unsafe economic state,
+stop the remaining load and report the reason; do not change code within a series.
+
+## Slice 9e: retained cursor byte budget
+
+Implementation and required lane verification are complete.
+The inactive bank now limits both subjects and retained cursor bytes. Its default
+budget is 8 MiB per lane. Cold work that exceeds the budget is rejected before a
+database refill. Rejection keeps live grants, and expiry or retirement removes
+the byte charge once. The batch call bound remains unchanged. Audit and pricing
+bodies are not retained by a cursor. The budget includes Unicode character space
+and fixed bounded object and grant metadata space; it is not an RSS measurement.
+
+Focused checks: 66 passed. Native bank and byte-limit checks: 7 passed. The first
+new native test incorrectly expected close to settle an unexpired grant. The
+corrected test proves that close keeps the escrow, then expiry permits exact
+settlement and unused-capacity release. No production recovery rule changed.
+Object-graph tests then found that the first fixed object charge was too small for
+the largest Unicode identifiers. The fixed cursor and window charges were
+increased, without increasing the 8 MiB bank budget. All six object-graph cases
+now pass. The 1,000-subject pruning fixture explicitly uses 16 MiB so that its
+unchanged 256-scan assertion tests pruning, not byte rejection. Earlier full
+runs were interrupted and are not passing gates. Final logs use the
+`issue320-slice9e-*-complete.log` names.
+
+Final verification:
+
+- Focused memory, bank, profile, and small-owner checks: 66 passed.
+- Native memory and bank checks: 7 passed.
+- Full component and Helm lanes: 4,901 passed.
+- Full application lane: 1,645 passed.
+- Full PostgreSQL lane: 554 passed, with no required-service skips.
+- Full Redis lane: 105 passed, with no required-service skips. One original
+  server-clock expiry case failed in the first full run. It passed unchanged when
+  isolated and in the second full lane. A read-only clock probe measured a
+  107.5 ms host/server progression gap; the original test had a 10 ms host-wait
+  margin. This is consistent with that timing failure. Keep the first log, and
+  make the test observe the Redis expiry deadline in a separate test-only change.
+- Collection: all 7,205 tests belong to one lane each: 4,664 hermetic, 1,645 app,
+  554 PostgreSQL, 105 Redis, and 237 Helm.
+- Ruff, format checks, and `git diff --check`: passed.
+
+The final Redis result is in
+`/private/tmp/issue320-slice9e-redis-confirmed.log`. The clock observation is in
+`/private/tmp/issue320-slice9e-redis-clock-probe.log`. No migration, runtime
+selection, pool, queue, fallback, or production deadline changes in this step.
+The applied 115-migration chain is unchanged. Local dispatch, the remaining
+integration slices, and the requested final gateway RPS tests are unfinished.
+
+The next local-dispatch step must not copy a source lifetime error. In
+`0ac46791`, `deltallm_accounting_allocate_local_permit_grant` extends the grant's
+`expires_at` to the reservation lifetime. `_cursor_is_usable` then uses that same
+field to allow new dispatch. The original allocator had capped it at the earlier
+budget-window end or refill TTL. Recovery must retain funded money for late
+receipts, but that must not extend the period for new provider work. Add separate
+deadlines, a terminal-lifetime check before local issue, and native period-boundary
+tests before activation. The clean runtime still uses assigned admission and
+does not contain this source local-dispatch behavior.
+
+## Slice 9f: local lease integration order
+
+- [ ] Add inactive local-lease fields and constraints in an append-only migration.
+  Keep assigned and durable-claim behavior unchanged by default.
+- [ ] Retain the allocator's short dispatch deadline. Store a separate bounded
+  receipt-recovery deadline. Reject a new local issue if its terminal lifetime
+  does not fit the funded lease.
+- [ ] Add typed bulk refill, unused-suffix return, and terminal persistence owners.
+  Keep a fixed call bound across subjects. Never await one call per subject.
+- [ ] Bound issued receipts and retiring cursors by both entries and bytes.
+  Preserve exact operation, request, owner, generation, grant, and ordinal identity
+  after an uncertain transport acknowledgement.
+- [ ] Supervise one bounded return worker through the existing lifecycle. Close
+  must stop new issues, drain terminal work, and return only the proven unused
+  suffix. Process loss must keep uncertain money as provisional, not release it.
+- [ ] Prove short TTL and budget-period boundaries, partial funding, duplicate
+  receipt replay, wrong owner/fence rejection, return races, owner loss, and mixed
+  assigned/local settlement against PostgreSQL. Then add runtime selection through
+  the small bootstrap owner and every governed configuration surface.
+
+The terminal journal follows this foundation. Its accepted payload must remain
+durable and immutable. The materializer must retain funding while accepted work
+is pending, and preserve exactly-once settlement after worker loss. The source
+append and materializer SQL must retain the clean branch's bounded key probes;
+copying an old JSON join must not restore retained-history scans.
 
 ## Slice 9a: inactive permit foundation
 
