@@ -167,6 +167,20 @@ deadlines, a terminal-lifetime check before local issue, and native period-bound
 tests before activation. The clean runtime still uses assigned admission and
 does not contain this source local-dispatch behavior.
 
+### Redis server-clock test correction
+
+The lease-expiry test now waits until Redis reports its declared deadline, within
+a fixed two-second host deadline. Each observation waits at most 100 ms before
+checking again. The one-second lease, reconnect, new-owner, and old-owner release
+assertions are unchanged. No production script, timeout, or capacity changed.
+
+Focused Redis checks: 5 passed. Full Redis lane: 105 passed, without required
+skips. Ruff, formatting, and `git diff --check` passed. Logs are in
+`/private/tmp/issue320-redis-server-clock-focused.log` and
+`/private/tmp/issue320-redis-server-clock-full.log`. The original failure and
+clock measurements remain available. The wait uses the declared server TTL;
+it does not retry a failed acquisition or increase the lease.
+
 ## Slice 9f: local lease integration order
 
 - [ ] Add inactive local-lease fields and constraints in an append-only migration.

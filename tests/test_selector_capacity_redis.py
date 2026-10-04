@@ -132,10 +132,16 @@ async def test_server_clock_lease_expiry_and_client_reconnect_preserve_owner_iso
     )
     old = await a.acquire_attempt(identity, bounds, lease_ttl_seconds=1)
     assert old.acquired
-    seconds, micros = await first.time()
-    # This wait exercises the declared Redis TTL, not a timing workaround.
-    remaining = (old.expires_at_ms - seconds * 1000 - micros / 1000) / 1000
-    await asyncio.sleep(max(0, remaining) + 0.01)
+    assert old.expires_at_ms is not None
+    # Redis owns the expiry clock. A VM clock can advance less than the host
+    # clock during a sleep. Observe the actual deadline within a fixed bound.
+    async with asyncio.timeout(2):
+        while True:
+            seconds, micros = await first.time()
+            remaining = (old.expires_at_ms - seconds * 1000 - micros / 1000) / 1000
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(remaining, 0.1))
     await second.connection_pool.disconnect()
     fresh = await b.acquire_attempt(identity, bounds, lease_ttl_seconds=1)
     assert fresh.acquired and fresh.owner_token != old.owner_token
