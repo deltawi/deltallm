@@ -72,7 +72,8 @@ Accepted performance code: `cc3113bd`
   expiry, shutdown, and the warm-path call bound before bootstrap can select it.
 - [x] Slice 9: profile all SQL inside the grant allocator before permit activation.
 - [x] Slice 9: verify the retained cursor byte budget with the required gates.
-- [ ] Slice 9: cap issued-lease state by bytes as well as entries before activation.
+- [x] Slice 9: add inactive immutable issued-receipt storage with both entry and
+  byte limits. The local runtime must use this owner before activation.
 - [ ] Slice 9: prove local-lease funding, unused-suffix return, expiry, and conservative
   owner-loss recovery before local dispatch can run.
 - [ ] Slice 9: separate the local dispatch deadline from the terminal recovery
@@ -218,6 +219,18 @@ is pending, and preserve exactly-once settlement after worker loss. The source
 append and materializer SQL must retain the clean branch's bounded key probes;
 copying an old JSON join must not restore retained-history scans.
 
+The local runtime must carry a complete typed financial issue proof through the
+request handle and terminal owner. A terminal retry after receipt-store removal
+must replay durable accepted facts, not create another admission or depend on a
+mutable process cache. Remote workers must derive their own clock anchors; they
+must not use an API process's monotonic value to permit new dispatch.
+
+Before activation, collection must also respect serialized batch bytes. A valid
+large terminal payload can exceed the 1 MiB batch limit when joined with other
+valid entries. Split collection at the byte limit, not in a per-subject awaited
+loop. Bound retained queue bytes and keep accepted facts immutable. Do not reduce
+the request payload contract or let a provider success lose its terminal record.
+
 ### Slice 9f verification
 
 All 7,223 collected tests passed. Counts are 4,665 hermetic, 237 Helm,
@@ -345,6 +358,69 @@ Neither a recovered old horizon nor a remote process's monotonic anchor can
 authorize new provider work. Prove this boundary before runtime selection.
 The return worker must supervise bounded scans and bulk calls, stop issue before
 drain, and retain uncertainty until the database terminal owner confirms it.
+
+## Slice 9h: immutable local receipt retention
+
+The inactive receipt store now keeps canonical reservation bytes and a copied,
+scalar funding proof. New request work must fit both its entry limit and its byte
+limit. The store has no eviction, expiry deletion, database client, task, or pool.
+Only an exact operation and generation terminal acknowledgement can remove a
+matching issued proof. Duplicate removal has no second effect. Recovery visits
+at most 256 entries and rotates that slice without removing its proofs.
+
+The retained-byte charge includes the serialized request plus a conservative
+fixed allowance for the grant, wrapper, key, and map entry. Tests compare the
+charge with the complete typed object graph for small, large, nested, and maximum
+Unicode cases. A 300-entry check verifies the aggregate charge and exact removal.
+This charge is a retained-state limit, not a process RSS limit.
+
+Frozen model fields do not freeze nested pricing or audit dictionaries. The store
+validates those dictionaries before serialization. Its first draft check found
+that a serializer could turn NaN into null before validation. The final store
+rejects NaN and oversized changes before it retains a proof. Caller mutations and
+changes to a restored copy cannot change the retained request facts.
+
+Funding recovery can now return a proof after its short dispatch horizon expires,
+while its recovery horizon is still live. That proof is for return, not dispatch.
+The original dispatch time remains unchanged and its monotonic deadline is in
+the past. One native lost-response test waits on the database clock for this
+boundary, recovers the proof, returns all four never-issued ordinals, and checks
+zero economic drift. No production deadline or allocator SQL changed.
+
+- [x] Complete focused, full application, full native PostgreSQL, component,
+  Redis, lane, and style checks before committing this inactive step.
+- [x] Record immutable-receipt and return-only recovery test results.
+- [ ] Add the local issuer and entry/byte-bounded retiring cursors next.
+- [ ] Add the supervised bulk return lifecycle and runtime selection after that.
+
+The main gateway still selects assigned admission. Slice 9 and the final kind
+50/100/200/500 RPS qualification remain incomplete. The applied 119-migration
+chain is unchanged.
+
+### Slice 9h verification
+
+Focused checks passed all 135 cases. Full lanes passed all 7,346 collected cases:
+4,767 hermetic, 237 Helm, 1,645 application, 592 PostgreSQL, and 105 Redis. Each
+test belongs to one lane. The full suites ran serially and had no required-service
+skips or failures. Ruff, format checks, the small typed-owner ratchet, and
+`git diff --check` passed. No schema, migration, default, or runtime selection changed.
+
+The first focused repository run misplaced an existing no-operation-insert
+assertion in the new successful-settlement case. The assertion was restored to
+its original rejection case without a change. The final focused run and all full
+lanes passed. The earlier failure remains in
+`/private/tmp/issue320-slice9h-focused-expanded.log`.
+
+Final logs are `/private/tmp/issue320-slice9h-focused-final.log`,
+`/private/tmp/issue320-slice9h-components-full.log`,
+`/private/tmp/issue320-slice9h-app-full.log`,
+`/private/tmp/issue320-slice9h-postgres-full.log`,
+`/private/tmp/issue320-slice9h-redis-full.log`, and
+`/private/tmp/issue320-slice9h-lanes-final.log`.
+
+This inactive retention step is complete. The local issuer, retiring-cursor owner,
+supervised returns, runtime selection, terminal journal, later integration slices,
+and final gateway RPS qualification remain required.
 
 ## Slice 9a: inactive permit foundation
 

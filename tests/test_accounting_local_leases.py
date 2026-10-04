@@ -138,6 +138,41 @@ async def test_monotonic_deadlines_do_not_depend_on_host_database_clock_alignmen
     assert before + 360 <= funded.recovery_deadline <= after + 360
 
 
+@pytest.mark.parametrize("shift", [-3600, 0, 3600])
+@pytest.mark.parametrize("ack", ["normal", "recovered"])
+async def test_expired_dispatch_proof_is_return_only_without_extending_its_horizon(shift, ack):
+    item = allocation()
+    row = funding_row(item, shift=shift)
+    row["observed_at"] += timedelta(seconds=31)
+    if ack == "recovered":
+        proof = grant(item, row)
+        row = {**row, **database_grant(proof), "subject_matches": True}
+    db = MagicMock(
+        query_raw=AsyncMock(side_effect=[TimeoutError(), [row]] if ack == "recovered" else [[row]])
+    )
+    before = asyncio.get_running_loop().time()
+    funded = (await owner(db).allocate_batch([item], expires_at=deadline()))[0]
+    assert funded.dispatch_expires_at == row["dispatch_expires_at"]
+    assert funded.dispatch_deadline < before
+    assert funded.recovery_deadline > before + 300
+    assert LocalPermitReturn(grant=funded, first_unused_ordinal=0).first_unused_ordinal == 0
+    assert db.query_raw.await_count == (2 if ack == "recovered" else 1)
+
+
+@pytest.mark.parametrize("invalid", ["recovery", "dispatch"])
+async def test_expired_recovery_or_extended_dispatch_ack_cannot_enter_the_local_owner(invalid):
+    item = allocation()
+    row = funding_row(item)
+    if invalid == "recovery":
+        row["observed_at"] = row["expires_at"]
+    else:
+        row["dispatch_expires_at"] = row["observed_at"] + timedelta(seconds=301)
+    db = MagicMock(query_raw=AsyncMock(return_value=[row]))
+    with pytest.raises(AccountingProtocolUnavailable):
+        await owner(db).allocate_batch([item], expires_at=deadline())
+    db.query_raw.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

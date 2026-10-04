@@ -412,4 +412,25 @@ its own anchor and must not trust a received anchor.
 
 This persistence owner opens no pool and starts no task. Bootstrap still uses
 assigned grants. Runtime issue, byte-bounded receipt retention, and supervised
-bulk return remain required before selection of this path.
+bulk return must be integrated before selection of this path. The inactive receipt
+store below provides retention, not runtime selection.
+
+## Inactive immutable local receipts
+
+The local receipt store retains canonical reservation bytes, not mutable pricing
+and audit graphs. It copies the scalar grant proof and checks nested facts before
+serialization. Each restored receipt has separate request dictionaries. Retained
+bytes and entry counts have fixed limits. The conservative byte charge covers the
+serialized request and scalar/map overhead; it is not a process RSS estimate.
+
+Capacity exhaustion rejects new retention without evicting an existing proof.
+Expiry does not prove terminal settlement and does not remove a receipt. Only a
+matching operation and generation terminal acknowledgement can remove its exact
+issued proof. A recovery slice contains at most 256 entries and only rotates them.
+The store starts no worker and performs no dependency call.
+
+A recovered funding proof can have an expired dispatch horizon and a live recovery
+horizon. Its stored short deadline is unchanged. Its derived monotonic dispatch
+deadline remains in the past. Such a proof can return a known unused suffix but
+must never authorize provider dispatch. The local issuer must enforce this check
+before runtime selection. The issued store and this proof contract remain inactive.

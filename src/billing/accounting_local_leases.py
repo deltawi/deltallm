@@ -15,7 +15,7 @@ from src.billing.selector_charge import FrozenBillingContract
 
 
 class LocalPermitGrant(PreissuedPermitGrant):
-    """Keep database deadlines and a conservative local observation anchor."""
+    """A funding proof can remain returnable after its dispatch horizon expires."""
 
     dispatch_expires_at: AwareDatetime
     observed_at: AwareDatetime
@@ -23,8 +23,10 @@ class LocalPermitGrant(PreissuedPermitGrant):
 
     @model_validator(mode="after")
     def validate_deadlines(self) -> LocalPermitGrant:
-        if not self.observed_at < self.dispatch_expires_at <= self.expires_at:
-            raise ValueError("local grant has no live dispatch horizon")
+        if not self.dispatch_expires_at <= self.expires_at or self.expires_at <= self.observed_at:
+            raise ValueError("local grant has no live recovery horizon")
+        if self.dispatch_expires_at > self.observed_at + timedelta(minutes=5):
+            raise ValueError("local grant exceeds its dispatch lifetime bound")
         if self.expires_at > self.observed_at + timedelta(minutes=20):
             raise ValueError("local grant exceeds its recovery lifetime bound")
         return self

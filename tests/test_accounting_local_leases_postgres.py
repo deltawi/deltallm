@@ -18,6 +18,7 @@ from src.billing.accounting_protocol import PreissuedPermitAllocation
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.accounting_local_leases import AccountingLocalLeaseRepository
 from src.db.accounting_local_lease_results import finalization_payload
+from src.billing.accounting_local_receipts import LocalReceiptStore
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_accounting_local_lease_foundation_postgres import finalize as raw_finalize
 from tests.test_accounting_protocol_postgres import (
@@ -197,6 +198,73 @@ async def test_database_rejects_a_receipt_beyond_its_funded_recovery_deadline(ac
         )
         == []
     )
+
+
+class ExpiredFundingAckClient:
+    """Wait for the database dispatch clock, then lose one funding response."""
+
+    def __init__(self, db):
+        self.db = db
+        self.calls = 0
+
+    async def query_raw(self, query, *arguments):
+        self.calls += 1
+        rows = await self.db.query_raw(query, *arguments)
+        if self.calls == 1:
+            await self.db.query_raw(
+                "SELECT 1 AS elapsed FROM deltallm_accounting_grants g CROSS JOIN LATERAL "
+                "pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM "
+                "(g.dispatch_expires_at-clock_timestamp())))+0.01) WHERE g.grant_id=$1",
+                rows[0]["grant_id"],
+            )
+            raise TimeoutError()
+        return rows
+
+
+async def test_lost_funding_ack_after_short_expiry_recovers_only_returnable_capacity(accounting_db):
+    clients, generation = accounting_db
+    db = clients[0]
+    window = str(uuid4())
+    await _create_window(db, generation, window)
+    item = _reservation(generation, window)
+    counted = ExpiredFundingAckClient(db)
+    repository = AccountingLocalLeaseRepository(
+        counted, owner_id="local-bulk-test", grant_ttl_seconds=1, statement_budget_seconds=2
+    )
+    grant = (await repository.allocate_batch([allocation(item)], expires_at=deadline()))[0]
+    assert counted.calls == 2
+    assert grant.observed_at > grant.dispatch_expires_at
+    assert grant.dispatch_deadline < asyncio.get_running_loop().time()
+    assert grant.recovery_deadline > asyncio.get_running_loop().time()
+    assert await repository.return_batch(
+        [LocalPermitReturn(grant=grant, first_unused_ordinal=0)], expires_at=deadline()
+    ) == [4]
+    assert await _settle_grants(db, generation) == 1
+    assert await _window(db, window) == (Decimal(0), Decimal(0), Decimal(0))
+    assert await _outstanding(db, generation) == 0
+
+
+async def test_retained_receipt_is_removed_only_by_its_exact_native_terminal_ack(accounting_db):
+    clients, generation = accounting_db
+    db = clients[0]
+    window, item, grant = await funded(db, generation)
+    first = terminal(item, grant)
+    store = LocalReceiptStore(max_entries=1, max_retained_bytes=8 * 1024 * 1024)
+    assert store.retain(first.receipt)
+    item.audit_envelope["changed"] = True
+    retained = store.get(item.operation_id)
+    assert "changed" not in retained.reservation.audit_envelope
+    accepted = LocalPermitFinalization(receipt=retained, finalization=first.finalization)
+    result = (await owner(db).finalize_batch([accepted], expires_at=deadline()))[0]
+    assert store.acknowledge(retained, result)
+    assert store.entries == store.retained_bytes == 0
+    assert not store.acknowledge(retained, result)
+    await owner(db).return_batch(
+        [LocalPermitReturn(grant=grant, first_unused_ordinal=1)], expires_at=deadline()
+    )
+    assert await _settle_grants(db, generation) == 1
+    assert await _window(db, window) == (Decimal("0.6"), Decimal(0), Decimal(0))
+    assert await _outstanding(db, generation) == 0
 
 
 async def test_concurrent_different_terminal_time_cannot_change_the_accepted_fact(accounting_db):
