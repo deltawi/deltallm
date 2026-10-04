@@ -1032,7 +1032,9 @@ BEGIN
      OR to_regprocedure('deltallm_accounting_allocate_permit_grants_batch(bigint,text,integer,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_claim_permits_batch(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_allocate_local_permit_grant(bigint,text,uuid,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_return_local_permits(bigint,text,uuid,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_return_local_permits_batch(bigint,text,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_finalize_local_permit_batch(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_pending_legacy_work()') IS NULL
      OR to_regprocedure('deltallm_accounting_finalize_grant_batch(bigint,jsonb)') IS NULL

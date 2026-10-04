@@ -199,7 +199,7 @@ loss. Bootstrap selection and the Python local lease lifecycle remain unfinished
 - [ ] Retain the allocator's short dispatch deadline. Store a separate bounded
   receipt-recovery deadline. Reject a new local issue if its terminal lifetime
   does not fit the funded lease.
-- [ ] Add typed bulk refill, unused-suffix return, and terminal persistence owners.
+- [x] Add typed bulk refill, unused-suffix return, and terminal persistence owners.
   Keep a fixed call bound across subjects. Never await one call per subject.
 - [ ] Bound issued receipts and retiring cursors by both entries and bytes.
   Preserve exact operation, request, owner, generation, grant, and ordinal identity
@@ -236,6 +236,115 @@ Logs are `/private/tmp/issue320-slice9f-postgres-full.log`,
 These are foundation checks, not gateway qualification results. The local issuer,
 bulk return lifecycle, runtime selection, terminal journal, and later plan slices
 remain unfinished. Do not activate local dispatch or mark slice 9 complete.
+
+## Slice 9g: inactive bulk local persistence
+
+The typed bulk repository is implemented but remains inactive. Funding, suffix
+return, and terminal persistence each use one database call for up to 256 items.
+Client payloads are limited to 1 MiB; SQL accepts at most 2 MiB. All phases share
+the existing statement, cancellation, result-set, and ambiguity-recovery owner.
+Each phase has at most three attempts and one recovery query per attempt within
+the caller deadline. There is no extra retry layer or per-subject awaited loop.
+
+Funding returns the database observation time. The caller anchors the dispatch
+and recovery horizons to its monotonic clock before each database call. This
+subtracts call latency and avoids extending dispatch through host/database clock
+differences. The local anchor is process-owned, not a value to trust from a remote
+transport. A future remote adapter must derive its own anchor before its request.
+
+The first append-only migration adds two bulk functions. It also checks funded terminal
+lifetimes and immutable terminal timestamps after the claim owner holds operation
+locks. Exact suffix returns can replay after grant closure. A bad entry rolls back
+the whole bulk effect. No setting, default, bootstrap selection, or pool changed.
+
+Final review found SQL null comparisons in return identity checks. Three native
+cases confirmed that a missing fence or generation could mark capacity unused.
+A second append-only migration now uses null-safe comparisons and explicit
+generation validation. It also rejects a missing suffix ordinal. All four
+rejection cases preserve active grant metadata and escrow. The earlier applied
+migrations remain unchanged. This path is not selected by the gateway.
+
+- [x] Complete the full affected application and PostgreSQL checks and record the
+  final results before marking the bulk persistence step complete.
+- [x] Prove native partial funding across two replicas, lost acknowledgements in
+  all three phases, exact closed replay, wrong return identity, and timestamp races.
+- [x] Verify all 119 migrations on fresh, released-version, and shared-feature paths.
+- [x] Complete representative nested-plan checks for windows, grants, operations,
+  events, reservations, and grant-window records, including prepared warm calls.
+
+The local issuer, entry and byte limits for issued state, supervised return worker,
+runtime selection, terminal journal, and later slices are still required. This step
+does not remove request-path claims until that runtime work is complete. The final
+50/100/200/500 RPS kind qualification remains unchecked.
+
+### Slice 9g verification
+
+The expanded focused check passed 100 cases. Six native plan cases seed 50,000
+retained budget windows and 10,000 each of grants, operations, events,
+reservations, and grant-window records. They exercise six prepared calls in each
+phase, with explicit and implicit window selection. The checks require indexed
+financial-history access with bounded rows. Final redacted plans are in
+`/private/tmp/issue320-slice9g-plans-final.log`. Migration checks passed all 118
+migrations in `/private/tmp/issue320-slice9g-migrations.log`.
+
+The first full PostgreSQL run passed 585 cases and failed the unchanged realtime
+test `test_older_accepted_timestamps_are_not_rebuilt`: its immediate worker claim
+returned no record. The same test then passed alone, all 19 cases in its family
+passed, and 20 further unchanged repetitions passed with an aggregate-only,
+read-only empty-claim probe. The cause was not established. No production code,
+assertion, deadline, or retry policy was changed to pass this test.
+
+The second, uninstrumented full PostgreSQL run passed all 586 cases. The full
+component and Helm run passed all 4,969 cases. All 1,645 application and 105 Redis
+cases passed. Those gates covered the typed bulk owner and migration 118. After
+the null-identity guard, all 36 local native and nested-plan cases passed. Migration
+119 passed all three upgrade paths in
+`/private/tmp/issue320-slice9g-null-guard-migrations.log`. The guard changes only
+invalid direct SQL inputs; no Python production code or valid caller changed.
+The next full PostgreSQL run passed 589 cases and failed
+`test_real_native_statement_deadline_and_connection_recovery`. The caller deadline
+fired before the native statement-timeout response arrived. The request still
+failed closed, but the test required a native error cause. This test and its owner
+were unchanged by this slice. All nine cases in its family then passed alone.
+The final full lane passed all 590 cases without instrumentation, changed limits,
+or changed assertions. Keep the failure in
+`/private/tmp/issue320-slice9g-postgres-null-guard-final.log` and the isolated result
+in `/private/tmp/issue320-slice9g-allocation-isolated.log`.
+Keep the original failure in
+`/private/tmp/issue320-slice9g-postgres-full.log`; isolated and diagnostic evidence
+is in `/private/tmp/issue320-slice9g-realtime-isolated.log`,
+`/private/tmp/issue320-slice9g-realtime-family.log`, and
+`/private/tmp/issue320-slice9g-realtime-diagnostic.log`.
+
+Final collection covers 7,309 tests: 4,732 hermetic, 237 Helm, 1,645 application,
+590 PostgreSQL, and 105 Redis. Each test belongs to exactly one lane. The full
+component, application, and Redis gates passed before migration 119; the final
+PostgreSQL gate checks its invalid-input guards. No required service was skipped.
+All 12 changed Python files passed Ruff and format checks. `git diff --check`
+passed. Final native and collection logs are
+`/private/tmp/issue320-slice9g-postgres-null-guard-confirmed.log` and
+`/private/tmp/issue320-slice9g-collection-null-guard-final.log`. The other final
+gates are in `/private/tmp/issue320-slice9g-components-final.log`,
+`/private/tmp/issue320-slice9g-app-final.log`, and
+`/private/tmp/issue320-slice9g-redis-final.log`.
+
+This inactive persistence step is complete. Slice 9 as a whole is not complete,
+and these tests are not gateway RPS qualification results.
+
+### Next: local issue and return lifecycle
+
+The local issuer must retain an immutable copy of each reservation. Frozen model
+fields do not freeze nested pricing and audit dictionaries. Use serialized bytes
+for retained request facts and account for both those bytes and scalar proof
+overhead. Prove that later dictionary changes cannot alter an issued receipt.
+Do not evict an unacknowledged receipt to admit new work.
+
+An expired short dispatch horizon does not prove that its funded escrow is gone.
+Recovery must distinguish a live dispatch proof from a return-only funding proof.
+Neither a recovered old horizon nor a remote process's monotonic anchor can
+authorize new provider work. Prove this boundary before runtime selection.
+The return worker must supervise bounded scans and bulk calls, stop issue before
+drain, and retain uncertainty until the database terminal owner confirms it.
 
 ## Slice 9a: inactive permit foundation
 

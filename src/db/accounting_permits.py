@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from datetime import UTC, datetime
-from decimal import Decimal
-from typing import TypeVar
-from uuid import UUID
+from collections.abc import Sequence
 
 from src.billing.accounting_protocol import (
     DispatchPermit,
@@ -17,15 +12,17 @@ from src.billing.accounting_protocol import (
     PreissuedPermitGrant,
     ReserveDecision,
 )
-from src.db.accounting_calls import (
-    AccountingDatabaseCalls,
-    AccountingProtocolUnavailable,
-    AccountingQueryClient,
-    AccountingResultFailure,
-    outcome_may_be_ambiguous,
+from src.db.accounting_batches import batch_payload, one_generation, result_rows, with_recovery
+from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
+from src.db.accounting_permit_results import (
+    allocation_result,
+    claim_identity_matches,
+    claim_payload,
+    claim_result,
+    grant_from_row,
+    invalid_result,
 )
 
-T = TypeVar("T")
 AllocationResult = PreissuedPermitGrant | ReserveDecision
 
 
@@ -54,8 +51,8 @@ class AccountingPermitRepository:
         if not allocations:
             return []
         keys = [str(item.fence_token) for item in allocations]
-        generation = _generation(item.reservation.protocol_generation for item in allocations)
-        payload = _batch_payload([item.model_dump(mode="json") for item in allocations], keys)
+        generation = one_generation(item.reservation.protocol_generation for item in allocations)
+        payload = batch_payload([item.model_dump(mode="json") for item in allocations], keys)
 
         async def attempt(deadline: float) -> dict[str, AllocationResult]:
             rows = await self._calls.call(
@@ -68,15 +65,15 @@ class AccountingPermitRepository:
                 payload,
                 expires_at=deadline,
             )
-            by_key = _result_rows(rows, "allocation_fence_token", keys)
+            by_key = result_rows(rows, "allocation_fence_token", keys)
             return {
-                str(item.fence_token): _allocation_result(
+                str(item.fence_token): allocation_result(
                     item, by_key[str(item.fence_token)], self._owner_id
                 )
                 for item in allocations
             }
 
-        results, recovered = await _with_recovery(
+        results, recovered = await with_recovery(
             keys,
             attempt,
             lambda deadline: self._recover_allocations(allocations, payload, deadline),
@@ -85,7 +82,7 @@ class AccountingPermitRepository:
         )
         for key, grant in recovered.items():
             if results[key] != grant:
-                raise _invalid()
+                raise invalid_result()
         return [results[key] for key in keys]
 
     async def claim_batch(
@@ -94,10 +91,10 @@ class AccountingPermitRepository:
         if not claims:
             return []
         keys = [str(item.reservation.operation_id) for item in claims]
-        generation = _generation(item.reservation.protocol_generation for item in claims)
+        generation = one_generation(item.reservation.protocol_generation for item in claims)
         if len({(item.grant.grant_id, item.permit_ordinal) for item in claims}) != len(claims):
             raise ValueError("one permit batch cannot repeat a grant ordinal")
-        payload = _batch_payload([_claim_payload(item) for item in claims], keys)
+        payload = batch_payload([claim_payload(item) for item in claims], keys)
 
         async def attempt(deadline: float) -> dict[str, DispatchPermit]:
             rows = await self._calls.call(
@@ -107,15 +104,15 @@ class AccountingPermitRepository:
                 payload,
                 expires_at=deadline,
             )
-            by_key = _result_rows(rows, "operation_id", keys)
+            by_key = result_rows(rows, "operation_id", keys)
             return {
-                str(item.reservation.operation_id): _claim_result(
+                str(item.reservation.operation_id): claim_result(
                     item, by_key[str(item.reservation.operation_id)]
                 )
                 for item in claims
             }
 
-        results, recovered = await _with_recovery(
+        results, recovered = await with_recovery(
             keys,
             attempt,
             lambda deadline: self._recover_claims(claims, deadline),
@@ -125,7 +122,7 @@ class AccountingPermitRepository:
         for key, permit in recovered.items():
             if results[key] != permit:
                 if results[key].decision is not ReserveDecision.REPLAY:
-                    raise _invalid()
+                    raise invalid_result()
                 results[key] = permit
         return [results[key] for key in keys]
 
@@ -155,8 +152,8 @@ class AccountingPermitRepository:
                 or row.get("state") != "active"
                 or row.get("generation") != item.reservation.protocol_generation
             ):
-                raise _invalid()
-            result[key] = _grant_from_row(item, row, self._owner_id)
+                raise invalid_result()
+            result[key] = grant_from_row(item, row, self._owner_id)
         return result
 
     async def _recover_claims(
@@ -177,11 +174,11 @@ class AccountingPermitRepository:
         for row in rows:
             key = str(row.get("operation_id"))
             item = expected.get(key)
-            if item is None or key in result or not _claim_identity_matches(item, row):
-                raise _invalid()
+            if item is None or key in result or not claim_identity_matches(item, row):
+                raise invalid_result()
             state = row.get("accounting_state")
             if state not in {"reserved", "finalized", "released", "provisional"}:
-                raise _invalid()
+                raise invalid_result()
             dispatch = state == "reserved"
             result[key] = DispatchPermit(
                 protocol_generation=item.reservation.protocol_generation,
@@ -191,168 +188,3 @@ class AccountingPermitRepository:
                 accounting_partition=item.grant.accounting_partition if dispatch else None,
             )
         return result
-
-
-async def _with_recovery(
-    keys: Sequence[str],
-    attempt: Callable[[float], Awaitable[dict[str, T]]],
-    recover: Callable[[float], Awaitable[dict[str, T]]],
-    *,
-    calls: AccountingDatabaseCalls,
-    expires_at: float,
-) -> tuple[dict[str, T], dict[str, T]]:
-    deadline = calls.attempt_deadline(expires_at)
-    recovered: dict[str, T] = {}
-    for number in range(3):
-        try:
-            return await attempt(deadline), recovered
-        except AccountingProtocolUnavailable as exc:
-            if exc.reason in {item.value for item in AccountingResultFailure}:
-                raise
-            if outcome_may_be_ambiguous(exc):
-                try:
-                    recovered.update(await recover(expires_at))
-                except AccountingProtocolUnavailable as recovery_error:
-                    if recovery_error.reason in {item.value for item in AccountingResultFailure}:
-                        raise
-                if len(recovered) == len(keys):
-                    return recovered, recovered
-            remaining = deadline - asyncio.get_running_loop().time()
-            if number == 2 or remaining <= 0.01:
-                raise
-            await asyncio.sleep(min(0.01 * (number + 1), remaining / 2))
-    raise _invalid()  # pragma: no cover - each attempt returns or raises
-
-
-def _allocation_result(
-    item: PreissuedPermitAllocation, row: Mapping[str, object], owner: str
-) -> AllocationResult:
-    try:
-        decision = ReserveDecision(str(row["decision"]))
-    except (KeyError, ValueError):
-        raise _invalid() from None
-    if decision in {ReserveDecision.BUDGET_EXHAUSTED, ReserveDecision.CAPACITY_EXHAUSTED}:
-        if any(
-            row.get(field) is not None
-            for field in (
-                "grant_id",
-                "grantee_id",
-                "fence_token",
-                "accounting_partition",
-                "allowance_exact",
-                "operation_limit",
-                "expires_at",
-            )
-        ):
-            raise _invalid()
-        return decision
-    if decision is not ReserveDecision.DISPATCH:
-        raise _invalid()
-    return _grant_from_row(item, row, owner)
-
-
-def _grant_from_row(
-    item: PreissuedPermitAllocation, row: Mapping[str, object], owner: str
-) -> PreissuedPermitGrant:
-    try:
-        timestamp = row["expires_at"]
-        if isinstance(timestamp, str):
-            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        grant = PreissuedPermitGrant(
-            protocol_generation=item.reservation.protocol_generation,
-            grant_id=row["grant_id"],
-            grantee_id=row["grantee_id"],
-            fence_token=UUID(str(row["fence_token"])),
-            accounting_partition=row["accounting_partition"],
-            allowance=Decimal(str(row["allowance_exact"])),
-            operation_limit=row["operation_limit"],
-            expires_at=timestamp,
-        )
-        if (
-            grant.fence_token != item.fence_token
-            or grant.grantee_id != f"{owner}:{item.fence_token}"
-            or grant.allowance != item.reservation.allowance
-            or grant.operation_limit > item.target_operations
-            or grant.expires_at <= datetime.now(UTC)
-        ):
-            raise _invalid()
-        return grant
-    except (KeyError, TypeError, ValueError, ArithmeticError):
-        raise _invalid() from None
-
-
-def _claim_result(item: PreissuedPermitClaim, row: Mapping[str, object]) -> DispatchPermit:
-    try:
-        decision = ReserveDecision(str(row["decision"]))
-        if decision not in {ReserveDecision.DISPATCH, ReserveDecision.REPLAY}:
-            raise _invalid()
-        dispatch = decision is ReserveDecision.DISPATCH
-        if row.get("dispatch_token") != (
-            str(item.reservation.owner_token) if dispatch else None
-        ) or row.get("accounting_partition") != (
-            item.grant.accounting_partition if dispatch else None
-        ):
-            raise _invalid()
-        return DispatchPermit(
-            protocol_generation=item.reservation.protocol_generation,
-            operation_id=item.reservation.operation_id,
-            decision=decision,
-            dispatch_token=item.reservation.owner_token if dispatch else None,
-            accounting_partition=item.grant.accounting_partition if dispatch else None,
-        )
-    except (KeyError, ValueError):
-        raise _invalid() from None
-
-
-def _claim_identity_matches(item: PreissuedPermitClaim, row: Mapping[str, object]) -> bool:
-    reservation = item.reservation
-    return (
-        row.get("owner_token") == str(reservation.owner_token)
-        and row.get("request_fingerprint") == reservation.request_fingerprint
-        and row.get("snapshot") == reservation.model_dump(mode="json")
-        and row.get("accounting_protocol") == "primary"
-        and row.get("accounting_generation") == reservation.protocol_generation
-        and row.get("accounting_partition") == item.grant.accounting_partition
-        and row.get("accounting_grant_id") == item.grant.grant_id
-        and row.get("accounting_permit_ordinal") == item.permit_ordinal
-        and str(row.get("accounting_grant_fence_token")) == str(item.grant.fence_token)
-    )
-
-
-def _result_rows(
-    rows: Sequence[Mapping[str, object]], field: str, keys: Sequence[str]
-) -> dict[str, Mapping[str, object]]:
-    result = {str(row.get(field)): row for row in rows}
-    if len(result) != len(rows) or set(result) != set(keys):
-        raise AccountingProtocolUnavailable(AccountingResultFailure.INCOMPLETE_RESULT)
-    return result
-
-
-def _batch_payload(values: list[dict[str, object]], keys: Sequence[str]) -> str:
-    if len(values) > 256 or len(set(keys)) != len(keys):
-        raise ValueError("permit batches must have up to 256 unique identities")
-    payload = json.dumps(values, allow_nan=False, separators=(",", ":"), sort_keys=True)
-    if len(payload.encode()) > 1_048_576:
-        raise ValueError("permit batch exceeds its serialized size limit")
-    return payload
-
-
-def _claim_payload(item: PreissuedPermitClaim) -> dict[str, object]:
-    return {
-        "grant_id": item.grant.grant_id,
-        "grantee_id": item.grant.grantee_id,
-        "fence_token": str(item.grant.fence_token),
-        "permit_ordinal": item.permit_ordinal,
-        "reservation": item.reservation.model_dump(mode="json"),
-    }
-
-
-def _generation(values: Iterable[int]) -> int:
-    generations = set(values)
-    if len(generations) != 1:
-        raise ValueError("one permit batch cannot mix protocol generations")
-    return generations.pop()
-
-
-def _invalid() -> AccountingProtocolUnavailable:
-    return AccountingProtocolUnavailable(AccountingResultFailure.INVALID_RESULT)

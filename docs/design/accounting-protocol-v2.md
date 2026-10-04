@@ -379,3 +379,37 @@ archival, and vacuum remain under the existing financial-grant policy.
 The Python lease owner, byte-bounded issued receipts, supervised bulk return worker,
 and terminal journal are still required before activation. This database step is
 not a new gateway RPS result.
+
+## Inactive bulk local persistence
+
+One typed repository owns funding, unused-suffix return, and local terminal
+persistence. Each normal phase uses one statement for up to 256 items across
+subjects. All phases share the existing deadline, cancellation, result-set, and
+ambiguity recovery helpers with durable pre-issued permits. Three attempts and
+one recovery query per attempt are the fixed maximum. Recovery uses indexed fence,
+grant, operation, and event keys and checks the complete owned proof. An invalid
+result cannot authorize dispatch or enter another retry layer.
+
+The client accepts at most 1 MiB of serialized batch data. SQL accepts at most
+2 MiB and takes grants in the same global order as claims. One bad return entry
+rolls back every return in that statement. A closed grant can replay its exact
+never-issued suffix without releasing more money. Terminal persistence checks
+that the operation lifetime fits its funded recovery horizon. It checks the
+original terminal time after operation locks are held, so concurrent retries
+cannot accept two different terminal facts.
+
+Single and bulk suffix returns reject missing generations. Single returns also
+reject a missing fence or ordinal. Null-safe identity checks prevent an absent
+value from marking funded capacity unused. Each rejection leaves grant metadata
+and escrow unchanged. These checks are additive; applied migrations are unchanged.
+
+Funding includes PostgreSQL's observation time. The caller records its monotonic
+clock before the call. It derives local deadlines from that anchor and the
+database-relative horizons. Call latency reduces remaining validity instead of
+extending it. Host/database wall-clock differences do not increase local dispatch
+validity. A monotonic anchor belongs to one process; a remote adapter must derive
+its own anchor and must not trust a received anchor.
+
+This persistence owner opens no pool and starts no task. Bootstrap still uses
+assigned grants. Runtime issue, byte-bounded receipt retention, and supervised
+bulk return remain required before selection of this path.

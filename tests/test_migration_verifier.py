@@ -35,7 +35,9 @@ def test_accounting_verifier_requires_local_lease_schema_and_functions(monkeypat
         "unknown_provisional_exact",
         "deltallm_accounting_grant_local_dispatch_check",
         "deltallm_accounting_allocate_local_permit_grant(bigint,text,uuid,integer,integer,jsonb)",
+        "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
         "deltallm_accounting_return_local_permits(bigint,text,uuid,integer)",
+        "deltallm_accounting_return_local_permits_batch(bigint,text,jsonb)",
         "deltallm_accounting_finalize_local_permit_batch(bigint,jsonb)",
     ):
         assert contract in sql
