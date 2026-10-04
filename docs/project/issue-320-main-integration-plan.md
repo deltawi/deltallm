@@ -303,6 +303,30 @@ The permit bank is still inactive. Next: byte limits, local-lease schema and rec
 then the supervised local-dispatch owner. Keep the remaining slices and final kind
 qualification unchecked until their own gates pass.
 
+### Clean slice 9d database comparison
+
+The repeat used clean commit `9d65f8af` with all 115 migrations. It kept the same
+50 RPS, ten-second, two-process settings as the slice 9c comparison. All three
+modes completed 500 of 500 operations with no errors or generator drops. Each
+again ended with 300 exact units committed and no reserved or provisional balance.
+
+| Mode | Request-path database calls | Caller p95 | Caller p99 |
+| --- | ---: | ---: | ---: |
+| Direct | 1,000 | 26.83 ms | 39.99 ms |
+| Assigned grants | 998 | 28.34 ms | 39.08 ms |
+| Pre-issued permits | 1,014 | 31.26 ms | 50.12 ms |
+
+The permit mode still used 16 refills, 500 claim calls, and 498 terminal calls.
+The query corrections add no request-path database call. This small, empty-history
+probe does not establish a latency gain. The native seeded-plan cases establish
+the removal of retained-history scans. Local dispatch and the terminal journal
+remain necessary to remove the per-request claim and compact terminal work.
+
+Raw samples, summaries, source hashes, and the clean-worktree marker are in
+`/private/tmp/issue320-slice9d-native-clean-9d65f8af/`. The log is
+`/private/tmp/issue320-slice9d-native-clean-9d65f8af.log`. This is an isolated
+accounting probe, not 50/100/200/500 RPS kind gateway qualification.
+
 ## Slice 1 source decisions
 
 The slice replays the behavior from `30f4b1e7`, `2efcf685`, and `e82f24c5`. It does
