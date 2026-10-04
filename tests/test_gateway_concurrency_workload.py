@@ -111,6 +111,22 @@ deltallm_event_loop_last_lag_seconds NaN
     assert len(metrics.select_metrics(text, buckets=False)) == 1
 
 
+def test_admission_metrics_and_errors_are_preserved_without_identity_labels() -> None:
+    text = """
+deltallm_ingress_active{allocation="inference"} 4
+deltallm_ingress_rejections_total{allocation="inference",reason="gateway_ingress_full"} 10
+deltallm_auth_fallback_events_total{phase="lookup",outcome="coalesced"} 3
+deltallm_database_allocation_occupied{allocation="foreground"} 1
+deltallm_auth_fallback_tasks{api_key="private-key"} 99
+deltallm_ingress_rejections_total{allocation="inference",reason="private-error"} 99
+"""
+    selected = metrics.select_metrics(text)
+    assert len(selected) == 4
+    assert "private" not in repr(selected)
+    for code in ("gateway_ingress_full", "auth_fallback_unavailable", "database_unavailable"):
+        assert workload.error_code({"error": {"code": code}}) == code
+
+
 @pytest.mark.asyncio
 async def test_recorder_closes_and_records_failed_scrapes_without_urls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

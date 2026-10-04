@@ -65,9 +65,8 @@ async def managed_asset_membership_transaction(db: Any) -> AsyncIterator[Any]:
             yield tx
     except RawQueryError as exc:
         metadata = exc.meta if isinstance(exc.meta, Mapping) else {}
-        if (
-            metadata.get("code") == "23514"
-            and any(message in str(exc) for message in _MODEL_CREDENTIAL_AUDIENCE_CONSTRAINTS)
+        if metadata.get("code") == "23514" and any(
+            message in str(exc) for message in _MODEL_CREDENTIAL_AUDIENCE_CONSTRAINTS
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -244,7 +243,9 @@ def db_or_503(request: Request) -> Any:
 def telemetry_db_or_503(request: Request) -> object:
     """Resolve the dedicated telemetry client once at the HTTP boundary."""
 
-    db = getattr(getattr(request.app.state, "telemetry_prisma_manager", None), "client", None)
+    db = getattr(
+        getattr(request.app.state, "telemetry_worker_prisma_manager", None), "client", None
+    )
     if db is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

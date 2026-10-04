@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import fields
 import hashlib
 import json
 import os
@@ -14,6 +15,10 @@ import sys
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.database_settings import DatabaseAllocationSettings
+from src.ingress import IngressLimits
+from src.services.auth_fallback import AuthFallbackLimits
 
 
 class ServerManifest(BaseModel):
@@ -35,6 +40,9 @@ class ServerManifest(BaseModel):
     postgres_version: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+){0,2}$")
     redis_version: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+){0,2}$")
     profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    database_allocations: DatabaseAllocationSettings | None = None
+    ingress: IngressLimits | None = None
+    auth_fallback: AuthFallbackLimits | None = None
     image_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     cpu_limit_cores: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     memory_limit_mib: int | None = Field(default=None, gt=0)
@@ -51,10 +59,31 @@ def read_manifest(path: Path) -> ServerManifest:
 async def local_manifest(api_processes: int) -> ServerManifest:
     import yaml
 
+    from src.config import GeneralSettings, Settings, _resolve_env_token
+    from src.config_startup import startup_field_values
+    from src.db.allocation_config import resolve_allocation_settings
     from tests.performance.gateway_concurrency_dependencies import local_dependencies
 
-    profile_path = Path("tests/performance/gateway_concurrency_profile.yaml")
+    profile_path = Path(
+        os.getenv("DELTALLM_CONFIG_PATH", "tests/performance/gateway_concurrency_profile.yaml")
+    )
     profile = yaml.safe_load(profile_path.read_text())["general_settings"]
+    # Resolve only the explicit, nonsecret budget allowlist. Loading the entire
+    # application config would unnecessarily resolve provider/master credentials.
+    budget_fields = set(DatabaseAllocationSettings.model_fields) | {
+        prefix + field.name
+        for prefix, model in (
+            ("gateway_ingress_", IngressLimits),
+            ("auth_fallback_", AuthFallbackLimits),
+        )
+        for field in fields(model)
+    }
+    general = GeneralSettings.model_validate(
+        _resolve_env_token(
+            {name: value for name, value in profile.items() if name in budget_fields}
+        )
+    )
+    environment = Settings()
     async with local_dependencies() as dependencies:
         async with asyncio.timeout(5):
             rows = await dependencies.database.query_raw("SHOW server_version")
@@ -83,6 +112,13 @@ async def local_manifest(api_processes: int) -> ServerManifest:
         postgres_version=postgres_version,
         redis_version=redis_version,
         profile_sha256=hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+        database_allocations=resolve_allocation_settings(general, environment),
+        ingress=IngressLimits.from_settings(general, environment),
+        auth_fallback=AuthFallbackLimits(
+            **startup_field_values(
+                AuthFallbackLimits(), general, environment, prefix="auth_fallback_"
+            )
+        ),
     )
 
 

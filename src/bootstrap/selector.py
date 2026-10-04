@@ -20,7 +20,7 @@ def configure_selector_execution(state: State, spend: SpendIngestionService) -> 
         return
     operations = BillingOperationRepository(spend.db)
     spend.operation_recovery = BillingOperationRecovery(
-        operations,
+        BillingOperationRepository(spend.worker_db),
         max_pending_events=spend.config.max_pending_events,
         max_attempts=spend.config.max_attempts,
         selector_events_only=True,

@@ -10,6 +10,7 @@ an existing deployment healthy.
 | [Railway](railway.md) | A quick hosted evaluation |
 | [Docker](docker.md) | Local or single-host evaluation |
 | [Kubernetes](../guides/kubernetes-deployment.md) | Evaluation or production on a Kubernetes cluster |
+| [Gateway ingress admission](ingress-admission.md) | Set request and upload limits before authentication |
 
 The Docker Compose `ha` profile is useful for testing more than one DeltaLLM process, but it is not
 a production high-availability setup. Its services still share one machine.

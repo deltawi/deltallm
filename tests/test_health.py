@@ -1,8 +1,153 @@
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
+
+
+@pytest.fixture(autouse=True)
+def ready_databases(test_app):
+    for name in ("prisma_manager", "foreground_prisma_manager", "telemetry_worker_prisma_manager"):
+        setattr(
+            test_app.state,
+            name,
+            SimpleNamespace(
+                client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
+            ),
+        )
+
+
+@pytest.mark.parametrize("allocation", ["foreground", "telemetry_worker"])
+@pytest.mark.parametrize("failure", ["missing_manager", "missing_client", "unavailable", "timeout"])
+async def test_readiness_requires_each_new_database_allocation(
+    client, test_app, allocation, failure
+):
+    if allocation == "telemetry_worker":
+        test_app.state.audit_ingestion_mode = "outbox"
+        test_app.state.telemetry_prisma_manager = SimpleNamespace(
+            client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
+        )
+    manager_name = allocation + "_prisma_manager"
+    manager = getattr(test_app.state, manager_name)
+    if failure == "missing_manager":
+        delattr(test_app.state, manager_name)
+    elif failure == "missing_client":
+        manager.client = None
+    elif failure == "unavailable":
+        manager.client.query_raw.side_effect = RuntimeError("private database endpoint")
+    else:
+
+        async def blocked(*_):
+            await asyncio.Event().wait()
+
+        manager.client.query_raw.side_effect = blocked
+
+    async with asyncio.timeout(2):
+        response = await client.get("/health/readiness")
+    assert response.status_code == 503
+    check = allocation + "_database"
+    assert response.json()["checks"][check] is False
+    assert response.json()["details"][check] == {
+        "state": "timeout" if failure == "timeout" else "unavailable"
+    }
+    assert "private" not in response.text
+    assert (await client.get("/health/liveliness")).status_code == 200
+
+    recovered = SimpleNamespace(query_raw=AsyncMock(return_value=[{"value": 1}]))
+    setattr(test_app.state, manager_name, SimpleNamespace(client=recovered))
+    response = await client.get("/health/readiness")
+    assert response.status_code == 200
+    assert response.json()["checks"][check] is True
+
+
+async def test_readiness_probes_all_dependency_allocations_concurrently(client, test_app):
+    entered = set()
+    all_entered = asyncio.Event()
+
+    def probe(name):
+        async def run(*_):
+            entered.add(name)
+            if len(entered) == 5:
+                all_entered.set()
+            await all_entered.wait()
+            return True
+
+        return AsyncMock(side_effect=run)
+
+    test_app.state.redis.ping = probe("redis")
+    test_app.state.audit_ingestion_mode = "outbox"
+    for name in (
+        "prisma_manager",
+        "foreground_prisma_manager",
+        "telemetry_prisma_manager",
+        "telemetry_worker_prisma_manager",
+    ):
+        setattr(
+            test_app.state, name, SimpleNamespace(client=SimpleNamespace(query_raw=probe(name)))
+        )
+    async with asyncio.timeout(2):
+        response = await client.get("/health/readiness")
+    assert response.status_code == 200
+    assert all_entered.is_set()
+    for name in entered - {"redis"}:
+        getattr(test_app.state, name).client.query_raw.assert_awaited_once_with("SELECT 1")
+    test_app.state.redis.ping.assert_awaited_once_with()
+
+
+async def test_legacy_readiness_does_not_probe_disabled_telemetry_allocations(client, test_app):
+    worker = test_app.state.telemetry_worker_prisma_manager.client
+    response = await client.get("/health/readiness")
+    assert response.status_code == 200
+    assert "telemetry_database" not in response.json()["checks"]
+    assert "telemetry_worker_database" not in response.json()["checks"]
+    worker.query_raw.assert_not_awaited()
+
+
+async def test_cancelling_readiness_cancels_all_owned_probes(client, test_app):
+    entered, cancelled = set(), set()
+    started = asyncio.Event()
+
+    def probe(name):
+        async def run(*_):
+            entered.add(name)
+            if len(entered) == 3:
+                started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.add(name)
+
+        return AsyncMock(side_effect=run)
+
+    test_app.state.redis.ping = probe("redis")
+    test_app.state.prisma_manager.client.query_raw = probe("control")
+    test_app.state.foreground_prisma_manager.client.query_raw = probe("foreground")
+    request = asyncio.create_task(client.get("/health/readiness"))
+    try:
+        async with asyncio.timeout(1):
+            await started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert entered == cancelled == {"redis", "control", "foreground"}
+    finally:
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+
+
+@pytest.mark.parametrize("manager_name", ["redis", "prisma_manager"])
+async def test_readiness_cannot_report_a_missing_required_dependency_as_ready(
+    client, test_app, manager_name
+):
+    delattr(test_app.state, manager_name)
+    response = await client.get("/health/readiness")
+    assert response.status_code == 503
+    name = "redis" if manager_name == "redis" else "database"
+    assert response.json()["details"][name] == {"state": "unavailable"}
 
 
 @pytest.mark.asyncio

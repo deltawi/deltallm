@@ -225,6 +225,7 @@ class AuditService:
         repository: AuditRepository,
         *,
         db_client: Any | None = None,
+        worker_db_client: Any | None = None,
         prompt_repository: PromptRegistryRepository | None = None,
         ingestion_config: AuditIngestionConfig | None = None,
         redis_client: Any | None = None,
@@ -236,6 +237,13 @@ class AuditService:
     ) -> None:
         self.repository = repository
         self.db = db_client
+        self.worker_db = worker_db_client if worker_db_client is not None else db_client
+        self._worker_ingestion_repository = (
+            AuditIngestionRepository(worker_db_client) if worker_db_client is not None else None
+        )
+        self.worker_repository = (
+            repository.with_db(worker_db_client) if worker_db_client is not None else repository
+        )
         self.prompt_repository = prompt_repository
         self.ingestion_config = ingestion_config or AuditIngestionConfig()
         self.ingestion_repository = AuditIngestionRepository(db_client)
@@ -405,7 +413,7 @@ class AuditService:
 
     async def _reconcile_durable_capacity(self) -> None:
         try:
-            await self.ingestion_repository.reconcile_capacity()
+            await self.worker_ingestion_repository.reconcile_capacity()
         except Exception:
             increment_audit_write_failure(path="capacity_reconcile")
             logger.exception("failed to reconcile durable audit capacity")
@@ -527,7 +535,10 @@ class AuditService:
         payload = _serialize_audit_item(item)
         redacted_payload = _serialize_audit_item(_redact_audit_item(item))
         try:
-            result = await self.ingestion_repository.enqueue(
+            ingestion_repository = (
+                self.ingestion_repository if required else self.worker_ingestion_repository
+            )
+            result = await ingestion_repository.enqueue(
                 event_id=item.event_id,
                 record_type="audit_event",
                 organization_id=event.organization_id,
@@ -757,6 +768,14 @@ class AuditService:
                 self._queue.task_done()
                 set_audit_queue_depth(self._total_queue_depth())
 
+    @property
+    def worker_ingestion_repository(self):
+        return (
+            self._worker_ingestion_repository
+            if self._worker_ingestion_repository is not None
+            else self.ingestion_repository
+        )
+
     def _total_queue_depth(self) -> int:
         return self._queue.qsize()
 
@@ -785,7 +804,7 @@ class AuditService:
 
     async def _durable_worker_iteration(self) -> None:
         try:
-            records = await self.ingestion_repository.claim_batch(
+            records = await self.worker_ingestion_repository.claim_batch(
                 limit=self.ingestion_config.batch_size,
                 worker_id=self.ingestion_config.worker_id,
                 claim_token=str(uuid4()),
@@ -864,7 +883,7 @@ class AuditService:
             )
         )
         try:
-            async with self._transaction() as tx:
+            async with self._transaction(self.worker_db) as tx:
                 ingestion_repository = self.ingestion_repository.with_db(tx)
                 audit_repository = self.repository.with_db(tx)
                 prompt_repository = PromptRegistryRepository(tx)
@@ -941,7 +960,7 @@ class AuditService:
         while True:
             await asyncio.sleep(interval)
             try:
-                renewed = await self.ingestion_repository.renew_lease(
+                renewed = await self.worker_ingestion_repository.renew_lease(
                     event_ids=event_ids,
                     worker_id=self.ingestion_config.worker_id,
                     claim_token=claim_token,
@@ -962,7 +981,7 @@ class AuditService:
                 return
 
     async def _mark_durable_retry(self, record: AuditOutboxRecord, exc: Exception) -> None:
-        terminal = await self.ingestion_repository.mark_retry(
+        terminal = await self.worker_ingestion_repository.mark_retry(
             record=record,
             worker_id=self.ingestion_config.worker_id,
             error=str(exc),
@@ -988,7 +1007,7 @@ class AuditService:
 
     async def _publish_durable_backlog(self) -> None:
         try:
-            count, oldest_age = await self.ingestion_repository.pending_stats()
+            count, oldest_age = await self.worker_ingestion_repository.pending_stats()
         except Exception:
             increment_audit_write_failure(path="backlog_metrics")
             return
@@ -1013,7 +1032,7 @@ class AuditService:
             if perf_counter() - started >= self.ingestion_config.cleanup_time_budget_seconds:
                 break
             try:
-                deleted = await self.ingestion_repository.cleanup_terminal(
+                deleted = await self.worker_ingestion_repository.cleanup_terminal(
                     completed_retention_hours=self.ingestion_config.completed_retention_hours,
                     failed_retention_days=self.ingestion_config.failed_retention_days,
                     limit=self.ingestion_config.cleanup_batch_size,
@@ -1110,6 +1129,7 @@ class AuditService:
             try:
                 await self._persist(
                     item,
+                    repository=self.worker_repository,
                     path=(
                         AuditIngestionPath.QUEUE if attempt == 1 else AuditIngestionPath.FALLBACK
                     ),
@@ -1166,7 +1186,7 @@ class AuditService:
         enabled = False
         version = 0
         try:
-            enabled, version = await self.ingestion_repository.get_content_policy(normalized)
+            enabled, version = await self.worker_ingestion_repository.get_content_policy(normalized)
         except Exception:
             logger.exception(
                 "failed reading audit content policy for invalidation",

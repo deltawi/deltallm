@@ -241,6 +241,14 @@ config:
       write_seconds: 10
       health_seconds: 5
       cleanup_seconds: 5
+
+    # Finite Redis allocations (restart required).
+    redis_bulk_url: null
+    redis_critical_max_connections: 64
+    redis_bulk_max_connections: 16
+    redis_acquisition_timeout_seconds: 0.2
+    redis_socket_timeout_seconds: 1.0
+    redis_connect_timeout_seconds: 1.0
     deltallm_key_header_name: Authorization
     # Startup-only provider discovery egress; independent of batch webhook policy.
     provider_discovery_allow_http: false
@@ -269,6 +277,23 @@ config:
     budget_enforcement_query_mode: legacy
     budget_enforcement_shadow_sample_rate: 0.01
     budget_enforcement_query_timeout_seconds: 2
+    # Per-process ingress admission (restart required; enable after workload validation).
+    gateway_ingress_control_max_active: 16
+    gateway_ingress_control_max_buffered_bytes: 67108864
+    auth_fallback_max_active: 8
+    auth_fallback_max_waiters: 32
+    auth_fallback_queue_timeout_ms: 10
+    auth_fallback_timeout_seconds: 0.5
+    auth_fallback_cache_timeout_seconds: 0.1
+    auth_fallback_cache_max_bytes: 131072
+    gateway_ingress_enabled: false
+    gateway_ingress_max_active: 100
+    gateway_ingress_max_waiters: 0
+    gateway_ingress_queue_timeout_ms: 10
+    gateway_ingress_max_body_bytes: 33554432
+    gateway_ingress_max_buffered_bytes: 67108864
+    gateway_ingress_body_timeout_seconds: 10.0
+    gateway_ingress_health_max_active: 4
     gateway_preflight_capacity_enabled: false
     gateway_preflight_global_max_parallel: 300
     gateway_preflight_org_max_parallel: 100
@@ -291,7 +316,19 @@ config:
     spend_ingestion_cleanup_batch_size: 1000
     spend_ingestion_cleanup_max_batches_per_run: 10
     spend_ingestion_cleanup_time_budget_seconds: 2
+    db_pool_size: 20
+    db_pool_timeout: 30
     telemetry_db_pool_size: 5
+    db_foreground_pool_size: 8
+    telemetry_worker_db_pool_size: 5
+    db_acquisition_timeout_seconds: 0.2
+    db_statement_timeout_seconds: 1.0
+    db_lock_timeout_seconds: 0.2
+    db_transaction_timeout_seconds: 2.0
+    db_background_statement_timeout_seconds: 5.0
+    db_background_lock_timeout_seconds: 1.0
+    db_background_transaction_timeout_seconds: 10.0
+    redis_cache_max_connections: 16
     telemetry_db_pool_timeout_seconds: 2
     telemetry_worker_startup_timeout_seconds: 5
     telemetry_shutdown_drain_timeout_seconds: 20
@@ -491,3 +528,14 @@ redis:
     persistence:
       enabled: true
       size: 5Gi
+
+# Declared deployment ceilings, not a change to PostgreSQL/Redis server limits.
+# Set these from provisioned service capacity before production deployment.
+dependencyCapacity:
+  apiProcessesPerPod: 1
+  batchWorkerProcessesPerPod: 1
+  retiringGenerations: 1
+  postgresqlMaxConnections: 1000
+  postgresqlReservedConnections: 20
+  redisMaxClients: 2000
+  redisReservedClients: 64

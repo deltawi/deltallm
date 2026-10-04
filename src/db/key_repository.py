@@ -73,7 +73,7 @@ class KeyRepository:
 
     async def get_by_token(self, token_hash: str) -> KeyRecord | None:
         if self.prisma is None:
-            return None
+            raise RuntimeError("Key database unavailable")
 
         rows = await self.prisma.query_raw(
             """

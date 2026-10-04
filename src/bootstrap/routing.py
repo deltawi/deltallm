@@ -196,7 +196,7 @@ async def init_routing_runtime(
     configure_cache_runtime(
         app,
         app_config=cfg,
-        redis_client=redis_client,
+        redis_client=app.state.bulk_redis,
         salt_key=salt_key,
     )
 

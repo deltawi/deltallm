@@ -180,6 +180,9 @@ nav:
           - Kubernetes and Helm: deployment/kubernetes.md
           - Metrics and callbacks: features/observability.md
           - Measure gateway concurrency: deployment/concurrency-measurement.md
+          - Gateway ingress admission: deployment/ingress-admission.md
+          - Ingress and authentication measurement: deployment/ingress-measurement.md
+          - Dependency capacity: deployment/dependency-capacity.md
           - Provider connection tuning: deployment/upstream-http.md
           - Upgrade and rollback behavior: deployment/upgrade-and-rollback.md
           - Release-specific rollouts: deployment/rollout-index.md

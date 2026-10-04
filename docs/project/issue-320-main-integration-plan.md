@@ -36,8 +36,8 @@ Accepted performance code: `cc3113bd`
 - [x] Verify slice 1 with focused hermetic, startup-lifecycle, and real-PostgreSQL
   tests.
 - [x] Commit slice 1 as one reviewable integration change.
-- [ ] Slice 2: port ingress isolation and bounded authentication fallback.
-- [ ] Slice 3: port dependency capacity ownership and startup arithmetic.
+- [x] Slice 2: port ingress isolation and bounded authentication fallback.
+- [x] Slice 3: port dependency capacity ownership and startup arithmetic.
 - [ ] Slice 4: port capacity schema and durable admission foundations.
 - [ ] Slice 5: port budget and prompt hot-path reductions.
 - [ ] Slice 6: port spend recovery, deadlines, and bounded work.
@@ -74,6 +74,42 @@ navigation and adding the concurrency guide to its operations reference.
 - Current-main startup lifecycle: 2 tests passed.
 - Real PostgreSQL telemetry acceptance and spend recovery: 4 tests passed against a
   fresh PostgreSQL 16 database with all 99 main migrations.
+
+The only reported warnings are the existing Prisma/Pydantic Python 3.14 compatibility
+warning and pytest-asyncio deprecation warnings.
+
+## Slices 2 and 3 source decisions
+
+These slices were integrated and verified together because the ingress/authentication
+qualification harness imports the database allocation layer. The historical PR numbers
+suggested the opposite order, but the source code dependency is unambiguous.
+
+The ingress and authentication behavior comes from `034be4dc`, `5c3d5361`,
+`df67f7a8`, and `42216598`. The dependency ownership behavior comes from `891a4a17`,
+`7aa53ed2`, `261bfc89`, `b3c1257c`, `301ed1eb`, `8c13b3f9`, `9ca8c2e8`, and
+`ea77c231`. The allocated telemetry failure classification from `c4ebe3ee` was applied
+after its database allocation dependency existed. Old feature-branch CI trigger changes
+were not replayed; the Redis memory-isolation services required by the current test lane
+were retained.
+
+Current main's realtime runtime, managed-asset authorization, reconciliation service,
+and documentation structure were preserved. All startup resources now share one bounded
+cleanup owner, including the newer reconciliation service. The legacy dynamic-config
+regression was adapted to use the production partial-update contract so full default
+serialization cannot accidentally pin environment-owned pool limits for a later restart.
+
+## Slices 2 and 3 verification
+
+- `ruff check`: all 70 touched Python files passed.
+- `ruff format --check`: all touched Python files passed after formatting four replayed
+  files to current main's canonical style.
+- Focused hermetic suite: 436 passed and 1 Redis memory test skipped until dedicated
+  servers were supplied.
+- Real PostgreSQL and Redis suite: 19 passed against isolated PostgreSQL 16 and Redis
+  7.2 containers.
+- Dedicated Redis no-eviction/eviction isolation: 1 passed against two physically
+  separate Redis 7.2 containers.
+- `git diff --check`: passed.
 
 The only reported warnings are the existing Prisma/Pydantic Python 3.14 compatibility
 warning and pytest-asyncio deprecation warnings.

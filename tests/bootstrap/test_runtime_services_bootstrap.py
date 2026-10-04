@@ -61,11 +61,13 @@ def _runtime_app(*, settings: SimpleNamespace | None = None) -> SimpleNamespace:
             mcp_repository="mcp-repo",
             mcp_scope_policy_repository="mcp-scope-policy-repo",
             redis="redis-client",
+            cache_redis="cache-redis-client",
             http_client="http-client",
             upstream_http_settings="startup-upstream-settings",
             limit_counter="limit-counter",
             cache_backend="cache-backend",
             prisma_manager=SimpleNamespace(client="db-client"),
+            foreground_prisma_manager=SimpleNamespace(client="foreground-db-client"),
         )
     )
 
@@ -253,7 +255,7 @@ async def test_init_and_shutdown_runtime_services(monkeypatch: pytest.MonkeyPatc
     assert app.state.guardrail_middleware[0] == "guardrail-middleware"
     assert app.state.turn_off_message_logging is True
     assert app.state.alert_service[0] == "alert-service"
-    assert app.state.spend_ledger_service == ("ledger", "db-client")
+    assert app.state.spend_ledger_service == ("ledger", "foreground-db-client")
     assert app.state.budget_service[0] == "budget"
 
     await shutdown_runtime_services(runtime)

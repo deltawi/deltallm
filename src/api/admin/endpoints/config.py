@@ -604,7 +604,7 @@ async def get_settings(
         return {}
 
     scope = get_auth_scope(request, authorization, x_master_key)
-    general = to_json_value(app_config.general_settings.model_dump())
+    general = to_json_value(app_config.general_settings.model_dump(mode="json"))
     if not scope.is_platform_admin:
         general.pop("master_key", None)
 
@@ -638,6 +638,16 @@ async def update_settings(
     general_updates = (
         payload.get("general_settings") if isinstance(payload.get("general_settings"), dict) else {}
     )
+    if "redis_bulk_url" in general_updates:
+        general_updates = dict(general_updates)
+        if general_updates.pop("redis_bulk_url") not in (None, "", "**********"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "restart_required",
+                    "message": "general_settings.redis_bulk_url requires startup configuration",
+                },
+            )
     router_updates = (
         payload.get("router_settings") if isinstance(payload.get("router_settings"), dict) else {}
     )

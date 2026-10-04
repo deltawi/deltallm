@@ -8,7 +8,7 @@ applies_to: Releases whose notes explicitly link this runbook.
 
 # Durable telemetry ingestion rollout
 
-Durable telemetry mode moves spend aggregation, audit persistence, and prompt-render logging onto bounded outboxes and a dedicated Prisma connection pool. Both ingestion modes default to `legacy` and are restart-bound. In legacy audit mode, required audit and prompt-render records are persisted synchronously and fail closed; only best-effort audit events use the bounded in-process queue.
+Durable telemetry mode moves spend aggregation, audit persistence, and prompt-render logging onto bounded outboxes with separate Prisma allocations for acceptance and background workers. Both ingestion modes default to `legacy` and are restart-bound. In legacy audit mode, required audit and prompt-render records are persisted synchronously and fail closed; only best-effort audit events use the bounded in-process queue.
 
 !!! warning "Check your release notes"
     Use this runbook only when the release notes for your target version link to it. Do not assume its migration names or compatibility rules apply to another release.
@@ -16,7 +16,7 @@ Durable telemetry mode moves spend aggregation, audit persistence, and prompt-re
 ## Preconditions
 
 1. Apply all Prisma migrations through `20260817140000_fence_email_delivery` before deploying this binary. The application assumes the additive email-audit reconciliation, fenced email-delivery claims, and exact-spend columns exist before startup.
-2. Provision database headroom for `telemetry_db_pool_size` connections per process. These connections are separate from `db_pool_size`; size the database for the sum across all replicas.
+2. Provision database headroom for `telemetry_db_pool_size` acceptance connections and `telemetry_worker_db_pool_size` worker connections per process. Add the control and foreground pools and all API/worker rollout overlap using the [dependency capacity calculation](dependency-capacity.md). Consumers, cleanup and retention share the worker allocation; they are not extra pools.
 3. Configure Redis for prompt cache freshness and multi-replica audit policy invalidation. PostgreSQL advisory locks and the policy-change transaction remain the privacy correctness boundary; audit content writes do not rely on Pub/Sub delivery.
 4. Verify the server-owned spend event identity, Prisma transaction-client detection, blocked-event replay, and claim-token fencing tests before enabling spend producers.
 5. Set the pod termination grace period above `telemetry_shutdown_drain_timeout_seconds`.
@@ -60,7 +60,7 @@ After the P0 migration, lock-snapshot concurrency tests, and fixed-binary rollou
    - One bulk acknowledgement.
 
 3. Compare the spend-event total with key, user, team, organization, and team-model ledger deltas. Retries must not increment a ledger twice.
-4. Increase the canary share while watching request-pool saturation and the dedicated telemetry pool independently.
+4. Increase the canary share while watching foreground, telemetry acceptance, telemetry worker and control pool saturation independently.
 5. Roll all replicas only after the oldest-event age returns to normal after an induced worker pause.
 
 The exact-spend migration only adds schema elements.

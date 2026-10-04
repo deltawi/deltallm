@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.database_settings import DATABASE_ALLOCATION_FIELDS
+
 import asyncio
 import json
 import logging
@@ -51,9 +53,32 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
         self.committed_app_config = committed_app_config.model_copy(deep=True)
 
 
-_STARTUP_ONLY_GENERAL_SETTINGS = frozenset(
+_STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
     {
         "realtime",
+        "gateway_ingress_control_max_active",
+        "gateway_ingress_control_max_buffered_bytes",
+        "auth_fallback_max_active",
+        "auth_fallback_max_waiters",
+        "auth_fallback_queue_timeout_ms",
+        "auth_fallback_timeout_seconds",
+        "auth_fallback_cache_timeout_seconds",
+        "auth_fallback_cache_max_bytes",
+        "gateway_ingress_enabled",
+        "gateway_ingress_max_active",
+        "gateway_ingress_max_waiters",
+        "gateway_ingress_queue_timeout_ms",
+        "gateway_ingress_max_body_bytes",
+        "gateway_ingress_max_buffered_bytes",
+        "gateway_ingress_body_timeout_seconds",
+        "gateway_ingress_health_max_active",
+        "redis_bulk_url",
+        "redis_critical_max_connections",
+        "redis_cache_max_connections",
+        "redis_bulk_max_connections",
+        "redis_acquisition_timeout_seconds",
+        "redis_socket_timeout_seconds",
+        "redis_connect_timeout_seconds",
         "provider_discovery_allow_http",
         "provider_discovery_allowed_ports",
         "provider_discovery_allowed_private_cidrs",
@@ -117,9 +142,16 @@ class DynamicConfigManager:
         self._config_generation = 1
 
         if self.redis is not None:
-            self._pubsub_task = asyncio.create_task(self._listen_for_changes())
+            self.attach_redis(self.redis)
         if self.db is not None and self._poll_interval_seconds > 0:
             self._poll_task = asyncio.create_task(self._poll_for_changes())
+
+    def attach_redis(self, redis_client: Any) -> None:
+        """Attach the effective startup client once durable config is loaded."""
+        if self._stopping or self._pubsub_task is not None:
+            raise RuntimeError("dynamic config Redis listener cannot be replaced")
+        self.redis = redis_client
+        self._pubsub_task = asyncio.create_task(self._listen_for_changes())
 
     async def close(self) -> None:
         self._stopping = True
@@ -431,6 +463,13 @@ class DynamicConfigManager:
             field_name
             for field_name in _STARTUP_ONLY_GENERAL_SETTINGS
             if getattr(current, field_name) != getattr(candidate, field_name)
+            or (
+                (
+                    field_name.startswith(("redis_", "gateway_ingress_", "auth_fallback_"))
+                    or field_name in DATABASE_ALLOCATION_FIELDS
+                )
+                and field_name in (current.model_fields_set ^ candidate.model_fields_set)
+            )
         )
         if changed:
             fields = ", ".join(f"general_settings.{field_name}" for field_name in changed)

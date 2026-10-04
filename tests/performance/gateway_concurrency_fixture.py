@@ -41,6 +41,16 @@ async def seed() -> None:
                     "audit_content_storage_enabled": False,
                 }
             )
+            # Model lists alone do not grant organization access under the
+            # enforced callable-target policy. Keep authorization enabled.
+            await tx.deltallm_callabletargetbinding.create(
+                data={
+                    "callable_key": MODEL,
+                    "scope_type": "organization",
+                    "scope_id": "concurrency-org",
+                    "enabled": True,
+                }
+            )
             await tx.deltallm_teamtable.create(
                 data={
                     "team_id": "concurrency-team",
