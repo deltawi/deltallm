@@ -1,4 +1,4 @@
-"""Measure direct-window and grant accounting against one hot PostgreSQL budget.
+"""Measure direct, assigned, and pre-issued accounting on one hot budget.
 
 This probe requires a disposable, fully migrated database with no active accounting
 generation. It exercises the production repository and microbatch service; it does
@@ -44,9 +44,12 @@ from src.billing.accounting_protocol import (
     request_fingerprint,
 )
 from src.billing.accounting_service import AccountingProtocolService
+from src.billing.preissued_permits import PreissuedPermitBank
 from src.config import DatabaseConnectionSettings
 from src.db.accounting_pool import AccountingPostgresManager
 from src.db.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting_calls import AccountingQueryClient
+from src.db.accounting_permits import AccountingPermitRepository
 from tests.performance.gateway_concurrency_dependencies import fixture_database_url
 
 _PROFILE_TABLES = (
@@ -103,14 +106,24 @@ def _source_manifest() -> dict[str, object]:
         Path("src/billing/durable_microbatch.py"),
         Path("src/db/accounting_protocol.py"),
         Path("src/db/accounting_pool.py"),
+        Path("src/db/accounting_calls.py"),
+        Path("src/db/accounting_permits.py"),
+        Path("src/billing/accounting_protocol.py"),
+        Path("src/billing/preissued_permits.py"),
         Path("prisma/migrations/20260926120000_accounting_protocol_v2/migration.sql"),
         Path("prisma/migrations/20260926180000_accounting_budget_grants/migration.sql"),
         Path("prisma/migrations/20260927150000_accounting_atomic_grant_admission/migration.sql"),
+        Path("prisma/migrations/20260929100000_accounting_preissued_permits/migration.sql"),
+        Path("prisma/migrations/20261004130000_accounting_permit_batches/migration.sql"),
+        Path("prisma/migrations/20261004140000_accounting_zero_allowance_permits/migration.sql"),
         Path("tests/performance/accounting_grant_profile.py"),
     )
     return {
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "python": sys.version.split()[0],
+        "working_tree_dirty": bool(
+            subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+        ),
         "sha256": {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths},
     }
 
@@ -269,6 +282,7 @@ async def _run_profile_worker(spec: _WorkerSpec) -> dict[str, object]:
     database_calls: Counter[str] = Counter()
     decisions: Counter[str] = Counter()
     service: AccountingProtocolService | None = None
+    permit_bank: PreissuedPermitBank | None = None
     try:
         await manager.connect(
             DatabaseConnectionSettings(url=spec.database_url, pool_size=3, pool_timeout=1),
@@ -279,7 +293,10 @@ async def _run_profile_worker(spec: _WorkerSpec) -> dict[str, object]:
         )
         if manager.client is None:
             raise RuntimeError("profile accounting pool did not start")
-        repository = _ObservedAccountingRepository(
+        repository_type = (
+            _ObservedPermitRepository if spec.mode == "permits" else _ObservedAccountingRepository
+        )
+        repository = repository_type(
             manager.client,
             reserve_seconds=reserve_db_seconds,
             finalize_seconds=finalize_db_seconds,
@@ -287,11 +304,13 @@ async def _run_profile_worker(spec: _WorkerSpec) -> dict[str, object]:
             finalize_batch_sizes=finalize_batch_sizes,
             database_calls=database_calls,
             statement_budget_seconds=spec.statement_timeout,
-            grants_enabled=spec.mode == "grants",
+            grants_enabled=spec.mode in {"grants", "permits"},
             grantee_id=f"accounting-profile-{spec.index}",
             grant_target_operations=spec.grant_operations,
             grant_ttl_seconds=spec.grant_ttl,
         )
+        if isinstance(repository, _ObservedPermitRepository):
+            permit_bank = repository.permit_bank
         worker_pending = max(spec.batch_size, spec.max_in_flight)
         service = AccountingProtocolService(
             repository,
@@ -344,6 +363,8 @@ async def _run_profile_worker(spec: _WorkerSpec) -> dict[str, object]:
     finally:
         if service is not None:
             await service.close(timeout_seconds=spec.finalization_timeout * 2)
+        if permit_bank is not None:
+            await permit_bank.close()
         await manager.disconnect()
 
 
@@ -431,7 +452,9 @@ async def _measure_mode(args: argparse.Namespace, mode: str, url: str) -> dict[s
         for result in results:
             decisions.update(result["decisions"])
             database_calls.update(result["database_calls"])
-        reconciled_grants = await _close_grants(observer, generation) if mode == "grants" else 0
+        reconciled_grants = (
+            await _close_grants(observer, generation) if mode in {"grants", "permits"} else 0
+        )
         window_rows = await observer.query_raw(
             "SELECT committed_exact::text AS committed,reserved_exact::text AS reserved,"
             "provisional_exact::text AS provisional FROM deltallm_accounting_budget_windows "
@@ -454,8 +477,10 @@ async def _measure_mode(args: argparse.Namespace, mode: str, url: str) -> dict[s
                 "partitions": args.partitions,
                 "batch_size": args.batch_size,
                 "dwell_ms": args.dwell_ms,
-                "grant_target_operations": args.grant_operations if mode == "grants" else None,
-                "grant_ttl_seconds": args.grant_ttl if mode == "grants" else None,
+                "grant_target_operations": args.grant_operations
+                if mode in {"grants", "permits"}
+                else None,
+                "grant_ttl_seconds": args.grant_ttl if mode in {"grants", "permits"} else None,
                 "reservation_decisions": dict(decisions),
                 "database_call_counts": dict(database_calls),
                 "reservation_latency_seconds": _percentiles(reserve_seconds),
@@ -495,7 +520,13 @@ async def _measure_mode(args: argparse.Namespace, mode: str, url: str) -> dict[s
 async def run(args: argparse.Namespace) -> dict[str, object]:
     url = args.database_url or fixture_database_url()
     args.output.mkdir(parents=True, exist_ok=True)
-    modes = ("direct", "grants") if args.mode == "both" else (args.mode,)
+    modes = (
+        ("direct", "grants", "permits")
+        if args.mode == "all"
+        else ("direct", "grants")
+        if args.mode == "both"
+        else (args.mode,)
+    )
     report: dict[str, object] = {
         "source": _source_manifest(),
         "configuration": {
@@ -561,10 +592,66 @@ class _ObservedAccountingRepository(AccountingProtocolRepository):
             self._profile_finalize_seconds.append(perf_counter() - started)
 
 
+class _ObservedPermitClient:
+    """Count the exact calls made through the same production accounting pool."""
+
+    def __init__(self, client: AccountingQueryClient, counts: Counter[str]) -> None:
+        self._client = client
+        self._counts = counts
+
+    async def query_raw(self, query: str, *parameters: object):
+        if "deltallm_accounting_allocate_permit_grants_batch" in query:
+            operation = "allocate_permit_grants"
+        elif "deltallm_accounting_claim_permits_batch" in query:
+            operation = "claim_permits"
+        elif "deltallm_accounting_grants" in query:
+            operation = "recover_permit_grants"
+        elif "deltallm_billing_operations" in query:
+            operation = "recover_permit_claims"
+        else:
+            raise ValueError("profile saw an unknown permit query class")
+        self._counts[operation] += 1
+        return await self._client.query_raw(query, *parameters)
+
+
+class _ObservedPermitRepository(_ObservedAccountingRepository):
+    """Use the production bank for admission and the existing terminal owner."""
+
+    def __init__(self, client, *, grantee_id, grant_target_operations, grant_ttl_seconds, **kwargs):
+        super().__init__(
+            client,
+            grantee_id=grantee_id,
+            grant_target_operations=grant_target_operations,
+            grant_ttl_seconds=grant_ttl_seconds,
+            **kwargs,
+        )
+        self.permit_bank = PreissuedPermitBank(
+            AccountingPermitRepository(
+                _ObservedPermitClient(client, self._profile_database_calls),
+                owner_id=grantee_id,
+                statement_budget_seconds=kwargs["statement_budget_seconds"],
+                grant_ttl_seconds=grant_ttl_seconds,
+            ),
+            target_operations=grant_target_operations,
+            max_operations=max(256, grant_target_operations),
+            max_subjects=1,
+        )
+
+    async def reserve_batch(self, reservations, *, expires_at):
+        started = perf_counter()
+        try:
+            return await self.permit_bank.reserve_batch(reservations, expires_at=expires_at)
+        finally:
+            self._profile_reserve_batch_sizes.append(float(len(reservations)))
+            self._profile_reserve_seconds.append(perf_counter() - started)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url")
-    parser.add_argument("--mode", choices=("direct", "grants", "both"), default="both")
+    parser.add_argument(
+        "--mode", choices=("direct", "grants", "permits", "both", "all"), default="both"
+    )
     parser.add_argument("--rate", type=float, default=1000)
     parser.add_argument("--duration", type=float, default=10)
     parser.add_argument("--processes", type=int, default=8)

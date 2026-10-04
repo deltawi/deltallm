@@ -150,6 +150,7 @@ def test_new_accounting_owners_have_small_typed_boundaries():
         "telemetry/cache_accounting.py",
         "billing/accounting_protocol.py",
         "billing/accounting_projection.py",
+        "billing/preissued_permits.py",
         "db/accounting_protocol.py",
         "db/accounting_calls.py",
         "db/accounting_permits.py",

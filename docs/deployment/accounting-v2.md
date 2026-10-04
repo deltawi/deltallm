@@ -168,6 +168,13 @@ database-call latency, reservation decisions, errors, closed grants, and final e
 invariants. This isolates the database protocol; it does not replace the end-to-end
 HTTP/provider/Redis qualification.
 
+The clean-main integration also supports `--mode all`. It adds the inactive
+pre-issued permit bank to this comparison. This mode uses the same two-connection
+accounting pool and terminal owner. It does not enable permits in the gateway.
+Use a new output directory for each run. Check the commit, file hashes, and
+`working_tree_dirty` field before comparing results. A dirty-tree result is a
+development probe, not release evidence.
+
 For the bundled local dependencies, layer the accounting evaluation profile after the
 normal evaluation profile. It sizes PostgreSQL for the complete rolling topology:
 

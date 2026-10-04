@@ -235,3 +235,44 @@ An additional migration corrects zero-cost permit grants. Zero reserved money do
 not mean that all operation slots are used. Such a grant stays active until its
 operation limit is reached. The regression failed against the copied source function
 and passed after the appended correction. The applied source migration is unchanged.
+
+## Inactive permit bank
+
+`PreissuedPermitBank` owns a bounded set of funded grant cursors. It does not own
+a client, pool, task, or queue. The existing durable microbatch owner can call it.
+Bootstrap cannot select it yet. Each provider dispatch still needs a durable claim
+acknowledgement; a local ordinal alone does not authorize a provider call.
+
+A warm batch uses one claim call across all subjects. A cold batch uses at most two
+refill rounds and one claim call, independent of subject count. The second round
+handles a partial grant. Work still unfunded after that round receives a capacity
+rejection. Each repository call keeps its existing bounded lost-ACK retries. These
+bounds do not add an admission fallback or extend the caller deadline.
+
+The bank advances each ordinal before it awaits a claim. A failed or cancelled call
+retires every touched cursor. It cannot reuse an uncertain ordinal. The database
+worker recovers claimed work and releases proven unused money and slots after
+expiry. Closing the bank rejects new work, waits for its owned call, and clears
+local state. It does not release money that might belong to a durable operation.
+
+The bank caps subjects and grant size. Capacity rejection does not evict a live
+grant. Expiry cleanup checks at most 256 subjects per refill; it does not scan the
+whole configured bank on the request event loop. Subject and available-permit
+gauges use fixed lane labels. Action counters contain no tenant, owner, or fence
+values. Grant representations also hide the grantee because it contains a fence.
+
+Subject identity includes the generation, budget references, full budget scope,
+model, and allowance text. For example, `1` and `1.0` are numerically equal, but
+the database subject contract hashes their different text. The bank must not reuse
+a grant across those contracts.
+
+The isolated native profile now supports `--mode all` to compare direct, assigned,
+and pre-issued admission on the same pool and terminal owner. Its source manifest
+records the commit, file hashes, and dirty-worktree state. It counts refill, claim,
+recovery, and terminal calls. This probe excludes HTTP, Redis, provider latency,
+and compatibility projection. It is not gateway RPS qualification.
+
+Activation still requires full allocator plan checks, a byte budget for retained
+state, the supervised local-dispatch and recovery owners, and clean-image gateway
+qualification. Fewer refills alone do not remove the per-request claim or terminal
+acknowledgement.

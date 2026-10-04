@@ -65,10 +65,10 @@ Accepted performance code: `cc3113bd`
   the temporary checks. Legacy mode must retain every current main feature.
 - [ ] Slice 9: port pre-issued permits and local lease dispatch.
 - [x] Slice 9: add the inactive fenced-permit schema and prove current grant parity.
-- [ ] Slice 9: batch refill and claim work across subjects with a fixed database-call
+- [x] Slice 9: batch refill and claim work across subjects with a fixed database-call
   bound. Do not copy the source branch's sequential subject loop.
 - [x] Slice 9: put permit persistence in a small typed repository owner.
-- [ ] Slice 9: add the bounded permit bank and test partial grants, cancellation,
+- [x] Slice 9: add the bounded permit bank and test partial grants, cancellation,
   expiry, shutdown, and the warm-path call bound before bootstrap can select it.
 - [ ] Slice 9: profile all SQL inside the allocator before permit activation.
 - [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
@@ -163,6 +163,60 @@ Final logs are in `/private/tmp/issue320-slice9b-focused-final.log`,
 
 The permit bank, local dispatch, and remaining integration slices are unfinished.
 This verification is not a new 50/100/200/500 RPS gateway result.
+
+## Slice 9c: inactive bounded permit bank
+
+The bank batches subjects and grants through the typed permit repository. A warm
+batch uses one claim call. A cold batch uses at most two refill rounds and one
+claim call, including partial grants. The call bound does not grow with subject
+count. Remaining unfunded work receives a capacity rejection, not another
+admission path. The existing per-call recovery limits still apply.
+
+Subject capacity is fixed. Expiry cleanup checks at most 256 subjects, not the
+whole bank. An uncertain claim retires its touched cursors; it cannot reuse an
+ordinal. Close rejects new work and leaves durable claims for recovery. The tests
+cover shared hard budgets, partial grants, expiry, cancellation, and crash recovery.
+Subject identity also retains the allowance text required by the database hash.
+Metrics use fixed labels, and representations hide grantees that contain fences.
+
+The native comparison harness now supports direct, assigned, and pre-issued
+admission through the same production pool and terminal owner. It records exact
+database calls and source hashes. The initial 50 RPS, ten-second development probe
+completed 500 operations in each mode with no drops or economic drift. It is a
+dirty-tree development result, not a gateway qualification or evidence of 500 RPS.
+Fewer refills did not remove each request's claim and terminal acknowledgement.
+
+Verification:
+
+- Final bank, privacy, profile, small-owner, and lane checks: 61 passed.
+- Focused native bank and accounting checks: 134 passed.
+- Full component and Helm lanes, run without overlapping lanes: 4,874 passed.
+- Full application lane: 1,645 passed.
+- Full real-PostgreSQL lane: 540 passed, with no required-service skips.
+- Full real-Redis lane: 105 passed, with no required-service skips.
+- Collection assigns all 7,164 tests to one lane each: 4,637 hermetic, 1,645 app,
+  540 PostgreSQL, 105 Redis, and 237 Helm.
+- Ruff, formatting, the typed-owner ratchet, and `git diff --check`: passed.
+- No migration or Prisma schema changed in this step. The 111-migration chain
+  retains slice 9b's verified fresh, last-release, and shared-feature paths.
+
+Two overlapping component runs each failed one existing lifecycle timing case:
+a cold child-process shutdown and an HTTP rejection during withdrawal. Both passed
+separately, and the full serial lane passed with their original deadlines and
+unchanged source. No test was removed, skipped, retried inside its assertion, or
+given a larger deadline. Keep these failures as a test-isolation signal.
+
+Final logs are in `/private/tmp/issue320-slice9c-bank-final.log`,
+`/private/tmp/issue320-slice9c-focused-rechecked.log`,
+`/private/tmp/issue320-slice9c-components-serial.log`,
+`/private/tmp/issue320-slice9c-app-full.log`,
+`/private/tmp/issue320-slice9c-postgres-full.log`,
+`/private/tmp/issue320-slice9c-redis-final.log`, and
+`/private/tmp/issue320-slice9c-lanes-final.log`.
+
+Bootstrap still cannot select the bank. Full allocator plan checks, retained-state
+byte limits, local dispatch, transport, journal, reporting, and current-main feature
+adapters remain unfinished. Slice 9 and final load qualification remain unchecked.
 
 ## Slice 1 source decisions
 

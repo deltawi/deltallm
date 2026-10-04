@@ -108,7 +108,7 @@ class PreissuedPermitGrant(FrozenBillingContract):
 
     protocol_generation: int = Field(ge=1, le=2**63 - 1)
     grant_id: Identifier
-    grantee_id: Identifier
+    grantee_id: Identifier = Field(repr=False)
     fence_token: UUID = Field(repr=False)
     accounting_partition: int = Field(ge=0, le=63)
     allowance: Money
