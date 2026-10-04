@@ -282,9 +282,10 @@ general_settings:
 
   # Governance notifications are opt-in and disabled by default.
   governance_notifications_enabled: false
+  # Startup-only: restart after enabling the durable budget-notification worker.
   budget_notifications_enabled: false
   key_lifecycle_notifications_enabled: false
-  budget_alert_ttl_seconds: 3600
+  budget_alert_ttl_seconds: 3600  # Startup-only; shared durable deduplication window
 
   # Optional terminal Batch API webhooks. The feature remains inert until enabled.
   # Generate the encryption key with:

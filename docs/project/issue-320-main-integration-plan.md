@@ -39,7 +39,7 @@ Accepted performance code: `cc3113bd`
 - [x] Slice 2: port ingress isolation and bounded authentication fallback.
 - [x] Slice 3: port dependency capacity ownership and startup arithmetic.
 - [x] Slice 4: port capacity schema and durable admission foundations.
-- [ ] Slice 5: port budget and prompt hot-path reductions.
+- [x] Slice 5: port budget and prompt hot-path reductions.
 - [ ] Slice 6: port spend recovery, deadlines, and bounded work.
 - [ ] Slice 7: port readiness, drain, and Kubernetes capacity contracts.
 - [ ] Slice 8: port accounting protocol v2 and atomic grant admission.
@@ -106,6 +106,42 @@ admission authority.
 
 The only reported warnings are the existing Prisma/Pydantic Python 3.14 compatibility
 warning and pytest-asyncio deprecation warnings.
+
+## Slice 5 source decisions
+
+The budget and prompt changes come from `024f2e71` and `44b70fda`. The integration
+keeps current main's realtime settings, managed-asset relations, migration checks,
+and documentation navigation.
+
+Normal combined budget checks use one SQL call. Missing or invalid budget counters
+cause an unavailable response. Operators must repair counters outside inference.
+Optional budget alerts use durable, deduplicated intents and a bounded worker.
+Cold prompt bindings use one Redis read, one bounded SQL lookup, and one cache-write
+pipeline. PostgreSQL remains the source of truth.
+
+The large historical PR 5 sample directory was not copied. It is not an input to a
+regression test or a release qualification gate. The design and deployment pages
+record this choice. The final integrated image still requires new load evidence.
+
+## Slice 5 verification
+
+- Focused budget, prompt, bootstrap, and configuration checks: 151 passed.
+- Real Redis prompt-fill check: 1 passed.
+- Real PostgreSQL budget concurrency checks: 15 passed.
+- Resume checks for budget, alerts, configuration, and Helm: 79 passed.
+- Prisma client generation: passed.
+- Fresh install, upgrade from `v0.1.42`, and shared-feature migration verification:
+  passed with all 103 migrations and the budget and realtime fixtures.
+- Helm lint and template: base, evaluation, and production profiles passed.
+- Ruff check and format: all 30 changed Python files passed.
+- `git diff --check`: passed.
+
+The interrupted verifier did not produce a final result. The complete rerun used
+the installed Prisma 5.17.0 CLI directly through the verifier's `--prisma` option.
+This uses the same pinned engine and avoids repeated Python-wrapper startup.
+Its output is in `/private/tmp/issue320-slice5-native-migration-verification.log`.
+Five disposable databases left by the interrupted and superseded checks were
+removed after the complete rerun passed.
 
 ## Slices 2 and 3 source decisions
 

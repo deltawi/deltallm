@@ -56,6 +56,8 @@ class DynamicConfigPostCommitApplyError(RuntimeError):
 _STARTUP_ONLY_GENERAL_SETTINGS = DATABASE_ALLOCATION_FIELDS | frozenset(
     {
         "realtime",
+        "budget_notifications_enabled",
+        "budget_alert_ttl_seconds",
         "gateway_ingress_control_max_active",
         "gateway_ingress_control_max_buffered_bytes",
         "auth_fallback_max_active",

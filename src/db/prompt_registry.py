@@ -137,9 +137,7 @@ class PromptRegistryRepository:
                 f"(t.template_key ILIKE ${len(params)} OR t.name ILIKE ${len(params)} OR COALESCE(t.description, '') ILIKE ${len(params)})"
             )
         if managed_asset_ids is not None:
-            normalized_ids = [
-                str(item).strip() for item in managed_asset_ids if str(item).strip()
-            ]
+            normalized_ids = [str(item).strip() for item in managed_asset_ids if str(item).strip()]
             if not normalized_ids:
                 return [], 0
             placeholders: list[str] = []
@@ -844,10 +842,13 @@ class PromptRegistryRepository:
                             b.prompt_binding_id ASC
                     ) AS binding_rank
                 FROM requested r
-                JOIN deltallm_promptbinding b
-                  ON b.scope_type = r.stored_scope_type
-                 AND b.scope_id = r.scope_id
-                 AND b.enabled = TRUE
+                JOIN LATERAL (
+                    SELECT candidate.* FROM deltallm_promptbinding candidate
+                    WHERE candidate.scope_type = r.stored_scope_type
+                      AND candidate.scope_id = r.scope_id AND candidate.enabled = TRUE
+                    ORDER BY candidate.priority, candidate.created_at, candidate.prompt_binding_id
+                    LIMIT 1
+                ) b ON TRUE
                 JOIN deltallm_prompttemplate t
                   ON t.prompt_template_id = b.prompt_template_id
             )

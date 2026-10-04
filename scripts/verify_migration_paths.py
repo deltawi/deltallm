@@ -931,6 +931,24 @@ $reservation_verify$;
     )
 
 
+def _seed_pr5_budgets(prisma: str, database_url: str, schema: Path) -> None:
+    _db_execute(
+        prisma,
+        schema=schema,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/pr5_budget_seed.sql").read_text(),
+    )
+
+
+def _verify_pr5_budgets(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/pr5_budget_verify.sql").read_text(),
+    )
+
+
 def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> None:
     suffix = uuid.uuid4().hex[:12]
     fresh_name = f"deltallm_migration_verify_{suffix}_fresh"
@@ -950,12 +968,14 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _migrate(prisma, schema=CURRENT_SCHEMA, database_url=fresh_url)
         _verify_fresh_database(prisma, fresh_url)
         _verify_operation_reservations(prisma, fresh_url)
+        _verify_pr5_budgets(prisma, fresh_url)
 
         with tempfile.TemporaryDirectory(prefix="deltallm-migration-base-") as temp:
             temp_root = Path(temp)
             base_schema = _extract_prisma_at_ref(base_ref, temp_root / "base")
             _migrate(prisma, schema=base_schema, database_url=upgrade_url)
             _seed_upgrade_fixture(prisma, upgrade_url, base_schema)
+            _seed_pr5_budgets(prisma, upgrade_url, base_schema)
             _db_execute(
                 prisma,
                 schema=base_schema,
@@ -989,6 +1009,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
             )
             _migrate(prisma, schema=shared_schema, database_url=shared_url)
             _seed_shared_migration_fixture(prisma, shared_url, shared_schema)
+            _seed_pr5_budgets(prisma, shared_url, shared_schema)
             _migrate(prisma, schema=CURRENT_SCHEMA, database_url=shared_url)
         _verify_upgrade_database(prisma, upgrade_url)
         _db_execute(
@@ -1000,6 +1021,8 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _verify_shared_migration_database(prisma, shared_url)
         _verify_operation_reservations(prisma, upgrade_url)
         _verify_operation_reservations(prisma, shared_url)
+        _verify_pr5_budgets(prisma, upgrade_url)
+        _verify_pr5_budgets(prisma, shared_url)
         for database_url in (fresh_url, upgrade_url, shared_url):
             _db_execute(
                 prisma,
