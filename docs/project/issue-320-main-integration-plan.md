@@ -67,7 +67,10 @@ Accepted performance code: `cc3113bd`
 - [x] Slice 9: add the inactive fenced-permit schema and prove current grant parity.
 - [ ] Slice 9: batch refill and claim work across subjects with a fixed database-call
   bound. Do not copy the source branch's sequential subject loop.
-- [ ] Slice 9: put permit persistence in a small typed repository owner.
+- [x] Slice 9: put permit persistence in a small typed repository owner.
+- [ ] Slice 9: add the bounded permit bank and test partial grants, cancellation,
+  expiry, shutdown, and the warm-path call bound before bootstrap can select it.
+- [ ] Slice 9: profile all SQL inside the allocator before permit activation.
 - [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
   missing-owner rejection when adding local or remote accounting clients.
 - [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
@@ -111,6 +114,55 @@ Logs are in `/private/tmp/issue320-slice9a-postgres.log`,
 `/private/tmp/issue320-slice9a-collection.log`.
 
 Slice 9 is not complete. This result is not gateway load qualification.
+
+## Slice 9b: permit batch persistence
+
+The clean replay adds a small typed permit repository. The assigned and permit
+repositories use one deadline, metric, error, and cancellation owner. The new
+repository is not selected by bootstrap yet. No pool, queue, setting, admission
+fallback, or reporting default changes.
+
+One refill call covers up to 256 subjects. One claim call covers up to 256
+operations across grants. The tests verify this bound for batches of 1, 8, 32,
+and 256 items. Stable window and grant lock order protects concurrent batches.
+Recovery verifies the complete request snapshot and every fence and owner field.
+Exact exhausted or closed claims replay without a provider dispatch token.
+
+The new window-lock plan check uses 25,000 expired same-subject windows and
+25,000 live other-subject windows. It uses the scope/time index and returns one
+window. This check does not prove the plans for all SQL inside the allocator.
+
+An extra regression found that the copied source function marked a zero-cost
+grant as draining after its first ordinal. The test failed before the fix. A new
+append-only migration keeps it active until its operation limit is reached. The
+applied source migration remains unchanged.
+
+Verification:
+
+- Final focused permit and accounting checks: 123 passed.
+- Full component and Helm lanes: 4,848 passed.
+- Full application lane: 1,645 passed.
+- Full real-PostgreSQL lane: 535 passed, with no required-service skips.
+- Full real-Redis lane: 105 passed, with no required-service skips. The first run
+  omitted the dedicated memory-service variables and skipped one case; the final
+  configured run has no skips.
+- All five lanes cover 7,133 tests: 4,611 hermetic, 1,645 app, 535 PostgreSQL,
+  105 Redis, and 237 Helm. Collection is exhaustive and does not overlap.
+- Fresh install, upgrade from `v0.1.42`, and shared-feature checks: passed with
+  111 migrations. The verifier removed its disposable databases.
+- Prisma generation, Ruff, formatting, the small-owner ratchet, and
+  `git diff --check`: passed.
+
+Final logs are in `/private/tmp/issue320-slice9b-focused-final.log`,
+`/private/tmp/issue320-slice9b-components-final.log`,
+`/private/tmp/issue320-slice9b-app-full.log`,
+`/private/tmp/issue320-slice9b-postgres-full.log`,
+`/private/tmp/issue320-slice9b-redis-final.log`,
+`/private/tmp/issue320-slice9b-migrations-final.log`, and
+`/private/tmp/issue320-slice9b-collection-final.log`.
+
+The permit bank, local dispatch, and remaining integration slices are unfinished.
+This verification is not a new 50/100/200/500 RPS gateway result.
 
 ## Slice 1 source decisions
 

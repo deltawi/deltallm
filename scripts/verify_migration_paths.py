@@ -1014,6 +1014,9 @@ BEGIN
      OR to_regprocedure('deltallm_accounting_admit_grant_batch(bigint,text,integer,integer,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_allocate_permit_grant(bigint,text,uuid,integer,integer,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_claim_permit_batch(bigint,text,text,uuid,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_permit_window_ids(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_permit_grants_batch(bigint,text,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_claim_permits_batch(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_pending_legacy_work()') IS NULL
      OR to_regprocedure('deltallm_accounting_finalize_grant_batch(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_reconcile_expired_grants(bigint,integer)') IS NULL

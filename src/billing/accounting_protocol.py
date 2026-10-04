@@ -103,6 +103,45 @@ class AccountingReservation(FrozenBillingContract):
         return self
 
 
+class PreissuedPermitGrant(FrozenBillingContract):
+    """Durable capacity for one owner under one database fence."""
+
+    protocol_generation: int = Field(ge=1, le=2**63 - 1)
+    grant_id: Identifier
+    grantee_id: Identifier
+    fence_token: UUID = Field(repr=False)
+    accounting_partition: int = Field(ge=0, le=63)
+    allowance: Money
+    operation_limit: int = Field(ge=1, le=1024)
+    expires_at: AwareDatetime
+
+
+class PreissuedPermitAllocation(FrozenBillingContract):
+    """Stable refill identity created before any database attempt."""
+
+    reservation: AccountingReservation = Field(repr=False)
+    fence_token: UUID = Field(repr=False)
+    target_operations: int = Field(ge=1, le=1024)
+
+
+class PreissuedPermitClaim(FrozenBillingContract):
+    """One ordinal from an allocated grant; this is not a dispatch proof."""
+
+    grant: PreissuedPermitGrant = Field(repr=False)
+    permit_ordinal: int = Field(ge=0, le=1023)
+    reservation: AccountingReservation = Field(repr=False)
+
+    @model_validator(mode="after")
+    def validate_claim(self) -> PreissuedPermitClaim:
+        if self.reservation.protocol_generation != self.grant.protocol_generation:
+            raise ValueError("permit claim uses a stale accounting generation")
+        if self.reservation.allowance != self.grant.allowance:
+            raise ValueError("permit claim allowance does not match its grant")
+        if self.permit_ordinal >= self.grant.operation_limit:
+            raise ValueError("permit ordinal exceeds its grant capacity")
+        return self
+
+
 class DispatchPermit(FrozenBillingContract):
     protocol_generation: int
     operation_id: UUID

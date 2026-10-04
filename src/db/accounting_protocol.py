@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
-from enum import StrEnum
-from time import perf_counter
-from typing import Protocol
 from uuid import UUID
 
 from src.billing.accounting_protocol import (
@@ -20,27 +16,14 @@ from src.billing.accounting_protocol import (
     FinalizationReceipt,
     ReserveDecision,
 )
-from src.db.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
-from src.metrics.accounting import observe_accounting_database_call
-
-
-class AccountingQueryClient(Protocol):
-    async def query_raw(
-        self, query: str, *parameters: object
-    ) -> Sequence[Mapping[str, object]]: ...
-
-
-class AccountingResultFailure(StrEnum):
-    INCOMPLETE_RESULT = "incomplete_result"
-    INVALID_RESULT = "invalid_result"
-
-
-class AccountingProtocolUnavailable(RuntimeError):
-    """Sanitized protocol failure with a bounded operator-visible reason."""
-
-    def __init__(self, reason: AcceptanceFailure | AccountingResultFailure) -> None:
-        super().__init__("accounting protocol unavailable")
-        self.reason = reason.value
+from src.db.accounting_calls import (
+    AccountingDatabaseCalls,
+    AccountingProtocolUnavailable,
+    AccountingQueryClient,
+    AccountingResultFailure,
+    outcome_may_be_ambiguous as _outcome_may_be_ambiguous,
+)
+from src.db.telemetry_acceptance import AcceptanceFailure
 
 
 class AccountingProtocolRepository:
@@ -64,7 +47,7 @@ class AccountingProtocolRepository:
             raise ValueError("accounting grant target must be between 1 and 1024 operations")
         if not 1 <= grant_ttl_seconds <= 300:
             raise ValueError("accounting grant TTL must be between 1 and 300 seconds")
-        self._db = db
+        self._calls = AccountingDatabaseCalls(db, statement_budget_seconds=statement_budget_seconds)
         self._statement_budget_seconds = statement_budget_seconds
         self._grants_enabled = grants_enabled
         self._grantee_id = grantee_id
@@ -334,28 +317,15 @@ class AccountingProtocolRepository:
             )
         return recovered
 
-    async def _call(self, operation: str, query: str, *parameters: object, expires_at: float):
-        started = perf_counter()
-        remaining = expires_at - asyncio.get_running_loop().time()
-        if not math.isfinite(remaining) or remaining <= 0:
-            observe_accounting_database_call(operation, perf_counter() - started, "error")
-            raise AccountingProtocolUnavailable(AcceptanceFailure.DEADLINE)
-        try:
-            async with asyncio.timeout(min(remaining, self._statement_budget_seconds)):
-                rows = await self._db.query_raw(query, *parameters)
-        except asyncio.CancelledError:
-            observe_accounting_database_call(operation, perf_counter() - started, "cancelled")
-            raise
-        except Exception as exc:
-            observe_accounting_database_call(operation, perf_counter() - started, "error")
-            raise AccountingProtocolUnavailable(classify_acceptance_failure(exc)) from None
-        observe_accounting_database_call(operation, perf_counter() - started, "success")
-        return rows
+    async def _call(
+        self, operation: str, query: str, *parameters: object, expires_at: float
+    ) -> Sequence[Mapping[str, object]]:
+        return await self._calls.call(operation, query, *parameters, expires_at=expires_at)
 
     def _attempt_deadline(self, expires_at: float) -> float:
         """Reserve one statement window for exact ambiguity recovery."""
 
-        return expires_at - self._statement_budget_seconds
+        return self._calls.attempt_deadline(expires_at)
 
 
 def _one_generation(generations) -> int:
@@ -363,16 +333,6 @@ def _one_generation(generations) -> int:
     if len(values) != 1:
         raise ValueError("one accounting batch cannot mix protocol generations")
     return values.pop()
-
-
-def _outcome_may_be_ambiguous(exc: AccountingProtocolUnavailable) -> bool:
-    return exc.reason in {
-        AcceptanceFailure.DEADLINE.value,
-        AcceptanceFailure.STATEMENT_CANCELLED.value,
-        AcceptanceFailure.CONNECTION.value,
-        AcceptanceFailure.DATABASE_UNAVAILABLE.value,
-        AcceptanceFailure.UNKNOWN.value,
-    }
 
 
 def _optional_decimal_equal(actual: object, expected: Decimal | None) -> bool:

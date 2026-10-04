@@ -725,6 +725,7 @@ model DeltaLLM_AccountingBudgetWindow {
 
   @@unique([protocol_name, generation, scope_type, scope_id, period_key], map: "deltallm_accounting_budget_window_scope_key")
   @@index([protocol_name, generation, window_ends_at], map: "deltallm_accounting_budget_window_expiry_idx")
+  @@index([protocol_name, generation, scope_type, scope_id, window_ends_at, window_starts_at], map: "deltallm_accounting_window_subject_time_idx")
   @@map("deltallm_accounting_budget_windows")
 }
 

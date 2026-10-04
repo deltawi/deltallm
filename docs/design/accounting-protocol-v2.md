@@ -32,7 +32,8 @@ enabled, HTTP provider calls and charged cache hits use one admission authority.
 Their cost bounds come from the final validated request, not the original JSON body.
 Multiple outputs and multiple embedding inputs are included in the bound. A charged
 cache hit reserves its known charge and records a terminal result before success.
-It does not reserve provider-attempt capacity or call a provider.
+It reserves one accounting slot, but no extra provider-attempt allowance. It does
+not call a provider.
 
 Realtime, batch completion, and selector billing still use main's legacy write owner.
 They cannot run beside v2 grants until they use the same budget authority and recovery
@@ -188,3 +189,49 @@ admission owner; a failed permit must never fall through to assigned admission.
 
 The permit schema stays inactive until these safety checks pass. Removing assigned
 admission also requires new gateway load evidence and a reviewed rollback window.
+
+## Permit batch persistence
+
+`AccountingPermitRepository` owns typed refill and claim batches. It uses the same
+accounting pool and the same deadline, error, cancellation, and metric owner as
+assigned admission. It does not add a pool, worker, setting, or admission fallback.
+Bootstrap does not select it yet. The API and cache paths keep assigned admission.
+
+A refill batch needs one database call for up to 256 subjects. A claim batch needs
+one call for up to 256 operations across grants. Both have a one-MiB client payload
+limit. PostgreSQL also bounds the expanded JSON representation at two MiB. An invalid
+batch is rejected before a provider can run. Exact lost-ACK recovery adds one indexed
+query per attempt. At most three attempts fit inside the existing ACK budget; they
+use the same fences and frozen requests.
+
+PostgreSQL locks refill fences, existing grants, and all applicable windows in stable
+order before it invokes the reviewed allocator. Claim batches lock operation
+identities and grants in stable order before they append any operation. They never
+mutate budget windows. An identity error rolls back the whole claim batch. Existing
+terminal or exhausted claims return replay without a dispatch token. Recovery checks
+the complete request snapshot as well as owner, generation, grant, fence, ordinal,
+and partition. A different claim cannot authorize provider work.
+
+The window-lock lookup uses primary-key reads for explicit references and an indexed,
+row-bounded lookup for each implicit scope. It rejects more than eight matching
+windows. The scope/time index must be built through the migration role with the
+declared lock and statement limits. If the bounded migration cannot finish, schedule
+a maintenance window; do not increase request timeouts. Rollback retains the additive
+functions and index and selects the existing assigned writer.
+
+This persistence step is not the process-local permit bank or local dispatch. It
+does not remove the claim acknowledgement. Before activation, the bank must batch
+refills, bound subject state, handle partial grants, and retire unused permits safely.
+The complete allocator and bank still need constant-arrival evidence. The indexed
+window-lock check alone is not evidence for all SQL inside the allocator.
+
+The new index adds one entry per budget-window creation or renewal, not per ledger
+event. Its columns do not change when money counters change. The plan check uses
+25,000 expired windows for the same subject and 25,000 live windows for other
+subjects. It verifies the index and the one-row result. Retain normal window-table
+vacuum and analyze work. Recheck index size and write cost in the full qualification.
+
+An additional migration corrects zero-cost permit grants. Zero reserved money does
+not mean that all operation slots are used. Such a grant stays active until its
+operation limit is reached. The regression failed against the copied source function
+and passed after the appended correction. The applied source migration is unchanged.
