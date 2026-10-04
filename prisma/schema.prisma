@@ -738,14 +738,19 @@ model DeltaLLM_AccountingGrant {
   accounting_partition Int
   state                String
   dispatch_mode        String   @default("assigned")
+  local_dispatch       Boolean  @default(false)
+  dispatch_expires_at  DateTime? @db.Timestamptz
   fence_token          String?  @unique(map: "deltallm_accounting_grant_fence_token_key") @db.Uuid
   unit_allowance_exact Decimal? @db.Decimal(38, 18)
   allocated_exact      Decimal  @db.Decimal(38, 18)
   consumed_exact       Decimal  @default(0) @db.Decimal(38, 18)
   settled_exact        Decimal  @default(0) @db.Decimal(38, 18)
+  returned_exact       Decimal  @default(0) @db.Decimal(38, 18)
+  unknown_provisional_exact Decimal @default(0) @db.Decimal(38, 18)
   operation_limit      Int
   consumed_operations  Int      @default(0)
   settled_operations   Int      @default(0)
+  returned_operations  Int      @default(0)
   expires_at           DateTime @db.Timestamptz
   reconciled_at        DateTime? @db.Timestamptz
   created_at           DateTime @default(now()) @db.Timestamptz

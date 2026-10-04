@@ -339,3 +339,43 @@ Rollback can select the existing assigned writer or disable v2 through the curre
 cutover procedure. Keep the additive index, functions, and retained economic
 records. These bounds do not complete local dispatch, the terminal journal, or
 gateway qualification.
+
+## Inactive local lease foundation
+
+The database foundation adds local-lease fields with `local_dispatch=false` by
+default. Bootstrap does not select local dispatch. Assigned grants and durable
+pre-issued claims keep their current owners and behavior.
+
+Local funding keeps two deadlines. `dispatch_expires_at` retains the allocator's
+earlier budget-period end or short refill TTL. The existing `expires_at` retains
+escrow for terminal receipt recovery. Its first value covers the first operation
+lifetime plus the remaining short dispatch horizon. The operation lifetime is at
+most 15 minutes and the refill TTL is at most five minutes, so recovery is at most
+20 minutes from allocation. Exact allocation replay does not extend either stored
+deadline. This gives later local issues room to finish, without extending the
+period for new provider work. Runtime issue must check both deadlines.
+
+One terminal statement calls the existing bounded cross-grant claim owner and
+terminal owner in the same transaction. It retains global operation and grant
+lock order, full receipt identity, and one economic effect. Closed receipts can
+replay without a new provider dispatch. Batches are limited to 256 entries and
+2 MiB. No pool or normal assigned-path database call is added.
+
+Only a proven never-issued suffix can be returned. Returned ordinals cannot be
+claimed later, and suffix returns cannot reduce previously claimed capacity.
+Return updates grant metadata; the existing settlement owner releases money and
+slots once. If the issuer dies, unreturned capacity without a proven receipt
+becomes a conservative provisional debit. It is not assumed unused. Late valid
+receipts settle against the original funded budget period, not a new period.
+
+The migrations add five scalar fields per funded grant and no new table or index.
+They replace the existing settlement checks with local-aware checks. Existing
+records use false, zero, and null defaults that retain their previous constraints.
+Apply through the coordinated migration role, with a two-second lock limit and
+a thirty-second statement limit. Constraint validation reads retained grants;
+use a maintenance window if it cannot finish within those limits. Retention,
+archival, and vacuum remain under the existing financial-grant policy.
+
+The Python lease owner, byte-bounded issued receipts, supervised bulk return worker,
+and terminal journal are still required before activation. This database step is
+not a new gateway RPS result.

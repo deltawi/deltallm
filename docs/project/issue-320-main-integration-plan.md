@@ -183,7 +183,18 @@ it does not retry a failed acquisition or increase the lease.
 
 ## Slice 9f: local lease integration order
 
-- [ ] Add inactive local-lease fields and constraints in an append-only migration.
+The inactive foundation is implemented in two new migrations. The first keeps
+the short dispatch deadline separate from recovery. It uses the existing bulk
+claim owner instead of the source's per-grant terminal loop, and prevents claims
+from using a returned suffix. The second gives later issues recovery headroom
+without extending stored deadlines on replay. The already-applied first migration
+was not edited. All 17 new native cases pass, including assigned parity, period
+boundaries, wrong identity, zero-cost capacity, duplicate settlement, and owner
+loss. Bootstrap selection and the Python local lease lifecycle remain unfinished.
+
+- [x] Complete full database and migration verification for the inactive lease
+  foundation. Focused checks passed: 47 native and 35 verifier/lane cases.
+- [x] Add inactive local-lease fields and constraints in an append-only migration.
   Keep assigned and durable-claim behavior unchanged by default.
 - [ ] Retain the allocator's short dispatch deadline. Store a separate bounded
   receipt-recovery deadline. Reject a new local issue if its terminal lifetime
@@ -206,6 +217,25 @@ durable and immutable. The materializer must retain funding while accepted work
 is pending, and preserve exactly-once settlement after worker loss. The source
 append and materializer SQL must retain the clean branch's bounded key probes;
 copying an old JSON join must not restore retained-history scans.
+
+### Slice 9f verification
+
+All 7,223 collected tests passed. Counts are 4,665 hermetic, 237 Helm,
+1,645 application, 571 PostgreSQL, and 105 Redis. No required-service test was
+skipped. The full suites ran one at a time. All 117 migrations passed fresh install,
+upgrade from `v0.1.42`, and shared-feature upgrade. The verifier removed its
+disposable databases. Prisma generation, changed-file Ruff checks, format checks,
+and `git diff --check` passed.
+
+Logs are `/private/tmp/issue320-slice9f-postgres-full.log`,
+`/private/tmp/issue320-slice9f-components-full.log`,
+`/private/tmp/issue320-slice9f-app-full.log`,
+`/private/tmp/issue320-slice9f-redis-full.log`,
+`/private/tmp/issue320-slice9f-collection.log`, and
+`/private/tmp/issue320-slice9f-migrations.log`.
+These are foundation checks, not gateway qualification results. The local issuer,
+bulk return lifecycle, runtime selection, terminal journal, and later plan slices
+remain unfinished. Do not activate local dispatch or mark slice 9 complete.
 
 ## Slice 9a: inactive permit foundation
 

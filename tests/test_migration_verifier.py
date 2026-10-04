@@ -22,6 +22,25 @@ def test_database_url_for_replaces_only_database_path() -> None:
     )
 
 
+def test_accounting_verifier_requires_local_lease_schema_and_functions(monkeypatch) -> None:
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_protocol("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "local_dispatch",
+        "dispatch_expires_at",
+        "returned_exact",
+        "returned_operations",
+        "unknown_provisional_exact",
+        "deltallm_accounting_grant_local_dispatch_check",
+        "deltallm_accounting_allocate_local_permit_grant(bigint,text,uuid,integer,integer,jsonb)",
+        "deltallm_accounting_return_local_permits(bigint,text,uuid,integer)",
+        "deltallm_accounting_finalize_local_permit_batch(bigint,jsonb)",
+    ):
+        assert contract in sql
+
+
 @pytest.mark.parametrize(
     "database_name",
     (

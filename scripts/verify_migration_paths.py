@@ -994,6 +994,20 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'accounting permit schema is missing';
   END IF;
+  IF (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='deltallm_accounting_grants'
+        AND column_name IN (
+          'local_dispatch','dispatch_expires_at','returned_exact',
+          'returned_operations','unknown_provisional_exact'
+        )) <> 5
+     OR NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid='deltallm_accounting_grants'::regclass
+          AND conname='deltallm_accounting_grant_local_dispatch_check'
+          AND contype='c'
+     ) THEN
+    RAISE EXCEPTION 'accounting local lease schema is missing';
+  END IF;
   IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
       WHERE table_schema='public' AND table_name='deltallm_accounting_grants'
@@ -1017,6 +1031,9 @@ BEGIN
      OR to_regprocedure('deltallm_accounting_permit_window_ids(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_allocate_permit_grants_batch(bigint,text,integer,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_claim_permits_batch(bigint,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_allocate_local_permit_grant(bigint,text,uuid,integer,integer,jsonb)') IS NULL
+     OR to_regprocedure('deltallm_accounting_return_local_permits(bigint,text,uuid,integer)') IS NULL
+     OR to_regprocedure('deltallm_accounting_finalize_local_permit_batch(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_pending_legacy_work()') IS NULL
      OR to_regprocedure('deltallm_accounting_finalize_grant_batch(bigint,jsonb)') IS NULL
      OR to_regprocedure('deltallm_accounting_reconcile_expired_grants(bigint,integer)') IS NULL
