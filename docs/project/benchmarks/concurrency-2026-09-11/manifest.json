@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-11",
+  "sanitization": "Only stage-local index, relative times, status and fixed error codes are retained. Request IDs, identities, URLs, messages and payloads are removed.",
+  "stages": [
+    {
+      "arrival_window_seconds": 35.0,
+      "client_concurrency": 1,
+      "drain_window_seconds": 0.12250837497413158,
+      "samples": "stage-1.jsonl",
+      "sha256": "5816171563a4493ad376ec4caf8c14207f9c960070b1cb40667e91d0170f9de0"
+    },
+    {
+      "arrival_window_seconds": 35.0,
+      "client_concurrency": 5,
+      "drain_window_seconds": 0.25266741699306294,
+      "samples": "stage-5.jsonl",
+      "sha256": "457fc0f461505b73b696f2a6a257eacea46fb6504e046ab2da9f9fbbe1de9abe"
+    },
+    {
+      "arrival_window_seconds": 35.0,
+      "client_concurrency": 10,
+      "drain_window_seconds": 0.5622051670216024,
+      "samples": "stage-10.jsonl",
+      "sha256": "5f9f7188392d7bd8ae78546d92263174a58c2682c8903753297c0c77a8fa1bd1"
+    },
+    {
+      "arrival_window_seconds": 35.0,
+      "client_concurrency": 50,
+      "drain_window_seconds": 1.2385347080416977,
+      "samples": "stage-50.jsonl",
+      "sha256": "9ce212451a1980b1c46c5acfa051f7e3f3cfd018714f2c7237a07c5ae21e30be"
+    },
+    {
+      "arrival_window_seconds": 35.0,
+      "client_concurrency": 100,
+      "drain_window_seconds": 1.2877632500021718,
+      "samples": "stage-100.jsonl",
+      "sha256": "fa5809e0adac78a27d94e84f03fade90c0631082c3f0c9e1b320947576646716"
+    },
+    {
+      "arrival_window_seconds": 35.0,
+      "client_concurrency": 200,
+      "drain_window_seconds": 4.910360707959626,
+      "samples": "stage-200.jsonl",
+      "sha256": "544b3e72cbef6fbb71d5a1de56bdffa290fd1938fdb571aaaca983b1d06f3d63"
+    },
+    {
+      "arrival_window_seconds": 35.0,
+      "client_concurrency": 500,
+      "drain_window_seconds": 8.293251750001218,
+      "samples": "stage-500.jsonl",
+      "sha256": "cb6eea872cfa3002a12104501309abd0e90c3436dbc7cab617597ee7a25d3500"
+    }
+  ],
+  "workload": "35-second closed-loop stages with five-second ramp; mixed providers and 13 organizations"
+}

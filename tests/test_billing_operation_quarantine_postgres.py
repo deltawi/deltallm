@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from decimal import Decimal
 import json
 
@@ -40,7 +41,10 @@ async def write_event(db, charge, payload):
         )
 
 
-async def test_poison_receipt_is_durable_and_neighbors_recover_across_workers(review_operation_db):
+@pytest.mark.parametrize("expire_first_open", [False, True], ids=["ready", "expired-open-slice"])
+async def test_poison_receipt_is_durable_and_neighbors_recover_across_workers(
+    review_operation_db, monkeypatch, expire_first_open
+):
     db, bad, bad_charge = review_operation_db
     good, good_charge = fixtures.another_operation(bad, bad_charge)
     abandoned, _ = fixtures.another_operation(bad, bad_charge)
@@ -68,17 +72,44 @@ async def test_poison_receipt_is_durable_and_neighbors_recover_across_workers(re
         == bad.total_allowance + good.total_allowance + abandoned.total_allowance
     )
     assert await _scope_totals(db, bad.attribution.api_key) == ledger
-    await asyncio.gather(fixtures.recovery(db).recover(), fixtures.recovery(db).recover())
+    recoveries = [fixtures.recovery(db), fixtures.recovery(db)]
+    expired_slices = []
+    if expire_first_open:
+        for recovery in recoveries:
+            expire_open_slice_once(recovery, monkeypatch, expired_slices)
+    services = [
+        SpendIngestionService(
+            db_client=db,
+            writer=SpendTrackingService(db),
+            config=SpendIngestionConfig(enabled=True, worker_enabled=False),
+            operation_recovery=recovery,
+        )
+        for recovery in recoveries
+    ]
+    delivered = []
+    # Recovery has a fixed 250-ms slice. Exercise its real owner, which drains
+    # available receipts even when recovery is unavailable, then revisits durable
+    # work on the next tick. All original economic assertions still apply.
+    for tick in range(2):
+        async with asyncio.TaskGroup() as group:
+            claims = [group.create_task(service._claim_batch()) for service in services]
+        if expire_first_open and tick == 0:
+            assert expired_slices == ["open", "open"]
+            assert [record.event_id for claim in claims for record in claim.result()] == [
+                good.attribution.component_event_id
+            ]
+            assert (await fixtures.operation_row(db, abandoned))["closed_at"] is None
+            assert await hold(db, bad) == (
+                bad.total_allowance + good.total_allowance + abandoned.total_allowance
+            )
+            assert await _scope_totals(db, bad.attribution.api_key) == ledger
+        async with asyncio.TaskGroup() as group:
+            for service, claim in zip(services, claims, strict=True):
+                records = claim.result()
+                delivered.extend(record.event_id for record in records)
+                group.create_task(service._process_batch(records))
+    assert delivered == [good.attribution.component_event_id]
     assert (await fixtures.operation_row(db, abandoned))["closed_at"] is not None
-    service = SpendIngestionService(
-        db_client=db,
-        writer=SpendTrackingService(db),
-        config=SpendIngestionConfig(enabled=True, worker_enabled=False),
-        operation_recovery=fixtures.recovery(db),
-    )
-    records = await service._claim_batch()
-    assert [record.event_id for record in records] == [good.attribution.component_event_id]
-    await service._process_batch(records)
     await BillingOperationRepository(db).unattempted(
         good, component="answer", expires_at=deadline()
     )
@@ -90,6 +121,31 @@ async def test_poison_receipt_is_durable_and_neighbors_recover_across_workers(re
     assert (await fixtures.operation_row(db, bad))["recovery_blocked_at"] == blocked[
         "recovery_blocked_at"
     ]
+
+
+def expire_open_slice_once(recovery, monkeypatch, expired_slices):
+    recover_one = recovery._recover_one
+    transaction = recovery.operations._transaction
+    expired = False
+
+    @asynccontextmanager
+    async def expired_transaction(_expires_at):
+        # Use the real repository's expired-deadline rejection before SQL; no
+        # sleep, replacement recovery result, retry loop or relaxed budget.
+        async with transaction(asyncio.get_running_loop().time() - 1) as tx:
+            yield tx
+
+    async def recover(lane, *, skip_id=None):
+        nonlocal expired
+        if lane == "open" and not expired:
+            expired = True
+            expired_slices.append(lane)
+            with monkeypatch.context() as patch:
+                patch.setattr(recovery.operations, "_transaction", expired_transaction)
+                return await recover_one(lane, skip_id=skip_id)
+        return await recover_one(lane, skip_id=skip_id)
+
+    monkeypatch.setattr(recovery, "_recover_one", recover)
 
 
 async def test_strict_writer_rolls_back_conflicting_charge_and_exposes_record_error(

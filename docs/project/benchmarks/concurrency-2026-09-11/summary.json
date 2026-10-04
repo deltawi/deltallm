@@ -1,0 +1,88 @@
+{
+  "failure_causes_total": {
+    "audit_persistence_unavailable": 884,
+    "gateway_preflight_global_parallel_exceeded": 1121,
+    "prompt_resolution_timeout": 36,
+    "unclassified_http_error": 288
+  },
+  "measured_deployment_revision": null,
+  "per_pod_capacity_certified": false,
+  "stages": [
+    {
+      "client_concurrency": 1,
+      "failure_causes": {},
+      "started": 98,
+      "success": 98,
+      "success_only_p95_seconds": 0.5198905839934014,
+      "success_percent": 100.0,
+      "successful_rps_including_drain": 2.790233515036415
+    },
+    {
+      "client_concurrency": 5,
+      "failure_causes": {},
+      "started": 390,
+      "success": 390,
+      "success_only_p95_seconds": 0.8669087910093367,
+      "success_percent": 100.0,
+      "successful_rps_including_drain": 11.062992635048259
+    },
+    {
+      "client_concurrency": 10,
+      "failure_causes": {},
+      "started": 794,
+      "success": 794,
+      "success_only_p95_seconds": 0.6973807910108007,
+      "success_percent": 100.0,
+      "successful_rps_including_drain": 22.327074383348734
+    },
+    {
+      "client_concurrency": 50,
+      "failure_causes": {},
+      "started": 1721,
+      "success": 1721,
+      "success_only_p95_seconds": 1.7609252919792198,
+      "success_percent": 100.0,
+      "successful_rps_including_drain": 47.490882671315426
+    },
+    {
+      "client_concurrency": 100,
+      "failure_causes": {
+        "audit_persistence_unavailable": 61
+      },
+      "started": 1557,
+      "success": 1496,
+      "success_only_p95_seconds": 3.8467689160024747,
+      "success_percent": 96.08220937700706,
+      "successful_rps_including_drain": 41.22601852567781
+    },
+    {
+      "client_concurrency": 200,
+      "failure_causes": {
+        "audit_persistence_unavailable": 617,
+        "gateway_preflight_global_parallel_exceeded": 172,
+        "prompt_resolution_timeout": 2,
+        "unclassified_http_error": 285
+      },
+      "started": 1696,
+      "success": 620,
+      "success_only_p95_seconds": 10.559311375021935,
+      "success_percent": 36.556603773584904,
+      "successful_rps_including_drain": 15.534813241523741
+    },
+    {
+      "client_concurrency": 500,
+      "failure_causes": {
+        "audit_persistence_unavailable": 206,
+        "gateway_preflight_global_parallel_exceeded": 949,
+        "prompt_resolution_timeout": 34,
+        "unclassified_http_error": 3
+      },
+      "started": 1943,
+      "success": 751,
+      "success_only_p95_seconds": 22.03748837497551,
+      "success_percent": 38.6515697375193,
+      "successful_rps_including_drain": 17.34681433348279
+    }
+  ],
+  "workload": "historical-closed-loop-mixed-provider"
+}

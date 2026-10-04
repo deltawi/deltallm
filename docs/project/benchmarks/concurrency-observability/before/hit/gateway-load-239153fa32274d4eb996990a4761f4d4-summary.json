@@ -1,0 +1,130 @@
+{
+  "arrival_window_completion_rps": 10.0,
+  "arrival_window_seconds": 20,
+  "cache_calls": {
+    "get": 200
+  },
+  "case": "hit",
+  "client_started_count": 200,
+  "client_started_rps": 10.0,
+  "completion_count": 200,
+  "drain_window_seconds": 0.0003853329999401467,
+  "environment": "ASGI with fake Redis, fixed provider mock, no database",
+  "generator_dropped_count": 0,
+  "in_flight_samples": [
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ],
+    [
+      10,
+      0
+    ],
+    [
+      11,
+      0
+    ],
+    [
+      12,
+      0
+    ],
+    [
+      13,
+      0
+    ],
+    [
+      14,
+      0
+    ],
+    [
+      15,
+      0
+    ],
+    [
+      16,
+      0
+    ],
+    [
+      17,
+      0
+    ],
+    [
+      18,
+      0
+    ],
+    [
+      19,
+      0
+    ]
+  ],
+  "in_flight_slope_per_second": 0.0,
+  "label": "before",
+  "latency_seconds": {
+    "max": 0.008823915999528253,
+    "mean": 0.0046628312599932544,
+    "p50": 0.004740332999062957,
+    "p95": 0.005790041001091595,
+    "p99": 0.006481374999566469
+  },
+  "max_in_flight_observed": 1,
+  "provider_calls": {},
+  "provider_seconds": {},
+  "redis_calls": {
+    "eval": 600,
+    "get": 200
+  },
+  "run_id": "239153fa32274d4eb996990a4761f4d4",
+  "scheduling_lag_seconds": {
+    "max": 0.0026852920000237646,
+    "mean": 0.0019801655154788023,
+    "p50": 0.0022189170013007242,
+    "p95": 0.0022861249999550637,
+    "p99": 0.002345708999200724
+  },
+  "started_at": "2026-09-12T10:06:54.613379+00:00",
+  "status_counts": {
+    "200": 200
+  },
+  "success_count": 200,
+  "target_count": 200,
+  "target_rate_rps": 10,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  }
+}

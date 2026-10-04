@@ -1,0 +1,143 @@
+{
+  "arrival_window_completion_rps": 10.0,
+  "arrival_window_seconds": 20,
+  "cache_calls": {
+    "get": 200,
+    "set": 200
+  },
+  "case": "miss",
+  "client_started_count": 200,
+  "client_started_rps": 10.0,
+  "completion_count": 200,
+  "drain_window_seconds": 0.0002601670003059553,
+  "environment": "ASGI with fake Redis, fixed provider mock, no database",
+  "generator_dropped_count": 0,
+  "in_flight_samples": [
+    [
+      1,
+      0
+    ],
+    [
+      2,
+      0
+    ],
+    [
+      3,
+      0
+    ],
+    [
+      4,
+      0
+    ],
+    [
+      5,
+      0
+    ],
+    [
+      6,
+      0
+    ],
+    [
+      7,
+      0
+    ],
+    [
+      8,
+      0
+    ],
+    [
+      9,
+      0
+    ],
+    [
+      10,
+      0
+    ],
+    [
+      11,
+      0
+    ],
+    [
+      12,
+      0
+    ],
+    [
+      13,
+      0
+    ],
+    [
+      14,
+      0
+    ],
+    [
+      15,
+      0
+    ],
+    [
+      16,
+      0
+    ],
+    [
+      17,
+      0
+    ],
+    [
+      18,
+      0
+    ],
+    [
+      19,
+      0
+    ]
+  ],
+  "in_flight_slope_per_second": 0.0,
+  "label": "after",
+  "latency_seconds": {
+    "max": 0.20949358399957418,
+    "mean": 0.008528470830005972,
+    "p50": 0.007575375000669737,
+    "p95": 0.009316499999840744,
+    "p99": 0.011951167000006535
+  },
+  "max_in_flight_observed": 3,
+  "provider_calls": {
+    "post": 200
+  },
+  "provider_seconds": {
+    "post": 0.014941169009034638
+  },
+  "redis_calls": {
+    "eval": 1200,
+    "expire": 400,
+    "get": 200,
+    "hgetall": 200,
+    "incr": 200,
+    "incrby": 200,
+    "mget": 200,
+    "pexpire": 200,
+    "zadd": 400,
+    "zremrangebyscore": 200
+  },
+  "run_id": "c3a558a09a574fccb23e17b8f9347d6b",
+  "scheduling_lag_seconds": {
+    "max": 0.10807766699872445,
+    "mean": 0.0024298910245852314,
+    "p50": 0.002193917000113288,
+    "p95": 0.002295083000717568,
+    "p99": 0.0025067079986911267
+  },
+  "started_at": "2026-09-12T10:09:03.798757+00:00",
+  "status_counts": {
+    "200": 200
+  },
+  "success_count": 200,
+  "target_count": 200,
+  "target_rate_rps": 10,
+  "ttft_seconds": {
+    "max": null,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null
+  }
+}

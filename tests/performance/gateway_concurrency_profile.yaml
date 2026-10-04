@@ -1,0 +1,39 @@
+# Disposable local workload. Fixture prices are not real provider quotes.
+model_list:
+  - model_name: concurrency-fixture
+    deployment_id: fixed-one-token
+    deltallm_params:
+      model: openai/fixed-one-token
+      api_key: local-mock-only
+      api_base: http://127.0.0.1:59441/v1
+    model_info:
+      mode: chat
+      max_tokens: 8192
+      input_cost_per_token: 0.000001
+      output_cost_per_token: 0.000002
+      rpm_limit: 100000
+      tpm_limit: 10000000
+router_settings:
+  num_retries: 0
+  timeout: 10
+general_settings:
+  master_key: os.environ/DELTALLM_MASTER_KEY
+  salt_key: os.environ/DELTALLM_SALT_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+  model_deployment_source: config_only
+  cache_enabled: true
+  budget_enforcement_query_mode: legacy
+  db_pool_size: 20
+  db_pool_timeout: 30
+  telemetry_db_pool_size: 5
+  telemetry_db_pool_timeout_seconds: 2
+  gateway_preflight_capacity_enabled: true
+  gateway_preflight_global_max_parallel: 100
+  gateway_preflight_org_max_parallel: 50
+  redis_degraded_mode: fail_closed
+  audit_enabled: true
+  audit_ingestion_mode: outbox
+  audit_ingestion_worker_enabled: true
+  spend_ingestion_mode: outbox
+  spend_ingestion_worker_enabled: true

@@ -179,6 +179,7 @@ nav:
       - Operations details:
           - Kubernetes and Helm: deployment/kubernetes.md
           - Metrics and callbacks: features/observability.md
+          - Measure gateway concurrency: deployment/concurrency-measurement.md
           - Provider connection tuning: deployment/upstream-http.md
           - Upgrade and rollback behavior: deployment/upgrade-and-rollback.md
           - Release-specific rollouts: deployment/rollout-index.md
