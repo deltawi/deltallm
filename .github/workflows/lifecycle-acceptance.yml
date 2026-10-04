@@ -1,0 +1,169 @@
+name: Managed lifecycle acceptance
+
+on:
+  workflow_call:
+    inputs:
+      publish-release:
+        type: boolean
+        default: false
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  image-and-rollout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        presidio: ["false", "true"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.13'
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Install frozen test environment
+        run: |
+          uv sync --frozen --extra dev
+          uv run prisma generate --schema=./prisma/schema.prisma
+          uv run python scripts/check_container_contract.py
+      - name: Build exact runtime image
+        if: ${{ !inputs.publish-release }}
+        env:
+          INSTALL_PRESIDIO: ${{ matrix.presidio }}
+        run: docker build --build-arg INSTALL_PRESIDIO="$INSTALL_PRESIDIO" -t deltallm-lifecycle:candidate .
+      - uses: docker/setup-qemu-action@v3
+        if: inputs.publish-release
+      - uses: docker/setup-buildx-action@v3
+        if: inputs.publish-release
+      - uses: docker/login-action@v3
+        if: inputs.publish-release
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build immutable release artifact without release tags
+        if: inputs.publish-release
+        id: release-build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=deltallm/deltallm,push-by-digest=true,name-canonical=true,push=true
+          build-args: INSTALL_PRESIDIO=${{ matrix.presidio }}
+          labels: |
+            org.opencontainers.image.title=DeltaLLM
+            org.opencontainers.image.description=OpenAI-compatible LLM gateway
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=lifecycle-${{ matrix.presidio }}
+          cache-to: type=gha,mode=max,scope=lifecycle-${{ matrix.presidio }}
+      - name: Load the exact release digest for acceptance
+        if: inputs.publish-release
+        env:
+          IMAGE_DIGEST: ${{ steps.release-build.outputs.digest }}
+        run: |
+          docker pull "deltallm/deltallm@$IMAGE_DIGEST"
+          docker tag "deltallm/deltallm@$IMAGE_DIGEST" deltallm-lifecycle:candidate
+      - name: Verify offline non-root runtime and forced-exit bound
+        env:
+          INSTALL_PRESIDIO: ${{ matrix.presidio }}
+        run: |
+          extra=()
+          if [ "$INSTALL_PRESIDIO" = true ]; then extra+=(--presidio); fi
+          uv run python scripts/check_lifecycle_image.py --image deltallm-lifecycle:candidate \
+            --output /tmp/lifecycle-evidence/image "${extra[@]}"
+      - name: Install pinned disposable cluster tool
+        if: matrix.presidio == 'false'
+        run: |
+          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64 -o /tmp/kind-linux-amd64
+          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256sum
+          (cd /tmp && sha256sum -c kind.sha256sum)
+          chmod +x /tmp/kind-linux-amd64
+      - name: Exercise migration, rollout and pod loss
+        if: matrix.presidio == 'false'
+        run: >-
+          uv run python -m tests.performance.run_lifecycle_acceptance
+          --image deltallm-lifecycle:candidate --kind /tmp/kind-linux-amd64
+          --output /tmp/lifecycle-evidence/kubernetes
+      - name: Build committed PR7 comparison baseline
+        if: matrix.presidio == 'false'
+        run: >-
+          uv run python scripts/build_lifecycle_baseline.py
+          --ref 4d856670e54e689ea4fc1ceead787730e5edcf5c
+          --image deltallm-lifecycle:baseline
+          --manifest /tmp/lifecycle-evidence/baseline.json
+      - name: Compare the same offered workload before and after PR8
+        if: matrix.presidio == 'false'
+        run: >-
+          uv run python -m tests.performance.run_lifecycle_comparison
+          --image deltallm-lifecycle:candidate --baseline-image deltallm-lifecycle:baseline
+          --baseline-manifest /tmp/lifecycle-evidence/baseline.json
+          --output /tmp/lifecycle-evidence/comparison
+      - name: Retain lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-${{ matrix.presidio }}
+          path: /tmp/lifecycle-evidence
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Record qualified release digest
+        if: inputs.publish-release
+        env:
+          IMAGE_DIGEST: ${{ steps.release-build.outputs.digest }}
+          VARIANT: ${{ matrix.presidio }}
+        run: |
+          mkdir -p /tmp/release-digests
+          printf '%s\n' "$IMAGE_DIGEST" > "/tmp/release-digests/$VARIANT"
+      - uses: actions/upload-artifact@v4
+        if: inputs.publish-release
+        with:
+          name: qualified-release-digest-${{ matrix.presidio }}
+          path: /tmp/release-digests
+          if-no-files-found: error
+
+  promote-release:
+    if: inputs.publish-release
+    needs: image-and-rollout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qualified-release-digest-*
+          path: /tmp/release-digests
+          merge-multiple: true
+      - name: Publish tags for the already tested multi-platform manifests
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          for variant in false true; do
+            digest=$(cat "/tmp/release-digests/$variant")
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            suffix=""
+            if [ "$variant" = true ]; then suffix="-presidio"; fi
+            tags=(--tag "deltallm/deltallm:$RELEASE_TAG$suffix")
+            if [ "$PRERELEASE" = false ]; then tags+=(--tag "deltallm/deltallm:latest$suffix"); fi
+            docker buildx imagetools create "${tags[@]}" "deltallm/deltallm@$digest"
+          done

@@ -160,7 +160,7 @@ envFrom:
 {{- $redisEnv := include "deltallm.redisEnv" . -}}
 initContainers:
   - name: wait-for-runtime-dependencies
-    image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+    image: {{ include "deltallm.image" . | quote }}
     imagePullPolicy: {{ .Values.image.pullPolicy }}
     securityContext:
       {{- toYaml .Values.securityContext | nindent 6 }}
@@ -236,4 +236,5 @@ readinessProbe:
   periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
   timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
   failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+  successThreshold: {{ .Values.probes.readiness.successThreshold }}
 {{- end -}}

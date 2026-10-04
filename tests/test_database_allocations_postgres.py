@@ -5,6 +5,7 @@ import os
 from uuid import uuid4
 
 import pytest
+from prisma import Prisma
 from prisma.errors import RawQueryError
 
 from src.db.allocated_client import AllocatedPrisma, DatabaseOwner, DatabaseUnavailableError
@@ -25,7 +26,13 @@ async def allocated_databases():
         pytest.skip("DATABASE_URL is required")
     async with AsyncExitStack() as stack:
         clients = {}
-        for name in ("control", "foreground", "telemetry", "telemetry_worker"):
+        for name in (
+            "control",
+            "foreground",
+            "telemetry",
+            "telemetry_worker",
+            "telemetry_settlement",
+        ):
             policy = DatabasePolicy(name, 1, 0.2, 0.8, 0.1, 2)
             allocation = DatabaseOwner(policy)
             client = AllocatedPrisma(
@@ -83,6 +90,69 @@ async def test_real_native_statement_deadline_and_connection_recovery(allocated_
     assert "statement timeout" in str(failure.value.__cause__)
     assert await client.query_raw("SELECT 1 AS alive") == [{"alive": 1}]
     assert client.allocation.gate.active == 0
+
+
+async def test_real_health_probe_does_not_reject_a_single_slot_transaction(
+    allocated_databases,
+    monkeypatch,
+):
+    client = allocated_databases["telemetry"]
+    entered, release = asyncio.Event(), asyncio.Event()
+    execute = Prisma._execute
+
+    async def paused_probe(self, **kwargs):
+        if kwargs.get("arguments", {}).get("query") == "SELECT 1 AS ready":
+            entered.set()
+            await release.wait()
+        return await execute(self, **kwargs)
+
+    monkeypatch.setattr(Prisma, "_execute", paused_probe)
+
+    async def settle():
+        async with client.tx() as tx:
+            return await tx.query_raw("SELECT 1 AS committed")
+
+    probe = asyncio.create_task(client.readiness_probe())
+    await asyncio.wait_for(entered.wait(), 1)
+    settlement = asyncio.create_task(settle())
+    try:
+        async with asyncio.timeout(1):
+            while client.allocation.gate.waiters != 1:
+                await asyncio.sleep(0)
+        release.set()
+        assert await probe is True
+        assert await settlement == [{"committed": 1}]
+        assert client.allocation.gate.active == client.allocation.gate.waiters == 0
+    finally:
+        release.set()
+        await asyncio.gather(probe, settlement, return_exceptions=True)
+
+
+@pytest.mark.parametrize("allocation", ["telemetry", "telemetry_settlement"])
+async def test_real_overlapping_acceptance_transactions_wait_and_commit_with_one_connection(
+    allocated_databases, allocation
+):
+    client = allocated_databases[allocation]
+
+    async def settle():
+        async with client.tx() as tx:
+            return await tx.query_raw("SELECT 2 AS settled")
+
+    second = None
+    try:
+        async with client.tx() as first:
+            assert await first.query_raw("SELECT 1 AS settled") == [{"settled": 1}]
+            second = asyncio.create_task(settle())
+            async with asyncio.timeout(1):
+                while client.allocation.gate.waiters != 1:
+                    await asyncio.sleep(0)
+            with pytest.raises(DatabaseUnavailableError):
+                await client.query_raw("SELECT 3 AS overflow")
+        assert await second == [{"settled": 2}]
+        assert client.allocation.gate.active == client.allocation.gate.waiters == 0
+    finally:
+        if second is not None:
+            await asyncio.gather(second, return_exceptions=True)
 
 
 async def test_real_native_lock_deadline_rolls_back_and_does_not_authorize_on_exhaustion(

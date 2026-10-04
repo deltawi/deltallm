@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
+from src.shutdown import cleanup_deadline
+from src.telemetry.lifecycle import stop_tasks_before_deadline
+
 from asyncio import Task, create_task
 from dataclasses import dataclass
 import os
@@ -33,10 +34,18 @@ def _startup_setting(general_settings: Any, settings: Any, field_name: str, defa
 
 
 async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
+    runtime = AuditRuntime(statuses=(BootstrapStatus("audit", "disabled"),))
+    try:
+        return await _init_audit_runtime(app, cfg, runtime)
+    except BaseException:
+        await shutdown_audit_runtime(app, runtime)
+        raise
+
+
+async def _init_audit_runtime(app: Any, cfg: Any, runtime: AuditRuntime) -> AuditRuntime:
     app.state.audit_repository = None
     app.state.audit_service = None
 
-    runtime = AuditRuntime(statuses=(BootstrapStatus("audit", "disabled"),))
     if not cfg.general_settings.audit_enabled:
         return runtime
 
@@ -167,6 +176,7 @@ async def init_audit_runtime(app: Any, cfg: Any) -> AuditRuntime:
             worker_id=f"{socket.gethostname()}:{os.getpid()}:audit",
         ),
     )
+    app.state.audit_service = service
     await service.start()
 
     app.state.audit_repository = AuditRepository(app.state.prisma_manager.client)
@@ -200,9 +210,9 @@ async def shutdown_audit_runtime(app: Any, runtime: AuditRuntime) -> None:
     if runtime.retention_worker is not None:
         runtime.retention_worker.stop()
     if runtime.retention_task is not None:
-        runtime.retention_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runtime.retention_task
+        await stop_tasks_before_deadline(
+            [runtime.retention_task], deadline=cleanup_deadline(5), cancel_first=True
+        )
 
     audit_service: AuditService | None = getattr(app.state, "audit_service", None)
     if audit_service is not None:

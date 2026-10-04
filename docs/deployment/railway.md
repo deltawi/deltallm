@@ -52,7 +52,7 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 ```
 
-Do not hard-code `PORT`. Railway provides `PORT` at runtime, and `deploy/railway/Dockerfile` starts `uvicorn` with that value.
+Do not hard-code `PORT`. Railway provides `PORT` at runtime, and the managed `python -m src.server` command reads that value.
 
 `DELTALLM_CONFIG_PATH` tells DeltaLLM which YAML config file to load at startup. The Docker image default is intended for Docker Compose bind mounts. Railway sets:
 
@@ -186,3 +186,7 @@ After the app is running:
 For production, create a separate template with the necessary operational controls.
 This includes dedicated batch workers, shared artifact storage, and custom domains.
 Keep these changes separate from this evaluation template.
+
+The Railway Dockerfile is generated from the root image contract without BuildKit
+cache mounts. Set a 90-second termination grace where the platform supports it.
+See [Process lifecycle](process-lifecycle.md) for supported migration modes.

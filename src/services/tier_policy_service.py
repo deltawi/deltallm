@@ -9,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from src.db.tiers import TierPolicyLoadResult
+from src.telemetry.lifecycle import WorkerHealth, WorkerState, stop_tasks_before_deadline
+from src.shutdown import cleanup_deadline
 from src.services.tier_policy_compiler import compile_tier_policy_snapshot
 from src.services.tier_policy_models import (
     CompiledTierCapacityPoolMember,
@@ -100,6 +102,7 @@ class TierPolicyService:
         self._refresh_wakeup = asyncio.Event()
         self._refresh_task: asyncio.Task[None] | None = None
         self._stopping = False
+        self._started = asyncio.Event()
         self._retry_after: datetime | None = None
         self._snapshot_stale = self.mode != "disabled"
         self._last_reload_failed = False
@@ -112,19 +115,33 @@ class TierPolicyService:
         if self._refresh_task is not None and not self._refresh_task.done():
             return
         self._stopping = False
+        self._started.clear()
         self._refresh_task = asyncio.create_task(self._refresh_loop())
+
+    @property
+    def worker_health(self) -> WorkerHealth:
+        if self.mode == "disabled":
+            return WorkerHealth(WorkerState.DISABLED)
+        if self._stopping:
+            return WorkerHealth(WorkerState.STOPPING)
+        if self._refresh_task is None or self._refresh_task.done():
+            return WorkerHealth(WorkerState.FAILED)
+        if not self._started.is_set():
+            return WorkerHealth(WorkerState.STARTING)
+        if self._snapshot_stale or self._last_reload_failed:
+            return WorkerHealth(WorkerState.DEGRADED)
+        return WorkerHealth(WorkerState.READY)
 
     async def close(self) -> None:
         self._stopping = True
         self._refresh_wakeup.set()
-        if self._refresh_task is None:
-            return
-        self._refresh_task.cancel()
-        try:
-            await self._refresh_task
-        except asyncio.CancelledError:
-            pass
-        self._refresh_task = None
+        await stop_tasks_before_deadline(
+            (self._refresh_task,),
+            deadline=cleanup_deadline(5),
+            cancel_first=True,
+        )
+        if self._refresh_task is not None and self._refresh_task.done():
+            self._refresh_task = None
 
     async def reload(self, *, reason: str = "manual") -> TierPolicySnapshot:
         async with self._reload_lock:
@@ -308,6 +325,7 @@ class TierPolicyService:
         )
 
     async def _refresh_loop(self) -> None:
+        self._started.set()
         while not self._stopping:
             delay_seconds = self._next_refresh_delay_seconds()
             woke = await self._wait_for_wakeup(delay_seconds)

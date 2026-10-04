@@ -9,6 +9,7 @@ from src.bootstrap.runtime_services import _runtime_setting
 from src.config import AppConfig
 from src.db.realtime_billing import RealtimeBillingRepository
 from src.db.realtime_recovery import RealtimeBillingRecovery
+from src.process_lifecycle import ProcessLifecycle
 from src.realtime.admission import RealtimeAdmissionService
 from src.realtime.capacity import RealtimeCapacity
 from src.realtime.config import RealtimeSettings
@@ -39,6 +40,9 @@ async def init_realtime_runtime(state: State, cfg: AppConfig) -> RealtimeRuntime
             )
     if not settings.enabled:
         return None
+    lifecycle: ProcessLifecycle | None = getattr(state, "process_lifecycle", None)
+    if lifecycle is not None:
+        validate_realtime_drain(settings, lifecycle)
     if (
         state.redis is None
         or not spend.durable_ingestion_enabled
@@ -77,5 +81,18 @@ async def init_realtime_runtime(state: State, cfg: AppConfig) -> RealtimeRuntime
         accounting_ready=lambda: spend.worker_health.ready,
     )
     runtime = RealtimeRuntime(admission=admission, limits=settings.transport_limits())
+    if lifecycle is not None:
+        lifecycle.register_claim_stop(runtime.begin_drain)
     state.realtime_runtime = runtime
     return runtime
+
+
+def validate_realtime_drain(settings: RealtimeSettings, lifecycle: ProcessLifecycle) -> None:
+    available = (
+        lifecycle.settings.lifecycle_withdrawal_seconds
+        + lifecycle.settings.lifecycle_request_drain_seconds
+    )
+    if settings.cleanup_seconds + settings.write_seconds >= available:
+        raise RuntimeError(
+            "Realtime cleanup_seconds + write_seconds must fit before the process response cutoff"
+        )

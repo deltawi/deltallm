@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from contextlib import suppress
 from dataclasses import dataclass
 import logging
 import random
@@ -10,6 +9,8 @@ from time import perf_counter
 from typing import Any, Callable
 
 from src.rate_limit_policy import RateLimitLease, release_rate_limit_controls
+from src.shutdown import cleanup_deadline
+from src.telemetry.lifecycle import stop_tasks_before_deadline
 from src.services.limit_counter import LimitCounter
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class RateLimitReleaseRetryQueue:
     ) -> bool:
         if not lease.pending_parallel_acquisitions:
             return True
+        if self._stopped:
+            return False
 
         delay_seconds = max(0.0, float(self._delay_seconds(attempt_count)))
         inserted = self._insert_retry(
@@ -101,12 +104,11 @@ class RateLimitReleaseRetryQueue:
         self._stopped = True
         self._wake_worker()
         task = self._task
-        self._task = None
-        if task is None:
-            return
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        stopped = await stop_tasks_before_deadline(
+            [task], deadline=cleanup_deadline(5), cancel_first=True
+        )
+        if stopped:
+            self._task = None
 
     def _insert_retry(self, retry: _RateLimitReleaseRetry) -> bool:
         if len(self._queue) >= self._max_size:

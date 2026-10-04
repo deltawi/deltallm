@@ -15,10 +15,11 @@ from typing import TypeVar
 import httpx
 from prisma import Prisma
 from prisma.client import Batch
+from prisma._raw_query import deserialize_raw_results
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, TransactionExpiredError
 from prometheus_client import Counter, Gauge, Histogram
 
-from src.concurrency import BoundedCapacityGate, CapacityGateFull
+from src.concurrency import BoundedCapacityGate, CapacityGateFull, CapacityGateTimedOut
 from src.db.allocation_config import DatabasePolicy
 from src.metrics.prometheus import get_prometheus_registry
 from src.models.errors import RoutingFailureAction, ServiceUnavailableError
@@ -87,18 +88,39 @@ async def _native_call(operation: Callable[[], Awaitable[T]], seconds: float) ->
 class DatabaseOwner:
     def __init__(self, policy: DatabasePolicy):
         self.policy = policy
-        self.gate = BoundedCapacityGate(concurrency=policy.connections, max_waiters=0)
+        # Required acceptance and receipts need a finite burst buffer. Other
+        # business allocations keep immediate shedding; health may borrow one waiter.
+        self._business_waiters = (
+            policy.connections if policy.allocation in {"telemetry", "telemetry_settlement"} else 0
+        )
+        self.gate = BoundedCapacityGate(
+            concurrency=policy.connections, max_waiters=self._business_waiters
+        )
         self.tasks: set[asyncio.Task] = set()
         self.closed = False
+        self._probe_active = False
 
-    async def acquire(self):
+    async def acquire(self, *, timeout_seconds: float | None = None):
         if self.closed:
             raise DatabaseUnavailableError()
         try:
-            await self.gate.acquire(timeout_seconds=self.policy.acquisition_seconds)
+            await self.gate.acquire(
+                timeout_seconds=min(
+                    self.policy.acquisition_seconds,
+                    timeout_seconds
+                    if timeout_seconds is not None
+                    else self.policy.acquisition_seconds,
+                )
+            )
         except CapacityGateFull:
             _events.labels(self.policy.allocation, "full").inc()
             raise DatabaseUnavailableError() from None
+        except CapacityGateTimedOut:
+            _events.labels(self.policy.allocation, "queue_timeout").inc()
+            raise DatabaseUnavailableError() from None
+        if self.closed:
+            await self.gate.release()
+            raise DatabaseUnavailableError()
         _occupied.labels(self.policy.allocation).inc()
 
     async def release(self):
@@ -118,12 +140,39 @@ class DatabaseOwner:
             task.exception()  # Observe errors after an abandoned caller.
 
     async def query(self, operation: Callable[[], Awaitable[T]]) -> T:
+        deadline = monotonic() + self.policy.acquisition_seconds + self.policy.statement_seconds
         await self.acquire()
         task = self.spawn(self._query(operation))
+        return await self._wait_query(task, deadline)
+
+    async def readiness_query(self, operation: Callable[[], Awaitable[T]]) -> T:
+        # Borrow one existing slot. A business operation may wait behind this
+        # probe within its existing acquisition deadline instead of being shed
+        # by health traffic. One probe uses the existing telemetry queue or
+        # borrows one waiter; other business saturation still has zero waiters.
+        if self._probe_active or self.gate.waiters or self.gate.active >= self.policy.connections:
+            raise DatabaseUnavailableError()
+        deadline = monotonic() + self.policy.acquisition_seconds + self.policy.statement_seconds
+        self._probe_active = True
         try:
-            async with asyncio.timeout(
-                self.policy.acquisition_seconds + self.policy.statement_seconds
-            ):
+            await self.acquire()
+        except BaseException:
+            self._probe_active = False
+            raise
+        try:
+            await self.gate.reconfigure(
+                concurrency=self.policy.connections, max_waiters=max(1, self._business_waiters)
+            )
+        except BaseException:
+            self._probe_active = False
+            await self.release()
+            raise
+        task = self.spawn(self._query(operation, readiness=True))
+        return await self._wait_query(task, deadline)
+
+    async def _wait_query(self, task: asyncio.Task[T], deadline: float) -> T:
+        try:
+            async with asyncio.timeout(max(0, deadline - monotonic())):
                 return await asyncio.shield(task)
         except TimeoutError:
             _events.labels(self.policy.allocation, "caller_deadline").inc()
@@ -132,7 +181,7 @@ class DatabaseOwner:
             _events.labels(self.policy.allocation, "caller_cancelled").inc()
             raise
 
-    async def _query(self, operation: Callable[[], Awaitable[T]]) -> T:
+    async def _query(self, operation: Callable[[], Awaitable[T]], *, readiness: bool = False) -> T:
         started = monotonic()
         outcome = "error"
         try:
@@ -141,7 +190,14 @@ class DatabaseOwner:
             return result
         finally:
             _events.labels(self.policy.allocation, outcome).inc()
-            _duration.labels(self.policy.allocation, "query").observe(monotonic() - started)
+            _duration.labels(self.policy.allocation, "readiness" if readiness else "query").observe(
+                monotonic() - started
+            )
+            if readiness:
+                self._probe_active = False
+                await self.gate.reconfigure(
+                    concurrency=self.policy.connections, max_waiters=self._business_waiters
+                )
             await self.release()
 
     async def close(self):
@@ -205,6 +261,20 @@ class AllocatedPrisma(Prisma):
         # batch escape hatch under the same admission owner for future callers.
         return AllocatedBatch(self)
 
+    async def readiness_probe(self) -> bool:
+        if self.allocation is None or self.is_transaction():
+            raise RuntimeError("Readiness requires the owned non-transactional Prisma client")
+
+        async def operation() -> bool:
+            response = await super(AllocatedPrisma, self)._execute(
+                method="query_raw",
+                arguments={"query": "SELECT 1 AS ready", "parameters": ()},
+                model=None,
+            )
+            return deserialize_raw_results(response["data"]["result"]) == [{"ready": 1}]
+
+        return await self.allocation.readiness_query(operation)
+
 
 def _bounded_seconds(value: int | timedelta | None, maximum: float) -> float:
     if value is None:
@@ -245,14 +315,15 @@ class AllocatedTransaction:
         if self._started:
             raise RuntimeError("Transaction has already started")
         self._started = True
-        await self.owner.acquire()
+        acquisition_deadline = monotonic() + self.acquisition_seconds
+        await self.owner.acquire(timeout_seconds=self.acquisition_seconds)
         self._owns_slot = True
         self.expires_at = (
             monotonic() + self.owner.policy.native_query_seconds + self.transaction_seconds
         )
         task = self.owner.spawn(self._start())
         try:
-            async with asyncio.timeout(self.acquisition_seconds):
+            async with asyncio.timeout(max(0, acquisition_deadline - monotonic())):
                 return await asyncio.shield(task)
         except (asyncio.CancelledError, TimeoutError) as exc:
             self._finishing = True

@@ -1,27 +1,16 @@
-{{- define "deltallm.peakRoleProcesses" -}}
-{{- $replicas := int .replicas -}}
-{{- $surge := 0 -}}
-{{- if eq .strategy.type "RollingUpdate" -}}
-{{- $configured := toString .strategy.rollingUpdate.maxSurge -}}
-{{- if hasSuffix "%" $configured -}}
-{{- $surge = int (ceil (divf (mulf $replicas (trimSuffix "%" $configured | float64)) 100)) -}}
-{{- else -}}
-{{- $surge = int $configured -}}
-{{- end -}}
-{{- end -}}
-{{- mul (add $replicas $surge (mul $replicas .retiringGenerations)) .processes -}}
-{{- end -}}
-
+{{- define "deltallm.capacityReport" -}}
 {{- $capacity := .Values.dependencyCapacity -}}
 {{- $api := (include "deltallm.apiConfigYaml" . | fromYaml).general_settings -}}
 {{- $worker := (include "deltallm.batchWorkerConfigYaml" . | fromYaml).general_settings -}}
 {{- $apiReplicas := ternary .Values.autoscaling.maxReplicas .Values.replicaCount .Values.autoscaling.enabled -}}
 {{- $workerReplicas := ternary .Values.batchWorker.autoscaling.maxReplicas .Values.batchWorker.replicaCount .Values.batchWorker.autoscaling.enabled -}}
-{{- $roles := list (dict "config" $api "replicas" $apiReplicas "processes" $capacity.apiProcessesPerPod) -}}
+{{- $roles := list (dict "name" "api" "config" $api "replicas" $apiReplicas "processes" $capacity.apiProcessesPerPod) -}}
 {{- if .Values.batchWorker.enabled -}}
-{{- $roles = append $roles (dict "config" $worker "replicas" $workerReplicas "processes" $capacity.batchWorkerProcessesPerPod) -}}
+{{- $roles = append $roles (dict "name" "batchWorker" "config" $worker "replicas" $workerReplicas "processes" $capacity.batchWorkerProcessesPerPod) -}}
 {{- end -}}
-{{- $dbTotal := int $capacity.postgresqlReservedConnections -}}
+{{- $extended := $capacity.extended -}}
+{{- $dbTotal := add $capacity.postgresqlReservedConnections $extended.postgresqlMigrationConnections $extended.postgresqlOtherConnections -}}
+{{- $roleReports := dict -}}
 {{- $criticalTotal := 0 -}}
 {{- $cacheTotal := 0 -}}
 {{- $processTotal := 0 -}}
@@ -42,6 +31,9 @@
 {{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") -}}
 {{- $db = add $db $g.telemetry_db_pool_size $g.telemetry_worker_db_pool_size -}}
 {{- end -}}
+{{- $pools := dict "postgresql" $db "redisCritical" $g.redis_critical_max_connections "redisCache" (add $g.redis_cache_max_connections $g.redis_bulk_max_connections) "upstreamHttp" (mul $g.upstream_http_max_connections (add 1 $extended.proxyPoolsPerClient)) "controlHttp" (mul 100 (add 1 $extended.proxyPoolsPerClient)) "auxiliaryHttp" $extended.auxiliaryHttpConnectionsPerProcess -}}
+{{- $report := dict "maxReplicas" $role.replicas "processesPerPod" $role.processes "steadyProcesses" (mul $role.replicas $role.processes) "peakProcesses" $processes "pools" $pools -}}
+{{- $_ := set $roleReports $role.name $report -}}
 {{- $processTotal = add $processTotal $processes -}}
 {{- $dbTotal = add $dbTotal (mul $processes $db) -}}
 {{- $criticalTotal = add $criticalTotal (mul $processes $g.redis_critical_max_connections) -}}
@@ -52,11 +44,19 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- $redisTotal := add $criticalTotal $cacheTotal $capacity.redisReservedClients -}}
+{{- include "deltallm.validateProductionCapacity" . -}}
+{{- $redisTotal := add $criticalTotal $cacheTotal $capacity.redisReservedClients $extended.redisOtherClients -}}
+{{- $redisCriticalBudget := $redisTotal -}}
+{{- if $extended.cacheRedis.separate -}}
+{{- $redisCriticalBudget = add $criticalTotal $capacity.redisReservedClients $extended.redisOtherClients -}}
+{{- if gt (add $cacheTotal $extended.cacheRedis.reservedClients) (int $extended.cacheRedis.maxClients) -}}
+{{- fail "Peak cache Redis connection budget exceeds declared maximum" -}}
+{{- end -}}
+{{- end -}}
 {{- if gt $dbTotal (int $capacity.postgresqlMaxConnections) -}}
 {{- fail (printf "Peak PostgreSQL connection budget %d exceeds declared maximum %d" $dbTotal (int $capacity.postgresqlMaxConnections)) -}}
 {{- end -}}
-{{- if gt $redisTotal (int $capacity.redisMaxClients) -}}
+{{- if gt $redisCriticalBudget (int $capacity.redisMaxClients) -}}
 {{- fail (printf "Peak Redis connection budget %d exceeds declared maximum %d" $redisTotal (int $capacity.redisMaxClients)) -}}
 {{- end -}}
 {{- range $env := concat .Values.env .Values.batchWorker.env -}}
@@ -69,6 +69,11 @@
 {{- fail "Worker count flags are owned by dependencyCapacity; set the declared process counts" -}}
 {{- end -}}
 {{- end -}}
+{{- $report := dict "schemaVersion" 1 "extended" $extended.enabled "production" .Values.managedLifecycle.production "roles" $roleReports "peakProcesses" $processTotal "postgresqlConnections" $dbTotal "redisCriticalConnections" $criticalTotal "redisCacheConnections" $cacheTotal "redisConnections" $redisTotal "postgresqlMaximum" $capacity.postgresqlMaxConnections "redisMaximum" $capacity.redisMaxClients "proxyPoolsPerClient" $extended.proxyPoolsPerClient "cacheRedis" $extended.cacheRedis -}}
+{{- include "deltallm.extendedCapacity" (dict "root" . "report" $report) -}}
+{{- toJson $report -}}
+{{- end -}}
+{{- $report := include "deltallm.capacityReport" . | fromJson -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -76,8 +81,9 @@ metadata:
   labels:
     {{- include "deltallm.labels" . | nindent 4 }}
 data:
-  peak-processes: {{ $processTotal | quote }}
-  postgresql-connections-including-reserve: {{ $dbTotal | quote }}
-  redis-critical-connections: {{ $criticalTotal | quote }}
-  redis-cache-connections: {{ $cacheTotal | quote }}
-  redis-connections-including-reserve: {{ $redisTotal | quote }}
+  peak-processes: {{ $report.peakProcesses | quote }}
+  postgresql-connections-including-reserve: {{ $report.postgresqlConnections | quote }}
+  redis-critical-connections: {{ $report.redisCriticalConnections | quote }}
+  redis-cache-connections: {{ $report.redisCacheConnections | quote }}
+  redis-connections-including-reserve: {{ $report.redisConnections | quote }}
+  report.json: {{ toJson $report | quote }}

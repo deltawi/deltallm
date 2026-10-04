@@ -44,6 +44,10 @@ class _FakePubSub:
         if self.broker.subscribe_count >= 2:
             self.broker.resubscribed.set()
 
+    async def get_message(self, **kwargs):
+        del kwargs
+        return await self.__anext__()
+
     def listen(self):  # noqa: ANN201
         return self
 
@@ -100,6 +104,7 @@ async def test_governance_invalidation_service_notifies_other_instances() -> Non
 
     local = GovernanceInvalidationService(
         redis_client=redis,
+        creator_model_access_service=_FakeReloadService(),
         callable_target_grant_service=local_callable,
         tier_policy_service=local_tier,
         mcp_registry_service=local_registry,
@@ -107,6 +112,7 @@ async def test_governance_invalidation_service_notifies_other_instances() -> Non
     )
     remote = GovernanceInvalidationService(
         redis_client=redis,
+        creator_model_access_service=_FakeReloadService(),
         callable_target_grant_service=remote_callable,
         tier_policy_service=remote_tier,
         mcp_registry_service=remote_registry,
@@ -118,14 +124,16 @@ async def test_governance_invalidation_service_notifies_other_instances() -> Non
     await local.notify("callable_target", "mcp", "tier_policy")
     await asyncio.sleep(0.1)
 
-    assert local_callable.reload_calls == 0
-    assert local_tier.reload_calls == 0
-    assert local_registry.invalidate_calls == 0
-    assert local_mcp.reload_calls == 0
-    assert remote_callable.reload_calls == 1
-    assert remote_tier.reload_calls == 1
-    assert remote_registry.invalidate_calls == 1
-    assert remote_mcp.reload_calls == 1
+    # Each listener catches up once at subscription; only the remote instance
+    # applies this subsequent invalidation message.
+    assert local_callable.reload_calls == 1
+    assert local_tier.reload_calls == 1
+    assert local_registry.invalidate_calls == 1
+    assert local_mcp.reload_calls == 1
+    assert remote_callable.reload_calls == 2
+    assert remote_tier.reload_calls == 2
+    assert remote_registry.invalidate_calls == 2
+    assert remote_mcp.reload_calls == 2
 
     await local.close()
     await remote.close()
@@ -141,7 +149,9 @@ async def test_governance_invalidation_service_returns_false_when_publish_fails(
 @pytest.mark.asyncio
 async def test_governance_invalidation_listener_restarts_after_disconnect() -> None:
     redis = _FakeRedis()
-    service = GovernanceInvalidationService(redis_client=redis)
+    service = GovernanceInvalidationService(
+        redis_client=redis, creator_model_access_service=_FakeReloadService()
+    )
     await service.start()
     try:
         await redis.subscribers[0].queue.put({"type": "stop"})
@@ -169,7 +179,9 @@ async def test_governance_invalidation_listener_recovers_when_pubsub_factory_fai
             return super().pubsub()
 
     redis = FactoryFailRedis()
-    service = GovernanceInvalidationService(redis_client=redis)
+    service = GovernanceInvalidationService(
+        redis_client=redis, creator_model_access_service=_FakeReloadService()
+    )
     await service.start()
     try:
         await asyncio.wait_for(redis.recovered.wait(), timeout=1)
@@ -364,9 +376,14 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
         nonlocal route_group_reload_calls
         route_group_reload_calls += 1
 
-    local = GovernanceInvalidationService(redis_client=redis, remote_apply_delay_seconds=0.01)
+    local = GovernanceInvalidationService(
+        redis_client=redis,
+        creator_model_access_service=_FakeReloadService(),
+        remote_apply_delay_seconds=0.01,
+    )
     remote = GovernanceInvalidationService(
         redis_client=redis,
+        creator_model_access_service=_FakeReloadService(),
         callable_target_grant_service=remote_callable,
         tier_policy_service=remote_tier,
         mcp_registry_service=remote_registry,
@@ -384,10 +401,12 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
     await asyncio.sleep(0.05)
 
     assert remote_callable.reload_calls == 0
-    assert remote_tier.reload_calls == 1
-    assert remote_registry.invalidate_calls == 1
-    assert remote_mcp.reload_calls == 1
-    assert route_group_reload_calls == 1
+    assert remote_tier.reload_calls == 2
+    assert remote_registry.invalidate_calls == 2
+    assert remote_mcp.reload_calls == 2
+    # Startup refreshes routing, creator-model access, and creator-prompt access.
+    # The four later messages must use one routing rebuild.
+    assert route_group_reload_calls == 4
 
     await local.close()
     await remote.close()
@@ -396,28 +415,48 @@ async def test_governance_invalidation_service_coalesces_remote_invalidations() 
 @pytest.mark.asyncio
 async def test_governance_invalidation_service_retries_failed_remote_targets() -> None:
     redis = _FakeRedis()
-    remote_tier = _FakeReloadService(fail_times=1)
+    remote_tier = _FakeReloadService()
 
-    local = GovernanceInvalidationService(redis_client=redis, remote_apply_delay_seconds=0.01)
+    local = GovernanceInvalidationService(
+        redis_client=redis,
+        creator_model_access_service=_FakeReloadService(),
+        remote_apply_delay_seconds=0.01,
+    )
     remote = GovernanceInvalidationService(
         redis_client=redis,
+        creator_model_access_service=_FakeReloadService(),
         tier_policy_service=remote_tier,
         remote_apply_delay_seconds=0.01,
         remote_retry_delay_seconds=0.01,
     )
     await local.start()
     await remote.start()
+    remote_tier.fail_times = 2  # fail the next refresh, after initial catch-up
 
     assert await local.notify("tier_policy") is True
     for _ in range(20):
-        if remote_tier.reload_calls >= 2:
+        if remote_tier.reload_calls >= 3:
             break
         await asyncio.sleep(0.02)
 
-    assert remote_tier.reload_calls == 2
+    assert remote_tier.reload_calls == 3
 
     await local.close()
     await remote.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [False, True])
+async def test_governance_listener_stays_unready_when_creator_catchup_fails(missing: bool) -> None:
+    service = GovernanceInvalidationService(
+        redis_client=_FakeRedis(),
+        creator_model_access_service=None if missing else _FakeReloadService(fail_times=1),
+    )
+    try:
+        await service.start()
+        assert not service.worker_health.ready
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio

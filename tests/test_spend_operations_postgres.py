@@ -6,6 +6,7 @@ import os
 from uuid import uuid4
 
 import pytest
+from prisma import Prisma
 from prisma.errors import RawQueryError
 
 from scripts.benchmarks.ingestion_database import ingestion_database
@@ -271,3 +272,85 @@ async def test_dependency_budget_and_indexed_plans_at_representative_cardinality
             pytest.fail("CI must provision PostgreSQL")
         pytest.skip("DATABASE_URL required")
     await measure(Namespace(output=tmp_path / "plans.json"), database_url=url)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_committed_receipt_survives_lost_ack_and_retains_its_native_slot(
+    dbs, monkeypatch, cancel
+):
+    operation = handle()
+    await begin(SpendOperationRepository(dbs.acceptance), operation)
+    repository = SpendOperationRepository(dbs.worker)
+    entered, release = asyncio.Event(), asyncio.Event()
+    execute = Prisma._execute
+    intercepted = False
+
+    async def hold_ack(self, **kwargs):
+        nonlocal intercepted
+        result = await execute(self, **kwargs)
+        query = kwargs.get("arguments", {}).get("query", "")
+        if (
+            self is dbs.worker
+            and query.startswith("UPDATE deltallm_spend_ingestion_outbox")
+            and not intercepted
+        ):
+            intercepted = True
+            entered.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(Prisma, "_execute", hold_ack)
+    caller = asyncio.create_task(accept(repository, operation))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        # The returned SQL result already represents an atomic commit, even
+        # though its acknowledgement to the request is delayed or lost.
+        assert (await row(dbs.observer, operation))["operation_state"] == "accepted"
+        if cancel:
+            caller.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await caller
+        else:
+            with pytest.raises(BillingOperationUnavailable):
+                await caller
+        assert dbs.worker.allocation.gate.active == 1
+        assert any(not task.done() for task in dbs.worker.allocation.tasks)
+    finally:
+        release.set()
+        await asyncio.gather(caller, *tuple(dbs.worker.allocation.tasks), return_exceptions=True)
+    assert dbs.worker.allocation.gate.active == 0
+    await accept(repository, operation)
+    assert await SpendIngestionRepository(dbs.observer).reconcile_capacity() == 1
+    state = await row(dbs.observer, operation)
+    assert state["operation_state"] == "accepted" and state["status"] == "queued"
+
+
+async def test_concurrent_different_receipts_cannot_rewrite_the_committed_value(dbs):
+    operation = handle()
+    await begin(SpendOperationRepository(dbs.acceptance), operation)
+    values = [payload(operation), {**payload(operation), "cost_exact": "0.200000000000000000"}]
+    repositories = [SpendOperationRepository(dbs.acceptance), SpendOperationRepository(dbs.worker)]
+    results = await asyncio.gather(
+        *(accept(repo, operation, data) for repo, data in zip(repositories, values)),
+        return_exceptions=True,
+    )
+    assert sum(result is None for result in results) == 1
+    assert sum(isinstance(result, BillingOperationUnavailable) for result in results) == 1
+    committed = (await row(dbs.observer, operation))["payload_json"]
+    assert committed == values[results.index(None)]
+    assert await SpendIngestionRepository(dbs.observer).reconcile_capacity() == 1
+
+
+@pytest.mark.parametrize("expires_at", [0.0, float("nan"), float("inf")])
+async def test_invalid_receipt_deadline_cannot_change_the_reserved_intent(dbs, expires_at):
+    operation = handle()
+    repository = SpendOperationRepository(dbs.acceptance)
+    await begin(repository, operation)
+    with pytest.raises(BillingOperationUnavailable):
+        await repository.accept(
+            event_id=str(operation.event_id),
+            owner_token=str(operation.owner_token),
+            payload=payload(operation),
+            expires_at=expires_at,
+        )
+    assert (await row(dbs.observer, operation))["operation_state"] == "dispatched"

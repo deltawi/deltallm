@@ -120,3 +120,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "redis://%s:6379/0" (include "deltallm.redisHost" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "deltallm.image" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
+{{- end -}}
+{{- end -}}

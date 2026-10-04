@@ -1,0 +1,59 @@
+name: Deployment capacity acceptance
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  capacity-cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.13'
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.9.28'
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Install frozen environment and generate client
+        run: |
+          uv sync --frozen --extra dev
+          uv run prisma generate --schema=./prisma/schema.prisma
+          uv run python scripts/check_container_contract.py
+      - name: Build candidate and committed PR8 baseline
+        run: |
+          docker build --build-arg INSTALL_PRESIDIO=false -t deltallm-capacity:candidate .
+          uv run python scripts/build_lifecycle_baseline.py \
+            --ref 9a3f2cfc9c13f4eba332b3e331e7003acba20b03 \
+            --image deltallm-capacity:baseline \
+            --manifest /tmp/capacity-evidence/baseline-image.json
+      - name: Install pinned kind
+        run: |
+          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64 -o /tmp/kind-linux-amd64
+          curl -fsSL --max-time 90 https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256sum
+          (cd /tmp && sha256sum -c kind.sha256sum)
+          chmod +x /tmp/kind-linux-amd64
+      - name: Exercise fixed replicas, saturation scaling, metric failure, and pod loss
+        run: >-
+          uv run python -m tests.performance.run_capacity_acceptance
+          --image deltallm-capacity:candidate
+          --baseline-image deltallm-capacity:baseline
+          --baseline-manifest /tmp/capacity-evidence/baseline-image.json
+          --kind /tmp/kind-linux-amd64
+          --output /tmp/capacity-evidence/kubernetes
+      - name: Retain bounded capacity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capacity-acceptance
+          path: /tmp/capacity-evidence
+          if-no-files-found: ignore
+          retention-days: 30

@@ -45,8 +45,17 @@ Accepted performance code: `cc3113bd`
 - [x] Slice 6: apply request deadlines and bounded callback and guardrail work.
 - [x] Slice 6: verify fresh, last-release, and shared-feature migrations.
 - [x] Slice 6: port spend recovery, deadlines, and bounded work.
-- [ ] Slice 7: port readiness, drain, and Kubernetes capacity contracts.
+- [x] Slice 7: apply the managed lifecycle and deployment capacity implementation.
+- [x] Slice 7: retain current main's realtime, asset-link, and authorization checks.
+- [x] Slice 7: begin realtime cleanup before generic request cancellation.
+- [x] Slice 7: verify the shared lifecycle, deployment, and real-dependency gates.
+- [x] Slice 7: port readiness, drain, and Kubernetes capacity contracts.
 - [ ] Slice 8: port accounting protocol v2 and atomic grant admission.
+- [ ] Slice 8: check current main's realtime accounting against the new authority.
+- [ ] Slice 8: use the validated, transformed request for cost bounds, including
+  multiple outputs. Do not parse the original request body again.
+- [ ] Slice 8: keep one accounting bootstrap owner and remove new policy from
+  large composition modules.
 - [ ] Slice 9: port pre-issued permits and local lease dispatch.
 - [ ] Slice 10: port the terminal journal and compact acknowledgement path.
 - [ ] Slice 11: split accounting transport and projection roles.
@@ -200,6 +209,107 @@ Logs are in `/private/tmp/issue320-slice6-python311-focused-tests.log`,
 `/private/tmp/issue320-slice6-full-app-tests.log`,
 `/private/tmp/issue320-slice6-full-redis-tests.log`, and
 `/private/tmp/issue320-slice6-migration-verification.log`.
+
+## Slice 7 source decisions
+
+This slice replays `9a3f2cfc` and `5be17a63`. It retains current main's realtime
+runtime, asset-link reconciliation, and four creator authorization owners.
+These checks now use the shared readiness inventory. Fixed diagnostics retain
+asset counts and timestamps without exposing raw exception messages.
+
+Realtime cleanup starts at the first process drain signal. Bootstrap and Helm
+require its cleanup and write budget to fit before generic response cancellation.
+Deployment capacity includes realtime upstream and downstream sockets and provider
+connection limits. No extra connection pool or inference query is added.
+
+The old policy-listener tests lacked current main's creator-model owner. The
+fixtures now provide that owner. Two regressions also prove that missing or failed
+creator policy refresh prevents readiness. The production check remains closed.
+
+The historical lifecycle sample archive was not copied. The source plans retain
+their history but now point to this plan for clean-replay progress.
+
+The first kind run found a migration Job memory failure. The Python Prisma CLI
+imports the full generated client and exits with code 137 at 1 GiB, even for its
+version command. The bundled native Prisma 5.17.0 CLI succeeds at the same limit.
+The canonical image now selects that native CLI at runtime. Build-time client
+generation still uses the Python CLI. The Railway image is generated from the
+canonical image. No memory, timeout, migration, or admission limit was increased.
+The image check now verifies CLI selection and execution at 1 GiB.
+
+## Slice 7 verification
+
+- Focused current-main readiness, realtime drain, and capacity checks: 62 passed.
+- Full component and Helm suite: 4,682 passed. The first run found four fixture
+  failures; the final run has none.
+- Full application lane: 1,641 passed.
+- Full real-Redis lane: 105 passed, with no skips. The first run found the same
+  missing creator-model fixture; the final run has no failures.
+- Real PostgreSQL migration, allocation, spend, recovery, and realtime checks:
+  63 passed, with no skips. This includes the pinned official realtime SDK.
+- Full real-PostgreSQL lane: all 485 passed, with no skips.
+- Fresh-install, `v0.1.42` upgrade, and shared-feature upgrade checks: passed
+  with all 104 migrations. Image history and realtime fixtures also passed.
+- Native CLI, container contract, migration, and managed-server regressions:
+  16 passed.
+- Base, evaluation, and production Helm lint and template: passed.
+- Effective capacity-profile documentation check: passed.
+- Frozen dependency install and lock check: passed.
+- Container and generated-settings checks: passed after the native CLI fix.
+- Image build, offline non-root startup, and blocked shutdown: passed before and
+  after the native CLI fix. The new 1 GiB native CLI image check passed.
+- Optional Presidio image variant: build and offline checks passed. The analyzer
+  made no external network request. Migration and blocked shutdown checks passed.
+- Ruff check and format: all 134 changed or new Python files passed.
+- Full collection: 6,915 tests in exactly one lane each. Counts are 4,464
+  hermetic, 1,641 app, 485 PostgreSQL, 105 Redis, and 220 Helm.
+- Settings reference: current, with 380 fields.
+- Representative SQL probe: passed with 100,000 ledger rows, 10,000 retained
+  outbox rows, and 1,000 expired operations. Receipt acceptance now uses one
+  fenced statement and one implicit transaction. It used two statements in the
+  previous slice. Admission and indexed recovery retain their row bounds.
+- `git diff HEAD --check`: passed.
+- Fresh disposable kind lifecycle run after the native CLI fix: passed. Checks
+  cover fresh and concurrent migrations, Redis readiness recovery, both
+  failed-migration rollout gates, stream drain, repeated signals, and shared
+  backlog recovery. All 20 batch items completed after rollout, with one ledger
+  entry each. Forced pod loss preserved one spend charge and the required audit.
+  All four interrupted streams closed upstream without a success marker.
+- The harness removed its own cluster after completion. It did not change the
+  user's Kubernetes context or stop unrelated containers.
+
+The before- and after-rollout samples each completed 100 requests at 10 RPS.
+They prove lifecycle behavior only. Fixed-replica and autoscaling comparison
+remains in the capacity CI job and is not claimed as a local result here. The
+final integration still requires the full qualification ladder.
+
+Application logs are in `/private/tmp/issue320-slice7-full-app-tests.log`.
+Component and Helm logs are in
+`/private/tmp/issue320-slice7-hermetic-helm-tests-final.log`.
+Redis logs are in `/private/tmp/issue320-slice7-redis-tests-final.log`.
+PostgreSQL logs are in `/private/tmp/issue320-slice7-postgres-tests.log`.
+Image results are in `/private/tmp/issue320-slice7-native-image-smoke`.
+Kind results are in `/private/tmp/issue320-slice7-kind-native-lifecycle`.
+These are slice checks, not the final 50/100/200/500 RPS certificate.
+
+## Slice 8 integration checks
+
+The source protocol predates current main's realtime journal and selector billing
+owner. Those paths still write through the legacy spend owner. The v2 profile can
+disable that worker and can use a separate budget-window authority. Before v2
+activation, prove that each enabled writer shares the same authority and recovery
+owner. Do not restore a legacy worker merely to make startup pass. That would not
+prove shared hard-budget safety. Migration checks must include unresolved realtime
+and selector work, not only legacy spending holds.
+
+The source request path also reads the original JSON body to calculate cost bounds.
+Current main can change the validated payload before provider dispatch. The clean
+replay must calculate bounds from that final payload and cover multiple outputs.
+This change must add no SQL, Redis, or network call.
+
+Accounting construction must move to a small bootstrap owner. The existing spend
+module is already above the size guard. New accounting audit and cost-bound policy
+must use separate typed modules, not new concerns in that large file.
 
 ## Slices 2 and 3 source decisions
 

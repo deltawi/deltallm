@@ -94,6 +94,11 @@ def build_upstream_http_limits(general_settings: Any) -> httpx.Limits:
     )
 
 
+def environment_proxy_pool_count() -> int:
+    """Count HTTPX proxy transports without exposing proxy URLs or credentials."""
+    return sum(proxy is not None for proxy in get_environment_proxies().values())
+
+
 def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=build_upstream_http_timeout(general_settings),

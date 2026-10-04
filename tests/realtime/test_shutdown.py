@@ -7,6 +7,8 @@ from fastapi import WebSocket
 from src.api.v1.endpoints.realtime import realtime
 from src.realtime.contracts import RealtimeLimits
 from src.realtime.runtime import RealtimeRuntime
+from src.lifecycle_settings import LifecycleSettings
+from src.process_lifecycle import ProcessLifecycle
 from tests.realtime.fakes import Admission, Connector, Socket
 from tests.realtime.test_session import assert_no_pumps
 
@@ -138,6 +140,44 @@ async def test_repeated_shutdown_does_not_interrupt_cleanup_or_finalize_twice(
         assert runtime.active_sessions == 0
         assert owner.cancelled() is not disconnect_first
         assert_no_pumps()
+
+
+async def test_process_drain_starts_realtime_cleanup_once_before_worker_shutdown(test_app):
+    async with session(test_app) as values:
+        runtime, admission, connector, edge, owner = values
+        lifecycle = ProcessLifecycle(LifecycleSettings())
+        lifecycle.register_claim_stop(runtime.begin_drain)
+        lifecycle.mark_serving()
+        deadlines = lifecycle.begin_drain()
+        await asyncio.wait_for(admission.finalizing.wait(), 1)
+        assert not runtime.ready
+        assert lifecycle.begin_drain() is deadlines
+        shutdown = asyncio.create_task(runtime.close())
+        await asyncio.sleep(0)
+        assert not admission.interrupted
+        assert not shutdown.done()
+        admission.release.set()
+        await asyncio.wait_for(edge.closing.wait(), 1)
+        edge.release.set()
+        await asyncio.wait_for(shutdown, 1)
+        assert owner.cancelled()
+        assert connector.closed == admission.closed == 1
+        assert runtime.active_sessions == 0
+        assert_no_pumps()
+
+
+@pytest.mark.parametrize("cleanup,write,valid", [(5, 10, True), (25, 25, False), (30, 30, False)])
+def test_realtime_cleanup_budget_fits_before_generic_request_cancellation(cleanup, write, valid):
+    from src.bootstrap.realtime import validate_realtime_drain
+    from src.realtime.config import RealtimeSettings
+
+    settings = RealtimeSettings(cleanup_seconds=cleanup, write_seconds=write)
+    lifecycle = ProcessLifecycle(LifecycleSettings())
+    if valid:
+        validate_realtime_drain(settings, lifecycle)
+    else:
+        with pytest.raises(RuntimeError, match="response cutoff"):
+            validate_realtime_drain(settings, lifecycle)
 
 
 @pytest.mark.parametrize("phase", ["admission", "downstream"])

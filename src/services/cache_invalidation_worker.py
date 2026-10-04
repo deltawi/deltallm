@@ -41,11 +41,13 @@ class CacheInvalidationWorker:
         self.worker_id = str(worker_id or "").strip() or "cache-invalidation-worker"
         self.config = config or CacheInvalidationWorkerConfig()
         self._stopped = False
+        self.started = asyncio.Event()
 
     def stop(self) -> None:
         self._stopped = True
 
     async def run(self) -> None:
+        self.started.set()
         while not self._stopped:
             try:
                 processed = await self.process_once()

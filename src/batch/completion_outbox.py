@@ -52,12 +52,14 @@ class BatchCompletionOutboxWorker:
         self.config = config or BatchCompletionOutboxWorkerConfig()
         self._stopped = False
         self._stop_event = asyncio.Event()
+        self.started = asyncio.Event()
 
     def stop(self) -> None:
         self._stopped = True
         self._stop_event.set()
 
     async def run(self) -> None:
+        self.started.set()
         while not self._stopped and not self._stop_event.is_set():
             try:
                 processed = await self.process_once()
@@ -141,7 +143,10 @@ class BatchCompletionOutboxWorker:
                 return
             retry_seconds = min(
                 self.config.retry_max_seconds,
-                max(self.config.retry_initial_seconds, self.config.retry_initial_seconds * max(1, record.attempt_count)),
+                max(
+                    self.config.retry_initial_seconds,
+                    self.config.retry_initial_seconds * max(1, record.attempt_count),
+                ),
             )
             updated = await self.repository.mark_completion_outbox_retry(
                 record.completion_id,
@@ -161,7 +166,9 @@ class BatchCompletionOutboxWorker:
         if delivered:
             self._publish_metrics(payload)
 
-    async def _record_durable_success(self, record: BatchCompletionOutboxRecord, payload: dict[str, Any]) -> bool:
+    async def _record_durable_success(
+        self, record: BatchCompletionOutboxRecord, payload: dict[str, Any]
+    ) -> bool:
         db = getattr(self.repository, "prisma", None)
         spend_tracking_service = getattr(self.app.state, "spend_tracking_service", None)
         if db is not None and hasattr(db, "tx"):
@@ -171,7 +178,8 @@ class BatchCompletionOutboxWorker:
                     repository=tx_repository,
                     spend_tracking_service=(
                         spend_tracking_service.with_db(tx)
-                        if spend_tracking_service is not None and hasattr(spend_tracking_service, "with_db")
+                        if spend_tracking_service is not None
+                        and hasattr(spend_tracking_service, "with_db")
                         else SpendTrackingService(tx)
                     ),
                     record=record,
@@ -219,12 +227,16 @@ class BatchCompletionOutboxWorker:
             spend_metadata.update(pricing_metadata)
             outcome = await service.log_spend_once(
                 event_id=record.completion_id,
-                request_id=str(payload.get("request_id") or f"batch:{record.batch_id}:{record.item_id}"),
+                request_id=str(
+                    payload.get("request_id") or f"batch:{record.batch_id}:{record.item_id}"
+                ),
                 api_key=api_key,
                 user_id=str(payload.get("user_id")) if payload.get("user_id") is not None else None,
                 team_id=str(payload.get("team_id")) if payload.get("team_id") is not None else None,
                 organization_id=(
-                    str(payload.get("organization_id")) if payload.get("organization_id") is not None else None
+                    str(payload.get("organization_id"))
+                    if payload.get("organization_id") is not None
+                    else None
                 ),
                 owner_account_id=(
                     str(payload.get("owner_account_id"))
@@ -260,7 +272,9 @@ class BatchCompletionOutboxWorker:
             pass
 
     async def _heartbeat_loop(self, completion_id: str) -> None:
-        interval_seconds = max(0.1, min(self.config.heartbeat_interval_seconds, self.config.lease_seconds / 2))
+        interval_seconds = max(
+            0.1, min(self.config.heartbeat_interval_seconds, self.config.lease_seconds / 2)
+        )
         while True:
             await asyncio.sleep(interval_seconds)
             try:

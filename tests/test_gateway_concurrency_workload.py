@@ -16,7 +16,7 @@ from tests.performance import run_gateway_concurrency as workload
 from tests.performance.gateway_concurrency_dependencies import fixture_database_url
 from tests.performance.gateway_concurrency_fixture import fixture_key
 from tests.performance.gateway_concurrency_manifest import ServerManifest
-from tests.performance.gateway_concurrency_mock import app
+from tests.performance.gateway_concurrency_mock import app, complete, CompletionRequest
 from tests.performance.run_gateway_concurrency import error_code, valid_completion
 from tests.performance.summarize_historical_concurrency import summarize
 
@@ -37,10 +37,28 @@ async def test_provider_is_fixed_and_rejects_other_workloads() -> None:
         response = await client.post("/v1/chat/completions", json=body)
         assert response.status_code == 200
         assert valid_completion(response.json())
-        for changed in ({"model": "other"}, {"max_tokens": 2}, {"stream": True}):
+        discovered = await client.get("/v1/models")
+        assert discovered.status_code == 200
+        assert discovered.json()["data"][0]["id"] == body["model"]
+        for changed in ({"model": "other"}, {"max_tokens": 2}):
             assert (
                 await client.post("/v1/chat/completions", json={**body, **changed})
             ).status_code == 400
+
+
+async def test_lifecycle_provider_stream_starts_and_closes_without_terminal_success():
+    response = await complete(
+        CompletionRequest(
+            model="fixed-one-token",
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            max_tokens=1,
+            stream=True,
+        )
+    )
+    first = await anext(response.body_iterator)
+    assert '"content": "OK"' in first
+    assert "[DONE]" not in first
+    await response.body_iterator.aclose()
 
 
 def test_profile_uses_supported_settings_and_keeps_required_dependencies_enabled() -> None:
@@ -133,11 +151,14 @@ deltallm_ingress_active{allocation="inference"} 4
 deltallm_ingress_rejections_total{allocation="inference",reason="gateway_ingress_full"} 10
 deltallm_auth_fallback_events_total{phase="lookup",outcome="coalesced"} 3
 deltallm_database_allocation_occupied{allocation="foreground"} 1
+deltallm_database_allocation_events_total{allocation="telemetry_settlement",outcome="queue_timeout"} 2
+deltallm_spend_ingestion_failures_total{stage="operation_receipt"} 3
+deltallm_spend_ingestion_failures_total{stage="private-stage"} 99
 deltallm_auth_fallback_tasks{api_key="private-key"} 99
 deltallm_ingress_rejections_total{allocation="inference",reason="private-error"} 99
 """
     selected = metrics.select_metrics(text)
-    assert len(selected) == 4
+    assert len(selected) == 6
     assert "private" not in repr(selected)
     for code in ("gateway_ingress_full", "auth_fallback_unavailable", "database_unavailable"):
         assert workload.error_code({"error": {"code": code}}) == code

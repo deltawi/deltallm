@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.shutdown import cleanup_deadline
+
 import asyncio
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -350,8 +352,7 @@ class AuditService:
     async def shutdown(self) -> None:
         self._closed = True
         self._worker_state = WorkerState.STOPPING
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.ingestion_config.shutdown_drain_timeout_seconds
+        deadline = cleanup_deadline(self.ingestion_config.shutdown_drain_timeout_seconds)
         if self._worker_task is not None:
             if self.ingestion_config.enabled:
                 await self._stop_durable_worker_tasks(deadline=deadline)
@@ -371,19 +372,28 @@ class AuditService:
                     logger.error(
                         "audit queue worker exceeded its shutdown deadline and was cancelled"
                     )
-                self._worker_task = None
+                if worker_stopped:
+                    self._worker_task = None
         if self._cleanup_task is not None:
-            await stop_tasks_before_deadline(
+            cleanup_stopped = await stop_tasks_before_deadline(
                 [self._cleanup_task],
                 deadline=deadline,
                 cancel_first=True,
             )
-            self._cleanup_task = None
+            if cleanup_stopped:
+                self._cleanup_task = None
         listener_stopped = await self.policy_invalidation.shutdown(deadline=deadline)
         if not listener_stopped:
             increment_audit_write_failure(path="policy_listener_shutdown_timeout")
             logger.error("audit policy listener exceeded its shutdown deadline and was cancelled")
-        self._worker_state = WorkerState.DISABLED
+        pending = any(
+            task is not None and not task.done()
+            for task in (
+                self._worker_task,
+                self._cleanup_task,
+            )
+        )
+        self._worker_state = WorkerState.FAILED if pending else WorkerState.DISABLED
         self._worker_detail = None
         self._started = False
         set_audit_queue_depth(0)
@@ -463,10 +473,7 @@ class AuditService:
 
     async def _stop_durable_worker_tasks(self, *, deadline: float | None = None) -> None:
         if deadline is None:
-            deadline = (
-                asyncio.get_running_loop().time()
-                + self.ingestion_config.shutdown_drain_timeout_seconds
-            )
+            deadline = cleanup_deadline(self.ingestion_config.shutdown_drain_timeout_seconds)
         self._worker_state = WorkerState.STOPPING
         self._durable_worker_running = False
         self._wake.set()
@@ -480,9 +487,13 @@ class AuditService:
         if not cleanup_stopped or not worker_stopped:
             increment_audit_write_failure(path="shutdown_timeout")
             logger.error("durable audit worker exceeded its shutdown deadline and was cancelled")
-        self._worker_task = None
-        self._cleanup_task = None
-        self._worker_state = WorkerState.DISABLED
+        if worker_stopped:
+            self._worker_task = None
+        if cleanup_stopped:
+            self._cleanup_task = None
+        self._worker_state = (
+            WorkerState.DISABLED if worker_stopped and cleanup_stopped else WorkerState.FAILED
+        )
         self._worker_detail = None
 
     async def enqueue_event(

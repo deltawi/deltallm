@@ -166,6 +166,32 @@ def build_redis_client(
     endpoint_settings: object | None = None,
 ) -> Redis:
     limits = RedisLimits.from_settings(general, settings)
+    options = redis_connection_options(settings, general, allocation, endpoint_settings)
+    # URL query parameters must not disable typed capacity/deadline settings.
+    options.update(
+        max_connections=getattr(limits, allocation + "_max_connections"),
+        socket_timeout=limits.socket_timeout_seconds,
+        socket_connect_timeout=limits.connect_timeout_seconds,
+        decode_responses=True,
+        retry=Retry(NoBackoff(), 0),
+        retry_on_timeout=False,
+        retry_on_error=[],
+    )
+    pool = AllocatedRedisPool(
+        allocation=allocation,
+        acquisition_timeout=limits.acquisition_timeout_seconds,
+        **options,
+    )
+    return AllocatedRedis.from_pool(pool)
+
+
+def redis_connection_options(
+    settings: object,
+    general: object,
+    allocation: Allocation,
+    endpoint_settings: object | None = None,
+) -> dict[str, object]:
+    """One endpoint resolver for client construction and startup capacity checks."""
     endpoint = general if endpoint_settings is None else endpoint_settings
     url = getattr(settings, "redis_url", None) or getattr(endpoint, "redis_url", None)
     if allocation in {"cache", "bulk"}:
@@ -185,19 +211,4 @@ def build_redis_client(
             or getattr(settings, "redis_password", None),
         }
     )
-    # URL query parameters must not disable typed capacity/deadline settings.
-    options.update(
-        max_connections=getattr(limits, allocation + "_max_connections"),
-        socket_timeout=limits.socket_timeout_seconds,
-        socket_connect_timeout=limits.connect_timeout_seconds,
-        decode_responses=True,
-        retry=Retry(NoBackoff(), 0),
-        retry_on_timeout=False,
-        retry_on_error=[],
-    )
-    pool = AllocatedRedisPool(
-        allocation=allocation,
-        acquisition_timeout=limits.acquisition_timeout_seconds,
-        **options,
-    )
-    return AllocatedRedis.from_pool(pool)
+    return options

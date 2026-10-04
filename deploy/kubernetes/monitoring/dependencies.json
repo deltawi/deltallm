@@ -1,0 +1,10 @@
+{
+  "adapterChart": {
+    "version": "5.3.0",
+    "url": "https://github.com/prometheus-community/helm-charts/releases/download/prometheus-adapter-5.3.0/prometheus-adapter-5.3.0.tgz",
+    "sha256": "aa6752b6207ed788522714c3ef7f67f27d423eb4d9512fecb52dc641b6434f31"
+  },
+  "prometheusImage": "prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996",
+  "metricsServerImage": "registry.k8s.io/metrics-server/metrics-server:v0.8.1@sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41",
+  "edgeImage": "haproxy:3.2.4-alpine@sha256:436a5691e6fd563ca4090e351048fda1066bec93b595cc8eaf26988c65eb1152"
+}

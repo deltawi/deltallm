@@ -25,6 +25,8 @@ from src.auth.roles import TeamRole, validate_team_role
 from src.database_settings import DatabaseAllocationSettings
 from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
+from src.lifecycle_settings import LifecycleSettings
+from src.deployment_capacity_settings import DeploymentCapacitySettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
@@ -543,7 +545,13 @@ class UIBrandingUpdatePayload(BaseModel):
         return value.upper()
 
 
-class GeneralSettings(DatabaseAllocationSettings, SpendOperationSettings, RequestWorkSettings):
+class GeneralSettings(
+    DatabaseAllocationSettings,
+    SpendOperationSettings,
+    RequestWorkSettings,
+    LifecycleSettings,
+    DeploymentCapacitySettings,
+):
     model_config = ConfigDict(hide_input_in_errors=True)
 
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
@@ -1155,7 +1163,12 @@ class AppConfig(BaseModel):
 
 
 class Settings(
-    BaseSettings, DatabaseAllocationSettings, SpendOperationSettings, RequestWorkSettings
+    BaseSettings,
+    DatabaseAllocationSettings,
+    SpendOperationSettings,
+    RequestWorkSettings,
+    LifecycleSettings,
+    DeploymentCapacitySettings,
 ):
     model_config = SettingsConfigDict(
         env_prefix="DELTALLM_", extra="ignore", hide_input_in_errors=True
