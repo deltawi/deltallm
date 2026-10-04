@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field
+import gc
 import json
 
 import httpx
@@ -126,6 +127,11 @@ async def selected_batch_harness(test_app, monkeypatch, *, independent=False):
         harness = SelectedBatchHarness(
             test_app, worker, repository, checkpoints, billing, policy, job
         )
+        # Each test builds a full application graph. Collect preceding fixtures'
+        # cycles before entering the selector's real deadline: Python 3.11 full
+        # collections can exceed 750 ms and otherwise interrupt an unrelated hop.
+        # Keep GC enabled and exercise the unchanged deadlines during execution.
+        gc.collect()
         yield harness
 
 

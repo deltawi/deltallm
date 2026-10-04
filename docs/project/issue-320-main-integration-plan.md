@@ -38,7 +38,7 @@ Accepted performance code: `cc3113bd`
 - [x] Commit slice 1 as one reviewable integration change.
 - [x] Slice 2: port ingress isolation and bounded authentication fallback.
 - [x] Slice 3: port dependency capacity ownership and startup arithmetic.
-- [ ] Slice 4: port capacity schema and durable admission foundations.
+- [x] Slice 4: port capacity schema and durable admission foundations.
 - [ ] Slice 5: port budget and prompt hot-path reductions.
 - [ ] Slice 6: port spend recovery, deadlines, and bounded work.
 - [ ] Slice 7: port readiness, drain, and Kubernetes capacity contracts.
@@ -74,6 +74,35 @@ navigation and adding the concurrency guide to its operations reference.
 - Current-main startup lifecycle: 2 tests passed.
 - Real PostgreSQL telemetry acceptance and spend recovery: 4 tests passed against a
   fresh PostgreSQL 16 database with all 99 main migrations.
+
+The only reported warnings are the existing Prisma/Pydantic Python 3.14 compatibility
+warning and pytest-asyncio deprecation warnings.
+
+## Slice 4 source decisions
+
+The durable admission behavior comes from `e39512db`, `4ca6abdd`, `04282772`, and
+`154aeb81`, with the batch race/replay regressions from `073e2d3f`, `f976bcb4`, and
+`bd291a51`. The inactive capacity-partition schema comes from `bbc2c597`.
+
+The design contracts from `6c532178` were retained and registered in current main's
+documentation structure. The large historical PR 4 raw benchmark archive from
+`61a4081c` was not copied because it is neither a release qualification result nor a
+regression input. The design records explicitly document that decision. The migration
+remains inactive: it prepares bounded partition tables but does not enable a second
+admission authority.
+
+## Slice 4 verification
+
+- `ruff check` and `ruff format --check`: all 13 touched Python files passed.
+- Hermetic admission benchmark and batch selector regressions: 59 passed.
+- Native PostgreSQL admission and schema tests: all 66 unique tests passed. One combined
+  host-pressure run produced an allocation-full result before SQL in one strict race;
+  the exact case and then the full 20-test durable-admission file passed unchanged.
+- Prisma client generation: passed.
+- Repository migration-path verifier: fresh install, upgrade from `v0.1.42`, and the
+  shared route-policy feature path all passed with seeded compatibility records. The
+  verifier removed all of its disposable databases.
+- `git diff --check`: passed.
 
 The only reported warnings are the existing Prisma/Pydantic Python 3.14 compatibility
 warning and pytest-asyncio deprecation warnings.

@@ -28,9 +28,11 @@ async def test_failed_billing_admission_can_retry_without_a_checkpoint(selected_
     assert not h.calls and not h.checkpoints.writes
     assert h.repository.failed_calls[0]["retryable"]
 
-    await h.worker._process_item(h.job, replace(item, claim_epoch=1))
+    retried = replace(item, claim_epoch=1)
+    await h.worker._process_item(h.job, retried)
     assert len(attempts) == 2
     assert attempts[0].attribution.operation_id == attempts[1].attribution.operation_id
+    assert retried.selector_checkpoint["decision"]["cause"] == "classified"
     assert len(selection_calls(h)) == len(answer_calls(h)) == 1
     assert len(h.checkpoints.writes) == 2
     assert len(h.repository.completed_calls) == 1

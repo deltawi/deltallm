@@ -183,6 +183,8 @@ nav:
           - Gateway ingress admission: deployment/ingress-admission.md
           - Ingress and authentication measurement: deployment/ingress-measurement.md
           - Dependency capacity: deployment/dependency-capacity.md
+          - Durable admission design: design/pr4-durable-admission.md
+          - Capacity partition protocol: design/pr4-capacity-partitions.md
           - Provider connection tuning: deployment/upstream-http.md
           - Upgrade and rollback behavior: deployment/upgrade-and-rollback.md
           - Release-specific rollouts: deployment/rollout-index.md
