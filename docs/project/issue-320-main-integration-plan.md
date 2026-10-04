@@ -70,7 +70,10 @@ Accepted performance code: `cc3113bd`
 - [x] Slice 9: put permit persistence in a small typed repository owner.
 - [x] Slice 9: add the bounded permit bank and test partial grants, cancellation,
   expiry, shutdown, and the warm-path call bound before bootstrap can select it.
-- [ ] Slice 9: profile all SQL inside the allocator before permit activation.
+- [x] Slice 9: profile all SQL inside the grant allocator before permit activation.
+- [ ] Slice 9: cap retained cursor and issued-lease state by bytes as well as entries.
+- [ ] Slice 9: prove local-lease funding, unused-suffix return, expiry, and conservative
+  owner-loss recovery before local dispatch can run.
 - [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
   missing-owner rejection when adding local or remote accounting clients.
 - [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
@@ -217,6 +220,88 @@ Final logs are in `/private/tmp/issue320-slice9c-bank-final.log`,
 Bootstrap still cannot select the bank. Full allocator plan checks, retained-state
 byte limits, local dispatch, transport, journal, reporting, and current-main feature
 adapters remain unfinished. Slice 9 and final load qualification remain unchecked.
+
+### Clean slice 9c database comparison
+
+The repeat used clean commit `76bcb8aa`, Python 3.11, PostgreSQL 16, two API-like
+processes, the same two-connection accounting pool per process, an 8-item batch,
+2 ms dwell, 32-operation grants, and 50 offered RPS for ten seconds. Each mode
+completed 500 of 500 operations with no generator drops or errors. Each ended with
+300 exact units committed, zero reserved, and zero provisional.
+
+| Mode | Request-path database calls | Caller p95 | Caller p99 |
+| --- | ---: | ---: | ---: |
+| Direct | 998 | 27.86 ms | 33.43 ms |
+| Assigned grants | 999 | 27.42 ms | 46.07 ms |
+| Pre-issued permits | 1,013 | 28.52 ms | 42.22 ms |
+
+The permit mode used 16 refills, 499 claim calls, and 498 terminal calls. This
+confirms refill amortization, not a throughput improvement. The probe excludes
+HTTP, Redis, provider latency, and projection. It is not a 500 RPS result.
+
+Raw samples, summaries, source hashes, and the clean-worktree marker are in
+`/private/tmp/issue320-slice9c-native-clean-76bcb8aa/`. The initial dirty-tree probe
+remains separate. Neither output directory was overwritten.
+
+## Slice 9d: bounded allocator SQL plans
+
+The first failing regression showed that a nine-row window result still read
+25,000 rows to sort tied window times. A new migration removes the unused ID tie
+sort and replaces broad generation scans at every grant window stage with indexed
+scope lookups. A partial renewal index and scalar active-window probes keep
+expired policy checks independent of retained history.
+
+Actual nested plans then found full retained-operation and grant scans in JSON
+batch joins. Three further append-only migrations use bounded key arrays for
+ordered locks and primary-key probes for identity, new-work, and replay checks.
+They preserve atomic settlement, immutable identities, stable lock order, zero-cost
+grants, and the existing request deadline. No pool, call, fallback, or runtime flag
+is added. Already applied migrations remain unchanged.
+
+The native plan recorder loads `auto_explain` on one owned diagnostic connection.
+It changes no server setting or production pool. Its reports omit SQL text,
+conditions, outputs, and parameter values. Count and byte limits bound its memory;
+setup failure and cancellation close the connection.
+
+Four cases each seed 50,000 windows, 10,000 closed grants, and 10,000 closed
+operations. They capture every nested statement for six cold/warm calls, including
+the prepared-statement threshold. Assigned and permit modes both pass with explicit
+and implicit windows. The four reports contain 234, 240, 236, and 242 statement
+plans. No retained-history scan runs; each observed history-table scan returns at
+most one row in these normal-admission cases. The invalid-overlap lookup is bounded
+at nine rows. This is plan evidence, not a new gateway load result.
+
+Verification:
+
+- Native bounds and nested-plan regressions: 12 passed. The original window-sort
+  and retained-key scan regressions failed before their corrections.
+- Final recorder, profile, ownership, and lane checks: 42 passed.
+- Migration-verifier and lane regressions: 34 passed.
+- Full component and Helm lanes: 4,880 passed.
+- Full application lane: 1,645 passed.
+- Full real-PostgreSQL lane: 552 passed, with no required-service skips.
+- Full real-Redis lane: 105 passed, with no required-service skips.
+- Fresh install, upgrade from `v0.1.42`, and shared-feature checks: passed with
+  115 migrations. The verifier removed its disposable databases.
+- Collection assigns all 7,182 tests to one lane each: 4,643 hermetic, 1,645 app,
+  552 PostgreSQL, 105 Redis, and 237 Helm.
+- Prisma generation, Ruff, formatting, and `git diff --check`: passed.
+
+Logs are in `/private/tmp/issue320-slice9d-before.log`,
+`/private/tmp/issue320-slice9d-nested-failure.log`,
+`/private/tmp/issue320-slice9d-nested-rechecked.log`,
+`/private/tmp/issue320-slice9d-plans-final.log`,
+`/private/tmp/issue320-slice9d-component-final.log`,
+`/private/tmp/issue320-slice9d-components-full.log`,
+`/private/tmp/issue320-slice9d-app-full.log`,
+`/private/tmp/issue320-slice9d-postgres-full.log`,
+`/private/tmp/issue320-slice9d-redis-final.log`,
+`/private/tmp/issue320-slice9d-migrations.log`, and
+`/private/tmp/issue320-slice9d-lanes-final.log`.
+
+The permit bank is still inactive. Next: byte limits, local-lease schema and recovery,
+then the supervised local-dispatch owner. Keep the remaining slices and final kind
+qualification unchecked until their own gates pass.
 
 ## Slice 1 source decisions
 

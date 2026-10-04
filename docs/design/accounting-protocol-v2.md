@@ -276,3 +276,47 @@ Activation still requires full allocator plan checks, a byte budget for retained
 state, the supervised local-dispatch and recovery owners, and clean-image gateway
 qualification. Fewer refills alone do not remove the per-request claim or terminal
 acknowledgement.
+
+## Allocator plan bounds
+
+The clean replay checks SQL inside the grant allocator, not only its outer call.
+The first new regression returned nine windows but read 25,000 rows to sort tied
+window times. The correction removes the unnecessary window-ID tie sort. The
+parent still locks window IDs in stable order and rejects more than eight matches.
+
+The allocator now uses the same indexed request-scope lookup at its window-lock,
+balance, and grant-link stages. Expired renewal checks use a scope-specific partial
+index and one scalar active-window probe per scope. This avoids an anti-join that
+can scan other tenants' active windows. An expired renewing policy with no current
+window still rejects admission; it cannot become an unlimited budget.
+
+Actual nested-plan tests then found full scans of retained operations and grants
+in JSON batch joins. New append-only migrations use bounded key arrays for ordered
+locks and primary-key probes for identity, new-work, and replay checks. They keep
+the same lock order, transaction, fence checks, payloads, and economic effects.
+No database call, pool, fallback, setting, or request timeout is added.
+
+Four native cases cover assigned and pre-issued admission, explicit and implicit
+windows, and six calls through the prepared-statement threshold. Each case seeds
+50,000 windows, 10,000 closed grants, and 10,000 closed operations. The test captures
+every executed nested plan with PostgreSQL's session-local `auto_explain` module.
+It checks that no retained-history scan runs. The fixture also verifies all five
+budget scopes, renewal rejection, hard-window bounds, and exact settlement.
+
+The recorder owns one diagnostic connection and closes it with a fixed deadline.
+It caps plan count and bytes. Reports contain only node types, table and index
+names, row and buffer counts, and a query hash. They omit query text, conditions,
+outputs, and parameter values. No server-wide logging or preload change is needed.
+This diagnostic connection is not a new production pool.
+
+The renewal index adds one entry per renewing window, not per request or event.
+Money-counter updates do not change its columns. Build it through the coordinated
+migration role with the declared two-second lock and thirty-second statement
+limits. Use a maintenance window if the bounded build cannot finish. Keep window
+vacuum and analyze work, and include index size and write cost in final load
+qualification. The applied migrations remain unchanged.
+
+Rollback can select the existing assigned writer or disable v2 through the current
+cutover procedure. Keep the additive index, functions, and retained economic
+records. These bounds do not complete local dispatch, the terminal journal, or
+gateway qualification.

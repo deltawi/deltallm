@@ -116,6 +116,10 @@ def _source_manifest() -> dict[str, object]:
         Path("prisma/migrations/20260929100000_accounting_preissued_permits/migration.sql"),
         Path("prisma/migrations/20261004130000_accounting_permit_batches/migration.sql"),
         Path("prisma/migrations/20261004140000_accounting_zero_allowance_permits/migration.sql"),
+        Path("prisma/migrations/20261004150000_accounting_allocator_scope_bounds/migration.sql"),
+        Path("prisma/migrations/20261004160000_accounting_operation_key_probes/migration.sql"),
+        Path("prisma/migrations/20261004170000_accounting_permit_key_probes/migration.sql"),
+        Path("prisma/migrations/20261004180000_accounting_claim_key_probes/migration.sql"),
         Path("tests/performance/accounting_grant_profile.py"),
     )
     return {
