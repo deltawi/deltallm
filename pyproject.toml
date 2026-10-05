@@ -69,3 +69,4 @@ include = ["src*"]
 
 [tool.setuptools.package-data]
 "src.providers.catalogs" = ["*.json"]
+"src.migration_recovery" = ["*.sql"]

@@ -107,6 +107,10 @@ manifests before rollout.
 - Monitor locks, long transactions, connection saturation, replication lag, and disk during the job.
 - If a migration fails, stop the application rollout. Preserve job logs and database state; do not
   edit `_prisma_migrations`, mark a migration applied, or use `db push` without a reviewed recovery plan.
+- DeltaLLM v0.1.48 has one narrowly scoped recovery command for the known missing-`pgcrypto`
+  failure in `20260927150000_model_api_identity`. Follow
+  [Recover the v0.1.48 model identity migration](model-api-identity-migration-recovery.md); do not
+  use that command for any other failed migration.
 - Rolling application code back does not roll schema back. A safe rollback requires the old binary
   to remain compatible with the migrated schema.
 
