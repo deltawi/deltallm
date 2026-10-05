@@ -197,7 +197,7 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     base_schema.touch()
     state = SimpleNamespace(validated=False, installed_checks=0, final_checks=0)
     steps: list[str] = []
-    created, dropped = Mock(), Mock()
+    created, dropped, recovery = Mock(), Mock(), Mock()
     validation = Path("migrations") / verifier.SELECTOR_VALIDATION_MIGRATION / "migration.sql"
 
     def extract(base_ref: str, _destination: Path) -> Path:
@@ -228,6 +228,7 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(verifier, "_db_execute", execute)
     monkeypatch.setattr(verifier, "_create_database", created)
     monkeypatch.setattr(verifier, "_drop_database", dropped)
+    monkeypatch.setattr(verifier, "_verify_model_identity_recovery_path", recovery)
     return SimpleNamespace(
         schema=base_schema,
         validation=validation,
@@ -235,6 +236,7 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         steps=steps,
         created=created,
         dropped=dropped,
+        recovery=recovery,
     )
 
 
@@ -262,7 +264,8 @@ def test_upgrade_verifier_handles_selector_migration_already_in_base(
     assert h.steps == ["base", *intermediate, "current", "final-check"]
     assert h.state.installed_checks == int(base_state != "validated")
     assert h.state.final_checks == 1
-    assert h.created.call_count == h.dropped.call_count == 3
+    assert h.created.call_count == h.dropped.call_count == 4
+    h.recovery.assert_called_once()
     assert h.dropped.call_args_list == list(reversed(h.created.call_args_list))
 
 
