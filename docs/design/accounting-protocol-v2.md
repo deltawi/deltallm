@@ -624,6 +624,34 @@ grant or grant-window history during admission. Actual nested plans cover four
 planner modes with 10,000 retained grant-window references and unchanged row
 limits. These restrictions add no database round trip or financial authority.
 
+### Supervised journal processing
+
+One worker owns one task and at most one immutable claim. The claim has at most
+256 sequence keys and a conservative 16 KiB retained-byte charge. It contains no
+audit, spend, request, or pricing document. A concurrent tick is rejected without
+a waiter or another database claim. PostgreSQL remains the financial authority.
+
+Startup must complete a real claim and processing check before it reports ready.
+An empty claim uses one database call; a normal nonempty tick uses one claim call
+and one canonical-processing call. Exact ambiguity recovery stays in the existing
+repository. A processing error can make one bounded failure-transition call.
+If that acknowledgement is uncertain, the worker keeps its original claim.
+Cancellation also keeps the claim. The next tick reuses the same keys before it
+can claim other work. Lease loss returns no financial effect and permits recovery
+through the database-owned claim path.
+
+Temporary database failure produces degraded task health and bounded, jittered
+backoff. Unexpected task exit produces failed health without exception text.
+Fixed action and outcome labels record worker calls, errors, cancellation, and
+duration. No worker, tenant, operation, or financial key enters a metric label.
+
+Close stops new claims and waits for the one owned task within the caller's
+deadline. A stopped task is not proof that the durable backlog has drained.
+Accepted documents, pending capacity, reserved money, and failed records remain
+charged in PostgreSQL. Task health describes execution, not settled balances.
+Runtime selection still requires the later bootstrap, durable backlog checks,
+transport roles, terminal drain, unused-suffix return, and recovery integration.
+
 ### Storage and rollout policy
 
 The compact journal has three unique key indexes and four partial work indexes.

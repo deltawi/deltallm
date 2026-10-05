@@ -20,7 +20,12 @@ The migration-131 checkpoint passed all 7,829 tests and all three migration path
 The first PostgreSQL run failed two compatibility cases. Their unchanged modules
 then passed all 15 cases, and a full confirmation passed all 705 PostgreSQL cases.
 Keep the original failures: the passing confirmation does not establish their
-causes or a production fix. The next step is the supervised journal worker.
+causes or a production fix. The supervised journal worker is now implemented.
+Its broad database run passed 710 cases and failed one unchanged child-startup
+case. The failure occurred after 9.69 seconds of module imports, before database
+connection completed. The unchanged recovery module then passed all seven cases.
+Keep both results. Full-suite confirmation remains open. Next: the shared local
+startup and shutdown owner, then bounded recovery and runtime selection.
 
 ## Integration rules
 
@@ -1165,20 +1170,45 @@ Runtime selection remains off. The final four-rate kind series remains pending.
 
 ### Slice 10d: supervised journal processing
 
-- [ ] Add one owned worker task with startup, liveness, bounded backoff, and
+- [x] Add one owned worker task with startup, liveness, bounded backoff, and
   cancellation-safe shutdown through the existing lifecycle helpers.
-- [ ] Retain at most one immutable claim with 256 keys and a fixed byte charge.
+- [x] Retain at most one immutable claim with 256 keys and a fixed byte charge.
   Reject another tick without a waiter or a second claim.
-- [ ] Retry the same claim after an uncertain materialization or failure reply.
+- [x] Retry the same claim after an uncertain materialization or failure reply.
   Never release durable documents, funding, or capacity on process cancellation.
-- [ ] Add fixed action/outcome metrics and safe failure health details. Task
+- [x] Add fixed action/outcome metrics and safe failure health details. Task
   shutdown must not claim that the durable accounting backlog has drained.
-- [ ] Prove lost claim and commit replies, cancellation after commit, owner loss,
+- [x] Prove lost claim and commit replies, cancellation after commit, owner loss,
   lease recovery, exact money, and complete document removal with PostgreSQL.
 - [ ] Complete focused checks, the affected real-dependency gates, collection,
   style checks, and the small typed-owner regression before closing this step.
 - [ ] Connect processing, terminal drain, unused-suffix return, and transport
   ownership through the accounting bootstrap and deployment roles in later steps.
+
+The first focused run passed all 112 cases in
+`/private/tmp/issue320-slice10d-focused.log`. This includes six new native worker
+cases. An empty tick makes no materialization call. A normal tick uses one claim
+and one bulk commit. Cancellation keeps the original handle for exact retry;
+lost claim ownership keeps all documents and money until lease recovery. The
+largest Unicode and integer-key object graph fits the fixed 16 KiB charge.
+Configuration and claim copies now use raw-field revalidation without a serializer.
+The final source passed all 5,416 component and Helm cases, including the 43 new
+component cases. The full PostgreSQL run passed 710 of 711 cases, including all
+six new worker cases. One existing process-death case failed while starting its
+child. The timed child imported modules for 9.69 seconds before connection began;
+the parent then reached its unchanged ten-second wait limit. No accounting SQL
+had started. This identifies the failed stage, not the cause of the import delay.
+The unchanged recovery module then passed all seven cases, with imports of
+4.44 and 4.40 seconds. Do not treat the confirmation as a production fix.
+
+Redis passed all 105 cases. Collection assigned all 7,878 cases to exactly one
+lane: 5,173 hermetic, 243 Helm, 1,646 application, 711 PostgreSQL, and 105 Redis.
+The 402-field configuration reference, Ruff, formatting, and whitespace checks
+passed. The unchanged application graph passed its 1,646 cases in slice 10c;
+this step did not rerun that lane. Preserve the `issue320-slice10d-full-` logs,
+`issue320-slice10d-spend-confirmation.log`, and `issue320-slice10d-final-` artifacts
+in `/private/tmp`. Full database confirmation remains open. No application route,
+startup selector, configuration field, schema, or database function changes here.
 
 ## Slice 9a: inactive permit foundation
 
