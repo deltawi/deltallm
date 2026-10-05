@@ -30,8 +30,10 @@ passed 114 focused cases and all 5,441 component and Helm cases. Collection now
 contains 7,911 cases. Keep the original cold-start failure; confirmation is not
 a production fix. Migration 132 now limits inspected settlement keys before
 eligibility checks. This checkpoint passed all 7,924 tests and all three migration
-paths. Next: durable backlog health, then runtime and transport integration.
-Runtime selection and final RPS tests remain pending.
+paths. Durable backlog health passed 100 focused cases, all 5,489 component and
+Helm cases, all 745 PostgreSQL cases, and all three migration paths. Collection
+now contains 7,985 cases. Runtime selection, transport integration, current-main
+adapters, reporting lanes, and final RPS tests remain pending.
 
 ## Integration rules
 
@@ -1311,6 +1313,76 @@ is exhaustive and non-overlapping. Ruff, formatting, whitespace, generated Prism
 and the unchanged 402-field configuration reference passed. Logs use
 `/private/tmp/issue320-slice12a-full-`, `issue320-slice12a-final-`, and
 `issue320-slice12a-migration-paths.log`.
+
+### Slice 12b: bounded durable backlog health
+
+- [x] Add one typed read of maintained partition and terminal-capacity counters.
+  Check all 64 possible partition keys. Missing, extra, and misnumbered partitions
+  must remain unavailable, not a false zero backlog.
+- [x] Add an append-only partial index for the oldest unsettled terminal record.
+  Include pending, processing, and failed records; exclude completed history.
+- [x] Keep one immutable observation and reject concurrent refresh without a task,
+  waiter, extra pool, or financial payload. Preserve one caller deadline.
+- [x] Report unknown, stale, failed, aged, capacity-full, and inactive-generation
+  states with fixed safe codes. Cancelled or failed reads cannot reset counters.
+- [x] Keep task execution, healthy backlog, and sampled durable drain separate.
+  A completed journal can leave grant funding and capacity outstanding.
+- [x] Complete the affected lanes, collection, style, and all migration paths.
+- [ ] Connect this required check to the accounting roles and readiness owner
+  during runtime integration. Do not select local or journal service without it.
+
+The final focused run passed 100 cases in
+`/private/tmp/issue320-slice12b-focused-final.log`. Ten new native cases
+cover empty state without capacity rows, exact acceptance-to-settlement states,
+charged dead letters, the oldest record in each unsettled state, a full partition,
+and malformed partition coverage. Four actual-plan cases retain 10,000 completed
+receipts and 10,000 other generations with partition and capacity rows. Six calls
+per planner mode use only indexed keys, at most 64 partition lookups per relation,
+and one oldest-work key. No retained history is counted or filtered.
+
+The probe owns one fixed-shape scalar observation with a 4 KiB retained-byte
+charge. Four maximum-scalar cases check the full retained object graph. It never
+owns balances, issue proofs, or pending documents. It uses no database write.
+A refresh uses one
+deadline-bounded native read and no recovery query. Query time counts toward
+observation age; a slow reply cannot reset freshness. A failed or cancelled refresh
+keeps the previous observation but makes health unavailable. Unexpected faults
+remain visible to the caller. A sampled empty state is not a cluster cutover
+proof: callers must first stop and fence new admission across all replicas.
+
+Migration 133 adds one partial oldest-work index. A new journal receipt now writes
+six indexes instead of five. Completed receipts do not enter this new work index.
+No configuration field, request-path call, runtime selector, or application route
+changes here.
+
+All three migration paths passed through migration 133. The final source passed
+5,246 hermetic, 243 Helm, and 745 PostgreSQL cases. The earlier slice-12a run
+passed all 1,646 application and 105 Redis cases; those runtime graphs and their
+configuration did not change in this inactive health slice. Current collection
+is exhaustive and non-overlapping at 7,985 cases. Ruff, formatting, whitespace,
+small typed-owner checks, and the unchanged 402-field configuration reference
+passed. Logs use `/private/tmp/issue320-slice12b-full-`,
+`issue320-slice12b-final-`, and `issue320-slice12b-migration-paths.log`.
+
+The full component run took 556.91 seconds. One unchanged selector structure
+check took 197.11 seconds, compared with 4.51 seconds in the prior checkpoint.
+A read-only host snapshot reported high load averages. Preserve these timings;
+they are not gateway load results or proof of a code bottleneck. The full
+PostgreSQL run passed in 681.18 seconds. No assertion or deadline was relaxed.
+
+### Next: runtime and transport integration
+
+- [ ] Add typed, minimal accounting request and projection roles. Keep their
+  pools, queues, ingress, and worker allocations separate from inference.
+- [ ] Connect signed transport to the shared local issue and terminal owners.
+  Keep complete generation, owner, fence, ordinal, and deadline checks.
+- [ ] Require actual generation, local-runtime, journal-task, and durable backlog
+  readiness before service selection. Keep one lifecycle owner and drain deadline.
+- [ ] Add bounded native maintenance before selecting the complete journal path.
+  Stop admission before proving durable settlement; do not use sampled emptiness
+  as a cluster drain or cutover proof.
+- [ ] Complete deployment arithmetic, configuration surfaces, role smoke tests,
+  current-main adapters, and reporting work before final kind qualification.
 
 ## Slice 9a: inactive permit foundation
 

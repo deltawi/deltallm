@@ -62,6 +62,22 @@ def test_migration_verifier_checks_recovery_schema_indexes_and_financial_guards(
         assert contract in sql
 
 
+def test_migration_verifier_checks_the_partial_oldest_terminal_index_and_counters(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_health("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "deltallm_accounting_terminal_oldest_work_idx",
+        "(generation, accepted_at, sequence)",
+        "status <> ''completed''",
+        "pending_entries",
+        "pending_bytes",
+        "failed_entries",
+    ):
+        assert contract in sql
+
+
 def test_migration_verifier_checks_each_bounded_window_funding_lookup(monkeypatch) -> None:
     execute = Mock()
     monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
@@ -257,7 +273,9 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     base_schema = tmp_path / "base" / "schema.prisma"
     base_schema.parent.mkdir()
     base_schema.touch()
-    state = SimpleNamespace(validated=False, installed_checks=0, final_checks=0, recovery_checks=0)
+    state = SimpleNamespace(
+        validated=False, installed_checks=0, final_checks=0, recovery_checks=0, health_checks=0
+    )
     steps: list[str] = []
     created, dropped = Mock(), Mock()
     history = Mock()
@@ -279,6 +297,8 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def execute(_prisma: str, *, schema: Path, database_url: str, sql: str) -> None:
         if "accounting recovery cursor contract is missing" in sql:
             state.recovery_checks += 1
+        if "accounting oldest terminal work index is missing" in sql:
+            state.health_checks += 1
         if "Batch checkpoint installation must commit before validation" in sql:
             assert not state.validated, "intermediate check cannot follow applied validation"
             state.installed_checks += 1
@@ -330,6 +350,7 @@ def test_upgrade_verifier_handles_selector_migration_already_in_base(
     assert h.state.installed_checks == int(base_state != "validated")
     assert h.state.final_checks == 1
     assert h.state.recovery_checks == 3
+    assert h.state.health_checks == 3
     assert h.created.call_count == h.dropped.call_count == 3
     assert h.history.call_count == 3
     assert h.dropped.call_args_list == list(reversed(h.created.call_args_list))

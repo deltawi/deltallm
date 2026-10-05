@@ -698,10 +698,33 @@ Budget-window and partition locks, exact balance effects, and provisional charge
 for unknown owner loss are unchanged. Failed terminal work stays funded. This
 database foundation does not yet select a maintenance task in bootstrap.
 
+### Durable backlog health
+
+Task execution and durable financial progress are separate checks. A bounded
+snapshot reads maintained capacity counters for the generation. It checks all
+64 possible partition keys and rejects missing, extra, or misnumbered coverage.
+One partial index provides the oldest pending, processing, or failed record.
+Completed receipts do not enter this work index. Health never counts event,
+receipt, or spend history to rebuild a missing counter.
+
+One probe owns one immutable scalar observation and no financial document.
+Concurrent refresh is rejected without another task or waiter. A refresh uses one
+native read within the caller deadline. The observation includes query time in
+its age. Failed or cancelled reads retain the last observation but make health
+unavailable. Unknown or stale state cannot become an invented zero backlog.
+Failed records, excessive age, full capacity, and an inactive generation produce
+fixed safe details. This observer does not admit requests or release money.
+
+A healthy backlog can still have funded work outstanding. Journal completion
+removes the pending document charge; grant settlement releases funding and
+partition capacity. An observed empty snapshot is not a cluster-wide drain proof
+while other replicas can still admit work. Runtime integration must connect this
+required check to the existing readiness and lifecycle owners before selection.
+
 ### Storage and rollout policy
 
-The compact journal has three unique key indexes and four partial work indexes.
-A new pending receipt writes five of these indexes. The lease, expiry, and claim
+The compact journal has three unique key indexes and five partial work indexes.
+A new pending receipt writes six of these indexes. The lease, expiry, and claim
 indexes contain only processing work. The unsettled-grant index supports the
 close guard. Pending documents have only their sequence primary key. Large audit
 and spend documents do not enter the retained replay indexes.
