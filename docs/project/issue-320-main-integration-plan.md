@@ -76,8 +76,9 @@ Accepted performance code: `cc3113bd`
   byte limits. The local runtime must use this owner before activation.
 - [ ] Slice 9: prove local-lease funding, unused-suffix return, expiry, and conservative
   owner-loss recovery before local dispatch can run.
-- [ ] Slice 9: separate the local dispatch deadline from the terminal recovery
-  deadline. Keep dispatch within the funded budget period and refill TTL.
+- [x] Slice 9: separate the local dispatch deadline from the terminal recovery
+  deadline in the inactive schema and issue owner. Keep dispatch within the funded
+  budget period and refill TTL. Runtime and transport selection are still pending.
 - [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
   missing-owner rejection when adding local or remote accounting clients.
 - [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
@@ -210,7 +211,7 @@ loss. Bootstrap selection and the Python local lease lifecycle remain unfinished
   foundation. Focused checks passed: 47 native and 35 verifier/lane cases.
 - [x] Add inactive local-lease fields and constraints in an append-only migration.
   Keep assigned and durable-claim behavior unchanged by default.
-- [ ] Retain the allocator's short dispatch deadline. Store a separate bounded
+- [x] Retain the allocator's short dispatch deadline. Store a separate bounded
   receipt-recovery deadline. Reject a new local issue if its terminal lifetime
   does not fit the funded lease.
 - [x] Add typed bulk refill, unused-suffix return, and terminal persistence owners.
@@ -412,9 +413,10 @@ zero economic drift. No production deadline or allocator SQL changed.
 - [x] Complete focused, full application, full native PostgreSQL, component,
   Redis, lane, and style checks before committing this inactive step.
 - [x] Record immutable-receipt and return-only recovery test results.
-- [ ] Add the local issuer next.
+- [x] Add the inactive local issuer in slice 9l.
 - [x] Complete entry/byte-bounded retiring cursor verification in slice 9i.
-- [ ] Add the supervised bulk return lifecycle and runtime selection after that.
+- [x] Add the supervised bulk return foundation in slice 9l.
+- [ ] Add the shared terminal path and runtime selection after that.
 
 The main gateway still selects assigned admission. Slice 9 and the final kind
 50/100/200/500 RPS qualification remain incomplete. The applied 119-migration
@@ -696,6 +698,144 @@ Full logs are `/private/tmp/issue320-slice9k-verified-components.log`,
 This inactive staging and issue step is complete. Funding coordination, terminal
 proof transport, replay, supervised returns, later integration slices, and the
 final 50/100/200/500 RPS kind qualification remain required.
+
+## Slice 9l: bounded admission, complete replies, and suffix returns
+
+The inactive admission owner has one active caller and at most one waiter. Its
+release is synchronous, so cancellation cannot enter between local issue and
+release. Tests cover queue overflow, timeout, cancellation before and after wakeup,
+waiter order, and release without ownership.
+
+The atomic issue owner now prepares dispatch, replay, and denial results together
+in the caller's original order. Only dispatch results retain financial proofs.
+The 256-result bound covers both issued and denied entries. The 1 MiB bound covers
+the complete reply, including scalar permits and full proofs. Result validation,
+serialization, and allocation finish before either state owner is changed.
+
+- [x] Add the bounded admission owner with synchronous release.
+- [x] Prepare complete mixed results before atomic issue. Reject duplicate IDs,
+  stale generations, invalid decisions, incorrect order, and oversized replies.
+- [x] Coordinate cold funding in no more than two bulk rounds. Keep warm issue
+  at zero SQL calls, and leave warm prefixes unchanged on a cold-funding failure.
+- [x] Preflight retained proof and cursor capacity before funding. Retain known
+  staged grants for exact return after failure; never invent a refund after an
+  unknown acknowledgement.
+- [x] Add one supervised return owner with bounded scans and bulk writes. Share
+  the admission owner, validate the whole reply before removal, stop admission
+  before drain, and keep proof charges on timeout or invalid acknowledgement.
+- [ ] Complete the shared terminal proof/replay path before runtime selection.
+- [x] Complete full required gates before this next integration step is committed.
+
+Initial mixed-result checks failed ten cases in
+`/private/tmp/issue320-slice9l-mixed-results-before.log`. The new size fixture first
+used a model-copy method on a dataclass. It now uses the dataclass replacement
+method. No existing assertion or monetary contract was changed.
+Final focused admission, result, staging, issue, and ratchet checks passed 83 cases
+in `/private/tmp/issue320-slice9l-complete-replies-focused.log`. All 19 native lease
+and issue checks passed in `/private/tmp/issue320-slice9l-complete-replies-native.log`.
+The new funding owner passed 106 focused checks. Three native cases prove zero
+SQL calls for warm issue, two bulk calls for partial cold issue, exact balances,
+lost funding or terminal acknowledgement recovery, and terminal replay after
+grant closure. The log is `/private/tmp/issue320-slice9l-issuer-native.log`.
+
+The return worker shares the issuer's cursor store and admission owner. It skips
+a busy owner instead of adding another waiter. Each scan and bulk return covers
+at most 256 grants. It validates all counts and proofs before the first removal.
+Known unused suffixes keep their entry and byte charge until exact acknowledgement.
+Issued proofs keep their separate terminal owner after return-worker close.
+Dependency failure makes this worker unready. Failed startup stops admission and
+cancels its task. Close uses the caller's deadline, and a failed drain keeps proofs.
+
+Initial return checks had two startup fixture failures. The worker correctly
+rejected initial dependency failure; the new fixtures now inject it after a ready
+startup. Startup cleanup was added without changing that readiness rule. The log
+is `/private/tmp/issue320-slice9l-returns-focused.log`. All 154 focused local-owner
+checks passed in `/private/tmp/issue320-slice9l-all-focused.log`.
+
+Two initial native return checks expected partition capacity to drop on suffix
+return. The applied return function records unused ordinals but leaves partition
+capacity charged until whole-grant settlement. The new tests now check the exact
+three-ordinal return and the retained four-slot charge, then require zero charge
+and exact cost after settlement. No applied migration or existing test was changed.
+The initial log is `/private/tmp/issue320-slice9l-returns-native.log`.
+
+All 24 native local-owner cases then passed in
+`/private/tmp/issue320-slice9l-returns-native-fixed.log`. Those cases include lost
+return acknowledgement, exact unused-ordinal facts, retained issued-proof charges,
+terminal acceptance after return-worker close, and replay after grant settlement.
+
+The first full gates passed 5,198 component and Helm cases and all 1,645 application
+cases. PostgreSQL had 634 passes and one overlap-plan assertion failure. The full
+failure log is `/private/tmp/issue320-slice9l-full-postgres.log`. Its assertion text
+did not retain the complete plan. Do not infer the exact failing branch from that
+truncated text. A single isolated check, four planner profiles, and seven planner
+cost profiles then passed with the original assertions and unchanged production
+settings. Their complete safe plans show a zero-work explicit-reference branch
+and an indexed nine-window overlap result.
+
+The window-plan guard inspected unused branches as if they had run. It now requires
+zero rows, filtering, and buffer work for each unused window branch. Executed
+branches keep the same row and filter bounds and the ban on sequential and bitmap
+heap scans. They must also have no sort. All 26 focused plan-guard checks passed,
+including tests that reject hidden work and 50,000-row scans. The log is
+`/private/tmp/issue320-slice9l-actual-plan-guard-focused.log`. No SQL, deadline,
+capacity, or executed-row limit changed. Final full gates must still pass with
+the complete overlap plan retained.
+
+The next full PostgreSQL run passed all plan checks but timed out waiting for a
+process-death fixture's child commit marker. Its failure log is
+`/private/tmp/issue320-slice9l-final-postgres.log`. All seven isolated spend recovery
+cases passed with the same ten-second startup and 250 ms statement deadlines.
+The diagnostic log is `/private/tmp/issue320-slice9l-spend-child-diagnostic.log`.
+No runtime, test deadline, or process-death assertion was changed.
+
+The final full PostgreSQL run passed all 635 cases without skips. It retained
+complete safe overlap plans and bounded child diagnostics in
+`/private/tmp/issue320-slice9l-verified-postgres.log`. One child spent 8.235 seconds
+in imports, 0.349 seconds connecting, and 0.023 seconds committing its intent.
+The host had about 17 GB of swap in use. This is evidence of slow test startup,
+not proof of the earlier timeout's exact cause. No unrelated host process was
+stopped. No Prisma engine remained after the isolated checks.
+
+Final component and Helm checks passed all 5,209 cases in
+`/private/tmp/issue320-slice9l-final-components.log`. The unchanged application
+code passed all 1,645 cases in `/private/tmp/issue320-slice9l-full-app.log`.
+Final collection covers 7,594 cases, each in one lane, in
+`/private/tmp/issue320-slice9l-final-lanes.log`. Redis passed all 105 cases without
+skips in `/private/tmp/issue320-slice9l-verified-redis.log`. All 123 unchanged
+migrations passed fresh install, upgrade from `v0.1.42`, and shared-feature upgrade
+in `/private/tmp/issue320-slice9l-verified-migrations.log`. The verifier removed
+only its disposable databases. All 15 changed Python files passed Ruff and format
+checks. The generated reference remains current at 402 fields. `git diff --check`+passed. No schema, configuration default, or runtime selection changed in 9l.
+
+Runtime selection, the rest of slice 9, later integration slices, and the four final
+kind RPS runs remain incomplete.
+
+## Next slice 9m: shared local proof and terminal owner
+
+- [ ] Add typed local permit and request-handle contracts. Keep the existing
+  assigned contracts unchanged. Check the complete reservation, owner, generation,
+  partition, grant fence, and ordinal before provider work.
+- [ ] Freeze local terminal input before its first await. Reject duplicate
+  operations, stale generations, NaN, and entry or byte excess before persistence.
+- [ ] Add a typed bulk terminal owner with the caller's single deadline. Check
+  every acknowledgement before removing any issued proof or retained-byte charge.
+- [ ] Prove cancellation, blocked transport, wrong acknowledgement, and replay
+  after local receipt removal. Do not create another admission on terminal retry.
+- [ ] Add the shared service path and preserve local proofs through provider retry
+  and charged cache admission. Missing proof must fail closed, not use assigned
+  or legacy billing.
+- [ ] Add compact authenticated transport with process-local clock anchors. Keep
+  financial proof identity separate from a process's monotonic clock value.
+- [ ] Prove the shared path against PostgreSQL, then run all required gates before
+  runtime selection. Keep later slices and the final four-rate kind series pending.
+
+Small drafts outside the checkpoint passed 27 terminal snapshot, acknowledgement,
+and deadline checks and 11 request-handle checks. They are not repository
+implementation or gateway qualification. Apply and verify them after the current
+checkpoint has passed its gates. Draft logs are
+`/private/tmp/issue320-terminal-owner-draft-deadlines.log` and
+`/private/tmp/issue320-local-handle-draft-focused-imported.log`.
 
 ## Slice 9a: inactive permit foundation
 

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 import math
+from uuid import UUID
 
 from src.billing.accounting_local_cursors import LocalCursorStore
 from src.billing.accounting_local_leases import LocalPermitReceipt
@@ -38,18 +39,21 @@ class LocalIssueCommit:
         self._minimum_validity = minimum_validity_seconds
 
     def commit(
-        self, proposed: Sequence[LocalPermitReceipt], *, expires_at: float
+        self,
+        proposed: Sequence[LocalPermitReceipt],
+        *,
+        expires_at: float,
+        non_dispatch: Sequence[DispatchPermit] = (),
+        operation_order: Sequence[UUID] | None = None,
     ) -> LocalIssuedBatch:
-        if len(proposed) > 256:
+        if len(proposed) + len(non_dispatch) > 256:
             raise ValueError("local issue must contain at most 256 entries")
         _caller_deadline(expires_at)
         proofs, receipts = _freeze(proposed)
         if not self._receipts.prepare_issue(proofs):
             raise DurableBatchFull("local issued receipt capacity is full")
         plans = self._cursors.prepare_issue(receipts)
-        result = LocalIssuedBatch(
-            permits=tuple(_permit(receipt) for receipt in receipts), proofs=proofs
-        )
+        result = _result(receipts, proofs, non_dispatch, operation_order, self._cursors.generation)
         retained = tuple(
             (receipt.reservation.operation_id, proof)
             for receipt, proof in zip(receipts, proofs, strict=True)
@@ -60,6 +64,44 @@ class LocalIssueCommit:
         self._cursors._commit_issue(plans)
         self._receipts._commit_issue(retained)
         return result
+
+
+def _result(
+    receipts: Sequence[LocalPermitReceipt],
+    proofs: tuple[RetainedLocalReceipt, ...],
+    non_dispatch: Sequence[DispatchPermit],
+    operation_order: Sequence[UUID] | None,
+    generation: int,
+) -> LocalIssuedBatch:
+    permits = {receipt.reservation.operation_id: _permit(receipt) for receipt in receipts}
+    for value in non_dispatch:
+        permit = DispatchPermit.model_validate(value.model_dump())
+        if (
+            permit.decision is ReserveDecision.DISPATCH
+            or permit.protocol_generation != generation
+            or permit.operation_id in permits
+        ):
+            raise ValueError("local non-dispatch result does not match its batch")
+        permits[permit.operation_id] = permit
+    order = tuple(permits) if operation_order is None else tuple(operation_order)
+    if len(order) != len(permits) or set(order) != set(permits):
+        raise ValueError("local result order does not match its batch")
+    result = LocalIssuedBatch(permits=tuple(permits[key] for key in order), proofs=proofs)
+    size = len(
+        json.dumps(
+            {
+                "permits": [permit.model_dump(mode="json") for permit in result.permits],
+                "proofs": [receipt.model_dump(mode="json") for receipt in receipts],
+            },
+            allow_nan=False,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    )
+    if size > 1_048_576:
+        raise DurableBatchFull("local complete reply exceeds its byte limit")
+    return result
 
 
 def _freeze(

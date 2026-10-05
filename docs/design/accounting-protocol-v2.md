@@ -482,7 +482,25 @@ a 1 MiB serialized proof limit, including JSON list delimiters and commas.
 Receipt entry and byte capacity, exact grant and subject identity, and both
 deadlines are checked before commit. Deadline checks use the database clock anchor
 and are repeated after preparation. The commit changes cursor prefixes and retains
-issued proofs without an await or external callback. The future admission owner
-must also release its gate without an await after this commit. These owners remain
-inactive: funding coordination, proof transport, replay after terminal acceptance,
-and supervised returns are required before runtime selection.
+issued proofs without an await or external callback. The admission owner releases
+its gate synchronously after commit. Complete replies contain dispatch, replay,
+and denial results in caller order. The 256-entry and 1 MiB limits also cover those
+results, not only their proofs.
+
+The inactive funding owner snapshots input before its first await. It checks
+entry and byte capacity before funding. Warm issue needs no SQL call. Cold issue
+uses at most two bulk rounds, with no awaited loop per subject. A funding failure
+does not consume warm prefixes. Only known fenced grants can enter return-only
+state; an unknown acknowledgement is not proof of a refund.
+
+One return task shares the admission owner and cursor store. It skips a busy gate,
+scans at most 256 cursors, and returns at most 256 unused suffixes per bulk call.
+It checks the complete reply before it removes any retained proof or byte charge.
+Return records unused ordinals; whole-grant settlement releases database capacity.
+Issued proofs keep their terminal owner after an unused-suffix return.
+
+Dependency failure makes the return worker unready. Failed startup stops admission
+and cancels its task. Close first stops admission, then drains unused suffixes
+within the caller's deadline. A failed drain keeps its proofs and charges. The
+runtime does not select these owners yet: shared proof transport and replay after
+terminal acceptance remain required.

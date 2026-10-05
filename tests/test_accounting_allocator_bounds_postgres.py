@@ -46,12 +46,34 @@ async def plan(db, sql, *parameters):
 
 
 def assert_bounded_window_plan(value, *, maximum_rows):
-    window_nodes = [
+    planned_windows = [
         node
         for node in nodes(value)
         if node.get("Relation Name") == "deltallm_accounting_budget_windows"
     ]
+    for node in planned_windows:
+        if node["Actual Loops"] == 0:
+            # An unused UNION branch can have a bitmap plan. It must have no
+            # actual rows, filtering, or buffer work, not just a small result.
+            assert all(
+                node.get(field, 0) == 0
+                for field in (
+                    "Actual Rows",
+                    "Rows Removed by Filter",
+                    "Rows Removed by Index Recheck",
+                    "Shared Hit Blocks",
+                    "Shared Read Blocks",
+                    "Temp Read Blocks",
+                    "Temp Written Blocks",
+                )
+            ), safe_plan(value)
+    window_nodes = [node for node in planned_windows if node["Actual Loops"]]
     assert window_nodes
+    assert all(
+        node["Node Type"] not in {"Sort", "Incremental Sort"}
+        for node in nodes(value)
+        if node["Actual Loops"]
+    ), safe_plan(value)
     assert all(
         node["Node Type"] not in {"Seq Scan", "Bitmap Heap Scan"} for node in window_nodes
     ), safe_plan(value)

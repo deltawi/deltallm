@@ -10,7 +10,10 @@ from tests.performance.accounting_allocator_plans import (
     CapturedAccountingPlan,
     capture_accounting_plans,
 )
-from tests.test_accounting_allocator_bounds_postgres import assert_bounded_allocator_plan
+from tests.test_accounting_allocator_bounds_postgres import (
+    assert_bounded_allocator_plan,
+    assert_bounded_window_plan,
+)
 
 
 def message(value):
@@ -131,3 +134,46 @@ def test_allocator_bound_accepts_only_bounded_indexed_bitmap_work():
         },
     )
     assert assert_bounded_allocator_plan(entry) == {"deltallm_accounting_budget_windows"}
+
+
+def window_node(**fields):
+    return {
+        "Node Type": "Index Scan",
+        "Relation Name": "deltallm_accounting_budget_windows",
+        "Actual Loops": 1,
+        "Actual Rows": 9,
+        **fields,
+    }
+
+
+@pytest.mark.parametrize("node_type", ["Bitmap Heap Scan", "Seq Scan"])
+def test_unused_window_branch_must_have_zero_rows_and_zero_buffer_work(node_type):
+    unused = window_node(**{"Node Type": node_type, "Actual Loops": 0, "Actual Rows": 0})
+    active = window_node()
+    value = {"Node Type": "Append", "Actual Loops": 1, "Plans": [unused, active]}
+    assert assert_bounded_window_plan(value, maximum_rows=9) == [active]
+
+
+@pytest.mark.parametrize(
+    "field", ["Actual Rows", "Rows Removed by Filter", "Shared Hit Blocks", "Temp Written Blocks"]
+)
+def test_unused_window_branch_cannot_hide_actual_work(field):
+    unused = window_node(**{"Actual Loops": 0, "Actual Rows": 0, field: 1})
+    value = {"Node Type": "Append", "Actual Loops": 1, "Plans": [unused, window_node()]}
+    with pytest.raises(AssertionError):
+        assert_bounded_window_plan(value, maximum_rows=9)
+
+
+@pytest.mark.parametrize("fault", ["bitmap", "sequential", "rows", "filtered", "sorted"])
+def test_executed_window_branch_keeps_the_original_history_limits(fault):
+    active = window_node()
+    if fault in {"bitmap", "sequential"}:
+        active["Node Type"] = "Bitmap Heap Scan" if fault == "bitmap" else "Seq Scan"
+    elif fault == "rows":
+        active["Actual Rows"] = 50000
+    elif fault == "filtered":
+        active["Rows Removed by Filter"] = 50000
+    else:
+        active = {"Node Type": "Sort", "Actual Loops": 1, "Plans": [active]}
+    with pytest.raises(AssertionError):
+        assert_bounded_window_plan(active, maximum_rows=9)

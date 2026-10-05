@@ -57,6 +57,10 @@ class LocalCursorStore:
         self._available = 0
 
     @property
+    def generation(self) -> int:
+        return self._generation
+
+    @property
     def active_subjects(self) -> int:
         return len(self._active)
 
@@ -251,17 +255,39 @@ class LocalCursorStore:
         cursor = self._retiring.get(returned.grant.grant_id)
         if cursor is None:
             return False
+        self.acknowledge_returns((returned,), (count,))
+        return True
+
+    def acknowledge_returns(
+        self, returns: Sequence[LocalPermitReturn], counts: Sequence[int]
+    ) -> None:
+        values, acknowledgements = tuple(returns), tuple(counts)
+        if len(values) > 256 or len(values) != len(acknowledgements):
+            raise ValueError("local suffix batch acknowledgement does not match")
+        if len({item.grant.grant_id for item in values}) != len(values):
+            raise ValueError("local suffix batch repeats a grant")
+        cursors = tuple(
+            self._validated_return(item, count)
+            for item, count in zip(values, acknowledgements, strict=True)
+        )
+        # Check the complete reply before the first removal. There is no await
+        # between validation and removal, and the shared owner excludes issue.
+        for cursor in cursors:
+            del self._retiring[cursor.grant.grant_id]
+            self._grant_ids.remove(cursor.grant.grant_id)
+            self._bytes -= cursor.retained_bytes
+
+    def _validated_return(self, returned: LocalPermitReturn, count: int) -> LocalGrantCursor:
+        cursor = self._retiring.get(returned.grant.grant_id)
         if (
-            cursor.grant != returned.grant
+            cursor is None
+            or cursor.grant != returned.grant
             or cursor.next_ordinal != returned.first_unused_ordinal
             or type(count) is not int
             or count != cursor.remaining
         ):
             raise ValueError("local suffix acknowledgement does not match")
-        del self._retiring[returned.grant.grant_id]
-        self._grant_ids.remove(returned.grant.grant_id)
-        self._bytes -= cursor.retained_bytes
-        return True
+        return cursor
 
 
 def _slice_limit(limit: int) -> None:
