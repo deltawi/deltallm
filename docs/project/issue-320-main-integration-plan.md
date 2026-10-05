@@ -981,6 +981,93 @@ The expiry-limit case proves that each limit-one pass changes only one of three
 expired grants. Entry and byte overload preserve accepted documents and counters.
 The return race has one winner and cannot release an accepted ordinal.
 
+### Slice 10b: fenced canonical journal processing
+
+- [x] Add typed claim handles with generation, worker, lease nonce, and bounded
+  positive sequence keys. Revalidate raw fields so copied booleans cannot become
+  integer keys through serialization.
+- [x] Claim at most 256 entries and 1 MiB of documents. Each pending and expired
+  index branch inspects at most the requested entry limit.
+- [x] Commit canonical operations, exact reservations, events, grant usage,
+  capacity release, and document removal in one transaction. Bulk writes update
+  each grant and partition once, not once per subject.
+- [x] Recover a lost claim reply by its original nonce. Recover a lost commit
+  reply by its original keys. Do not issue another claim or financial write.
+- [x] Prove stale-worker rejection, concurrent disjoint claims, expiry, exact
+  closed replay, payload corruption rollback, cancellation after commit, payload
+  limits, zero and fractional money, and worker crash exhaustion with PostgreSQL.
+- [x] Complete actual nested query-plan checks with retained journal, payload,
+  grant, window-reference, reservation, event, and operation history.
+- [x] Complete full required lanes, migration paths, collection, and style gates.
+- [ ] Connect the distinct journal receipt to the shared local terminal owner.
+  Runtime selection remains off until this path and worker lifecycle are complete.
+
+The first focused run found a PostgreSQL restriction on row-locking queries
+inside a set operation. Migration 128 moves the two separately bounded claims
+into materialized query blocks. Applied migration 127 remains unchanged.
+The corrected focused run passed 45 cases. Expanded financial cases pass,
+including capacity retained after five worker crashes and exact provisional
+money for zero or fractional charges.
+
+The first plan fixture did not retain enough payload or grant-window rows to
+measure those lookups. The expanded fixture retains 10,000 journal, grant,
+operation, event, reservation, and window-reference rows. The final fixture also
+retains 10,000 charged dead-letter documents. Its owned diagnostic capacity is
+20,000 entries; production defaults are unchanged. The alternate-join planner exposed a real grant
+update scan of 10,001 rows for one result. Migration 129 restricts that update
+and payload deletion to the current claimed keys. Migration 130 adds bounded
+key-dependent document probes and transaction-local row-location deletion. It
+also rejects duplicate, null, or nonpositive failure keys before any write.
+The 500-document fixture exposed a small-table scan: PostgreSQL estimated ten
+row locations and chose the four-page table scan. The final 10,000-document
+fixture provides substantial payload history without changing planner settings.
+All four planner modes, with normal and lost replies, pass the unchanged
+bounded-row assertions. Keep the failed logs as diagnostic history.
+
+The latest focused logs are `/private/tmp/issue320-slice10b-focused128.log`,
+`/private/tmp/issue320-slice10b-complete-focused.log`, and
+`/private/tmp/issue320-slice10b-key-focused.log`.
+Final focused verification passed 71 cases in
+`/private/tmp/issue320-slice10b-final-focused.log`. Raw SQL rejects malformed
+materialization and failure keys. An observed grant-lock wait lets a claim lease
+expire during processing; all financial effects roll back and capacity stays
+charged. The required lanes and the 130-migration chain passed final verification.
+The component and Helm lanes passed 5,347 cases. The first full application lane
+passed 1,645 and failed one selected `/v1/messages` stream-close case: it observed
+only the answer call instead of the expected classifier and answer calls. Its
+stream charge and terminal-delivery assertions passed before that call-count
+assertion. The complete stream-accounting module passed all 28 cases unchanged.
+Keep `/private/tmp/issue320-slice10b-full-app.log` and
+`/private/tmp/issue320-slice10b-stream-confirmation.log`. A full application retry
+will record bounded selector cause and latency diagnostics without changing
+production execution, deadlines, or assertions. The cause of the first mismatch
+is not yet confirmed.
+The first full PostgreSQL lane passed 700 cases and failed one Realtime receipt
+recovery case: its first claim returned no rows. The unchanged Realtime module
+then passed all 19 cases, and a complete PostgreSQL confirmation passed all 701.
+The cause of that first mismatch remains unconfirmed. Preserve both runs and the
+bounded read-only claim diagnostic; do not treat a passing retry as a cause fix.
+The real-Redis lane passed all 105 cases. Fresh install, `v0.1.42`, and shared-feature
+upgrade checks passed with all 130 migrations. Collection assigns all 7,799 tests
+to exactly one dependency lane, and the 402-field configuration reference is current.
+
+The first selector diagnostic used a fixture from an early pytest setup hook. That
+temporary diagnostic caused a setup error and left later test patches active.
+The contaminated application retry was interrupted and is invalid evidence. The
+diagnostic now uses a normal autouse fixture, with pytest-owned cleanup. Neither
+production code nor assertions or deadlines changed. Its focused check and a clean
+full application retry must pass before the full-lane checkbox can be completed.
+Keep `/private/tmp/issue320-slice10b-full-app-confirmed.log` as the invalid run,
+and `/private/tmp/issue320-slice10b-full-app-valid.log` as the new confirmation.
+The corrected diagnostic passed all 28 stream-accounting cases. The clean full
+application confirmation passed all 1,646 cases. Final required counts are 5,104
+hermetic, 243 Helm, 1,646 application, 701 PostgreSQL, and 105 Redis: 7,799 tests,
+with no required skips. Changed Python files passed Ruff check and format, and
+the diff check passed. The original stream and Realtime mismatch causes remain
+unconfirmed; their passing confirmations do not establish a production fix.
+No gateway RPS test has run on this clean replay yet. The four requested kind
+rates remain pending after integration.
+
 ## Slice 9a: inactive permit foundation
 
 This step copies the fenced-permit migration from `0ac46791` without changes. It

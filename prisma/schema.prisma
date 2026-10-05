@@ -778,6 +778,7 @@ model DeltaLLM_AccountingTerminalCapacity {
   max_bytes BigInt @default(67108864)
   pending_entries Int @default(0)
   pending_bytes BigInt @default(0)
+  failed_entries Int @default(0)
 
   partition DeltaLLM_AccountingPartition @relation(fields: [protocol_name, generation, accounting_partition], references: [protocol_name, generation, partition_id], onDelete: Restrict, onUpdate: Restrict)
   journal DeltaLLM_AccountingTerminalJournal[]

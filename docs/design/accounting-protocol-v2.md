@@ -569,8 +569,33 @@ permits exact replay. Worker failure must retain both capacity charges.
 An accepted ordinal cannot be returned as unused. An unresolved journal entry
 prevents grant closure. Its money remains reserved. Expiry moves at most the
 requested 256 grants to draining in one pass; it does not update all expired
-history first. Canonical processing, fenced worker claims, capacity release after
-processing, and failed-record recovery are still required before activation.
+history first. The inactive worker repository claims and commits accepted work.
+Its runtime lifecycle, local receipt integration, and failed-record operations
+remain required before activation.
+
+### Inactive canonical worker
+
+Claims carry the generation, worker identity, lease nonce, and positive journal
+keys. A claim selects at most 256 entries and 1 MiB of documents. Pending and
+expired branches each inspect at most the requested entry limit. Claims expire
+after a bounded lease. A stale owner cannot commit or fail another owner's work.
+
+Canonical processing checks complete document hashes and financial identities
+before its bulk writes. Operations, per-window reservations, events, grant usage,
+capacity release, and pending-document removal commit together. Accepted facts
+may be processed after the original dispatch or grant expiry; this never grants
+another provider admission. A completed record retains its canonical event key
+for exact retry. The lease is checked again before transaction completion.
+
+A normal claim or commit uses one database call. A lost claim reply is recovered
+with the original nonce. A lost commit reply uses the original completed keys.
+Neither recovery issues a second claim or a second financial write. Cancellation
+can leave a committed result, which the same keys recover without another debit.
+
+Five unsuccessful attempts move a record to failed state. Failed entries retain
+their documents, reserved money, pending entry charge, and pending byte charge.
+They remain visible in a separate failed-entry count. No automatic eviction or
+retention job removes them to hide a backlog. Runtime selection is still off.
 
 ### Storage and rollout policy
 
