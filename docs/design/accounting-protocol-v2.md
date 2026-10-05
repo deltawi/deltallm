@@ -434,3 +434,19 @@ horizon. Its stored short deadline is unchanged. Its derived monotonic dispatch
 deadline remains in the past. Such a proof can return a known unused suffix but
 must never authorize provider dispatch. The local issuer must enforce this check
 before runtime selection. The issued store and this proof contract remain inactive.
+
+## Inactive return-only cursor retention
+
+Active and retiring cursors share one bounded entry and byte budget. Retiring a
+cursor removes its dispatch capacity but keeps its immutable first-unused ordinal
+and its byte charge. Expiry is not a refund. Only an exact native suffix return
+acknowledgement removes a retiring proof, once. An exhausted cursor has no unused
+suffix; the separate issued-receipt owner still retains unsettled operations.
+Selection and expiry scans inspect at most 256 entries and rotate those entries.
+The cursor owner performs no dependency call and starts no task.
+
+Money comparisons do not use the caller's decimal precision. Unused-count
+multiplication uses an 80-digit context. Funding and recovery monetary scalar
+columns cross the query-client boundary as text, not a float. Local and durable
+pre-issued grants share this exact allocation projection. These changes add no
+statement, retry layer, pool, or reporting default.

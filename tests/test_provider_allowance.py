@@ -153,6 +153,7 @@ def test_new_accounting_owners_have_small_typed_boundaries():
         "billing/preissued_permits.py",
         "billing/accounting_local_leases.py",
         "billing/accounting_local_receipts.py",
+        "billing/accounting_local_cursors.py",
         "db/accounting_protocol.py",
         "db/accounting_calls.py",
         "db/accounting_permits.py",

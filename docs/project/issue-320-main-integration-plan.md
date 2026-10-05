@@ -202,9 +202,10 @@ loss. Bootstrap selection and the Python local lease lifecycle remain unfinished
   does not fit the funded lease.
 - [x] Add typed bulk refill, unused-suffix return, and terminal persistence owners.
   Keep a fixed call bound across subjects. Never await one call per subject.
-- [ ] Bound issued receipts and retiring cursors by both entries and bytes.
+- [x] Bound issued receipts and retiring cursors by both entries and bytes.
   Preserve exact operation, request, owner, generation, grant, and ordinal identity
-  after an uncertain transport acknowledgement.
+  after an uncertain transport acknowledgement. The inactive owners are verified;
+  runtime selection remains incomplete.
 - [ ] Supervise one bounded return worker through the existing lifecycle. Close
   must stop new issues, drain terminal work, and return only the proven unused
   suffix. Process loss must keep uncertain money as provisional, not release it.
@@ -224,6 +225,12 @@ request handle and terminal owner. A terminal retry after receipt-store removal
 must replay durable accepted facts, not create another admission or depend on a
 mutable process cache. Remote workers must derive their own clock anchors; they
 must not use an API process's monotonic value to permit new dispatch.
+
+Plan cold funding before committing a local issue batch. Keep new, never-issued
+funding in bounded staging that shares the cursor budget. Complete local issue
+without an intervening await after funding checks pass. A later funding failure
+must not turn an undelivered warm receipt into unknown provider work. The same
+admission owner must protect staging from the return worker until commit or abort.
 
 Before activation, collection must also respect serialized batch bytes. A valid
 large terminal payload can exceed the 1 MiB batch limit when joined with other
@@ -390,7 +397,8 @@ zero economic drift. No production deadline or allocator SQL changed.
 - [x] Complete focused, full application, full native PostgreSQL, component,
   Redis, lane, and style checks before committing this inactive step.
 - [x] Record immutable-receipt and return-only recovery test results.
-- [ ] Add the local issuer and entry/byte-bounded retiring cursors next.
+- [ ] Add the local issuer next.
+- [x] Complete entry/byte-bounded retiring cursor verification in slice 9i.
 - [ ] Add the supervised bulk return lifecycle and runtime selection after that.
 
 The main gateway still selects assigned admission. Slice 9 and the final kind
@@ -421,6 +429,70 @@ Final logs are `/private/tmp/issue320-slice9h-focused-final.log`,
 This inactive retention step is complete. The local issuer, retiring-cursor owner,
 supervised returns, runtime selection, terminal journal, later integration slices,
 and final gateway RPS qualification remain required.
+
+## Slice 9i: bounded return-only cursors
+
+The inactive cursor owner now shares one entry and byte limit across active
+grants and grants waiting for return. Expiry moves a cursor to return-only state.
+It does not reduce the byte charge or claim that money was refunded. A matching
+suffix acknowledgement removes the charge exactly once. Wrong fences, ordinals,
+counts, and generations cannot overwrite or remove retained capacity.
+
+Cursor ordinals are immutable. A borrowed old cursor cannot change the suffix
+after retirement. Fully issued grants need no unused-suffix return; their issued
+receipts remain with the separate receipt owner. Expiry, close selection, and
+return selection each inspect at most 256 entries. One scan never walks the whole
+configured bank. Memory tests cover zero, one, and five windows and maximum
+Unicode identifiers. No client, worker, task, pool, or runtime default was added.
+
+Review found a second exact-money boundary. Return recovery used the ambient
+decimal precision for allowance multiplied by unused count. Four regressions
+failed before correction: exact amounts were rejected and rounded amounts were
+accepted. The comparison now uses a fixed 80-digit context. The failure remains
+in `/private/tmp/issue320-slice9i-return-money-before.log`.
+
+A full-precision native case then found that the generic query client could
+convert PostgreSQL NUMERIC into a float. Funding and recovery now project monetary
+scalars as text before transport. The same projection serves local and durable
+pre-issued funding. No extra call or SQL-history scan was added. The native
+failure remains in `/private/tmp/issue320-slice9i-focused-final.log`. The six
+retained-history plan cases pass after the projection change.
+
+Focused lease, cursor, receipt, permit, and ratchet checks passed 226 cases before
+the last pre-issued full-precision case was added. All 32 final native money,
+plan, and focused ratchet cases passed. Full verification passed all 7,381 tests:
+4,798 hermetic, 237 Helm, 1,645 application, 596 PostgreSQL, and 105 Redis.
+No required-service test was skipped. All nine changed Python files passed Ruff
+and format checks. Collection assigned every test to one lane. `git diff --check`
+passed.
+
+The first full PostgreSQL run passed 595 cases and failed one unchanged realtime
+cleanup case: `test_transient_release_failure_closes_socket_and_retries_cleanup[True]`.
+The socket closed and routing release ran twice, but the runtime stayed unready.
+The log shows cleanup cancellation, a transaction rollback failure, and a billing
+recovery warning. It does not establish why cleanup exceeded its allowance.
+The failure remains in `/private/tmp/issue320-slice9i-postgres-full.log`.
+All 12 unchanged tests in the realtime failure family then passed in
+`/private/tmp/issue320-slice9i-realtime-failures-diagnostic.log`. No assertion,
+deadline, or production realtime rule was changed. The complete unchanged
+PostgreSQL lane then passed in `/private/tmp/issue320-slice9i-postgres-confirmed.log`.
+The earlier failure remains an intermittent signal, not a proven product fix.
+The other full logs are `/private/tmp/issue320-slice9i-components-full.log`,
+`/private/tmp/issue320-slice9i-app-full.log`,
+`/private/tmp/issue320-slice9i-redis-full.log`, and
+`/private/tmp/issue320-slice9i-lanes-final.log`.
+
+- [x] Complete all five full lanes, lane collection, Ruff, formatting, and
+  `git diff --check` before committing this inactive step.
+- [x] Record exact native unused-suffix return, lost-ACK recovery, and full-money
+  results with the complete lane counts.
+- [ ] Use both bounded state owners in the local issuer. Keep warm issue at zero
+  SQL calls and cold issue at no more than two bulk funding rounds.
+- [ ] Add the supervised return worker and the shared typed terminal proof path.
+
+The applied 119-migration chain is unchanged. The gateway still uses assigned
+admission. Slice 9, later slices, current-main feature adapters, and all four final
+kind RPS qualifications remain incomplete.
 
 ## Slice 9a: inactive permit foundation
 

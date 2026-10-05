@@ -15,6 +15,7 @@ from src.billing.accounting_protocol import (
 from src.db.accounting_batches import batch_payload, one_generation, result_rows, with_recovery
 from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
 from src.db.accounting_permit_results import (
+    PERMIT_ALLOCATION_FIELDS,
     allocation_result,
     claim_identity_matches,
     claim_payload,
@@ -57,7 +58,7 @@ class AccountingPermitRepository:
         async def attempt(deadline: float) -> dict[str, AllocationResult]:
             rows = await self._calls.call(
                 "allocate_permit_grants",
-                "SELECT * FROM deltallm_accounting_allocate_permit_grants_batch("
+                f"SELECT {PERMIT_ALLOCATION_FIELDS} FROM deltallm_accounting_allocate_permit_grants_batch("
                 "$1,$2,$3::integer,$4::jsonb)",
                 generation,
                 self._owner_id,
@@ -132,7 +133,7 @@ class AccountingPermitRepository:
         rows = await self._calls.call(
             "recover_permit_grants",
             "SELECT g.grant_id,g.generation,g.grantee_id,g.fence_token,g.accounting_partition,"
-            "g.unit_allowance_exact AS allowance_exact,g.operation_limit,g.expires_at,g.state,"
+            "g.unit_allowance_exact::text AS allowance_exact,g.operation_limit,g.expires_at,g.state,"
             "g.dispatch_mode,(g.subject_key=deltallm_accounting_grant_subject("
             "value->'reservation')) AS subject_matches FROM jsonb_array_elements($1::jsonb) value "
             "JOIN deltallm_accounting_grants g ON g.fence_token=(value->>'fence_token')::uuid",

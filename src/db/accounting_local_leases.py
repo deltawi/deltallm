@@ -28,9 +28,16 @@ from src.db.accounting_local_lease_results import (
     return_result,
     same_funding,
 )
-from src.db.accounting_permit_results import invalid_result
+from src.db.accounting_permit_results import PERMIT_ALLOCATION_FIELDS, invalid_result
 
 FundingResult = LocalPermitGrant | ReserveDecision
+_RECOVERY_GRANT_FIELDS = (
+    "g.grant_id,g.protocol_name,g.generation,g.grantee_id,g.fence_token,"
+    "g.accounting_partition,g.dispatch_mode,g.local_dispatch,g.state,"
+    "g.unit_allowance_exact::text AS unit_allowance_exact,g.operation_limit,"
+    "g.consumed_operations,g.returned_operations,g.returned_exact::text AS returned_exact,"
+    "g.dispatch_expires_at,g.expires_at"
+)
 
 
 class AccountingLocalLeaseRepository:
@@ -65,7 +72,8 @@ class AccountingLocalLeaseRepository:
             observed = asyncio.get_running_loop().time()
             rows = await self._calls.call(
                 "allocate_local_permit_grants",
-                "SELECT * FROM deltallm_accounting_allocate_local_permit_grants_batch("
+                f"SELECT {PERMIT_ALLOCATION_FIELDS},dispatch_expires_at,observed_at "
+                "FROM deltallm_accounting_allocate_local_permit_grants_batch("
                 "$1,$2,$3::integer,$4::jsonb)",
                 generation,
                 self._owner_id,
@@ -175,7 +183,7 @@ class AccountingLocalLeaseRepository:
         observed = asyncio.get_running_loop().time()
         rows = await self._calls.call(
             "recover_local_permit_grants",
-            "SELECT g.*,CURRENT_TIMESTAMP AS observed_at,"
+            f"SELECT {_RECOVERY_GRANT_FIELDS},CURRENT_TIMESTAMP AS observed_at,"
             "(g.subject_key=deltallm_accounting_grant_subject(value->'reservation')) AS subject_matches "
             "FROM jsonb_array_elements($1::jsonb) value CROSS JOIN LATERAL "
             "(SELECT g.* FROM deltallm_accounting_grants g "
@@ -197,7 +205,7 @@ class AccountingLocalLeaseRepository:
     ) -> dict[str, int]:
         rows = await self._calls.call(
             "recover_local_permit_returns",
-            "SELECT g.* FROM jsonb_array_elements($1::jsonb) value CROSS JOIN LATERAL "
+            f"SELECT {_RECOVERY_GRANT_FIELDS} FROM jsonb_array_elements($1::jsonb) value CROSS JOIN LATERAL "
             "(SELECT g.* FROM deltallm_accounting_grants g "
             "WHERE g.grant_id=value->>'grant_id' OFFSET 0) g",
             payload,

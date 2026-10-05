@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 from src.billing.accounting_local_leases import (
     LocalPermitFinalization,
@@ -128,7 +128,10 @@ def recovered_return(item: LocalPermitReturn, row: Mapping[str, object], owner: 
             raise invalid_result()
         if count == 0 and money == 0 and expected > 0:
             return None
-        if count != expected or money != grant.allowance * expected:
+        with localcontext() as context:
+            context.prec = 80
+            expected_money = grant.allowance * expected
+        if count != expected or money != expected_money:
             raise invalid_result()
         return expected
     except (KeyError, TypeError, ValueError, ArithmeticError):

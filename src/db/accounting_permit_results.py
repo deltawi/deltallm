@@ -17,6 +17,10 @@ from src.billing.accounting_protocol import (
 from src.db.accounting_calls import AccountingProtocolUnavailable, AccountingResultFailure
 
 AllocationResult = PreissuedPermitGrant | ReserveDecision
+PERMIT_ALLOCATION_FIELDS = (
+    "allocation_fence_token,decision,grant_id,grantee_id,fence_token,accounting_partition,"
+    "allowance_exact::text AS allowance_exact,operation_limit,expires_at"
+)
 
 
 def allocation_result(
