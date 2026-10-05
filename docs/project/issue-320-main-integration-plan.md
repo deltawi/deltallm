@@ -882,6 +882,23 @@ This is an inactive integration checkpoint, not gateway RPS qualification. Worke
 endpoint construction, remote runtime selection, the terminal journal, remaining
 integration slices, and all four final kind rates remain unfinished.
 
+### Slice 9m transport destination follow-up
+
+Review after the checkpoint found a missing transport safeguard. The inactive
+signed HTTP primitive did not yet use the shared outbound destination policy.
+It now checks scheme, port, DNS results, and private-network permission before
+connecting. It pins the checked address and retains the original Host and TLS
+server name. Metadata targets remain blocked. DNS and body read share the caller's
+deadline. No new URL policy or retry owner is added.
+
+Focused accounting, shared webhook destination, and small-owner checks passed
+67 cases in `/private/tmp/issue320-slice9m-egress-focused.log` before adding the
+explicit plain-HTTP rejection case. Full component and Helm verification then
+passed all 5,316 cases in
+`/private/tmp/issue320-slice9m-egress-components.log`. This follow-up changes only
+the unselected transport; the application, database,
+schema, settings, and reporting paths from the checkpoint remain unchanged.
+
 ## Next slice 10: inactive durable terminal journal
 
 - [ ] Add the journal and pending-payload tables in a new migration. Add matching

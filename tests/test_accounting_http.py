@@ -14,13 +14,20 @@ from src.billing.accounting_auth import (
 from src.billing.accounting_http import AccountingHttpTransport
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.telemetry_acceptance import AcceptanceFailure
+from src.outbound.network_policy import OutboundNetworkPolicy
 
 
 def transport(handler):
+    async def resolve(hostname, port):
+        return ("8.8.8.8",)
+
     return AccountingHttpTransport(
         service_url="http://accounting.test",
         signing_secret="test-secret",
         transport=httpx.MockTransport(handler),
+        network_policy=OutboundNetworkPolicy(
+            allow_http=True, allowed_ports=(80,), resolver=resolve
+        ),
     )
 
 
@@ -195,3 +202,125 @@ def test_authentication_rejects_changed_and_unbounded_fields(failure):
         body=body,
         now=1031 if failure == "old" else 1000,
     )
+
+
+async def test_private_destination_needs_an_explicit_allowlist_and_pins_the_checked_address():
+    async def resolve(hostname, port):
+        assert hostname == "accounting.test" and port == 8443
+        return ("10.96.1.2",)
+
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        assert request.url.host == "10.96.1.2"
+        assert request.headers["host"] == "accounting.test:8443"
+        assert request.extensions["sni_hostname"] == "accounting.test"
+        return httpx.Response(200, content=b"[]")
+
+    for allowed in (False, True):
+        client = AccountingHttpTransport(
+            service_url="https://accounting.test:8443",
+            signing_secret="test-secret",
+            transport=httpx.MockTransport(handler),
+            network_policy=OutboundNetworkPolicy(
+                allowed_ports=(8443,),
+                allowed_private_cidrs=("10.96.0.0/12",) if allowed else (),
+                resolver=resolve,
+            ),
+        )
+        try:
+            if allowed:
+                assert (
+                    await client.request(
+                        "/finalize/local/batch",
+                        b"[]",
+                        expires_at=asyncio.get_running_loop().time() + 1,
+                    )
+                    == b"[]"
+                )
+            else:
+                with pytest.raises(AccountingProtocolUnavailable):
+                    await client.request(
+                        "/finalize/local/batch",
+                        b"[]",
+                        expires_at=asyncio.get_running_loop().time() + 1,
+                    )
+                assert calls == []
+        finally:
+            await client.close()
+    assert len(calls) == 1
+
+
+async def test_dns_rebinding_to_metadata_is_rejected_before_the_second_request():
+    resolutions, calls = [], []
+
+    async def resolve(hostname, port):
+        resolutions.append(hostname)
+        return ("8.8.8.8",) if len(resolutions) == 1 else ("169.254.169.254",)
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, content=b"[]")
+
+    client = AccountingHttpTransport(
+        service_url="http://accounting.test",
+        signing_secret="test-secret",
+        transport=httpx.MockTransport(handler),
+        network_policy=OutboundNetworkPolicy(
+            allow_http=True,
+            allowed_ports=(80,),
+            allowed_private_cidrs=("0.0.0.0/0",),
+            resolver=resolve,
+        ),
+    )
+    try:
+        await client.request(
+            "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+        )
+        with pytest.raises(AccountingProtocolUnavailable):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert len(resolutions) == 2 and len(calls) == 1
+    finally:
+        await client.close()
+
+
+async def test_dns_resolution_has_the_same_caller_deadline_as_the_http_call():
+    calls = []
+
+    async def resolve(hostname, port):
+        await asyncio.Event().wait()
+
+    client = AccountingHttpTransport(
+        service_url="https://accounting.test",
+        signing_secret="test-secret",
+        transport=httpx.MockTransport(lambda request: calls.append(request)),
+        network_policy=OutboundNetworkPolicy(resolver=resolve),
+    )
+    try:
+        with pytest.raises(AccountingProtocolUnavailable) as raised:
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 0.02
+            )
+        assert raised.value.reason == AcceptanceFailure.DEADLINE.value and calls == []
+    finally:
+        await client.close()
+
+
+async def test_plain_http_needs_explicit_network_policy_permission():
+    calls = []
+    client = AccountingHttpTransport(
+        service_url="http://accounting.test",
+        signing_secret="test-secret",
+        transport=httpx.MockTransport(lambda request: calls.append(request)),
+    )
+    try:
+        with pytest.raises(AccountingProtocolUnavailable):
+            await client.request(
+                "/finalize/local/batch", b"[]", expires_at=asyncio.get_running_loop().time() + 1
+            )
+        assert calls == []
+    finally:
+        await client.close()

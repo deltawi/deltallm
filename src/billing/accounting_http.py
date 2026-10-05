@@ -19,6 +19,12 @@ from src.billing.accounting_auth import (
 )
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.telemetry_acceptance import AcceptanceFailure
+from src.outbound.http import suppress_httpcore_debug_traces
+from src.outbound.network_policy import (
+    OutboundNetworkPolicy,
+    OutboundPolicyError,
+    OutboundResolutionError,
+)
 
 AccountingEndpoint = Literal["/health", "/reserve/compact/batch", "/finalize/local/batch"]
 _ENDPOINTS = {"/health", "/reserve/compact/batch", "/finalize/local/batch"}
@@ -32,6 +38,7 @@ class AccountingHttpTransport:
         signing_secret: str,
         max_connections: int = 64,
         transport: httpx.AsyncBaseTransport | None = None,
+        network_policy: OutboundNetworkPolicy | None = None,
     ) -> None:
         url = httpx.URL(service_url)
         if (
@@ -50,6 +57,7 @@ class AccountingHttpTransport:
             raise ValueError("accounting connection capacity is invalid")
         self._secret = signing_secret
         self._closed = False
+        self._network_policy = network_policy or OutboundNetworkPolicy()
         self._client = httpx.AsyncClient(
             base_url=str(url),
             transport=transport,
@@ -92,25 +100,39 @@ class AccountingHttpTransport:
             ),
         }
         try:
-            async with asyncio.timeout_at(expires_at):
-                async with self._client.stream(
-                    "GET" if endpoint == "/health" else "POST",
-                    path,
-                    content=body,
-                    headers=headers,
-                    timeout=httpx.Timeout(remaining),
-                ) as response:
-                    response.raise_for_status()
-                    result = await _bounded_response(response)
-                    if asyncio.get_running_loop().time() >= expires_at:
-                        raise AccountingProtocolUnavailable(AcceptanceFailure.DEADLINE)
-                    return result
+            with suppress_httpcore_debug_traces():
+                return await self._request_target(path, body, headers, remaining, expires_at)
         except asyncio.CancelledError:
             raise
         except (httpx.TimeoutException, TimeoutError):
             raise AccountingProtocolUnavailable(AcceptanceFailure.DEADLINE) from None
-        except httpx.HTTPError:
+        except OutboundPolicyError:
+            raise AccountingProtocolUnavailable(AcceptanceFailure.INVALID_INPUT) from None
+        except (httpx.HTTPError, OutboundResolutionError):
             raise AccountingProtocolUnavailable(AcceptanceFailure.CONNECTION) from None
+
+    async def _request_target(
+        self, path: str, body: bytes, headers: dict[str, str], remaining: float, expires_at: float
+    ) -> bytes:
+        async with asyncio.timeout_at(expires_at):
+            target = await self._network_policy.resolve(str(self._client.base_url.join(path)))
+            headers["Host"] = target.host_header
+            extensions = (
+                {} if target.sni_hostname is None else {"sni_hostname": target.sni_hostname}
+            )
+            async with self._client.stream(
+                "GET" if path == ACCOUNTING_INTERNAL_PREFIX + "/health" else "POST",
+                target.connection_url,
+                content=body,
+                headers=headers,
+                timeout=httpx.Timeout(remaining),
+                extensions=extensions,
+            ) as response:
+                response.raise_for_status()
+                result = await _bounded_response(response)
+                if asyncio.get_running_loop().time() >= expires_at:
+                    raise AccountingProtocolUnavailable(AcceptanceFailure.DEADLINE)
+                return result
 
 
 async def _bounded_response(response: httpx.Response) -> bytes:

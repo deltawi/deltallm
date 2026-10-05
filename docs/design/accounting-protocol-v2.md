@@ -530,6 +530,10 @@ still checks every durable grant field, ordinal, and complete reservation.
 
 Authenticated transport has bounded request and response bytes, one caller
 deadline, one persistent connection pool, no redirects, and no implicit proxy.
+It uses the shared outbound destination policy. DNS resolution is inside the same
+deadline. The HTTP call uses the checked address with the original Host and TLS
+server name. Plain HTTP and private addresses require explicit policy permission.
+Metadata addresses remain blocked even with a broad private-network allowlist.
 An uncertain request does not trigger a new admission. Worker endpoints, remote
 runtime selection, terminal journal, and final gateway qualification remain
 separate unfinished steps. The flag-off path and reporting default do not change.
