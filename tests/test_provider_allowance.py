@@ -166,6 +166,8 @@ def test_new_accounting_owners_have_small_typed_boundaries():
         "billing/accounting_http.py",
         "billing/accounting_journal.py",
         "billing/accounting_journal_claims.py",
+        "billing/accounting_terminal_receipts.py",
+        "billing/accounting_journal_terminal.py",
         "billing/accounting_snapshots.py",
         "billing/accounting_service.py",
         "billing/durable_microbatch.py",

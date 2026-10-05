@@ -91,6 +91,7 @@ def assert_bounded_allocator_plan(entry):
         if relation in {
             "deltallm_accounting_budget_windows",
             "deltallm_accounting_grants",
+            "deltallm_accounting_grant_windows",
             "deltallm_billing_operations",
         }:
             observed.add(relation)
@@ -335,6 +336,16 @@ async def test_actual_nested_allocator_plans_do_not_scan_retained_history(
     item = _reservation(generation, window_id, explicit_window=explicit)
     await seed_history(db, generation, item)
     await seed_closed_accounting_history(db, generation)
+    # Retain real FK references as well as their closed grants. A small reference
+    # table can conceal a flattened join or a broad bitmap of dead index entries.
+    await db.execute_raw(
+        "INSERT INTO deltallm_accounting_grant_windows(grant_id,window_id,allocated_exact) "
+        "SELECT grant_id,$2,0 FROM deltallm_accounting_grants "
+        "WHERE generation=$1 AND grant_id LIKE 'allocator-grant-%'",
+        generation,
+        window_id,
+    )
+    await db.execute_raw("ANALYZE deltallm_accounting_grant_windows")
     async with capture_accounting_plans(os.environ["DATABASE_URL"], planner=planner) as captured:
         owner = admission(captured, mode)
         try:
@@ -374,7 +385,7 @@ async def test_actual_nested_allocator_plans_do_not_scan_retained_history(
     observed_tables = set()
     for entry in captured.plans:
         observed_tables.update(assert_bounded_allocator_plan(entry))
-    assert len(observed_tables) == 3
+    assert len(observed_tables) == 4
     reserved = Decimal(6) if mode == "local" else Decimal(8)
     assert await _window(db, window_id) == (Decimal(0), reserved, Decimal(0))
     print(

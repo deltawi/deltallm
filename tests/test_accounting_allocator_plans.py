@@ -98,10 +98,18 @@ async def test_planner_probe_is_scoped_to_its_owned_connection(monkeypatch, plan
 
 
 @pytest.mark.parametrize("failure", ["sequential", "rows", "filtered", "bitmap"])
-def test_allocator_bound_rejects_history_work_even_when_the_result_is_small(failure):
+@pytest.mark.parametrize(
+    "relation",
+    [
+        "deltallm_accounting_budget_windows",
+        "deltallm_accounting_grants",
+        "deltallm_accounting_grant_windows",
+    ],
+)
+def test_allocator_bound_rejects_history_work_even_when_the_result_is_small(failure, relation):
     node = {
         "Node Type": "Index Scan",
-        "Relation Name": "deltallm_accounting_budget_windows",
+        "Relation Name": relation,
         "Actual Loops": 1,
         "Actual Rows": 1,
     }

@@ -11,9 +11,9 @@ from src.billing.accounting_protocol import (
     AccountingOperationHandle,
     AccountingReservation,
     DispatchPermit,
-    FinalizationReceipt,
 )
 from src.billing.accounting_local_leases import LocalAccountingHandle
+from src.billing.accounting_terminal_receipts import TerminalReceipt
 from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull, DurableMicrobatcher
 from src.billing.accounting_snapshots import finalization_bytes, reservation_bytes
 from src.db.accounting_protocol import AccountingProtocolRepository, AccountingProtocolUnavailable
@@ -137,7 +137,7 @@ class AccountingProtocolService:
             increment_accounting_failure("reservation", "queue", "queue_closed")
             raise
 
-    async def finalize(self, finalization: AccountingFinalization) -> FinalizationReceipt:
+    async def finalize(self, finalization: AccountingFinalization) -> TerminalReceipt:
         if finalization.protocol_generation != self.generation:
             raise ValueError("finalization uses a stale accounting generation")
         try:
@@ -151,7 +151,7 @@ class AccountingProtocolService:
 
     async def finalize_operation(
         self, operation: AccountingOperationHandle, finalization: AccountingFinalization
-    ) -> FinalizationReceipt:
+    ) -> TerminalReceipt:
         if isinstance(operation, LocalAccountingHandle):
             raise ValueError("assigned accounting cannot accept a local issue proof")
         return await self.finalize(finalization)
@@ -175,7 +175,7 @@ class AccountingProtocolService:
             increment_accounting_decision(result.decision.value)
         return results
 
-    async def _finalize(self, values: Sequence[bytes]) -> list[FinalizationReceipt]:
+    async def _finalize(self, values: Sequence[bytes]) -> list[TerminalReceipt]:
         started = perf_counter()
         try:
             results = await self._repository.finalize_batch(

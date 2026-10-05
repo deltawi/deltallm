@@ -597,6 +597,33 @@ their documents, reserved money, pending entry charge, and pending byte charge.
 They remain visible in a separate failed-entry count. No automatic eviction or
 retention job removes them to hide a backlog. Runtime selection is still off.
 
+### Shared journal acceptance owner
+
+The local terminal owner can explicitly select the journal receipt contract.
+Canonical finalization remains its default. Each owner rejects the other receipt
+kind, and validates the complete batch before removing any issued local proof.
+Validation includes generation, operation, outcome, key bounds, and replay state.
+
+A journal acknowledgement means the complete terminal is stored durably. It does
+not claim that a canonical event exists. Its journal sequence is not an event key.
+Once all acknowledgements are valid, local queue and proof bytes can be released.
+Durable pending documents, pending capacity, and reserved money remain charged
+until canonical processing commits. A lost or cancelled acknowledgement keeps
+the local proofs for exact retry. Closed replay keeps the original journal keys
+after the large pending documents have been removed.
+
+Provider calls and paid cache hits use this same terminal owner and request queue.
+The journal adapter delegates one bounded append, with no second database call or
+legacy writer. Bootstrap does not yet select this runtime. Supervised processing,
+unused-grant return, recovery, and transport ownership remain activation gates.
+
+Admission effects must also use the current bounded keys. The grant-counter
+update uses an explicit current-grant key set. Each reservation-reference lookup
+depends on its inserted operation. This prevents a planner from scanning retained
+grant or grant-window history during admission. Actual nested plans cover four
+planner modes with 10,000 retained grant-window references and unchanged row
+limits. These restrictions add no database round trip or financial authority.
+
 ### Storage and rollout policy
 
 The compact journal has three unique key indexes and four partial work indexes.

@@ -6,24 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import json
-from uuid import UUID
-
-from pydantic import Field
 
 from src.billing.accounting_local_leases import LocalPermitFinalization
 from src.billing.accounting_local_terminal import freeze_local_terminals
-from src.billing.accounting_protocol import AccountingOutcome
+from src.billing.accounting_terminal_receipts import JournalReceipt as JournalReceipt
 from src.billing.accounting_snapshots import finalization_bytes, reservation_bytes
 from src.billing.money import money_string
-from src.billing.selector_charge import FrozenBillingContract
-
-
-class JournalReceipt(FrozenBillingContract):
-    protocol_generation: int = Field(ge=1, le=2**63 - 1)
-    operation_id: UUID
-    journal_sequence: int = Field(ge=1, le=2**63 - 1)
-    outcome: AccountingOutcome
-    replayed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

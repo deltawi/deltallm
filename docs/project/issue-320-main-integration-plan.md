@@ -8,6 +8,20 @@ Source implementation: `feat/issue-320-accounting-v2` at `534ef828`
 
 Accepted performance code: `cc3113bd`
 
+## Current status
+
+Whole slices 1 through 8 are complete. Slices 9 and 10 have substantial verified
+foundations, but their runtime integration is not complete. Slices 11 through 14,
+the current-main Realtime, batch, and selector billing adapters, and final gateway
+qualification remain unfinished. The experimental branch's 500 RPS result is not
+evidence for this clean replay. This branch is not ready to merge.
+
+The migration-131 checkpoint passed all 7,829 tests and all three migration paths.
+The first PostgreSQL run failed two compatibility cases. Their unchanged modules
+then passed all 15 cases, and a full confirmation passed all 705 PostgreSQL cases.
+Keep the original failures: the passing confirmation does not establish their
+causes or a production fix. The next step is the supervised journal worker.
+
 ## Integration rules
 
 - PostgreSQL remains the durable economic source of truth.
@@ -908,13 +922,13 @@ schema, settings, and reporting paths from the checkpoint remain unchanged.
 - [x] Append one bounded terminal batch with complete immutable payload hashes,
   exact money, generation, owner, grant, fence, and ordinal checks. Use indexed key
   probes. Reject missing fields and conflicting operations or ordinals atomically.
-- [ ] Keep accepted journal entries charged until canonical processing succeeds.
+- [x] Keep accepted journal entries charged until canonical processing succeeds.
   Prevent an unused-suffix return or grant close from releasing accepted work.
   Preserve exact retry after grant closure and local proof removal.
-- [ ] Add bounded, fenced claim and canonical-processing calls. Retain one durable
+- [x] Add bounded, fenced claim and canonical-processing calls. Retain one durable
   outcome through lease loss and retry. A failed record must remain visible and
   charged; it cannot be removed to make a queue look empty.
-- [ ] Prove normal and lost acknowledgements, changed-payload rejection, duplicate
+- [x] Prove normal and lost acknowledgements, changed-payload rejection, duplicate
   concurrent workers, return races, expiry, cancellation, and exact reconciliation
   with PostgreSQL. Check actual nested plans with substantial retained history.
 - [ ] Run the required test and migration gates before selecting the journal.
@@ -943,7 +957,7 @@ unfinished.
   missing fields, and eight retained-history plans. Worker reconciliation remains
   a later gate; these checks do not prove canonical processing.
 - [x] Complete overload, return-race, expiry-limit, full lane, and migration gates.
-- [ ] Add fenced worker claims, canonical processing, and complete replay after
+- [x] Add fenced worker claims, canonical processing, and complete replay after
   closure. Then connect journal acknowledgements to the local terminal owner.
 
 The initial schema check found PostgreSQL's shortened automatic constraint name.
@@ -999,7 +1013,7 @@ The return race has one winner and cannot release an accepted ordinal.
 - [x] Complete actual nested query-plan checks with retained journal, payload,
   grant, window-reference, reservation, event, and operation history.
 - [x] Complete full required lanes, migration paths, collection, and style gates.
-- [ ] Connect the distinct journal receipt to the shared local terminal owner.
+- [x] Connect the distinct journal receipt to the shared local terminal owner.
   Runtime selection remains off until this path and worker lifecycle are complete.
 
 The first focused run found a PostgreSQL restriction on row-locking queries
@@ -1067,6 +1081,104 @@ the diff check passed. The original stream and Realtime mismatch causes remain
 unconfirmed; their passing confirmations do not establish a production fix.
 No gateway RPS test has run on this clean replay yet. The four requested kind
 rates remain pending after integration.
+
+### Slice 10c: shared journal acceptance receipts
+
+- [x] Keep journal acceptance and canonical event receipts as distinct typed
+  contracts. Neither receipt can stand in for the other owner's result.
+- [x] Use the existing local terminal owner and complete batch validation for
+  journal acceptance. Keep every local proof until all acknowledgements are valid.
+- [x] Use the same shared request queues for provider calls and paid cache hits.
+  No legacy spend writer or second financial authority handles either path.
+- [x] Prove lost acceptance replies, lost canonical replies, cancellation after
+  acceptance, exact replay after grant closure, and exact balances with PostgreSQL.
+- [x] Verify malformed or mismatched receipt kind, identity, outcome, sequence,
+  generation, replay flag, and batch length cannot release a local proof.
+- [x] Complete required full lanes, collection, migration checks, and style gates.
+- [ ] Select this runtime only after supervised processing, unused-grant returns,
+  recovery, and transport ownership are complete in the following slices.
+
+The receipt contracts now live in a small leaf module. This keeps the journal and
+shared terminal owner free of a circular import. The journal persistence adapter
+delegates one bounded append call; it adds no database call, fallback, or writer.
+Canonical finalization remains the default receipt contract. A journal owner must
+select the journal contract explicitly, and rejects a canonical receipt.
+
+Focused verification passed all 191 cases in
+`/private/tmp/issue320-slice10c-focused.log`. Native shared-queue tests prove that
+four accepted operations release local queue and proof bytes but retain all four
+durable documents and their reserved money. Canonical processing then commits
+four outcomes once, releases pending capacity, and permits exact grant closure.
+Closed replay returns the original journal keys after large documents are removed.
+Cancellation after a committed append retains all local proofs until exact retry.
+The provider and paid-cache checks prove both paths share this acceptance owner.
+The full component and Helm checks passed 5,365 cases, and the full application
+lane passed 1,646. The first PostgreSQL lane passed 704 cases but failed one
+Realtime transient-release case, with a teardown error. Its initial WebSocket
+admission returned HTTP 503 after the local Prisma query-engine connection was
+lost; later cleanup could not reconnect. The journal runtime was not selected.
+The unchanged Realtime failure module passed all 12 cases with bounded engine
+process diagnostics. This does not establish why the first connection was lost.
+Preserve `/private/tmp/issue320-slice10c-full-postgres.log` and
+`/private/tmp/issue320-slice10c-realtime-engine-focused.log`. The next full PostgreSQL
+run passed all Realtime cases but found four admission planner failures. A focused
+repeat confirmed that the grant-counter update could scan 10,000 retained grants.
+The reservation-reference join could also lose its dependent key lookup. These
+are real history-dependent work defects, not reasons to relax the row limits.
+
+Append-only migration 131 restricts the counter update to the current grant keys
+and makes each reservation-reference lookup depend on its inserted operation.
+It changes no amount, ownership check, capacity limit, lock order, or driver-call
+count. The stronger regression retains 10,000 grant-window references as well as
+the existing grant, window, and operation history. All four planner modes keep
+the original row limits. The allocator, journal, and shared-terminal focused run
+passed all 108 cases in `/private/tmp/issue320-slice10c-key-focused.log`.
+
+The pre-correction real-Redis lane passed all 105 cases, and all three migration
+paths passed through migration 130. The migration-131 full run passed 5,373
+component and Helm cases and all 1,646 application cases. PostgreSQL passed 703
+and failed two: the official-SDK two-turn transcription case received a terminal
+event that did not match its assertion, and the intent-phase process-death test
+timed out waiting for its child's committed signal. The child diagnostic recorded
+9.61 seconds in imports before connection began; the underlying reason for the
+slow startup is not established. The SDK terminal type was not recorded, so its
+cause is also not established. Neither failure is a passing gate or a fixed issue.
+
+Preserve `/private/tmp/issue320-slice10c-final-components.log`,
+`/private/tmp/issue320-slice10c-final-app.log`, and
+`/private/tmp/issue320-slice10c-final-postgres.log`. The serial chain stopped at
+PostgreSQL. The current-source Redis, migration, collection, and configuration
+checks did not run in that first chain. Ruff check and format passed for all 12
+changed Python files, and `git diff --check` passed.
+
+Both unchanged compatibility modules passed all 15 cases with bounded SDK and
+child-startup diagnostics. The full PostgreSQL confirmation passed all 705 cases
+in `/private/tmp/issue320-slice10c-postgres-diagnostic-confirmation.log`. No assertion,
+production budget, deadline, or financial policy changed to obtain that result.
+The original failure causes remain unconfirmed. The final real-Redis lane passed
+105 cases. Fresh install, `v0.1.42`, and shared-feature upgrades passed all 131
+migrations. Collection assigns 7,829 tests to exactly one lane: 5,130 hermetic,
+243 Helm, 1,646 application, 705 PostgreSQL, and 105 Redis. The configuration
+reference remains current at 402 fields. Final logs use the same
+`issue320-slice10c-final-` prefix for Redis, migrations, lanes, and configuration.
+Runtime selection remains off. The final four-rate kind series remains pending.
+
+### Slice 10d: supervised journal processing
+
+- [ ] Add one owned worker task with startup, liveness, bounded backoff, and
+  cancellation-safe shutdown through the existing lifecycle helpers.
+- [ ] Retain at most one immutable claim with 256 keys and a fixed byte charge.
+  Reject another tick without a waiter or a second claim.
+- [ ] Retry the same claim after an uncertain materialization or failure reply.
+  Never release durable documents, funding, or capacity on process cancellation.
+- [ ] Add fixed action/outcome metrics and safe failure health details. Task
+  shutdown must not claim that the durable accounting backlog has drained.
+- [ ] Prove lost claim and commit replies, cancellation after commit, owner loss,
+  lease recovery, exact money, and complete document removal with PostgreSQL.
+- [ ] Complete focused checks, the affected real-dependency gates, collection,
+  style checks, and the small typed-owner regression before closing this step.
+- [ ] Connect processing, terminal drain, unused-suffix return, and transport
+  ownership through the accounting bootstrap and deployment roles in later steps.
 
 ## Slice 9a: inactive permit foundation
 

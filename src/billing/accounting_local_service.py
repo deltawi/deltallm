@@ -14,9 +14,9 @@ from src.billing.accounting_protocol import (
     AccountingOperationHandle,
     AccountingReservation,
     DispatchPermit,
-    FinalizationReceipt,
 )
 from src.billing.accounting_service import AccountingProtocolService, _record_batch_failure
+from src.billing.accounting_terminal_receipts import TerminalReceipt
 from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull
 from src.db.accounting_protocol import AccountingProtocolRepository
 from src.metrics.accounting import (
@@ -76,12 +76,12 @@ class LocalAccountingService(AccountingProtocolService):
         self._issuer.stop_admission()
         await super().close(timeout_seconds=timeout_seconds)
 
-    async def finalize(self, finalization: AccountingFinalization) -> FinalizationReceipt:
+    async def finalize(self, finalization: AccountingFinalization) -> TerminalReceipt:
         raise ValueError("local accounting requires the complete issue proof")
 
     async def finalize_operation(
         self, operation: AccountingOperationHandle, finalization: AccountingFinalization
-    ) -> FinalizationReceipt:
+    ) -> TerminalReceipt:
         if not isinstance(operation, LocalAccountingHandle):
             raise ValueError("local accounting requires the complete issue proof")
         value = LocalPermitFinalization(receipt=operation.proof, finalization=finalization)
@@ -110,7 +110,7 @@ class LocalAccountingService(AccountingProtocolService):
             increment_accounting_decision(permit.decision.value)
         return list(result.permits)
 
-    async def _finalize(self, values: Sequence[bytes]) -> list[FinalizationReceipt]:
+    async def _finalize(self, values: Sequence[bytes]) -> list[TerminalReceipt]:
         started = perf_counter()
         try:
             results = await self._terminal.finalize_batch(

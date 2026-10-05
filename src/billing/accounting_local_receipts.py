@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from src.billing.accounting_local_leases import LocalPermitGrant, LocalPermitReceipt
-from src.billing.accounting_protocol import AccountingReservation, FinalizationReceipt
+from src.billing.accounting_protocol import AccountingReservation
+from src.billing.accounting_terminal_receipts import TerminalReceipt
 from src.billing.accounting_snapshots import reservation_bytes
 
 
@@ -128,7 +129,7 @@ class LocalReceiptStore:
             raise ValueError("local issue identity cannot change")
         return True
 
-    def acknowledge(self, receipt: LocalPermitReceipt, terminal: FinalizationReceipt) -> bool:
+    def acknowledge(self, receipt: LocalPermitReceipt, terminal: TerminalReceipt) -> bool:
         _, retained = self._prepare_acknowledgement(receipt, terminal)
         if retained is None:
             return False
@@ -136,12 +137,12 @@ class LocalReceiptStore:
         return True
 
     def acknowledge_batch(
-        self, values: Sequence[tuple[LocalPermitReceipt, FinalizationReceipt]]
+        self, values: Sequence[tuple[LocalPermitReceipt, TerminalReceipt]]
     ) -> None:
         self._commit_acknowledgements(self.prepare_acknowledgements(values))
 
     def prepare_acknowledgements(
-        self, values: Sequence[tuple[LocalPermitReceipt, FinalizationReceipt]]
+        self, values: Sequence[tuple[LocalPermitReceipt, TerminalReceipt]]
     ) -> tuple[tuple[UUID, RetainedLocalReceipt | None], ...]:
         if len(values) > 256:
             raise ValueError("local terminal acknowledgement exceeds its entry limit")
@@ -161,7 +162,7 @@ class LocalReceiptStore:
                 self._bytes -= retained.retained_bytes
 
     def _prepare_acknowledgement(
-        self, receipt: LocalPermitReceipt, terminal: FinalizationReceipt
+        self, receipt: LocalPermitReceipt, terminal: TerminalReceipt
     ) -> tuple[UUID, RetainedLocalReceipt | None]:
         operation_id = receipt.reservation.operation_id
         if (

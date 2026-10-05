@@ -11,6 +11,11 @@ from typing import Protocol
 from src.billing.accounting_local_leases import LocalPermitFinalization
 from src.billing.accounting_local_receipts import LocalReceiptStore, RetainedLocalReceipt
 from src.billing.accounting_protocol import AccountingFinalization, FinalizationReceipt
+from src.billing.accounting_terminal_receipts import (
+    JournalReceipt,
+    TerminalReceipt,
+    TerminalReceiptType,
+)
 from src.billing.accounting_snapshots import finalization_bytes
 from src.billing.durable_microbatch import DurableBatchFull
 from src.db.accounting_calls import AccountingProtocolUnavailable
@@ -21,15 +26,23 @@ from src.db.telemetry_acceptance import AcceptanceFailure
 class LocalTerminalPersistence(Protocol):
     async def finalize_batch(
         self, values: Sequence[LocalPermitFinalization], *, expires_at: float
-    ) -> Sequence[FinalizationReceipt]: ...
+    ) -> Sequence[TerminalReceipt]: ...
 
 
 class LocalTerminalOwner:
     def __init__(
-        self, persistence: LocalTerminalPersistence, receipts: LocalReceiptStore, *, generation: int
+        self,
+        persistence: LocalTerminalPersistence,
+        receipts: LocalReceiptStore,
+        *,
+        generation: int,
+        receipt_type: TerminalReceiptType = FinalizationReceipt,
     ) -> None:
         if type(generation) is not int or not 1 <= generation <= 2**63 - 1:
             raise ValueError("local terminal generation is invalid")
+        if receipt_type not in (FinalizationReceipt, JournalReceipt):
+            raise ValueError("local terminal receipt type is invalid")
+        self._receipt_type = receipt_type
         self._persistence = persistence
         self._receipts = receipts
         self._generation = generation
@@ -43,14 +56,14 @@ class LocalTerminalOwner:
 
     async def finalize_batch(
         self, values: Sequence[LocalPermitFinalization], *, expires_at: float
-    ) -> tuple[FinalizationReceipt, ...]:
+    ) -> tuple[TerminalReceipt, ...]:
         frozen = freeze_local_terminals(values, generation=self._generation)
         if not frozen:
             return ()
         _caller_deadline(expires_at)
         async with asyncio.timeout_at(expires_at):
             results = await self._persistence.finalize_batch(frozen, expires_at=expires_at)
-        acknowledgements = validated_terminal_acks(frozen, results)
+        acknowledgements = validated_terminal_acks(frozen, results, receipt_type=self._receipt_type)
         prepared = self._receipts.prepare_acknowledgements(
             tuple((value.receipt, ack) for value, ack in zip(frozen, acknowledgements, strict=True))
         )
@@ -106,16 +119,19 @@ def local_terminal_bytes(value: LocalPermitFinalization, *, generation: int) -> 
 
 
 def validated_terminal_acks(
-    values: Sequence[LocalPermitFinalization], results: Sequence[FinalizationReceipt]
-) -> tuple[FinalizationReceipt, ...]:
-    if len(results) != len(values):
+    values: Sequence[LocalPermitFinalization],
+    results: Sequence[TerminalReceipt],
+    *,
+    receipt_type: TerminalReceiptType = FinalizationReceipt,
+) -> tuple[TerminalReceipt, ...]:
+    if receipt_type not in (FinalizationReceipt, JournalReceipt) or len(results) != len(values):
         raise invalid_result()
     copies = []
     for value, result in zip(values, results, strict=True):
-        if not isinstance(result, FinalizationReceipt):
+        if type(result) is not receipt_type:
             raise invalid_result()
         try:
-            copy = FinalizationReceipt.model_validate(result.model_dump())
+            copy = receipt_type.model_validate(result.model_dump())
         except ValueError:
             raise invalid_result() from None
         finalization = value.finalization
