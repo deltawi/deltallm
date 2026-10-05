@@ -66,6 +66,9 @@ class LocalReturnWorker:
     def task(self) -> asyncio.Task[None] | None:
         return self._task
 
+    def owns_issuer(self, issuer: LocalPermitIssuer) -> bool:
+        return self._issuer is issuer
+
     @property
     def worker_health(self) -> WorkerHealth:
         if self._state is WorkerState.DISABLED:

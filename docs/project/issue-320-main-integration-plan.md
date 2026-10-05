@@ -21,11 +21,14 @@ The first PostgreSQL run failed two compatibility cases. Their unchanged modules
 then passed all 15 cases, and a full confirmation passed all 705 PostgreSQL cases.
 Keep the original failures: the passing confirmation does not establish their
 causes or a production fix. The supervised journal worker is now implemented.
-Its broad database run passed 710 cases and failed one unchanged child-startup
-case. The failure occurred after 9.69 seconds of module imports, before database
+Its first broad database run passed 710 cases and failed one unchanged child-
+startup case. The failure occurred after 9.69 seconds of imports, before database
 connection completed. The unchanged recovery module then passed all seven cases.
-Keep both results. Full-suite confirmation remains open. Next: the shared local
-startup and shutdown owner, then bounded recovery and runtime selection.
+The shared local startup and shutdown checkpoint passed all 7,908 cases across
+the five lanes, including all 719 PostgreSQL cases. The final lifecycle guards
+passed 114 focused cases and all 5,441 component and Helm cases. Collection now
+contains 7,911 cases. Keep the original cold-start failure; confirmation is not
+a production fix. Next: bound settlement scans, then finish runtime selection.
 
 ## Integration rules
 
@@ -1180,7 +1183,7 @@ Runtime selection remains off. The final four-rate kind series remains pending.
   shutdown must not claim that the durable accounting backlog has drained.
 - [x] Prove lost claim and commit replies, cancellation after commit, owner loss,
   lease recovery, exact money, and complete document removal with PostgreSQL.
-- [ ] Complete focused checks, the affected real-dependency gates, collection,
+- [x] Complete focused checks, the affected real-dependency gates, collection,
   style checks, and the small typed-owner regression before closing this step.
 - [ ] Connect processing, terminal drain, unused-suffix return, and transport
   ownership through the accounting bootstrap and deployment roles in later steps.
@@ -1207,8 +1210,74 @@ The 402-field configuration reference, Ruff, formatting, and whitespace checks
 passed. The unchanged application graph passed its 1,646 cases in slice 10c;
 this step did not rerun that lane. Preserve the `issue320-slice10d-full-` logs,
 `issue320-slice10d-spend-confirmation.log`, and `issue320-slice10d-final-` artifacts
-in `/private/tmp`. Full database confirmation remains open. No application route,
+in `/private/tmp`. The full slice-10e run later passed all 719 PostgreSQL cases
+without changing this worker or the failed compatibility case. No application route,
 startup selector, configuration field, schema, or database function changes here.
+
+### Slice 10e: shared local startup and shutdown
+
+- [x] Add one typed runtime owner for the existing local service and return worker.
+  Reject mismatched owners and adoption of tasks that are already running.
+- [x] Start the return task before admission queues. Require one actual active-
+  generation probe before service selection. Bound concurrent readiness probes.
+- [x] Stop issue before the first shutdown await. Share one caller and process
+  deadline across terminal drain, unused-suffix returns, and task cleanup.
+- [x] Keep unfinished tasks visible through the existing shutdown owner. Retain
+  issued proof charges and report an incomplete drain after uncertain replies.
+- [x] Prove two-replica hard budgets, lost funding, acceptance, return and commit
+  replies, cancellation, and the separation of local drain from durable settlement.
+- [x] Complete the full affected lanes and style checks on the final source.
+- [ ] Connect the owner to bootstrap only after transport, bounded recovery,
+  durable health, and deployment capacity checks are complete.
+
+The final focused run passed all 111 cases in
+`/private/tmp/issue320-slice10e-focused-final.log`. It includes 22 new component
+cases and eight new PostgreSQL cases. The initial component check used a scheduler
+yield as a test-order assumption. An explicit queue-close event replaced that
+assumption; no production deadline or assertion was relaxed. The first native
+check expected a zero capacity sum when no terminal-capacity row existed. The
+new case now checks the actual NULL result, not an invented zero. All existing
+financial assertions remain unchanged.
+
+Successful local drain leaves accepted documents and reserved money charged until
+canonical processing and grant settlement complete. Unreported issued operations
+keep their proof and byte charge. Cancelled funding replies keep database funding
+reserved even when no cursor received the reply. Normal startup adds one generation
+probe. The existing warm admission, terminal batching, and recovery call bounds are
+unchanged. No configuration, schema, database function, application route, or
+runtime selector changes here.
+
+The full checkpoint passed 7,908 cases: 5,195 hermetic, 243 Helm, 1,646 application,
+719 PostgreSQL, and 105 Redis. Final review added three lifecycle cases. Expired
+startup now makes no task or database call; a return task that stops during the
+generation probe cannot expose a service. Interrupted close is cached so repeated
+close calls cannot add callbacks to a resistant task. The final source passed all
+114 focused cases, including all eight new native runtime cases, and all 5,441
+component and Helm cases. Application, Redis, and database functions did not
+change after their full runs. The other PostgreSQL cases do not use this new
+runtime. Collection now covers 7,911 cases in one lane each: 5,198 hermetic,
+243 Helm, 1,646 application, 719 PostgreSQL, and 105 Redis. Ruff, formatting,
+whitespace, and the 402-field configuration reference passed. Logs use
+`/private/tmp/issue320-slice10e-full-`, `issue320-slice10e-guards-`, and
+`issue320-slice10e-startup-guards-final.log`.
+
+### Next: bounded settlement scans
+
+The existing journal migration already caps active-to-draining expiry transitions.
+The remaining close selection applies eligibility before its result limit. A new
+isolated probe with 10,000 blocked grants and a close limit of one settled exactly
+one eligible grant, but its actual plan used a sequential grant scan, removed
+10,000 rows by filter, and recorded 30,746 shared-buffer hits. Financial effects
+remained exact. This is a measured recovery-scan gap, not evidence from a new
+gateway RPS run. Preserve `/private/tmp/issue320-slice10e-settlement-scan-probe.log`.
+
+- [x] Measure the actual nested settlement plan with retained blocked history.
+- [ ] Add an append-only migration with indexed expiry and drain work ranges.
+- [ ] Apply the inspected-key limit before eligibility checks. Rotate a disposable
+  cursor so a blocked prefix cannot hide eligible work behind it.
+- [ ] Retain complete grant, budget-window, partition, and pending-journal guards.
+- [ ] Prove scan limits, fair progress, cursor loss, concurrent recovery, foreground
+  admission, exact provisional owner-loss balances, and migration paths.
 
 ## Slice 9a: inactive permit foundation
 

@@ -652,6 +652,34 @@ charged in PostgreSQL. Task health describes execution, not settled balances.
 Runtime selection still requires the later bootstrap, durable backlog checks,
 transport roles, terminal drain, unused-suffix return, and recovery integration.
 
+### Shared local startup and shutdown
+
+`LocalAccountingRuntime` owns the local queues and their one return worker.
+Construction rejects another issue owner or a worker that is already running.
+The return task starts before the admission queues. One real active-generation
+probe must pass before the runtime exposes its accounting service. Concurrent
+probes cannot create another task or database call. Queue failure or an unready
+return task makes the runtime unready with a fixed, safe detail code.
+
+Close uses one deadline for every step and stays within the process worker-drain
+deadline. It stops local issue before its first await, drains accepted terminal
+queue work, then closes the return owner. Returns cover only a proven unused
+suffix. Concurrent close calls share one cleanup task. Interrupted tasks remain
+visible to the existing shutdown owner; cancellation must not hide a live task.
+
+A successful local drain requires empty local proof and byte queues, acknowledged
+unused suffixes, and stopped owned tasks. An issued operation without a terminal
+reply makes the drain incomplete. Its immutable proof keeps its entry and byte
+charge. A lost funding reply also keeps database funding charged, even if no local
+cursor received that reply. A stopped process is not proof that money is free.
+
+Journal processing remains a separate role. Local drain can succeed while accepted
+documents and partition capacity remain charged in PostgreSQL. Canonical processing
+must commit before document removal; grant settlement must commit before budget
+and partition capacity release. The new owner adds one startup probe and no extra
+request-path call. Bootstrap selection, transport roles, bounded expiration and
+recovery, and durable backlog health remain activation requirements.
+
 ### Storage and rollout policy
 
 The compact journal has three unique key indexes and four partial work indexes.

@@ -72,6 +72,10 @@ class LocalAccountingService(AccountingProtocolService):
     def requires_local_proof(self) -> bool:
         return True
 
+    @property
+    def issuer(self) -> LocalPermitIssuer:
+        return self._issuer
+
     async def close(self, *, timeout_seconds: float = 5.0) -> None:
         self._issuer.stop_admission()
         await super().close(timeout_seconds=timeout_seconds)
