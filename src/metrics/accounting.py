@@ -29,6 +29,12 @@ accounting_batch_size = Histogram(
     buckets=[1, 2, 4, 8, 16, 32, 64, 128, 256],
     registry=get_prometheus_registry(),
 )
+accounting_queue_retained_bytes = Gauge(
+    "deltallm_accounting_queue_retained_bytes",
+    "Conservative byte charge for queued and selected accounting payloads",
+    ["queue"],
+    registry=get_prometheus_registry(),
+)
 accounting_batch_seconds = Histogram(
     "deltallm_accounting_batch_seconds",
     "Accounting PostgreSQL batch acknowledgement latency",
@@ -112,6 +118,10 @@ accounting_projection_oldest_event_age = Gauge(
 
 def set_accounting_queue_depth(queue: str, value: int) -> None:
     accounting_queue_depth.labels(queue=queue).set(max(0, int(value)))
+
+
+def set_accounting_queue_retained_bytes(queue: str, value: int) -> None:
+    accounting_queue_retained_bytes.labels(queue=queue).set(max(0, int(value)))
 
 
 def observe_accounting_batch(queue: str, size: int, seconds: float, outcome: str) -> None:

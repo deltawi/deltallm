@@ -82,6 +82,8 @@ Accepted performance code: `cc3113bd`
   missing-owner rejection when adding local or remote accounting clients.
 - [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
 - [ ] Slice 9: keep protocol construction in the small accounting bootstrap owner.
+- [x] Slice 9: verify immutable financial queue payloads, byte-bounded collection,
+  and retained-byte limits across the required gates.
 - [ ] Slice 10: port the terminal journal and compact acknowledgement path.
 - [ ] Slice 11: split accounting transport and projection roles.
 - [ ] Slice 12: port bounded worker runtimes, economic settlement, and recovery limits.
@@ -231,6 +233,8 @@ funding in bounded staging that shares the cursor budget. Complete local issue
 without an intervening await after funding checks pass. A later funding failure
 must not turn an undelivered warm receipt into unknown provider work. The same
 admission owner must protect staging from the return worker until commit or abort.
+Do not await a gate release or another cleanup step after the local issue commit.
+The result and every proof must be ready before that commit starts.
 
 Before activation, collection must also respect serialized batch bytes. A valid
 large terminal payload can exceed the 1 MiB batch limit when joined with other
@@ -493,6 +497,77 @@ The other full logs are `/private/tmp/issue320-slice9i-components-full.log`,
 The applied 119-migration chain is unchanged. The gateway still uses assigned
 admission. Slice 9, later slices, current-main feature adapters, and all four final
 kind RPS qualifications remain incomplete.
+
+## Slice 9j: immutable byte-bounded financial queues
+
+The assigned accounting runtime now freezes each validated financial record as
+canonical JSON bytes before enqueue. One snapshot owner also serves local receipt
+retention. It validates the raw nested graph before JSON conversion, so invalid
+non-finite values cannot become JSON null. A caller cannot change queued pricing,
+audit, or spend facts through a nested dictionary after submission.
+
+The shared microbatch owner now collects at both an item limit and a 1 MiB JSON
+list limit. It includes list delimiters and commas. It leaves the next item in
+the queue when a batch is full. It does not split in an awaited subject loop.
+Each accounting queue has a separate 8 MiB retained-byte budget by default,
+including selected payloads and a fixed metadata charge. The startup settings,
+environment example, YAML example, Helm values and schema, and generated 402-field
+reference are synchronized. Accounting remains disabled by default. Existing
+batch sizes, acknowledgement budgets, pools, and per-record size limits are unchanged.
+
+Cancellation before collection removes one queued entry and its byte charge in
+constant time. Cancellation after selection does not remove the charge or cancel
+the persistence owner. Owner cancellation, observer failure, a wrong result count,
+and shutdown fail affected waiters and release each charge once. A cancelled
+handler now stops its worker instead of being swallowed by the per-batch exception
+handler. Worker health keeps the failed task visible.
+
+Before implementation, all 17 byte-collection regressions failed because the
+queue had no byte owner. After queue support was added, all 10 financial snapshot
+regressions still failed: large batches exceeded the transport limit and mutable
+or invalid nested records could enter the queue. The original failures remain in
+`/private/tmp/issue320-slice9j-byte-queue-before.log` and
+`/private/tmp/issue320-slice9j-immutable-queue-before.log`.
+
+Focused financial, cache, bootstrap, settings, and Helm checks passed 177 cases.
+All 50 final byte, observer, snapshot, and size-ratchet checks passed. All four
+native large-payload cases passed: direct and assigned admission, with and without
+a lost terminal acknowledgement. Eight 264 KiB-class terminal records use three
+bounded terminal calls. Lost acknowledgement recovery adds one call, not a second
+charge. Each case keeps eight reserved and eight finalized events, exact spend
+and audit payloads, and zero reserved/provisional balance after settlement.
+The default assigned grant retains its 32 units before expiry; the test advances
+only its private native expiry to prove exact release. No runtime TTL changed.
+
+The first new native fixtures read audit from the wrong column, counted reserved
+events as terminal events, and expected a default partially unused grant to close
+before expiry. Those fixture errors were corrected against the schema. The first
+observer test edit also misplaced a fake repository method; it was restored.
+No existing assertion or deadline was weakened. The failed logs remain available.
+The final focused logs are `/private/tmp/issue320-slice9j-settings-queue-focused.log`,
+`/private/tmp/issue320-slice9j-observer-byte-confirmed.log`, and
+`/private/tmp/issue320-slice9j-native-queue-final.log`.
+
+- [x] Run all five full lanes, complete collection, changed-file Ruff, formatting,
+  generated-reference verification, and `git diff --check` before commit.
+- [ ] Extend serialized-byte measurement to the complete local financial proof
+  envelope when the local terminal path is integrated. Do not measure only its
+  finalization body.
+- [ ] Complete bounded cold-funding staging, atomic local issue, supervised
+  return, and typed proof/replay integration before local runtime selection.
+
+No migration was added or changed. Slice 9 and the final kind qualification remain
+incomplete. These native cases are correctness checks, not gateway RPS results.
+
+The complete suite passed 7,429 tests with no service skips: 4,836 hermetic,
+1,645 application, 600 PostgreSQL, 105 Redis, and 243 Helm tests. Every collected
+test belongs to one lane. Changed-file Ruff, formatting, generated-reference
+verification, and `git diff --check` passed. The full logs are
+`/private/tmp/issue320-slice9j-components-full.log`,
+`/private/tmp/issue320-slice9j-app-full.log`,
+`/private/tmp/issue320-slice9j-postgres-full.log`,
+`/private/tmp/issue320-slice9j-redis-full.log`, and
+`/private/tmp/issue320-slice9j-lanes-final.log`.
 
 ## Slice 9a: inactive permit foundation
 

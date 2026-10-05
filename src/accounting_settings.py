@@ -10,6 +10,12 @@ class AccountingProtocolSettings(BaseModel):
     accounting_microbatch_dwell_ms: int = Field(default=2, ge=0, le=50)
     accounting_reservation_max_pending: int = Field(default=4096, ge=1, le=100_000)
     accounting_finalization_max_pending: int = Field(default=8192, ge=1, le=100_000)
+    accounting_reservation_max_pending_bytes: int = Field(
+        default=8_388_608, ge=1_048_576, le=67_108_864
+    )
+    accounting_finalization_max_pending_bytes: int = Field(
+        default=8_388_608, ge=1_048_576, le=67_108_864
+    )
     accounting_statement_timeout_ms: int = Field(default=250, ge=10, le=2000)
     accounting_reservation_ack_timeout_ms: int = Field(default=1000, ge=10, le=5000)
     accounting_finalization_ack_timeout_ms: int = Field(default=2000, ge=10, le=5000)

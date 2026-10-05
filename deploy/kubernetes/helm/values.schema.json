@@ -830,6 +830,8 @@
             "accounting_microbatch_dwell_ms": { "type": "integer", "minimum": 0, "maximum": 50 },
             "accounting_reservation_max_pending": { "type": "integer", "minimum": 1, "maximum": 100000 },
             "accounting_finalization_max_pending": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "accounting_reservation_max_pending_bytes": { "type": "integer", "minimum": 1048576, "maximum": 67108864 },
+            "accounting_finalization_max_pending_bytes": { "type": "integer", "minimum": 1048576, "maximum": 67108864 },
             "accounting_statement_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 2000 },
             "accounting_reservation_ack_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 5000 },
             "accounting_finalization_ack_timeout_ms": { "type": "integer", "minimum": 10, "maximum": 5000 },

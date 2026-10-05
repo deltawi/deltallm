@@ -120,6 +120,8 @@ config:
     accounting_microbatch_dwell_ms: 2
     accounting_reservation_max_pending: 4096
     accounting_finalization_max_pending: 8192
+    accounting_reservation_max_pending_bytes: 8388608
+    accounting_finalization_max_pending_bytes: 8388608
     accounting_statement_timeout_ms: 250
     accounting_finalization_ack_timeout_ms: 1000
     accounting_max_provider_attempts: 3
@@ -140,6 +142,21 @@ validation. API pods do not open the telemetry-worker database pool when they ow
 telemetry worker. The dedicated worker defaults to smaller control and foreground
 pools because it is not selected by the gateway Service; override those pools only
 with an updated capacity report.
+
+Each API process has separate reservation and finalization byte budgets. Both
+default to 8 MiB and are startup-only. Each budget covers immutable queued payloads,
+selected work waiting for a database acknowledgement, and a fixed charge for queue
+metadata. It is not an RSS limit. The item limits still apply. A full queue fails
+closed; it does not evict another operation or borrow the other queue's budget.
+
+Collection stops at 1 MiB of serialized JSON or the configured item count, whichever
+comes first. Large valid terminal records can use several batches. This keeps the
+per-record payload limits and avoids an oversized batch after provider completion.
+Caller cancellation before collection releases its byte charge. After selection,
+the charge remains until persistence finishes or the worker fails. The metric
+`deltallm_accounting_queue_retained_bytes{queue="reservation|finalization"}` records
+each queue's conservative charge. With `P` API processes, the two default queue
+budgets total `P * 16 MiB`, in addition to clients, request bodies, and local leases.
 
 The accounting-worker HPA always supports CPU and memory targets. Its oldest-event-age
 target requires the Prometheus custom-metrics adapter and is mandatory when accounting

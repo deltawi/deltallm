@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from time import perf_counter
 
 from src.billing.accounting_protocol import (
@@ -12,6 +13,7 @@ from src.billing.accounting_protocol import (
     FinalizationReceipt,
 )
 from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull, DurableMicrobatcher
+from src.billing.accounting_snapshots import finalization_bytes, reservation_bytes
 from src.db.accounting_protocol import AccountingProtocolRepository, AccountingProtocolUnavailable
 from src.metrics.accounting import (
     increment_accounting_failure,
@@ -19,6 +21,7 @@ from src.metrics.accounting import (
     observe_accounting_batch,
     observe_accounting_queue_wait,
     set_accounting_queue_depth,
+    set_accounting_queue_retained_bytes,
 )
 from src.telemetry.lifecycle import WorkerHealth, WorkerState, task_failure_detail
 
@@ -35,6 +38,8 @@ class AccountingProtocolService:
         dwell_seconds: float = 0.002,
         max_pending_reservations: int = 4096,
         max_pending_finalizations: int = 8192,
+        max_reservation_retained_bytes: int = 8 * 1024 * 1024,
+        max_finalization_retained_bytes: int = 8 * 1024 * 1024,
         statement_budget_seconds: float = 0.25,
         reservation_ack_budget_seconds: float = 1.0,
         finalization_ack_budget_seconds: float = 2.0,
@@ -62,6 +67,12 @@ class AccountingProtocolService:
                 "reservation", seconds
             ),
             set_queue_depth=lambda depth: set_accounting_queue_depth("reservation", depth),
+            payload_size=len,
+            max_batch_bytes=1_048_576,
+            max_retained_bytes=max_reservation_retained_bytes,
+            set_retained_bytes=lambda size: set_accounting_queue_retained_bytes(
+                "reservation", size
+            ),
         )
         self.finalizations = DurableMicrobatcher(
             self._finalize,
@@ -73,6 +84,12 @@ class AccountingProtocolService:
                 "finalization", seconds
             ),
             set_queue_depth=lambda depth: set_accounting_queue_depth("finalization", depth),
+            payload_size=len,
+            max_batch_bytes=1_048_576,
+            max_retained_bytes=max_finalization_retained_bytes,
+            set_retained_bytes=lambda size: set_accounting_queue_retained_bytes(
+                "finalization", size
+            ),
         )
 
     def start(self) -> tuple[asyncio.Task[None], asyncio.Task[None]]:
@@ -106,7 +123,7 @@ class AccountingProtocolService:
         if reservation.protocol_generation != self.generation:
             raise ValueError("reservation uses a stale accounting generation")
         try:
-            return await self.reservations.submit(reservation)
+            return await self.reservations.submit(reservation_bytes(reservation))
         except DurableBatchFull:
             increment_accounting_failure("reservation", "queue", "queue_full")
             raise
@@ -118,7 +135,7 @@ class AccountingProtocolService:
         if finalization.protocol_generation != self.generation:
             raise ValueError("finalization uses a stale accounting generation")
         try:
-            return await self.finalizations.submit(finalization)
+            return await self.finalizations.submit(finalization_bytes(finalization))
         except DurableBatchFull:
             increment_accounting_failure("finalization", "queue", "queue_full")
             raise
@@ -126,11 +143,11 @@ class AccountingProtocolService:
             increment_accounting_failure("finalization", "queue", "queue_closed")
             raise
 
-    async def _reserve(self, values):
+    async def _reserve(self, values: Sequence[bytes]) -> list[DispatchPermit]:
         started = perf_counter()
         try:
             results = await self._repository.reserve_batch(
-                values,
+                [AccountingReservation.model_validate_json(value) for value in values],
                 expires_at=(
                     asyncio.get_running_loop().time() + self._reservation_ack_budget_seconds
                 ),
@@ -145,11 +162,11 @@ class AccountingProtocolService:
             increment_accounting_decision(result.decision.value)
         return results
 
-    async def _finalize(self, values):
+    async def _finalize(self, values: Sequence[bytes]) -> list[FinalizationReceipt]:
         started = perf_counter()
         try:
             results = await self._repository.finalize_batch(
-                values,
+                [AccountingFinalization.model_validate_json(value) for value in values],
                 expires_at=(
                     asyncio.get_running_loop().time() + self._finalization_ack_budget_seconds
                 ),

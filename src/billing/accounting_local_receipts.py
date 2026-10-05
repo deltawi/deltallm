@@ -4,22 +4,11 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
-import json
 from uuid import UUID
 
 from src.billing.accounting_local_leases import LocalPermitGrant, LocalPermitReceipt
 from src.billing.accounting_protocol import AccountingReservation, FinalizationReceipt
-
-
-def reservation_bytes(item: AccountingReservation) -> bytes:
-    validated = AccountingReservation.model_validate(item.model_dump())
-    return json.dumps(
-        validated.model_dump(mode="json"),
-        allow_nan=False,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
+from src.billing.accounting_snapshots import reservation_bytes
 
 
 @dataclass(frozen=True, slots=True, repr=False)

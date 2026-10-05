@@ -430,6 +430,8 @@ config:
     accounting_microbatch_dwell_ms: 2
     accounting_reservation_max_pending: 4096
     accounting_finalization_max_pending: 8192
+    accounting_reservation_max_pending_bytes: 8388608
+    accounting_finalization_max_pending_bytes: 8388608
     accounting_statement_timeout_ms: 250
     accounting_reservation_ack_timeout_ms: 1000
     accounting_finalization_ack_timeout_ms: 2000

@@ -94,6 +94,20 @@ lag use bounded-label metrics. Readiness includes both microbatch owners and the
 projection worker when configured. It also checks the active generation through the
 actual accounting pool. A healthy Prisma pool does not prove that this pool is ready.
 
+Financial queues retain canonical, validated JSON bytes rather than shallow-frozen
+models with mutable dictionaries. Each queue defaults to a separate 8 MiB byte
+budget for queued and selected payloads, plus a fixed metadata charge. These
+startup limits have a 1 MiB minimum and a 64 MiB maximum. They do not replace item
+limits or change per-record payload limits. They are not RSS measurements.
+
+Collection also stops at 1 MiB of serialized JSON, including list delimiters and
+commas. Valid large records use separate batches instead of failing as one oversized
+commit. Cancelled queued work releases its charge immediately. Selected work keeps
+its charge until persistence finishes or the worker fails. Constant-time queued
+removal does not scan other tenants. Queue byte metrics use only the two fixed
+reservation/finalization labels. Future local terminal queues must measure the
+whole typed financial envelope, including the issue proof, not only terminal facts.
+
 ## Capacity impact
 
 Each request adds one reservation item and one terminal item. A collected reservation

@@ -204,6 +204,8 @@ def test_accounting_values_are_declared_in_helm_schema():
         "accounting_microbatch_dwell_ms",
         "accounting_reservation_max_pending",
         "accounting_finalization_max_pending",
+        "accounting_reservation_max_pending_bytes",
+        "accounting_finalization_max_pending_bytes",
         "accounting_statement_timeout_ms",
         "accounting_reservation_ack_timeout_ms",
         "accounting_finalization_ack_timeout_ms",
@@ -220,6 +222,24 @@ def test_accounting_values_are_declared_in_helm_schema():
         "accounting_projection_maintenance_interval_ms",
     ):
         assert name in general
+
+
+@pytest.mark.parametrize("queue", ["reservation", "finalization"])
+def test_accounting_queue_byte_budget_renders_for_api_and_worker(queue):
+    name = f"accounting_{queue}_max_pending_bytes"
+    documents = _accounting_render("--set", f"config.general_settings.{name}=3145728")
+    for config_name in ("deltallm-config", "deltallm-accounting-worker-config"):
+        rendered = _config_yaml(_by_kind_and_name(documents, "ConfigMap", config_name))
+        assert rendered["general_settings"][name] == 3145728
+
+
+@pytest.mark.parametrize("queue", ["reservation", "finalization"])
+@pytest.mark.parametrize("value", [1048575, 67108865])
+def test_accounting_queue_byte_budget_schema_rejects_outside_limits(queue, value):
+    error = _render_error(
+        "--set", f"config.general_settings.accounting_{queue}_max_pending_bytes={value}"
+    )
+    assert f"accounting_{queue}_max_pending_bytes" in error
 
 
 def test_accounting_worker_can_scale_on_projection_age():

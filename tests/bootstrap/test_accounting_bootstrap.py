@@ -8,6 +8,7 @@ from src.bootstrap.accounting import resolve_accounting_settings, start_accounti
 from src.bootstrap.readiness import dependency_probes
 from src.config import GeneralSettings, Settings
 from src.realtime.config import RealtimeSettings
+from src.config_runtime.dynamic import _STARTUP_ONLY_GENERAL_SETTINGS
 
 
 def test_accounting_settings_keep_the_shared_startup_precedence():
@@ -71,3 +72,24 @@ def test_legacy_mode_preserves_realtime_and_batch_configuration():
         realtime=RealtimeSettings(enabled=True), embeddings_batch_enabled=True
     )
     assert resolve_accounting_settings(general, Settings()).accounting_protocol_enabled is False
+
+
+@pytest.mark.parametrize("queue", ["reservation", "finalization"])
+def test_queue_byte_budget_has_shared_environment_precedence_and_requires_restart(
+    queue, monkeypatch
+):
+    field = f"accounting_{queue}_max_pending_bytes"
+    monkeypatch.setenv(f"DELTALLM_{field.upper()}", "3145728")
+    assert getattr(resolve_accounting_settings(GeneralSettings(), Settings()), field) == 3145728
+    assert (
+        getattr(resolve_accounting_settings(GeneralSettings(**{field: 4194304}), Settings()), field)
+        == 4194304
+    )
+    assert field in _STARTUP_ONLY_GENERAL_SETTINGS
+
+
+@pytest.mark.parametrize("queue", ["reservation", "finalization"])
+@pytest.mark.parametrize("value", [1048575, 67108865])
+def test_queue_byte_budget_has_finite_settings_bounds(queue, value):
+    with pytest.raises(ValueError):
+        AccountingProtocolSettings(**{f"accounting_{queue}_max_pending_bytes": value})

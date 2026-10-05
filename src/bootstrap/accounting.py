@@ -75,6 +75,8 @@ def start_accounting_protocol(
         dwell_seconds=config.accounting_microbatch_dwell_ms / 1000.0,
         max_pending_reservations=config.accounting_reservation_max_pending,
         max_pending_finalizations=config.accounting_finalization_max_pending,
+        max_reservation_retained_bytes=config.accounting_reservation_max_pending_bytes,
+        max_finalization_retained_bytes=config.accounting_finalization_max_pending_bytes,
         statement_budget_seconds=statement_seconds,
         reservation_ack_budget_seconds=config.accounting_reservation_ack_timeout_ms / 1000.0,
         finalization_ack_budget_seconds=config.accounting_finalization_ack_timeout_ms / 1000.0,

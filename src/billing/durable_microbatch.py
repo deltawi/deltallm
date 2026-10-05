@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar
+
+from src.billing.durable_batch_bytes import DurableBatchBytes
 
 Input = TypeVar("Input")
 Output = TypeVar("Output")
@@ -24,6 +27,8 @@ class _Pending(Generic[Input, Output]):
     value: Input
     result: asyncio.Future[Output]
     enqueued_at: float
+    payload_bytes: int
+    retained: bool = True
 
 
 class DurableMicrobatcher(Generic[Input, Output]):
@@ -43,6 +48,10 @@ class DurableMicrobatcher(Generic[Input, Output]):
         name: str = "durable-microbatch",
         observe_queue_wait: Callable[[float], None] | None = None,
         set_queue_depth: Callable[[int], None] | None = None,
+        payload_size: Callable[[Input], int] | None = None,
+        max_batch_bytes: int | None = None,
+        max_retained_bytes: int | None = None,
+        set_retained_bytes: Callable[[int], None] | None = None,
     ) -> None:
         if not 1 <= max_batch_size <= 256:
             raise ValueError("max_batch_size must be between 1 and 256")
@@ -56,13 +65,23 @@ class DurableMicrobatcher(Generic[Input, Output]):
         self._name = name
         self._observe_queue_wait = observe_queue_wait
         self._set_queue_depth = set_queue_depth
-        self._queue: asyncio.Queue[_Pending[Input, Output]] = asyncio.Queue(max_pending)
+        self._set_retained_bytes = set_retained_bytes
+        self._max_pending = max_pending
+        self._bytes = DurableBatchBytes(
+            payload_size, max_batch_bytes=max_batch_bytes, max_retained_bytes=max_retained_bytes
+        )
+        self._queue: OrderedDict[asyncio.Future[Output], _Pending[Input, Output]] = OrderedDict()
+        self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._closed = False
 
     @property
     def pending(self) -> int:
-        return self._queue.qsize()
+        return len(self._queue)
+
+    @property
+    def retained_bytes(self) -> int:
+        return self._bytes.retained
 
     @property
     def task(self) -> asyncio.Task[None] | None:
@@ -81,22 +100,34 @@ class DurableMicrobatcher(Generic[Input, Output]):
         if self._task is None or self._task.done():
             raise DurableBatchClosed(f"{self._name} is not running")
         loop = asyncio.get_running_loop()
-        pending = _Pending(value=value, result=loop.create_future(), enqueued_at=loop.time())
-        try:
-            self._queue.put_nowait(pending)
-        except asyncio.QueueFull:
+        size = self._bytes.measure(value)
+        if self.pending >= self._max_pending or not self._bytes.fits(size):
             raise DurableBatchFull(self._name) from None
-        self._report_depth()
+        pending = _Pending(
+            value=value, result=loop.create_future(), enqueued_at=loop.time(), payload_bytes=size
+        )
+        self._queue[pending.result] = pending
+        self._bytes.add(size)
+        self._wake.set()
         try:
+            self._report_depth()
             return await asyncio.shield(pending.result)
         except asyncio.CancelledError:
             pending.result.cancel()
+            if self._queue.pop(pending.result, None) is not None:
+                self._release(pending)
+                self._report_depth()
+            raise
+        except BaseException:
+            if self._queue.pop(pending.result, None) is not None:
+                self._release(pending)
             raise
 
     async def close(self, *, timeout_seconds: float = 5.0) -> None:
         if self._closed:
             return
         self._closed = True
+        self._wake.set()
         task = self._task
         if task is None:
             self._fail_queued(DurableBatchClosed(self._name))
@@ -118,47 +149,25 @@ class DurableMicrobatcher(Generic[Input, Output]):
 
     async def _run(self) -> None:
         try:
-            while not self._closed or not self._queue.empty():
+            while not self._closed or self._queue:
+                batch: list[_Pending[Input, Output]] = []
                 try:
-                    first = await asyncio.wait_for(self._queue.get(), timeout=0.050)
-                except TimeoutError:
-                    continue
-                batch = [first]
-                deadline = asyncio.get_running_loop().time() + self._dwell_seconds
-                while len(batch) < self._max_batch_size:
-                    if self._queue.empty():
-                        remaining = deadline - asyncio.get_running_loop().time()
-                        if remaining <= 0:
-                            break
-                        try:
-                            item = await asyncio.wait_for(self._queue.get(), remaining)
-                        except TimeoutError:
-                            break
-                    else:
-                        item = self._queue.get_nowait()
-                    batch.append(item)
-                self._report_depth()
-                selected = [item for item in batch if not item.result.cancelled()]
-                if not selected:
-                    continue
-                if self._observe_queue_wait is not None:
-                    collected_at = asyncio.get_running_loop().time()
-                    for item in selected:
-                        self._observe_queue_wait(max(0.0, collected_at - item.enqueued_at))
-                try:
-                    outputs = await self._handler([item.value for item in selected])
-                    if len(outputs) != len(selected):
-                        raise RuntimeError("durable batch handler returned the wrong result count")
+                    await self._collect(batch)
+                    await self._dispatch(batch)
                 except BaseException as exc:
-                    for item in selected:
+                    for item in batch:
                         if not item.result.done():
-                            item.result.set_exception(exc)
-                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                        raise
-                else:
-                    for item, output in zip(selected, outputs, strict=True):
-                        if not item.result.done():
-                            item.result.set_result(output)
+                            failure = (
+                                DurableBatchClosed(f"{self._name} was cancelled")
+                                if isinstance(exc, asyncio.CancelledError)
+                                else exc
+                            )
+                            item.result.set_exception(failure)
+                    raise
+                finally:
+                    for item in batch:
+                        self._release(item)
+                    self._report_depth()
         except asyncio.CancelledError:
             self._fail_queued(DurableBatchClosed(f"{self._name} was cancelled"))
             raise
@@ -167,12 +176,73 @@ class DurableMicrobatcher(Generic[Input, Output]):
             raise
 
     def _fail_queued(self, exc: BaseException) -> None:
-        while not self._queue.empty():
-            item = self._queue.get_nowait()
+        while self._queue:
+            _, item = self._queue.popitem(last=False)
+            self._release(item)
             if not item.result.done():
                 item.result.set_exception(exc)
         self._report_depth()
 
     def _report_depth(self) -> None:
         if self._set_queue_depth is not None:
-            self._set_queue_depth(self._queue.qsize())
+            self._set_queue_depth(self.pending)
+        if self._set_retained_bytes is not None:
+            self._set_retained_bytes(self.retained_bytes)
+
+    def _release(self, item: _Pending[Input, Output]) -> None:
+        if item.retained:
+            self._bytes.release(item.payload_bytes)
+            item.retained = False
+
+    async def _collect(self, batch: list[_Pending[Input, Output]]) -> None:
+        if not self._queue:
+            self._wake.clear()
+            if self._closed:
+                return
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=0.050)
+            except TimeoutError:
+                return
+        deadline = asyncio.get_running_loop().time() + self._dwell_seconds
+        size = 2  # JSON list delimiters; commas are charged only after the first item.
+        while len(batch) < self._max_batch_size:
+            if not self._queue:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if self._closed or remaining <= 0:
+                    break
+                self._wake.clear()
+                try:
+                    await asyncio.wait_for(self._wake.wait(), remaining)
+                except TimeoutError:
+                    break
+                continue
+            item = next(iter(self._queue.values()))
+            if not self._bytes.batch_fits(size, item.payload_bytes, first=not batch):
+                break
+            self._queue.popitem(last=False)
+            size += item.payload_bytes + bool(batch)
+            batch.append(item)
+            self._report_depth()
+
+    async def _dispatch(self, batch: Sequence[_Pending[Input, Output]]) -> None:
+        selected = [item for item in batch if not item.result.cancelled()]
+        if not selected:
+            return
+        if self._observe_queue_wait is not None:
+            collected_at = asyncio.get_running_loop().time()
+            for item in selected:
+                self._observe_queue_wait(max(0.0, collected_at - item.enqueued_at))
+        try:
+            outputs = await self._handler([item.value for item in selected])
+            if len(outputs) != len(selected):
+                raise RuntimeError("durable batch handler returned the wrong result count")
+        except BaseException as exc:
+            for item in selected:
+                if not item.result.done():
+                    item.result.set_exception(exc)
+            if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                raise
+        else:
+            for item, output in zip(selected, outputs, strict=True):
+                if not item.result.done():
+                    item.result.set_result(output)
