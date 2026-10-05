@@ -806,36 +806,110 @@ skips in `/private/tmp/issue320-slice9l-verified-redis.log`. All 123 unchanged
 migrations passed fresh install, upgrade from `v0.1.42`, and shared-feature upgrade
 in `/private/tmp/issue320-slice9l-verified-migrations.log`. The verifier removed
 only its disposable databases. All 15 changed Python files passed Ruff and format
-checks. The generated reference remains current at 402 fields. `git diff --check`+passed. No schema, configuration default, or runtime selection changed in 9l.
+checks. The generated reference remains current at 402 fields. `git diff --check`
+passed. No schema, configuration default, or runtime selection changed in 9l.
 
 Runtime selection, the rest of slice 9, later integration slices, and the four final
 kind RPS runs remain incomplete.
 
-## Next slice 9m: shared local proof and terminal owner
+## Slice 9m: shared local proof and terminal owner
 
-- [ ] Add typed local permit and request-handle contracts. Keep the existing
+- [x] Add typed local permit and request-handle contracts. Keep the existing
   assigned contracts unchanged. Check the complete reservation, owner, generation,
   partition, grant fence, and ordinal before provider work.
-- [ ] Freeze local terminal input before its first await. Reject duplicate
+- [x] Freeze local terminal input before its first await. Reject duplicate
   operations, stale generations, NaN, and entry or byte excess before persistence.
-- [ ] Add a typed bulk terminal owner with the caller's single deadline. Check
+- [x] Add a typed bulk terminal owner with the caller's single deadline. Check
   every acknowledgement before removing any issued proof or retained-byte charge.
-- [ ] Prove cancellation, blocked transport, wrong acknowledgement, and replay
+- [x] Prove cancellation, blocked transport, wrong acknowledgement, and replay
   after local receipt removal. Do not create another admission on terminal retry.
-- [ ] Add the shared service path and preserve local proofs through provider retry
+- [x] Add the shared service path and preserve local proofs through provider retry
   and charged cache admission. Missing proof must fail closed, not use assigned
   or legacy billing.
-- [ ] Add compact authenticated transport with process-local clock anchors. Keep
+- [x] Add compact authenticated transport with process-local clock anchors. Keep
   financial proof identity separate from a process's monotonic clock value.
-- [ ] Prove the shared path against PostgreSQL, then run all required gates before
+- [x] Prove the shared path against PostgreSQL, then run all required gates before
   runtime selection. Keep later slices and the final four-rate kind series pending.
 
-Small drafts outside the checkpoint passed 27 terminal snapshot, acknowledgement,
-and deadline checks and 11 request-handle checks. They are not repository
-implementation or gateway qualification. Apply and verify them after the current
-checkpoint has passed its gates. Draft logs are
-`/private/tmp/issue320-terminal-owner-draft-deadlines.log` and
-`/private/tmp/issue320-local-handle-draft-focused-imported.log`.
+The repository now contains the typed local handles, bulk terminal owner, shared
+byte-queue service, compact wire contracts, and bounded signed HTTP transport.
+Full proof checks also reject invalid scalar model copies. Each constructed handle
+gets its own request dictionaries. Terminal acknowledgement prepares every removal,
+then checks the caller's deadline before it changes retained entries or bytes.
+
+The shared service cannot accept an assigned handle. The assigned service cannot
+accept a local handle. Provider retries keep one proof. Charged cache requests use
+that same terminal path. One HTTP regression passed the provider response followed
+by a charged cache response with no legacy write. Compact replies omit the repeated
+reservation and process-local monotonic clock. They retain only the remaining warm
+dispatch lifetime. Terminal proof comparison excludes only clock observation fields,
+not a durable grant field, ordinal, or reservation fact.
+
+Focused local proof checks passed 132 cases in
+`/private/tmp/issue320-slice9m-final-focused.log`. The native proof, return, issue,
+and lease group passed 27 cases in
+`/private/tmp/issue320-slice9m-native-proof-focused.log`. Six of those checks cover
+the shared terminal owner and queued service with normal or lost funding and
+terminal acknowledgements. They use different process clock anchors and replay
+after local proof removal and grant closure. The focused HTTP provider/cache group
+passed five cases in `/private/tmp/issue320-slice9m-cache-app-focused.log`.
+
+Initial new fixtures had three errors: a call to a missing test method, a direct
+repository's 2-second statement budget inside the service's unchanged 1-second
+acknowledgement deadline, and a shifted grant expiry without its reservation expiry.
+Two transport checks also used the wrong fixed error label. Correcting the fixtures
+and using the existing error enum fixed these checks. No production deadline,
+capacity limit, or SQL assertion changed. The first native failure remains in
+`/private/tmp/issue320-slice9m-native-shared.log`; the first compact transport failure
+remains in `/private/tmp/issue320-slice9m-transport-focused.log`.
+
+Full gates passed all 7,701 tests: 5,069 hermetic, 243 Helm, 1,646 application,
+638 PostgreSQL, and 105 Redis cases. No required-service case was skipped. Each
+test belongs to one dependency lane. Logs are
+`/private/tmp/issue320-slice9m-full-components.log`,
+`/private/tmp/issue320-slice9m-full-app.log`,
+`/private/tmp/issue320-slice9m-full-postgres.log`,
+`/private/tmp/issue320-slice9m-full-redis.log`, and
+`/private/tmp/issue320-slice9m-final-lanes.log`.
+
+All 123 unchanged migrations passed fresh install, upgrade from `v0.1.42`, and
+shared-feature upgrade in `/private/tmp/issue320-slice9m-full-migrations.log`.
+The verifier removed its disposable databases. All 20 changed Python files passed
+Ruff and format checks. The generated configuration reference is current at
+402 fields, and `git diff --check` passed. No schema or default changed in 9m.
+
+This is an inactive integration checkpoint, not gateway RPS qualification. Worker
+endpoint construction, remote runtime selection, the terminal journal, remaining
+integration slices, and all four final kind rates remain unfinished.
+
+## Next slice 10: inactive durable terminal journal
+
+- [ ] Add the journal and pending-payload tables in a new migration. Add matching
+  Prisma models. Keep compact accepted identities separate from large documents.
+- [ ] Use a typed journal acknowledgement. Do not present its journal sequence as
+  a canonical accounting event that later processing has not yet created.
+- [ ] Append one bounded terminal batch with complete immutable payload hashes,
+  exact money, generation, owner, grant, fence, and ordinal checks. Use indexed key
+  probes. Reject missing fields and conflicting operations or ordinals atomically.
+- [ ] Keep accepted journal entries charged until canonical processing succeeds.
+  Prevent an unused-suffix return or grant close from releasing accepted work.
+  Preserve exact retry after grant closure and local proof removal.
+- [ ] Add bounded, fenced claim and canonical-processing calls. Retain one durable
+  outcome through lease loss and retry. A failed record must remain visible and
+  charged; it cannot be removed to make a queue look empty.
+- [ ] Prove normal and lost acknowledgements, changed-payload rejection, duplicate
+  concurrent workers, return races, expiry, cancellation, and exact reconciliation
+  with PostgreSQL. Check actual nested plans with substantial retained history.
+- [ ] Run the required test and migration gates before selecting the journal.
+  Do not copy the source's full-history expiry update. Its bounded replacement,
+  worker roles, reporting lanes, current-main adapters, and final kind series
+  remain tracked in the later integration slices above.
+
+Source review covers the original journal migration and its payload-isolation
+update. Their large repository and bootstrap methods, absent Prisma journal
+models, nullable-field checks, and history-wide joins must not enter the clean
+replay without the typed, bounded boundaries stated here. No slice 10 runtime or
+schema is implemented yet.
 
 ## Slice 9a: inactive permit foundation
 

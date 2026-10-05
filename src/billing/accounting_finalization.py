@@ -92,7 +92,8 @@ class AccountingSpendFinalizer:
         accepted_payload["cost_exact"] = money_string(exact_charge)
         accepted_payload["spend_event_version"] = 2
         final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
-        await service.finalize(
+        await service.finalize_operation(
+            operation,
             AccountingFinalization(
                 protocol_generation=operation.reservation.protocol_generation,
                 operation_id=operation.reservation.operation_id,
@@ -117,7 +118,7 @@ class AccountingSpendFinalizer:
                 # provider receipt proves otherwise, retain the unused part of
                 # the reservation as an explicit provisional debit.
                 unresolved_attempts=max(0, len(operation.attempts) - 1),
-            )
+            ),
         )
 
     async def log_failure(
@@ -138,7 +139,8 @@ class AccountingSpendFinalizer:
             or "provider_outcome_unknown"
         )
         final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
-        await service.finalize(
+        await service.finalize_operation(
+            operation,
             AccountingFinalization(
                 protocol_generation=operation.reservation.protocol_generation,
                 operation_id=operation.reservation.operation_id,
@@ -158,5 +160,5 @@ class AccountingSpendFinalizer:
                 ),
                 occurred_at=datetime.now(UTC),
                 uncertainty_reason=reason,
-            )
+            ),
         )

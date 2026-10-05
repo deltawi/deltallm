@@ -8,10 +8,12 @@ from time import perf_counter
 
 from src.billing.accounting_protocol import (
     AccountingFinalization,
+    AccountingOperationHandle,
     AccountingReservation,
     DispatchPermit,
     FinalizationReceipt,
 )
+from src.billing.accounting_local_leases import LocalAccountingHandle
 from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull, DurableMicrobatcher
 from src.billing.accounting_snapshots import finalization_bytes, reservation_bytes
 from src.db.accounting_protocol import AccountingProtocolRepository, AccountingProtocolUnavailable
@@ -96,6 +98,10 @@ class AccountingProtocolService:
         return self.reservations.start(), self.finalizations.start()
 
     @property
+    def requires_local_proof(self) -> bool:
+        return False
+
+    @property
     def worker_health(self) -> WorkerHealth:
         for name, batcher in (
             ("reservation", self.reservations),
@@ -142,6 +148,13 @@ class AccountingProtocolService:
         except DurableBatchClosed:
             increment_accounting_failure("finalization", "queue", "queue_closed")
             raise
+
+    async def finalize_operation(
+        self, operation: AccountingOperationHandle, finalization: AccountingFinalization
+    ) -> FinalizationReceipt:
+        if isinstance(operation, LocalAccountingHandle):
+            raise ValueError("assigned accounting cannot accept a local issue proof")
+        return await self.finalize(finalization)
 
     async def _reserve(self, values: Sequence[bytes]) -> list[DispatchPermit]:
         started = perf_counter()

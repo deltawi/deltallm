@@ -8,9 +8,14 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from src.billing.accounting_protocol import (
     AccountingFinalization,
+    AccountingOperationHandle,
+    AccountingReservation,
+    DispatchPermit,
     PreissuedPermitClaim,
     PreissuedPermitGrant,
+    ReserveDecision,
 )
+from src.billing.accounting_snapshots import reservation_bytes
 from src.billing.selector_charge import FrozenBillingContract
 
 
@@ -52,6 +57,57 @@ class LocalPermitReceipt(PreissuedPermitClaim):
         if self.reservation.expires_at > self.grant.expires_at:
             raise ValueError("local receipt exceeds its funded recovery lifetime")
         return self
+
+
+class LocalDispatchPermit(DispatchPermit):
+    """Carry the complete issue proof without changing assigned permits."""
+
+    proof: LocalPermitReceipt = Field(repr=False)
+
+    @model_validator(mode="after")
+    def validate_issue(self) -> LocalDispatchPermit:
+        proof = _validated_issue_proof(self.proof)
+        reservation = proof.reservation
+        if (
+            self.decision is not ReserveDecision.DISPATCH
+            or self.protocol_generation != reservation.protocol_generation
+            or self.operation_id != reservation.operation_id
+            or self.dispatch_token != reservation.owner_token
+            or self.accounting_partition != proof.grant.accounting_partition
+        ):
+            raise ValueError("local dispatch proof does not match its permit")
+        object.__setattr__(self, "proof", proof)
+        return self
+
+
+class LocalAccountingHandle(AccountingOperationHandle):
+    """Keep the issue proof when the request adds a provider attempt."""
+
+    proof: LocalPermitReceipt = Field(repr=False)
+
+    @model_validator(mode="after")
+    def validate_issue(self) -> LocalAccountingHandle:
+        proof = _validated_issue_proof(self.proof)
+        reservation = AccountingReservation.model_validate_json(reservation_bytes(self.reservation))
+        if (
+            reservation_bytes(proof.reservation) != reservation_bytes(reservation)
+            or self.dispatch_token != reservation.owner_token
+            or self.accounting_partition != proof.grant.accounting_partition
+        ):
+            raise ValueError("local operation proof does not match its handle")
+        object.__setattr__(self, "proof", proof)
+        object.__setattr__(self, "reservation", reservation)
+        return self
+
+
+def _validated_issue_proof(proof: LocalPermitReceipt) -> LocalPermitReceipt:
+    # Model copies can bypass scalar validation. Recheck the full graph before
+    # dispatch and give each handle its own request dictionaries.
+    return LocalPermitReceipt(
+        grant=LocalPermitGrant.model_validate(proof.grant.model_dump()),
+        permit_ordinal=proof.permit_ordinal,
+        reservation=AccountingReservation.model_validate_json(reservation_bytes(proof.reservation)),
+    )
 
 
 class LocalPermitReturn(FrozenBillingContract):

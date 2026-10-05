@@ -46,6 +46,14 @@ class RetainedLocalReceipt:
             reservation=AccountingReservation.model_validate_json(self.reservation_json),
         )
 
+    def same_issue(self, other: RetainedLocalReceipt) -> bool:
+        excluded = {"observed_at", "observed_monotonic"}
+        return (
+            self.permit_ordinal == other.permit_ordinal
+            and self.reservation_json == other.reservation_json
+            and self.grant.model_dump(exclude=excluded) == other.grant.model_dump(exclude=excluded)
+        )
+
 
 class LocalReceiptStore:
     """Only an acknowledged terminal owner can remove an issued proof."""
@@ -81,7 +89,7 @@ class LocalReceiptStore:
         retained = RetainedLocalReceipt.freeze(receipt)
         previous = self._values.get(item.operation_id)
         if previous is not None:
-            if previous != retained:
+            if not previous.same_issue(retained):
                 raise ValueError("local issue identity cannot change")
             return True
         if not self.capacity_for(entries=1, retained_bytes=retained.retained_bytes):
@@ -121,6 +129,40 @@ class LocalReceiptStore:
         return True
 
     def acknowledge(self, receipt: LocalPermitReceipt, terminal: FinalizationReceipt) -> bool:
+        _, retained = self._prepare_acknowledgement(receipt, terminal)
+        if retained is None:
+            return False
+        self.acknowledge_batch(((receipt, terminal),))
+        return True
+
+    def acknowledge_batch(
+        self, values: Sequence[tuple[LocalPermitReceipt, FinalizationReceipt]]
+    ) -> None:
+        self._commit_acknowledgements(self.prepare_acknowledgements(values))
+
+    def prepare_acknowledgements(
+        self, values: Sequence[tuple[LocalPermitReceipt, FinalizationReceipt]]
+    ) -> tuple[tuple[UUID, RetainedLocalReceipt | None], ...]:
+        if len(values) > 256:
+            raise ValueError("local terminal acknowledgement exceeds its entry limit")
+        prepared = tuple(self._prepare_acknowledgement(receipt, ack) for receipt, ack in values)
+        if len({key for key, _ in prepared}) != len(prepared):
+            raise ValueError("local terminal acknowledgement repeats an operation")
+        return prepared
+
+    def _commit_acknowledgements(
+        self, prepared: Sequence[tuple[UUID, RetainedLocalReceipt | None]]
+    ) -> None:
+        # Validate every proof before the first removal; no await or conversion
+        # can enter the removal loop. A replay can have no local charge to remove.
+        for key, retained in prepared:
+            if retained is not None:
+                del self._values[key]
+                self._bytes -= retained.retained_bytes
+
+    def _prepare_acknowledgement(
+        self, receipt: LocalPermitReceipt, terminal: FinalizationReceipt
+    ) -> tuple[UUID, RetainedLocalReceipt | None]:
         operation_id = receipt.reservation.operation_id
         if (
             terminal.operation_id != operation_id
@@ -128,13 +170,9 @@ class LocalReceiptStore:
         ):
             raise ValueError("local terminal acknowledgement does not match its issue")
         retained = self._values.get(operation_id)
-        if retained is None:
-            return False
-        if retained != RetainedLocalReceipt.freeze(receipt):
+        if retained is not None and not retained.same_issue(RetainedLocalReceipt.freeze(receipt)):
             raise ValueError("local receipt acknowledgement does not match its issue")
-        del self._values[operation_id]
-        self._bytes -= retained.retained_bytes
-        return True
+        return operation_id, retained
 
     def recovery_candidates(self, *, limit: int = 256) -> tuple[UUID, ...]:
         if not 1 <= limit <= 256:

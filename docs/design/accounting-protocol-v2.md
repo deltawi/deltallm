@@ -504,3 +504,32 @@ and cancels its task. Close first stops admission, then drains unused suffixes
 within the caller's deadline. A failed drain keeps its proofs and charges. The
 runtime does not select these owners yet: shared proof transport and replay after
 terminal acceptance remain required.
+
+## Inactive shared local terminal path
+
+Local dispatch permits and request handles extend the assigned contracts. They
+carry the complete issue proof. Assigned contracts remain unchanged. A provider
+retry keeps the first proof and adds only an attempt. Charged cache requests use
+the same admission and terminal owners. A missing local proof fails closed; it
+cannot select assigned or legacy accounting.
+
+The local service reuses the existing reservation and terminal queues. Each queue
+keeps immutable bytes, separate capacity, and the 1 MiB batch limit. Large valid
+records are split at collection, not by awaited calls per subject. The terminal
+owner freezes complete input before its first await. It checks the full reply and
+all stored proofs, then checks the caller's deadline before it removes any proof.
+A terminal retry uses the original complete facts after local proof removal. It
+does not create a new admission.
+
+Compact transport omits the duplicate reservation in each admission reply. It
+does not send a process's monotonic clock. A warm reply advances the observation
+time by elapsed monotonic time in its owner process. The receiving process anchors
+the remaining horizons before its HTTP call. Network time thus reduces dispatch
+validity. Terminal proof identity excludes only observation clock anchors. It
+still checks every durable grant field, ordinal, and complete reservation.
+
+Authenticated transport has bounded request and response bytes, one caller
+deadline, one persistent connection pool, no redirects, and no implicit proxy.
+An uncertain request does not trigger a new admission. Worker endpoints, remote
+runtime selection, terminal journal, and final gateway qualification remain
+separate unfinished steps. The flag-off path and reporting default do not change.

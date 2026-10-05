@@ -21,6 +21,7 @@ from src.billing.accounting_protocol import (
     request_fingerprint,
 )
 from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting_local_leases import LocalAccountingHandle, LocalDispatchPermit
 from src.billing.provider_allowance import (
     ProviderRequestBounds,
     conservative_provider_allowance,
@@ -293,7 +294,25 @@ async def admit_accounting_reservation(
         raise BudgetExceededError()
     if permit.decision is not ReserveDecision.DISPATCH:
         raise SpendPersistenceUnavailable()
-    if permit.dispatch_token is None or permit.accounting_partition is None:
+    if (
+        permit.dispatch_token is None
+        or permit.accounting_partition is None
+        or permit.protocol_generation != reservation.protocol_generation
+        or permit.operation_id != reservation.operation_id
+    ):
+        raise SpendPersistenceUnavailable()
+    if isinstance(permit, LocalDispatchPermit):
+        try:
+            return LocalAccountingHandle(
+                reservation=reservation,
+                dispatch_token=permit.dispatch_token,
+                accounting_partition=permit.accounting_partition,
+                attempts=(attempt,),
+                proof=permit.proof,
+            )
+        except (TypeError, ValueError):
+            raise SpendPersistenceUnavailable() from None
+    if accounting.requires_local_proof:
         raise SpendPersistenceUnavailable()
     return AccountingOperationHandle(
         reservation=reservation,

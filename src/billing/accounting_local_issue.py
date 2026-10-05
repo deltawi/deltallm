@@ -10,7 +10,7 @@ import math
 from uuid import UUID
 
 from src.billing.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting_local_leases import LocalPermitReceipt
+from src.billing.accounting_local_leases import LocalDispatchPermit, LocalPermitReceipt
 from src.billing.accounting_local_receipts import LocalReceiptStore, RetainedLocalReceipt
 from src.billing.accounting_protocol import DispatchPermit, ReserveDecision
 from src.billing.durable_microbatch import DurableBatchFull
@@ -90,7 +90,10 @@ def _result(
     size = len(
         json.dumps(
             {
-                "permits": [permit.model_dump(mode="json") for permit in result.permits],
+                # Each full proof is already present once in the proofs array.
+                "permits": [
+                    permit.model_dump(mode="json", exclude={"proof"}) for permit in result.permits
+                ],
                 "proofs": [receipt.model_dump(mode="json") for receipt in receipts],
             },
             allow_nan=False,
@@ -130,12 +133,13 @@ def _freeze(
 
 def _permit(receipt: LocalPermitReceipt) -> DispatchPermit:
     item = receipt.reservation
-    return DispatchPermit(
+    return LocalDispatchPermit(
         protocol_generation=item.protocol_generation,
         operation_id=item.operation_id,
         decision=ReserveDecision.DISPATCH,
         dispatch_token=item.owner_token,
         accounting_partition=receipt.grant.accounting_partition,
+        proof=receipt,
     )
 
 

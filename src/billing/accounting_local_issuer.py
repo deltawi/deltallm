@@ -66,6 +66,14 @@ class LocalPermitIssuer:
     def admission(self) -> LocalAdmissionOwner:
         return self._gate
 
+    @property
+    def generation(self) -> int:
+        return self._cursors.generation
+
+    @property
+    def receipt_store(self) -> LocalReceiptStore:
+        return self._receipts
+
     def owns_cursors(self, cursors: LocalCursorStore) -> bool:
         return self._cursors is cursors
 
