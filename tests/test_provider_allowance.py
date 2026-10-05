@@ -154,6 +154,7 @@ def test_new_accounting_owners_have_small_typed_boundaries():
         "billing/accounting_local_leases.py",
         "billing/accounting_local_receipts.py",
         "billing/accounting_local_cursors.py",
+        "billing/accounting_local_issue.py",
         "billing/accounting_snapshots.py",
         "billing/accounting_service.py",
         "billing/durable_microbatch.py",

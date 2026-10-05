@@ -451,7 +451,7 @@ before runtime selection. The issued store and this proof contract remain inacti
 
 ## Inactive return-only cursor retention
 
-Active and retiring cursors share one bounded entry and byte budget. Retiring a
+Active, staged, and retiring cursors share one bounded entry and byte budget. Retiring a
 cursor removes its dispatch capacity but keeps its immutable first-unused ordinal
 and its byte charge. Expiry is not a refund. Only an exact native suffix return
 acknowledgement removes a retiring proof, once. An exhausted cursor has no unused
@@ -464,3 +464,25 @@ multiplication uses an 80-digit context. Funding and recovery monetary scalar
 columns cross the query-client boundary as text, not a float. Local and durable
 pre-issued grants share this exact allocation projection. These changes add no
 statement, retry layer, pool, or reporting default.
+
+## Inactive staging and atomic local issue
+
+New funding enters staging while cold funding is incomplete. Staging adds no
+dispatch capacity and no return candidate. The admission owner must hold it until
+commit or abort. An abort moves at most 256 grants to return-only state. It keeps
+every byte charge and marks ordinal zero as the first unused ordinal. Warm cursors
+keep their issued prefixes and unused capacity.
+
+The local issue owner prepares complete immutable proofs, dispatch results, and
+cursor changes before mutation. Each grant must use a contiguous ordinal prefix.
+A staged grant cannot skip an active grant's unused suffix. Existing operation
+identities cannot receive another dispatch. A batch has at most 256 receipts and
+a 1 MiB serialized proof limit, including JSON list delimiters and commas.
+
+Receipt entry and byte capacity, exact grant and subject identity, and both
+deadlines are checked before commit. Deadline checks use the database clock anchor
+and are repeated after preparation. The commit changes cursor prefixes and retains
+issued proofs without an await or external callback. The future admission owner
+must also release its gate without an await after this commit. These owners remain
+inactive: funding coordination, proof transport, replay after terminal acceptance,
+and supervised returns are required before runtime selection.

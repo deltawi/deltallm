@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -92,6 +93,24 @@ class LocalReceiptStore:
     def get(self, operation_id: UUID) -> LocalPermitReceipt | None:
         retained = self._values.get(operation_id)
         return None if retained is None else retained.restore()
+
+    def prepare_issue(self, values: Sequence[RetainedLocalReceipt]) -> bool:
+        if len(values) > 256:
+            raise ValueError("local issue must contain at most 256 entries")
+        operation_ids = tuple(value.restore().reservation.operation_id for value in values)
+        if len(set(operation_ids)) != len(operation_ids):
+            raise ValueError("one local issue cannot repeat an operation")
+        if any(operation_id in self._values for operation_id in operation_ids):
+            raise ValueError("local operation is already issued")
+        return self.capacity_for(
+            entries=len(values), retained_bytes=sum(value.retained_bytes for value in values)
+        )
+
+    def _commit_issue(self, values: Sequence[tuple[UUID, RetainedLocalReceipt]]) -> None:
+        # No validation or model conversion may occur after the cursor commit.
+        for operation_id, retained in values:
+            self._values[operation_id] = retained
+            self._bytes += retained.retained_bytes
 
     def matches(self, item: AccountingReservation) -> bool:
         retained = self._values.get(item.operation_id)

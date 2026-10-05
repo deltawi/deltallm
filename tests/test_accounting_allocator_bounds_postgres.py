@@ -4,16 +4,18 @@ import asyncio
 from decimal import Decimal
 import json
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.accounting_protocol import ReserveDecision
+from src.billing.accounting_protocol import PreissuedPermitAllocation, ReserveDecision
 from src.billing.preissued_permits import PreissuedPermitBank
 from src.db.accounting_permits import AccountingPermitRepository
+from src.db.accounting_local_leases import AccountingLocalLeaseRepository
 from src.db.accounting_protocol import AccountingProtocolUnavailable
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
+from tests.performance.accounting_allocator_plans import safe_plan
 from tests.test_accounting_protocol_postgres import (
     _create_window,
     _finalization,
@@ -50,10 +52,33 @@ def assert_bounded_window_plan(value, *, maximum_rows):
         if node.get("Relation Name") == "deltallm_accounting_budget_windows"
     ]
     assert window_nodes
-    assert all(node["Node Type"] not in {"Seq Scan", "Bitmap Heap Scan"} for node in window_nodes)
+    assert all(
+        node["Node Type"] not in {"Seq Scan", "Bitmap Heap Scan"} for node in window_nodes
+    ), safe_plan(value)
     assert all(node["Actual Rows"] <= maximum_rows for node in window_nodes), window_nodes
     assert all(node.get("Rows Removed by Filter", 0) <= maximum_rows for node in window_nodes)
     return window_nodes
+
+
+def assert_bounded_allocator_plan(entry):
+    observed = set()
+    for node in nodes(entry.node):
+        if not node["Actual Loops"]:
+            continue
+        relation = node.get("Relation Name")
+        if relation in {
+            "deltallm_accounting_budget_windows",
+            "deltallm_accounting_grants",
+            "deltallm_billing_operations",
+        }:
+            observed.add(relation)
+            assert node["Node Type"] != "Seq Scan", entry.safe_report()
+            assert node["Actual Rows"] <= 45, entry.safe_report()
+            assert node.get("Rows Removed by Filter", 0) <= 45, entry.safe_report()
+        if node["Node Type"] == "Bitmap Index Scan":
+            # A bounded bitmap is valid for a key set, but must not build history.
+            assert node["Actual Rows"] <= 45, entry.safe_report()
+    return observed
 
 
 async def seed_history(db, generation, item, *, overlap=False):
@@ -129,6 +154,10 @@ async def test_renewal_lookup_uses_scope_index_and_skips_history(accounting_db):
 def admission(db, mode):
     if mode == "assigned":
         return _repository(db, target_operations=4)
+    if mode == "local":
+        return AccountingLocalLeaseRepository(
+            db, owner_id="bounded-local-allocator", statement_budget_seconds=2
+        )
     return PreissuedPermitBank(
         AccountingPermitRepository(db, owner_id="bounded-allocator", statement_budget_seconds=2),
         target_operations=4,
@@ -270,28 +299,41 @@ async def seed_closed_accounting_history(db, generation):
     await db.execute_raw("ANALYZE deltallm_billing_operations")
 
 
-@pytest.mark.parametrize("mode", ["assigned", "permits"])
+@pytest.mark.parametrize("mode", ["assigned", "permits", "local"])
 @pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("planner", ["auto", "generic", "custom", "alternate_join"])
 async def test_actual_nested_allocator_plans_do_not_scan_retained_history(
-    accounting_db, mode, explicit
+    accounting_db, mode, explicit, planner
 ):
     clients, generation = accounting_db
     db = clients[0]
-    window_id = str(uuid4())
+    # Sort the target after retained IDs. A merge scan cannot pass by accident.
+    window_id = str(UUID("ffffffff-ffff-4fff-8fff-" + uuid4().hex[-12:]))
     await _create_window(db, generation, window_id)
     item = _reservation(generation, window_id, explicit_window=explicit)
     await seed_history(db, generation, item)
     await seed_closed_accounting_history(db, generation)
-    async with capture_accounting_plans(os.environ["DATABASE_URL"]) as captured:
+    async with capture_accounting_plans(os.environ["DATABASE_URL"], planner=planner) as captured:
         owner = admission(captured, mode)
         try:
             # Include warm calls past the driver's prepared-plan threshold.
             for _ in range(6):
                 next_item = _reservation(generation, window_id, explicit_window=explicit)
-                permits = await owner.reserve_batch(
-                    [next_item], expires_at=asyncio.get_running_loop().time() + 6
-                )
-                assert permits[0].decision is ReserveDecision.DISPATCH
+                if mode == "local":
+                    grants = await owner.allocate_batch(
+                        [
+                            PreissuedPermitAllocation(
+                                reservation=next_item, fence_token=uuid4(), target_operations=1
+                            )
+                        ],
+                        expires_at=asyncio.get_running_loop().time() + 6,
+                    )
+                    assert grants[0] is not None and grants[0].operation_limit == 1
+                else:
+                    permits = await owner.reserve_batch(
+                        [next_item], expires_at=asyncio.get_running_loop().time() + 6
+                    )
+                    assert permits[0].decision is ReserveDecision.DISPATCH
         finally:
             if isinstance(owner, PreissuedPermitBank):
                 await owner.close()
@@ -309,34 +351,63 @@ async def test_actual_nested_allocator_plans_do_not_scan_retained_history(
     assert all(any(marker in query for query in queries) for marker in required), queries
     observed_tables = set()
     for entry in captured.plans:
-        for node in nodes(entry.node):
-            relation = node.get("Relation Name")
-            if (
-                relation
-                in {
-                    "deltallm_accounting_budget_windows",
-                    "deltallm_accounting_grants",
-                    "deltallm_billing_operations",
-                }
-                and node["Actual Loops"]
-            ):
-                observed_tables.add(relation)
-                assert node["Node Type"] != "Seq Scan", (
-                    relation,
-                    entry.query,
-                    entry.safe_report(),
-                )
-                assert node["Actual Rows"] <= 45, node
-                assert node.get("Rows Removed by Filter", 0) <= 45, node
+        observed_tables.update(assert_bounded_allocator_plan(entry))
     assert len(observed_tables) == 3
-    assert await _window(db, window_id) == (Decimal(0), Decimal(8), Decimal(0))
+    reserved = Decimal(6) if mode == "local" else Decimal(8)
+    assert await _window(db, window_id) == (Decimal(0), reserved, Decimal(0))
     print(
-        json.dumps(
+        "\nACCOUNTING_ALLOCATION_PLANS="
+        + json.dumps(
             {
                 "mode": mode,
                 "explicit": explicit,
+                "planner": planner,
                 "plans": [entry.safe_report() for entry in captured.plans],
             },
             sort_keys=True,
         )
     )
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("funding", ["assigned", "permits", "local"])
+async def test_bounded_window_membership_cannot_become_a_retained_history_join(
+    accounting_db, explicit, funding
+):
+    clients, generation = accounting_db
+    db = clients[0]
+    window_id = str(UUID("ffffffff-ffff-4fff-8fff-" + uuid4().hex[-12:]))
+    await _create_window(db, generation, window_id)
+    item = _reservation(generation, window_id, explicit_window=explicit)
+    await seed_history(db, generation, item)
+    async with capture_accounting_plans(
+        os.environ["DATABASE_URL"], planner="alternate_join"
+    ) as captured:
+        # Match the actual lock lookup; retain its SQL shape after migration.
+        signatures = {
+            "assigned": "deltallm_accounting_ensure_grants_batch(bigint,text,integer,integer,jsonb)",
+            "permits": "deltallm_accounting_allocate_permit_grants_batch(bigint,text,integer,jsonb)",
+            "local": "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
+        }
+        rows = await captured.query_raw(
+            "SELECT pg_get_functiondef($1::regprocedure) AS body", signatures[funding]
+        )
+        body = rows[0]["body"]
+        start = body.index("PERFORM 1 FROM deltallm_accounting_budget_windows w")
+        end = body.index(";", start)
+        query = body[start:end].replace("PERFORM 1", "SELECT w.window_id", 1)
+        query = query.replace("p_generation", "$1")
+        if funding == "assigned":
+            query = query.replace(",item)", ",$2::jsonb)")
+            payload = item.model_dump_json()
+        else:
+            query = query.replace("p_items", "$2::jsonb")
+            payload = json.dumps([{"reservation": item.model_dump(mode="json")}])
+        result = await captured.query_raw(query, generation, payload)
+        assert [row["window_id"] for row in result] == [window_id]
+    assert captured.errors == []
+    observed = [entry for entry in captured.plans if entry.query == query]
+    assert observed
+    for entry in observed:
+        print("\nWINDOW_KEYSET_PLAN=" + json.dumps(entry.safe_report(), sort_keys=True))
+        assert "deltallm_accounting_budget_windows" in assert_bounded_allocator_plan(entry)

@@ -87,9 +87,20 @@ Accepted performance code: `cc3113bd`
 - [ ] Slice 10: port the terminal journal and compact acknowledgement path.
 - [ ] Slice 11: split accounting transport and projection roles.
 - [ ] Slice 12: port bounded worker runtimes, economic settlement, and recovery limits.
+- [ ] Slice 12: bound expiry transitions as well as reconciliation. The source
+  settlement SQL and the inactive lease foundation update every expired active
+  grant before the limited reconciliation selection. Replace this in a new
+  migration with a bounded indexed selection. Prove the limit with more expired
+  grants than one worker slice, retained-history plans, and concurrent foreground
+  admission. Do not edit an applied migration.
 - [ ] Slice 13: port terminal/read-model lanes and rollup sharding.
 - [ ] Slice 14: port settled-receipt and narrow streamed projection fast paths.
 - [ ] Run fresh and upgrade migration verification for the complete integrated chain.
+- [ ] Port the reproducible kind harness and bounded 500 RPS runner from the
+  source worktree. The current main runner is capped at 200 RPS. Verify generator
+  accounting, output limits, mock controls, and complete metric coverage before
+  qualification. Keep throughput, economic correctness, and latency gates separate
+  in the report.
 - [ ] Run the 50, 100, 200, and short 500 RPS ladder on one clean kind image.
 - [ ] Run the ten-minute 500 RPS qualification only after the short ladder passes.
 - [ ] Complete the requested final 50, 100, 200, and 500 RPS tests on reproducible
@@ -568,6 +579,123 @@ verification, and `git diff --check` passed. The full logs are
 `/private/tmp/issue320-slice9j-postgres-full.log`,
 `/private/tmp/issue320-slice9j-redis-full.log`, and
 `/private/tmp/issue320-slice9j-lanes-final.log`.
+
+## Slice 9k: bounded staging and atomic local issue
+
+The cursor owner now retains active, staged, and return-only proofs under one
+entry and byte budget. Staging is not dispatchable or visible to the return
+worker. Abort moves a bounded slice to return-only state at ordinal zero, without
+changing warm cursors or claiming a refund. Raw grant validation rejects invalid
+clocks before JSON conversion.
+
+One small local issue owner freezes all reservation facts, builds dispatch
+results, and validates both stores before mutation. Its batch is bounded at 256
+receipts and 1 MiB of complete serialized issue proofs. It rejects wrong fences,
+subjects, ordinal gaps, duplicate operations, and skipped warm suffixes. It checks
+receipt capacity and repeats deadline checks after preparation. The cursor and
+receipt commits contain no await. Each complete issued proof remains retained
+until an exact terminal acknowledgement.
+
+The 15 staging regressions failed before staging existed. The initial atomic
+owner check failed at collection because that owner did not exist. Logs are
+`/private/tmp/issue320-slice9k-staging-before.log` and
+`/private/tmp/issue320-slice9k-issue-before.log`. Initial focused checks passed
+106 cases. All eight native issue and cursor cases passed in
+`/private/tmp/issue320-slice9k-native-partial-grants.log`.
+
+The new native fixture initially assumed three four-unit grants under a ten-unit
+budget. It now explicitly proves grants of four, four, and two, with all ten
+units reserved. The two cold grants follow ordered fences, not caller order.
+The fixture selects the larger grant first to exercise a full prefix and a partial
+tail. The original failure logs remain in
+`/private/tmp/issue320-slice9k-native-issue.log` and
+`/private/tmp/issue320-slice9k-native-issue-confirmed.log`. The new negative-clock
+fixture also constructed a receipt before shifting its operation expiry; it was
+corrected to shift the complete proof before validation. No existing assertion,
+database budget, deadline, migration, or runtime default was changed.
+
+- [x] Share entry and byte limits across active, staged, and return-only funding.
+- [x] Keep staged funding hidden from dispatch and return scans until commit or abort.
+- [x] Prepare immutable proofs and results, then commit both stores without an await.
+- [x] Prove native abort, partial funding, exact settlement, and lost acknowledgement.
+- [x] Reproduce retained-history scans in the complete allocator and window locks.
+- [x] Add guarded, append-only primary-key lookup corrections. Preserve all
+  economic calculations, replay decisions, and global lock order.
+- [x] Verify all 123 migrations on fresh, released-version, and shared-feature paths.
+- [x] Complete final clock, graph, full-lane, collection, style, and diff checks.
+- [ ] Integrate bounded funding coordination with a synchronous gate release.
+- [ ] Complete terminal proof transport, replay, and supervised return lifecycle.
+
+Bootstrap does not select these owners. Slice 9 and final kind qualification
+remain incomplete. These checks are not HTTP RPS results.
+
+### Slice 9k allocator failure and correction
+
+The first full component, application, and Redis gates passed 5,119, 1,645, and
+105 cases. The strict PostgreSQL gate passed 603 cases and failed one unchanged
+retained-history plan case. One node read 50,002 window rows instead of at most
+45. The failure is retained in
+`/private/tmp/issue320-slice9k-postgres-sdk-full.log`. The earlier PostgreSQL run
+had four SDK skips and is not a complete gate.
+
+The new probe puts the requested window after the seeded history. It covers
+automatic, generic, custom, and alternate join plans. The complete allocator
+still has the original bounds for windows, grants, and operations. Separate
+checks use each funding owner's actual ordered window-lock SQL. No production
+planner setting or test row bound was relaxed.
+
+The probes exposed four flattenable lookup shapes: window membership, explicit
+window references, missing-operation anti-joins, and funded-grant promotion.
+New migrations 120 through 123 replace only those exact fragments. They reject an
+unexpected function body before replacement. Money calculations, validation,
+counters, and lock order do not change. Applied migrations 116 through 119
+remain unchanged.
+
+The original strengthened whole-function failure is retained in
+`/private/tmp/issue320-slice9k-keyset-before.log`. All six window-entrypoint cases
+failed before the reference correction in
+`/private/tmp/issue320-slice9k-all-window-entrypoints-before.log`. The complete
+alternate-plan cases then exposed the operation scan in
+`/private/tmp/issue320-slice9k-operation-probe-before.log` and grant promotion in
+`/private/tmp/issue320-slice9k-all-probes-native-final.log`. These are diagnostic
+tests, not gateway load results. Final verification below includes these cases.
+
+The standalone lock probe first reused a no-bitmap assertion from the ordered
+overlap helper. Six cases then failed on bounded indexed bitmap probes, not
+history scans. Their indexed row counts were at most one, with at most five scope
+loops. The lock probe now shares the complete allocator's original no-sequential-
+scan and 45-row bounds. It also bounds bitmap index rows so a large bitmap cannot
+hide behind a small heap result. The original overlap helper's no-bitmap assertion
+is unchanged. The diagnostic failures remain in
+`/private/tmp/issue320-slice9k-retained-plans-stdout.log`. The failed tee-capture
+attempt in `/private/tmp/issue320-slice9k-retained-plans-final.log` could not start
+the Prisma subprocess. Final plan evidence uses separate output streams.
+
+Final focused verification passed 67 funding, plan, and lease cases in
+`/private/tmp/issue320-slice9k-retained-plans-verified.log`. It records all 24
+complete allocator cases: three owners, two window modes, and four planner modes.
+Each executed window, grant, and operation node read at most one row, against
+50,000 retained windows and 10,000 closed grants and operations. All six actual
+window-lock queries also pass. Five component cases prove that sequential scans,
+large results, filtered history, and large bitmap indexes still fail the bounds.
+The final focused component checks passed 93 cases in
+`/private/tmp/issue320-slice9k-final-focused-hermetic.log`.
+
+All 123 migrations passed fresh install, upgrade from `v0.1.42`, and shared-feature
+upgrade in `/private/tmp/issue320-slice9k-migrations-final.log`.
+The complete suite passed all 7,509 tests with no service skips: 4,886 hermetic,
+1,645 application, 630 PostgreSQL, 105 Redis, and 243 Helm tests. Every collected
+test belongs to one lane. All 12 changed Python files passed Ruff and formatting.
+The 402-field generated settings reference and `git diff --check` passed.
+Full logs are `/private/tmp/issue320-slice9k-verified-components.log`,
+`/private/tmp/issue320-slice9k-verified-app.log`,
+`/private/tmp/issue320-slice9k-verified-postgres.log`,
+`/private/tmp/issue320-slice9k-verified-redis.log`, and
+`/private/tmp/issue320-slice9k-verified-lanes.log`.
+
+This inactive staging and issue step is complete. Funding coordination, terminal
+proof transport, replay, supervised returns, later integration slices, and the
+final 50/100/200/500 RPS kind qualification remain required.
 
 ## Slice 9a: inactive permit foundation
 

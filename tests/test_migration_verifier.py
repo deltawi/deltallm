@@ -43,6 +43,28 @@ def test_accounting_verifier_requires_local_lease_schema_and_functions(monkeypat
         assert contract in sql
 
 
+def test_migration_verifier_checks_each_bounded_window_funding_lookup(monkeypatch) -> None:
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_window_keysets(
+        "unused", "postgresql://localhost/test"
+    )
+    sql = execute.call_args.kwargs["sql"]
+    assert "w.window_id = ANY(ARRAY(" in sql
+    assert "w.window_id IN (" in sql
+    assert "lookup.window_id=ref->>'window_id' OFFSET 0" in sql
+    assert "AS is_replay OFFSET 0" in sql
+    assert "AND NOT replay.is_replay" in sql
+    assert "SELECT candidate.grant_id FROM candidate" in sql
+    for name in (
+        "deltallm_accounting_ensure_grants_batch",
+        "deltallm_accounting_allocate_permit_grants_batch",
+        "deltallm_accounting_allocate_local_permit_grants_batch",
+        "deltallm_accounting_permit_window_ids",
+    ):
+        assert name in sql
+
+
 @pytest.mark.parametrize(
     "database_name",
     (

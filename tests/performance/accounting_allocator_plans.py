@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import hashlib
 import json
-from typing import cast
+from typing import Literal, cast
 
 import asyncpg
 
@@ -80,11 +80,26 @@ class AccountingPlanCapture:
 
 
 @asynccontextmanager
-async def capture_accounting_plans(database_url: str) -> AsyncIterator[AccountingPlanCapture]:
+async def capture_accounting_plans(
+    database_url: str,
+    *,
+    planner: Literal["auto", "generic", "custom", "alternate_join"] = "auto",
+) -> AsyncIterator[AccountingPlanCapture]:
+    # These settings affect only this diagnostic connection, never the runtime.
+    planner_sql = {
+        "auto": "SET plan_cache_mode=auto",
+        "generic": "SET plan_cache_mode=force_generic_plan",
+        "custom": "SET plan_cache_mode=force_custom_plan",
+        "alternate_join": "SET plan_cache_mode=force_generic_plan;SET enable_nestloop=off",
+    }[planner]
     connection = await asyncpg.connect(database_url, timeout=5, command_timeout=5)
     capture = AccountingPlanCapture(connection)
     try:
         await connection.execute("LOAD 'auto_explain'")
+        await connection.execute(planner_sql)
+        if planner == "alternate_join":
+            # Penalized join costs must not cause JIT to dominate this probe.
+            await connection.execute("SET jit=off")
         connection.add_log_listener(capture.capture)
         await connection.execute(
             "SET client_min_messages=log;"
