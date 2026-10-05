@@ -59,6 +59,12 @@ async def accounting_db():
         yield clients, generation
     finally:
         await db.execute_raw(
+            "DELETE FROM deltallm_accounting_terminal_journal WHERE generation=$1", generation
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_accounting_terminal_capacity WHERE generation=$1", generation
+        )
+        await db.execute_raw(
             "DELETE FROM deltallm_accounting_events WHERE generation=$1", generation
         )
         await db.execute_raw(

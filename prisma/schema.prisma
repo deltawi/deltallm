@@ -694,6 +694,7 @@ model DeltaLLM_AccountingPartition {
 
   protocol DeltaLLM_AccountingProtocol @relation(fields: [protocol_name, generation], references: [protocol_name, generation], onDelete: Restrict, onUpdate: Restrict)
   grants   DeltaLLM_AccountingGrant[]   @relation("AccountingGrantCapacityPartition")
+  terminal_capacity DeltaLLM_AccountingTerminalCapacity?
 
   @@id([protocol_name, generation, partition_id])
   @@map("deltallm_accounting_partitions")
@@ -762,9 +763,73 @@ model DeltaLLM_AccountingGrant {
   operations DeltaLLM_BillingOperation[]
   reservations DeltaLLM_AccountingReservation[]
 
+  terminal_journal DeltaLLM_AccountingTerminalJournal[]
+
   @@index([protocol_name, generation, grantee_id, subject_key, state, expires_at], map: "deltallm_accounting_grant_lookup_idx")
   @@index([protocol_name, generation, state, expires_at], map: "deltallm_accounting_grant_reconcile_idx")
   @@map("deltallm_accounting_grants")
+}
+
+model DeltaLLM_AccountingTerminalCapacity {
+  protocol_name String @default("primary")
+  generation BigInt
+  accounting_partition Int
+  max_entries Int
+  max_bytes BigInt @default(67108864)
+  pending_entries Int @default(0)
+  pending_bytes BigInt @default(0)
+
+  partition DeltaLLM_AccountingPartition @relation(fields: [protocol_name, generation, accounting_partition], references: [protocol_name, generation, partition_id], onDelete: Restrict, onUpdate: Restrict)
+  journal DeltaLLM_AccountingTerminalJournal[]
+
+  @@id([protocol_name, generation, accounting_partition])
+  @@map("deltallm_accounting_terminal_capacity")
+}
+
+model DeltaLLM_AccountingTerminalJournal {
+  sequence BigInt @id @default(autoincrement())
+  protocol_name String @default("primary")
+  generation BigInt
+  operation_id String @unique(map: "deltallm_accounting_terminal_journal_operation_id_key")
+  grant_id String
+  grantee_id String
+  fence_token String @db.Uuid
+  permit_ordinal Int
+  accounting_partition Int
+  allowance_exact Decimal @db.Decimal(38, 18)
+  outcome String
+  reservation_sha256 Bytes
+  finalization_sha256 Bytes
+  payload_bytes Int
+  status String @default("pending")
+  attempts Int @default(0)
+  lease_owner String?
+  lease_token String? @db.Uuid
+  lease_expires_at DateTime? @db.Timestamptz
+  materialized_event_sequence BigInt?
+  accepted_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @default(now()) @db.Timestamptz
+  completed_at DateTime? @db.Timestamptz
+  last_error_code String?
+
+  capacity DeltaLLM_AccountingTerminalCapacity @relation(fields: [protocol_name, generation, accounting_partition], references: [protocol_name, generation, accounting_partition], onDelete: Restrict, onUpdate: Restrict)
+  grant DeltaLLM_AccountingGrant @relation(fields: [grant_id], references: [grant_id], onDelete: Restrict, onUpdate: Restrict)
+  payload DeltaLLM_AccountingTerminalPayload?
+
+  // Partial work indexes are declared in SQL. Prisma cannot express predicates.
+  @@unique([grant_id, permit_ordinal], map: "deltallm_accounting_terminal_journa_grant_id_permit_ordinal_key")
+  @@map("deltallm_accounting_terminal_journal")
+}
+
+model DeltaLLM_AccountingTerminalPayload {
+  journal_sequence BigInt @id
+  reservation_payload String
+  finalization_payload String
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  journal DeltaLLM_AccountingTerminalJournal @relation(fields: [journal_sequence], references: [sequence], onDelete: Cascade, onUpdate: Restrict)
+
+  @@map("deltallm_accounting_terminal_payloads")
 }
 
 model DeltaLLM_AccountingGrantWindow {

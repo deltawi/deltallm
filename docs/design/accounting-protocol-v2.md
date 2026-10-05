@@ -537,3 +537,64 @@ Metadata addresses remain blocked even with a broad private-network allowlist.
 An uncertain request does not trigger a new admission. Worker endpoints, remote
 runtime selection, terminal journal, and final gateway qualification remain
 separate unfinished steps. The flag-off path and reporting default do not change.
+
+## Inactive terminal journal acceptance
+
+Journal acceptance and canonical accounting have different receipts. A journal
+receipt has a `journal_sequence`. It does not claim an `event_sequence` before
+the worker creates an accounting event. Bootstrap does not select this repository.
+The existing assigned and local terminal owners keep their behavior.
+
+The repository freezes the full reservation and terminal before its first await.
+It sends one compact identity batch and two immutable document arrays. The compact
+identity includes exact allowance, subject, generation, grant, owner, fence, and
+ordinal. SHA-256 hashes cover both complete documents, including terminal time.
+The client permits at most 256 records and 1 MiB for the complete encoded call.
+SQL permits at most 2 MiB, including array encoding. Missing fields, repeated
+operations or ordinals, a changed hash, and an unfunded subject fail atomically.
+
+One primary database call accepts a normal batch. An uncertain acknowledgement
+uses exact-key recovery with the original hashes and caller deadline. Recovery
+returns the first journal identity, not another provider admission. Each partition
+counter changes once per batch. Journal and payload inserts are bulk statements
+in the same transaction. No application loop awaits a write per request or subject.
+
+Pending documents have two durable limits. Each partition has at most its funded
+outstanding-operation limit in pending entries, and at most 64 MiB of pending
+document bytes. The byte count covers both UTF-8 documents; it is not a database
+disk or RSS measurement. Separate entry limits bound compact rows and index
+metadata. A full queue rejects new acceptance. It retains existing documents and
+permits exact replay. Worker failure must retain both capacity charges.
+
+An accepted ordinal cannot be returned as unused. An unresolved journal entry
+prevents grant closure. Its money remains reserved. Expiry moves at most the
+requested 256 grants to draining in one pass; it does not update all expired
+history first. Canonical processing, fenced worker claims, capacity release after
+processing, and failed-record recovery are still required before activation.
+
+### Storage and rollout policy
+
+The compact journal has three unique key indexes and four partial work indexes.
+A new pending receipt writes five of these indexes. The lease, expiry, and claim
+indexes contain only processing work. The unsettled-grant index supports the
+close guard. Pending documents have only their sequence primary key. Large audit
+and spend documents do not enter the retained replay indexes.
+
+Completed documents must be removed only in the transaction that commits their
+canonical result and releases the pending capacity charge. Compact receipts are
+not deleted in this slice. An archive must retain the operation, ordinal, hashes,
+and canonical result before a later retention job removes a hot receipt. That job
+and its replay proof are an activation gate, not an implemented feature. Financial
+retention stays governed by the deployment's accounting retention policy.
+
+The first rollout uses unpartitioned tables. Exact-key acceptance does not depend
+on retained row count. A partition change needs a separate design that keeps
+global operation and grant-ordinal uniqueness. Operators must monitor relation and
+index size, dead tuples, vacuum age, and analyze age. Autovacuum and auto-analyze
+remain enabled. Pending-document deletion and receipt status changes need a
+post-load vacuum/analyze check in the final qualification evidence.
+
+The migrations create new inactive tables and indexes, with 2-second lock and
+30-second statement limits. They do not rewrite existing financial history.
+Deployment migration ownership is unchanged. Rollback keeps the old runtime
+selector and journal data intact; it must not drop accepted financial work.

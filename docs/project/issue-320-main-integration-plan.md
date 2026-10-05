@@ -901,11 +901,11 @@ schema, settings, and reporting paths from the checkpoint remain unchanged.
 
 ## Next slice 10: inactive durable terminal journal
 
-- [ ] Add the journal and pending-payload tables in a new migration. Add matching
+- [x] Add the journal and pending-payload tables in a new migration. Add matching
   Prisma models. Keep compact accepted identities separate from large documents.
-- [ ] Use a typed journal acknowledgement. Do not present its journal sequence as
+- [x] Use a typed journal acknowledgement. Do not present its journal sequence as
   a canonical accounting event that later processing has not yet created.
-- [ ] Append one bounded terminal batch with complete immutable payload hashes,
+- [x] Append one bounded terminal batch with complete immutable payload hashes,
   exact money, generation, owner, grant, fence, and ordinal checks. Use indexed key
   probes. Reject missing fields and conflicting operations or ordinals atomically.
 - [ ] Keep accepted journal entries charged until canonical processing succeeds.
@@ -925,8 +925,61 @@ schema, settings, and reporting paths from the checkpoint remain unchanged.
 Source review covers the original journal migration and its payload-isolation
 update. Their large repository and bootstrap methods, absent Prisma journal
 models, nullable-field checks, and history-wide joins must not enter the clean
-replay without the typed, bounded boundaries stated here. No slice 10 runtime or
-schema is implemented yet.
+replay without the typed, bounded boundaries stated here. Slice 10a adds the
+inactive acceptance foundation below. The worker and runtime selection remain
+unfinished.
+
+### Slice 10a: bounded journal acceptance
+
+- [x] Add immutable compact identities, full document hashes, and a distinct
+  journal receipt. Bound the complete encoded batch, not just its metadata.
+- [x] Add primary-database bulk acceptance and exact lost-acknowledgement recovery.
+  Update each partition counter once per batch and insert documents in bulk.
+- [x] Add durable entry and payload-byte limits. Queue-full rejects new work and
+  keeps prior documents. Replay can succeed while capacity is full.
+- [x] Keep pending work funded through expiry. Block return of an accepted ordinal
+  and grant closure with unresolved journal work. Bound the expiry transition.
+- [x] Check native acceptance, lost replies, changed facts, concurrent append,
+  missing fields, and eight retained-history plans. Worker reconciliation remains
+  a later gate; these checks do not prove canonical processing.
+- [x] Complete overload, return-race, expiry-limit, full lane, and migration gates.
+- [ ] Add fenced worker claims, canonical processing, and complete replay after
+  closure. Then connect journal acknowledgements to the local terminal owner.
+
+The initial schema check found PostgreSQL's shortened automatic constraint name.
+The Prisma map now matches the actual name. One new snapshot test used a sync
+fixture that needs an event loop, then assumed an allowance of 1 instead of the
+fixture's 1.25. Both fixtures are corrected without changing production limits.
+The initial native acceptance and plan runs passed 16 and eight cases.
+
+Bulk commit review then found an ambiguous payload result column. A direct owned
+database probe confirmed the SQL error. A new migration qualifies that result;
+applied migrations stay unchanged. All 55 focused journal and small-owner checks
+passed in `/private/tmp/issue320-slice10a-result-focused.log`. The failed bulk run
+remains in `/private/tmp/issue320-slice10a-bulk-focused.log`. Extra overload checks
+passed 27 cases before the final expiry-limit test was added.
+
+This is inactive foundation work. Slice 10, worker roles, economic settlement,
+reporting lanes, current-main adapters, and the four final kind rates are not
+complete. Do not treat these SQL checks as RPS qualification.
+
+Full 10a verification passed all 7,746 tests: 5,086 hermetic, 243 Helm,
+1,646 application, 666 PostgreSQL, and 105 Redis cases. No required-service case
+was skipped. Collection confirms one lane per test. All 126 migrations passed
+fresh install, upgrade from `v0.1.42`, and shared-feature upgrade. Prisma generation,
+changed-file Ruff and format checks, and `git diff --check` passed. The generated
+configuration reference stays current at 402 fields. The verifier removed only
+its owned disposable databases.
+
+Logs are `/private/tmp/issue320-slice10a-full-components.log`,
+`/private/tmp/issue320-slice10a-full-app.log`,
+`/private/tmp/issue320-slice10a-full-postgres.log`,
+`/private/tmp/issue320-slice10a-full-redis.log`,
+`/private/tmp/issue320-slice10a-full-migrations.log`, and
+`/private/tmp/issue320-slice10a-final-lanes.log`.
+The expiry-limit case proves that each limit-one pass changes only one of three
+expired grants. Entry and byte overload preserve accepted documents and counters.
+The return race has one winner and cannot release an accepted ordinal.
 
 ## Slice 9a: inactive permit foundation
 
