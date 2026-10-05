@@ -28,7 +28,10 @@ The shared local startup and shutdown checkpoint passed all 7,908 cases across
 the five lanes, including all 719 PostgreSQL cases. The final lifecycle guards
 passed 114 focused cases and all 5,441 component and Helm cases. Collection now
 contains 7,911 cases. Keep the original cold-start failure; confirmation is not
-a production fix. Next: bound settlement scans, then finish runtime selection.
+a production fix. Migration 132 now limits inspected settlement keys before
+eligibility checks. This checkpoint passed all 7,924 tests and all three migration
+paths. Next: durable backlog health, then runtime and transport integration.
+Runtime selection and final RPS tests remain pending.
 
 ## Integration rules
 
@@ -110,12 +113,11 @@ a production fix. Next: bound settlement scans, then finish runtime selection.
 - [ ] Slice 10: port the terminal journal and compact acknowledgement path.
 - [ ] Slice 11: split accounting transport and projection roles.
 - [ ] Slice 12: port bounded worker runtimes, economic settlement, and recovery limits.
-- [ ] Slice 12: bound expiry transitions as well as reconciliation. The source
-  settlement SQL and the inactive lease foundation update every expired active
-  grant before the limited reconciliation selection. Replace this in a new
-  migration with a bounded indexed selection. Prove the limit with more expired
-  grants than one worker slice, retained-history plans, and concurrent foreground
-  admission. Do not edit an applied migration.
+- [ ] Slice 12: complete bounded recovery verification and runtime integration.
+  Migration 126 already limits active-to-draining expiry transitions. Migration
+  132 adds expiry and drain work indexes and limits inspected keys before close
+  eligibility checks. Prove scan limits, retained-history plans, cursor loss,
+  concurrent foreground admission, and upgrades. Do not edit an applied migration.
 - [ ] Slice 13: port terminal/read-model lanes and rollup sharding.
 - [ ] Slice 14: port settled-receipt and narrow streamed projection fast paths.
 - [ ] Run fresh and upgrade migration verification for the complete integrated chain.
@@ -1261,7 +1263,7 @@ whitespace, and the 402-field configuration reference passed. Logs use
 `/private/tmp/issue320-slice10e-full-`, `issue320-slice10e-guards-`, and
 `issue320-slice10e-startup-guards-final.log`.
 
-### Next: bounded settlement scans
+### Slice 12a: bounded settlement scans
 
 The existing journal migration already caps active-to-draining expiry transitions.
 The remaining close selection applies eligibility before its result limit. A new
@@ -1272,12 +1274,43 @@ remained exact. This is a measured recovery-scan gap, not evidence from a new
 gateway RPS run. Preserve `/private/tmp/issue320-slice10e-settlement-scan-probe.log`.
 
 - [x] Measure the actual nested settlement plan with retained blocked history.
-- [ ] Add an append-only migration with indexed expiry and drain work ranges.
-- [ ] Apply the inspected-key limit before eligibility checks. Rotate a disposable
+- [x] Add an append-only migration with indexed expiry and drain work ranges.
+- [x] Apply the inspected-key limit before eligibility checks. Rotate a disposable
   cursor so a blocked prefix cannot hide eligible work behind it.
-- [ ] Retain complete grant, budget-window, partition, and pending-journal guards.
-- [ ] Prove scan limits, fair progress, cursor loss, concurrent recovery, foreground
+- [x] Retain complete grant, budget-window, partition, and pending-journal guards.
+- [x] Prove scan limits, fair progress, cursor loss, concurrent recovery, foreground
   admission, exact provisional owner-loss balances, and migration paths.
+
+Migration 132 has two separate work limits per call. At most `p_limit` expired
+active grants move to draining state, and at most `p_limit` draining keys are
+inspected for closure. The second limit applies before pending-journal and billing
+eligibility checks. A cursor stores only scan position. It advances past blocked
+keys and wraps at the end of the range. Cursor loss restarts inspection; it cannot
+release money, remove financial work, or create capacity. A locked cursor makes
+another recovery owner skip closure. Grant, window, and partition locks and all
+exact-money effects retain their previous owner.
+
+The focused financial run passed 60 cases in
+`/private/tmp/issue320-slice12a-focused-finance.log`. Eight new cases cover limits
+of 1, 4, and 256, blocked-prefix progress, cursor loss, concurrent recovery and
+funding, locked-cursor recovery, and unknown-generation parity. Four actual-plan
+cases passed in `/private/tmp/issue320-slice12a-focused-plans.log`. Each retains
+10,000 blocked grants and runs six calls with a four-key limit in automatic,
+generic, custom, and alternate-join planner modes. Executed grant scans use an
+index and stay within the unchanged row and filter limits. These are native
+database checks, not gateway RPS evidence. No runtime selector changes in this
+slice.
+
+The final source passed all 7,924 cases: 5,199 hermetic, 243 Helm, 1,646
+application, 731 PostgreSQL, and 105 Redis. The PostgreSQL run includes the twelve
+new functional and actual-plan cases. Fresh install, last-release (`v0.1.42`), and
+shared-feature upgrades passed through migration 132. Their verification checks
+the cursor primary key and cascading protocol relation, both valid partial work
+indexes, bounded selection order, and retained financial guards. Full collection
+is exhaustive and non-overlapping. Ruff, formatting, whitespace, generated Prisma,
+and the unchanged 402-field configuration reference passed. Logs use
+`/private/tmp/issue320-slice12a-full-`, `issue320-slice12a-final-`, and
+`issue320-slice12a-migration-paths.log`.
 
 ## Slice 9a: inactive permit foundation
 

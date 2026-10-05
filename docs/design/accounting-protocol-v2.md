@@ -680,6 +680,24 @@ and partition capacity release. The new owner adds one startup probe and no extr
 request-path call. Bootstrap selection, transport roles, bounded expiration and
 recovery, and durable backlog health remain activation requirements.
 
+### Bounded grant recovery
+
+One recovery call has two work limits. It moves at most 256 expired active grants
+to draining state, then inspects at most 256 draining keys for closure. The caller
+can set a smaller limit. Indexed expiry and drain ranges use generation, expiry,
+and grant identity. The inspected-key limit applies before eligibility checks,
+so pending terminal work cannot cause a full retained-history scan.
+
+A disposable cursor records only scan position for the generation. It advances
+past blocked keys and wraps through the range. Cursor loss causes reinspection,
+not financial release. A locked cursor makes another recovery owner skip closure.
+This metadata stores no balance, capacity, terminal document, or replay identity.
+
+Pending journal work and reserved billing operations still prevent closure.
+Budget-window and partition locks, exact balance effects, and provisional charges
+for unknown owner loss are unchanged. Failed terminal work stays funded. This
+database foundation does not yet select a maintenance task in bootstrap.
+
 ### Storage and rollout policy
 
 The compact journal has three unique key indexes and four partial work indexes.

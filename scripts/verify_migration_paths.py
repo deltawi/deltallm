@@ -1100,6 +1100,15 @@ def _verify_accounting_window_keysets(prisma: str, database_url: str) -> None:
     )
 
 
+def _verify_accounting_recovery(prisma: str, database_url: str) -> None:
+    _db_execute(
+        prisma,
+        schema=CURRENT_SCHEMA,
+        database_url=database_url,
+        sql=(REPO_ROOT / "scripts/migration_fixtures/accounting_recovery_verify.sql").read_text(),
+    )
+
+
 def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> None:
     suffix = uuid.uuid4().hex[:12]
     fresh_name = f"deltallm_migration_verify_{suffix}_fresh"
@@ -1182,6 +1191,7 @@ def verify_migration_paths(*, admin_url: str, base_ref: str, prisma: str) -> Non
         _verify_pr5_budgets(prisma, shared_url)
         for database_url in (fresh_url, upgrade_url, shared_url):
             _verify_accounting_window_keysets(prisma, database_url)
+            _verify_accounting_recovery(prisma, database_url)
             _db_execute(
                 prisma,
                 schema=CURRENT_SCHEMA,

@@ -43,6 +43,25 @@ def test_accounting_verifier_requires_local_lease_schema_and_functions(monkeypat
         assert contract in sql
 
 
+def test_migration_verifier_checks_recovery_schema_indexes_and_financial_guards(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_recovery("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "PRIMARY KEY (protocol_name, generation)",
+        "confdeltype='c' AND confupdtype='r'",
+        "deltallm_accounting_grant_expiry_work_idx",
+        "deltallm_accounting_grant_drain_work_idx",
+        "WITH forward_scan AS MATERIALIZED",
+        "FROM unnest(inspected_ids) selected(grant_id)",
+        "last_expires_at=next_expires_at,last_grant_id=next_grant_id",
+        "reserved_exact=w.reserved_exact-d.allocated_exact",
+        "outstanding_count=p.outstanding_count-d.slots",
+    ):
+        assert contract in sql
+
+
 def test_migration_verifier_checks_each_bounded_window_funding_lookup(monkeypatch) -> None:
     execute = Mock()
     monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
@@ -238,7 +257,7 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     base_schema = tmp_path / "base" / "schema.prisma"
     base_schema.parent.mkdir()
     base_schema.touch()
-    state = SimpleNamespace(validated=False, installed_checks=0, final_checks=0)
+    state = SimpleNamespace(validated=False, installed_checks=0, final_checks=0, recovery_checks=0)
     steps: list[str] = []
     created, dropped = Mock(), Mock()
     history = Mock()
@@ -258,6 +277,8 @@ def selector_upgrade_verifier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             state.validated |= (schema.parent / validation).is_file()
 
     def execute(_prisma: str, *, schema: Path, database_url: str, sql: str) -> None:
+        if "accounting recovery cursor contract is missing" in sql:
+            state.recovery_checks += 1
         if "Batch checkpoint installation must commit before validation" in sql:
             assert not state.validated, "intermediate check cannot follow applied validation"
             state.installed_checks += 1
@@ -308,6 +329,7 @@ def test_upgrade_verifier_handles_selector_migration_already_in_base(
     assert h.steps == ["base", *intermediate, "current", "final-check"]
     assert h.state.installed_checks == int(base_state != "validated")
     assert h.state.final_checks == 1
+    assert h.state.recovery_checks == 3
     assert h.created.call_count == h.dropped.call_count == 3
     assert h.history.call_count == 3
     assert h.dropped.call_args_list == list(reversed(h.created.call_args_list))
