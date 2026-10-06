@@ -276,6 +276,14 @@ No proxy settings entered the runtime image. Next, run uninstrumented selected
 by selected 200 and then one full strict series only if preceding stages pass.
 This is not yet a throughput pass and does not prove six-CPU capacity.
 
+The new-image selected 500 check completed 30,000/30,000 requests with
+zero drops/errors, p95 86.86 ms, p99 170.41 ms, exact accounting, and a
+10.16-second safe drain. It failed only the strict in-flight slope gate
+at +0.15214. Preserve the complete failed stage; 200 and full qualification
+did not run. All original VM settings, workloads, and contexts were restored.
+Next, make one unchanged confirmation, not another unproven code edit.
+Keep the upper-tier and full qualification checkboxes open.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

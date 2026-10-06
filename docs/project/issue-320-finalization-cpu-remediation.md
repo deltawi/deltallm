@@ -1179,3 +1179,21 @@ restricted to the package and engine endpoints, with normal TLS verification.
 No proxy environment is present in the image; the relay was stopped before
 qualification. Keep both failures and the successful build in
 `artifacts/qualification/native-image-7b24cc12-20261006`.
+
+The first uninstrumented new-image 500 RPS check completed all 30,000
+requests without errors or drops. p95 was 86.86 ms and p99 170.41 ms;
+both passed. Exact accounting and the 10.16-second safe drain passed,
+with no unsettled operations, open grants, pending work, or unsafe windows.
+Redis core calls passed at 6.00003/request; diagnostic failures were empty.
+The stage still failed only the unchanged middle-window slope gate:
+`+0.15214` versus `+0.01` allowed. Keep
+`native-7b24cc12-500-8cpu-8g-60s-exclusive-20261006`; do not call it qualified.
+
+Average request latency increased from about 40 ms to 58 ms across the
+minute. Existing API terminal-batch means also increased from about 13 ms
+to 21 ms; these nested measurements are not pure database execution time.
+No sampled lock wait, new checkpoint, or Redis client failure explains it.
+Make one unchanged 60-second confirmation before another runtime edit.
+Keep the first failure. Advance to selected 200 and the full strict series
+only if preceding stages pass. Both original VM settings, eight running
+workloads, and global contexts were restored after the first run.
