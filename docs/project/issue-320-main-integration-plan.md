@@ -48,7 +48,14 @@ checks passed. This does not close the earlier full-PostgreSQL limitation.
 The first migration-147 image failed its offline native CLI check because a
 library engine was not packaged. The canonical builder now eagerly invokes that
 CLI; Railway parity and 76 focused checks pass. Runtime remains offline, read-only,
-and non-root. The failed image is retained; its replacement is not yet accepted.
+and non-root. The failed image is retained. Replacement `7d4fbe71` passed all
+five offline checks, engine/migration packaging, image revision/digest and proxy
+absence. Three same-instance 500/60 stages served all 90,000 requests with no
+errors/drops and exact accounting. The third passed every gate and terminal
+commit stayed below 800 page hits/call, versus 43,659 previously. The first two
+still failed only short queue slope; retain those failures. A normal canonical
+four-tier sequence remains necessary and must stop before long stages if any
+short tier fails. No release pass is claimed.
 Retain every result; do not loosen gates or call selected diagnostics release
 evidence. This branch is not ready to merge until a new exact image, canonical
 series, and remaining verification are complete.

@@ -1758,7 +1758,7 @@ alone did not prove a bad plan; the independent reproduction does.
 - [x] Add append-only migration 147 and a data-preserving rollback script.
 - [x] Pass affected PostgreSQL financial/replay/RPC/runtime and cold-plan checks.
 - [x] Prove rollback-forward behavior and all three migration paths.
-- [ ] Seal the normal image, pass all five exact-image checks, then recheck
+- [x] Seal the normal image, pass all five exact-image checks, then recheck
   upper tiers before another strict canonical four-tier series.
 
 The initial regression was too strict about bounded bitmap probes (eight
@@ -1803,9 +1803,42 @@ Keep all failures in `native-image-f9af9487-20261007`; that image is not accepte
 - [x] Regenerate the matching Railway Dockerfile and add a build-order regression.
 - [x] Pass 76 focused packaging/qualification-tool tests, frozen container parity,
   lint, format, and diff checks. No dependency, runtime permission, or gate changed.
-- [ ] Commit, rebuild, and pass all five network-disabled/read-only exact-image checks.
-- [ ] Confirm packaged migration 147, image revision/digest, and absent proxy settings.
-- [ ] Repeat upper-tier retained-history load before the canonical full qualification.
+- [x] Commit, rebuild, and pass all five network-disabled/read-only exact-image checks.
+- [x] Confirm packaged migration 147, image revision/digest, and absent proxy settings.
+- [x] Repeat upper-tier retained-history load before the canonical full qualification.
 
 This packaging-only correction does not require repeating the already completed
 SQL migration verification. Actual image checks and load remain required.
+
+Image `7d4fbe71` passed all five offline checks. Its index digest is
+`sha256:90894d32f3a896b1727d3716bf98e2f96e5ffc5e55aa833c1585f4713c4ef249`;
+the arm64 manifest is
+`sha256:f0b8f97c88352f41ccbd63f5c145e9ccff3e28554be81bf9cda628d09d79e927`.
+The revision label matches the clean source commit, migration 147 checksum
+`9c941504f821ee14b98f4897e324d72b2033e7bb900c35c7ecb0fd7ef47e244d`
+matches source, and the native library engine is packaged. No proxy environment
+remains in the runtime. The temporary build relay/container/tunnel were stopped
+before image checks and load. Keep `native-image-7d4fbe71-20261007`.
+
+The same-instance three-stage 500/60 diagnostic returned 30,000/30,000 in
+every stage, with no errors or drops, exact accounting, safe drain, and no
+diagnostic failures. Stages one and two failed only queue slope (+0.070506,
++0.105515); p95/p99 were 75.23/117.84 and 79.61/116.79 ms. Stage three
+passed every gate: p95 63.84 ms, p99 94.60 ms, slope -0.075391. Its terminal
+commit cost stayed below 800 page hits and 4.17 ms per call in the captured
+intervals, rather than the previous third stage's 43,659 hits and 18.22 ms.
+Append and reporting costs also stayed bounded. This supports the measured
+terminal-plan correction, but does not turn the two queue failures into passes.
+Post-stage metadata has no collection errors or load-time restarts; startup
+Error restarts precede arrivals. PostgreSQL error categories remained zero.
+Both VMs, original primary workloads, and contexts were restored. Keep
+`native-7d4fbe71-500-8cpu-6g-60s-queue-costs-20261007`; it is not qualification.
+
+- [ ] Run one normal unchanged-image canonical four-tier sequence; retain its
+  short gates and stop before ten-minute stages if any short tier fails.
+- [ ] Complete remaining full-database confirmation and report actual limitations.
+
+The next canonical sequence adds no sampler, schedule override, skipped
+prerequisite, threshold change, or runtime source change. The short queue
+variation remains an open qualification result, not evidence of another
+history-dependent database scan by itself.
