@@ -174,6 +174,16 @@ both results. If 500 passes, run selected 200, then the full fixed-image
 series. If it still fails, measure the missing request-path timing first.
 Full qualification remains open; no gate has been waived.
 
+The unchanged 8-GiB confirmation also failed: 14,866/15,000 successes,
+72 dropped arrivals, 62 HTTP 503 responses, p95 1,187.54 ms, and p99
+2,251.47 ms. Accounting drained safely in 12.12 seconds. Charges matched
+all four scopes, but partial-run success identity remains unknown and its
+economic gate failed closed. Host paging was only about 0.039 GB read
+with no writes, so paging alone does not explain this result. Preserve
+the `-4` evidence and the first comparison. All original resources were
+restored. Next, run one bounded 8-GiB RPC timing diagnostic on the unchanged
+image before a runtime change. Keep lower tiers out of the iteration loop.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

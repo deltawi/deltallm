@@ -864,8 +864,36 @@ The original failed and interrupted folders remain unchanged. Both VMs were
 restored to their original settings, all eight original running workloads
 were restarted, and both original contexts were restored.
 
-- [ ] Confirm 500 RPS once on the same image and 8-GiB environment. Preserve
+- [x] Confirm 500 RPS once on the same image and 8-GiB environment. Preserve
   both results; do not repeat lower tiers or relax any gate.
 - [ ] If 500 RPS passes, run selected 200 RPS, then one full fixed-image series.
 - [ ] If latency still fails, measure the unreported request-path delay before
   changing accounting, pooling, or safety behavior.
+
+### Unchanged 8-GiB confirmation
+
+The fresh `native-5b271273-500-8g-exclusive-20261006-4` confirmation failed.
+It completed 14,866 of 15,000 offered requests successfully, dropped 72
+arrivals, and returned 62 HTTP 503 responses. p95 was 1,187.54 ms, p99 was
+2,251.47 ms, and the in-flight slope was +14.0848 requests per second.
+The 12.12-second accounting drain passed with no open grant, provisional
+operation, pending terminal, pending reporting partition, or unsafe window.
+Facts and all four scopes matched 0.104069 exactly, including one warmup.
+Partial-run success identity remains unknown, so the complete economic gate
+correctly failed. Do not replace unknown identity with a success assertion.
+
+Host paging across setup, load, and drain was only 2,369 swap-in pages
+(about 0.039 GB) and no swap-out pages. This failure cannot be explained by
+high host paging alone. Existing metrics recorded 86 Redis acquisition
+deadlines and 109 cancellations. Database calls averaged 7.79 ms, while
+API finalization queue wait averaged 54.24 ms and its batches averaged
+33.89 ms. Per-operation queue time and per-batch service time are different
+measurements; do not add them as a proven per-request critical path.
+
+Both results remain unchanged. All original VM settings, workloads, and
+contexts were restored after confirmation. Do not rerun 50 or 100 RPS.
+Next, keep the 8-GiB environment and capture bounded timing buckets around
+local issue, terminal ownership, signed RPC, DNS, and native journal append.
+Include fixed-label native RPC queue metrics and guest resource-pressure
+totals. Keep all return values, deadlines, safety proofs, and pod limits.
+This instrumented cause check is not release qualification.
