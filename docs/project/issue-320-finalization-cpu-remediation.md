@@ -1271,3 +1271,21 @@ latency, throughput, drain, and slope gates. No added warmup, excluded requests,
 or extra cooling delay. The cold failure remains a failure. Advance to one
 canonical full series only if both selected stages pass; do not claim the
 selected ladder itself is release qualification.
+
+The supported upper ladder passed 200 RPS completely: 12,000 successes,
+p95 24.93 ms, p99 37.35 ms, slope 0, and exact accounting/drain. Its 500
+stage completed 30,000/30,000 with p95 90.83 ms, p99 137.71 ms, diagnostics,
+and exact accounting/drain passing, but slope still failed at +0.05254.
+Thus cold start alone does not explain the remaining drift. Preserve
+`native-1aaf2bda-upper-8cpu-8g-60s-exclusive-20261006`; full qualification did
+not start. All original resources and contexts were restored.
+
+API work remains the largest measured CPU consumer. Next test the previously
+checked pure ASGI header forwarding alone on the current image, without any
+profiling or timing wrappers. Only the private API header method is overridden;
+the accounting image, queues, concurrency, money, resources, and gates remain
+unchanged. This comparison is explicitly not release eligible. It must not
+erase the old failed header prototype or any cold/warm load failure. Adopt a
+runtime change only after the focused behavior checks and measured evidence.
+
+- [ ] Verify the header-only comparison and decide whether to adopt it.

@@ -315,6 +315,14 @@ used by final qualification, without repeating 50/100. No thresholds, request
 counts, arrival exclusions, or delays change. Only proceed to the canonical
 full series if both selected stages pass. Cold-start capacity remains unproved.
 
+The upper ladder passed 200 completely (12,000 successes, p95 24.93 ms,
+p99 37.35 ms, slope 0, exact accounting/drain). Its 500 stage again passed
+throughput, latency, diagnostics, accounting, and drain, but failed slope
+at +0.05254. Full qualification did not run; preserve this result and the
+cold failures. Both VMs/workloads/contexts were restored. Next, check the
+private header-only ASGI forwarding on the current image, with no timing or
+profiling hooks. Runtime source remains unchanged pending measured evidence.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
