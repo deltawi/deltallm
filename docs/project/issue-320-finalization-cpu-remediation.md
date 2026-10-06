@@ -1288,4 +1288,27 @@ unchanged. This comparison is explicitly not release eligible. It must not
 erase the old failed header prototype or any cold/warm load failure. Adopt a
 runtime change only after the focused behavior checks and measured evidence.
 
-- [ ] Verify the header-only comparison and decide whether to adopt it.
+- [x] Verify the header-only comparison and decide whether to adopt it.
+
+The header-only comparison passed 29 behavior checks but worsened 500 RPS:
+30,000 successes, p95 148.42 ms, p99 208.03 ms, and slope +0.72378 (failed).
+Exact accounting and safe drain passed. Reject this prototype; no header
+runtime change is adopted. Preserve its evidence in
+`native-1aaf2bda-500-8cpu-8g-60s-header-only-20261006`. All resources restored.
+
+### Remove duplicated reporting discovery
+
+Each of the four existing reporting lanes currently checks every one of the
+64 partition heads for every claim. Compare disjoint discovery: lane 0 checks
+0,4,...; lane 1 checks 1,5,..., and so on. This keeps all partitions covered,
+the same four lanes and pool, bounded key pages, current leases/fences, one
+global progress observer, and all original limits and gates. No new queue,
+coordinator, worker, or financial calculation. First use a clearly labeled
+private SQL-only comparison on the existing sealed image, without timing hooks.
+Native adoption requires explicit validated lane scope (not worker-ID parsing).
+
+- [ ] Verify full partition coverage and actual four-mode scoped claim plans.
+- [ ] Compare selected 500 RPS without rerunning lower tiers.
+- [ ] Adopt only if evidence supports it; cover fencing, recovery, and lifecycle.
+- [ ] Seal any adopted runtime change and pass the strict upper tiers.
+- [ ] Run one full four-tier short and 600-second qualification after upper passes.
