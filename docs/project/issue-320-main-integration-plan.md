@@ -195,6 +195,14 @@ and unchanged combined selected-entry capacity. Five bounded ownership,
 cancellation, and shutdown self-check groups passed. No runtime source or
 production image has changed. The probe cannot count as release qualification.
 
+The two-batch probe worsened p95 to 419.39 ms and p99 to 528.82 ms despite
+all 15,000 requests succeeding and exact accounting passing. Reject this
+private scheduling change; production remains unchanged. API cgroup work
+was about 98.74 CPU-seconds, versus 34.10 for PostgreSQL. Next, profile one
+API process for three seconds under 500 RPS with original scheduling.
+Use that bounded CPU evidence to select the next change, not another
+increase in concurrency. Full qualification remains open.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

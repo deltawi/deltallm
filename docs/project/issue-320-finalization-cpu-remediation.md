@@ -931,9 +931,29 @@ workloads and contexts were restored.
   selected-cancellation error type; corrected fixtures use the real charge
   and compare shutdown directly with the original batcher. All five
   self-check groups passed. No production implementation has changed.
-- [ ] Probe two concurrent API terminal batches in this same environment.
+- [x] Probe two concurrent API terminal batches in this same environment.
   Share the original queue and byte owner, and split the original selected
   entry budget across both lanes. Keep durable ACKs, deadlines, and all
   monetary proofs. Treat the probe as diagnostic, not qualification.
 - [ ] Implement a runtime change only if the controlled probe supports it,
   then test its failure paths and qualify a fresh immutable image.
+
+The private two-batch probe failed and is not a runtime fix. All 15,000
+requests succeeded, exact accounting passed, and drain took 12.17 seconds.
+However, p95 rose to 419.39 ms, p99 to 528.82 ms, and queue slope to +3.9713.
+Local finalization averaged 100.20 ms, signed RPC 55.06 ms, and native
+journal SQL 20.98 ms. Compared with the preceding one-batch diagnostic,
+these delays worsened. Host paging was low: about 0.041 GB read and no
+writes. All original resources were restored. Preserve
+`native-5b271273-500-8g-pipeline-probe-20261006` and reject this experiment;
+do not add its scheduling change to production.
+
+Fixed cgroup counters showed about 98.74 CPU-seconds for the four API
+processes, versus 34.10 for PostgreSQL and 13.21 for both native roles
+together. This window includes warmup and transfer, not only arrivals.
+Next, capture a three-second CPU profile in one API process under 500 RPS
+to identify costly request work. Keep original single-batch scheduling and
+all existing limits. The profiler changes timing and cannot qualify release.
+
+- [x] Reject the failed private pipeline; keep runtime source unchanged.
+- [ ] Identify API CPU hotspots with one bounded profile before another change.
