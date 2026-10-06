@@ -1439,7 +1439,9 @@ async def test_app() -> FastAPI:
     mock_http = MockHTTPClient()
 
     app.state.redis = redis
-    app.state.settings = type("Settings", (), {"openai_base_url": "https://api.openai.com/v1"})()
+    app.state.settings = type(
+        "Settings", (), {"openai_base_url": "https://api.openai.com/v1", "master_key": None}
+    )()
     app.state.key_service = KeyService(repository=repo, redis_client=redis, salt=salt)
     app.state.organization_lifecycle_authorizer = ActiveOrganizationLifecycleAuthorizer()
     app.state.limit_counter = LimitCounter(redis_client=redis)

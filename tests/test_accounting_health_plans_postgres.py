@@ -60,6 +60,7 @@ async def test_actual_terminal_health_plan_does_not_scan_receipt_or_generation_h
             defaults = [
                 await captured.query_raw("SHOW enable_seqscan"),
                 await captured.query_raw("SHOW enable_bitmapscan"),
+                await captured.query_raw("SHOW jit"),
             ]
             for _ in range(6):
                 value = await repo.snapshot(generation=generation, expires_at=deadline())
@@ -67,10 +68,12 @@ async def test_actual_terminal_health_plan_does_not_scan_receipt_or_generation_h
             assert defaults == [
                 await captured.query_raw("SHOW enable_seqscan"),
                 await captured.query_raw("SHOW enable_bitmapscan"),
+                await captured.query_raw("SHOW jit"),
             ]
         assert captured.errors == []
         observed = set()
         for entry in captured.plans:
+            assert entry.jit_functions == 0, entry.safe_report()
             for node in nodes(entry.node):
                 relation = node.get("Relation Name")
                 if relation is None or not node["Actual Loops"]:

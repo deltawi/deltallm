@@ -6,6 +6,15 @@ import logging
 
 from src.startup_config import StartupConfig
 
+HTTPCORE_TRACE_LOGGER_NAMES = (
+    "httpcore",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+    "httpcore.socks",
+)
+
 _LEVELS = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -36,6 +45,8 @@ def apply_runtime_log_level(value: object) -> str:
     logging.getLogger().setLevel(numeric)
     dependency_level = logging.DEBUG if level == "DEBUG" else max(logging.WARNING, numeric)
     logging.getLogger("httpx").setLevel(dependency_level)
+    for name in HTTPCORE_TRACE_LOGGER_NAMES:
+        logging.getLogger(name).setLevel(max(logging.INFO, numeric))
     return level
 
 

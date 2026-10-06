@@ -256,6 +256,11 @@ def test_qualification_profile_and_generator_keep_fixed_bounded_topology(tmp_pat
     assert values["batchWorker"] == {"enabled": False}
     assert values["config"]["general_settings"]["accounting_execution_mode"] == "local_journal"
     settings = values["config"]["general_settings"]
+    assert settings["accounting_microbatch_max_size"] == 32
+    assert (
+        values["accountingRequest"]["config"]["general_settings"]["accounting_microbatch_max_size"]
+        == 32
+    )
     assert not set(settings) - GeneralSettings.model_fields.keys()
     assert settings["gateway_ingress_max_active"] == 256
     assert settings["gateway_preflight_global_max_parallel"] == 150

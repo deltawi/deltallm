@@ -74,6 +74,10 @@ def test_migration_verifier_checks_the_partial_oldest_terminal_index_and_counter
         "pending_entries",
         "pending_bytes",
         "failed_entries",
+        "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
+        "deltallm_accounting_backlog_snapshot(bigint)",
+        "deltallm_accounting_project_read_models(bigint,text,uuid,integer,bigint,bigint[])",
+        "p.proconfig @> ARRAY['jit=off']",
     ):
         assert contract in sql
 

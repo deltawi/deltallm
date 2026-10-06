@@ -99,7 +99,7 @@ async def bootstrap(app, dependencies, profile):
     )
     state = app.state
     state.redis, state.app_config = redis, cfg
-    state.settings = SimpleNamespace(realtime=RealtimeSettings())
+    state.settings = SimpleNamespace(realtime=RealtimeSettings(), master_key=None)
     state.key_service = KeyService(
         repository=KeyRepository(db),
         redis_client=redis,

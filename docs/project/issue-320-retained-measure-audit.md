@@ -1,6 +1,13 @@
 # Issue 320: retained-measure audit of the clean replay
 
-Status: implementation and full regression complete; exact-image and new load qualification pending.
+Status: restored implementation and full regression complete; finalization CPU remediation and load qualification active.
+
+The final CPU remediation regression contains 8,674 cases: 6,059 component/chart,
+1,649 application, 854 PostgreSQL, and 112 Redis. All required confirmations
+passed. Migration 143 passed fresh, last-release, and shared-feature paths. Its
+three function-local execution settings remove the repeatable funding timeout
+without changing money checks, deadlines, or database-wide reporting policy.
+The exact-image and fixed-profile load gates remain open.
 
 The source record is the earlier 26-measure extraction. The first clean image,
 `22f62c8c`, omitted request-path and worker measures even though its accounting
@@ -190,7 +197,9 @@ gates separately. No pause is allowed inside an arrival window.
 - [x] Commit restored source and pass all five exact-image checks at `eed8af71`.
 - [x] Reproduce and repair the native deployment database-limit mismatch.
 - [x] Confirm all 265 chart tests and all six deployment profiles after the repair.
-- [ ] Pass all five exact-image checks on the repaired commit.
+- [x] Pass all five exact-image checks on the repaired commit `f01ef9ff`.
+- [x] Run its fresh short ladder and preserve failed latency, rate, and queue gates.
+- [ ] Complete the [finalization CPU remediation](issue-320-finalization-cpu-remediation.md).
 - [ ] Pass a fresh generator proof and 50/100/200/500 short ladder.
 - [ ] Run all four ten-minute qualification stages with the same image/profile.
 - [ ] Save results, update the plan, and prepare the local merge handoff.

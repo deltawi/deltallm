@@ -63,6 +63,25 @@ def test_capture_reports_invalid_input_and_does_not_ignore_an_incomplete_profile
     assert owner.errors == ["plan capture returned invalid JSON"]
 
 
+def test_capture_records_compilation_without_retaining_private_jit_fields():
+    owner = AccountingPlanCapture(None)
+    owner.capture(
+        None,
+        message({"Query Text": "private", "Plan": {}, "JIT": {"Functions": 7, "private": 1}}),
+    )
+    assert owner.plans[0].jit_functions == 7
+    assert owner.plans[0].safe_report()["jit_functions"] == 7
+    assert "private" not in json.dumps(owner.plans[0].safe_report())
+
+
+@pytest.mark.parametrize("jit", [None, [], {"Functions": True}, {"Functions": -1}])
+def test_capture_rejects_invalid_compilation_evidence(jit):
+    owner = AccountingPlanCapture(None)
+    owner.capture(None, message({"Query Text": "safe", "Plan": {}, "JIT": jit}))
+    assert owner.plans == []
+    assert owner.errors == ["plan capture returned invalid JSON"]
+
+
 @pytest.mark.parametrize("fault", ["load", "cancel"])
 async def test_diagnostic_connection_closes_after_setup_failure_or_cancellation(monkeypatch, fault):
     from tests.performance import accounting_allocator_plans as module

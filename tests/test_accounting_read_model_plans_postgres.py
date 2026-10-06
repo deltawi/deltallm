@@ -76,6 +76,7 @@ async def test_actual_native_read_model_plans_do_not_scan_retained_history(
         defaults = [
             await captured.query_raw("SHOW enable_seqscan"),
             await captured.query_raw("SHOW enable_bitmapscan"),
+            await captured.query_raw("SHOW jit"),
         ]
         repo = repository(captured)
         await repo.initialize(generation=generation, expires_at=deadline())
@@ -89,9 +90,11 @@ async def test_actual_native_read_model_plans_do_not_scan_retained_history(
         assert defaults == [
             await captured.query_raw("SHOW enable_seqscan"),
             await captured.query_raw("SHOW enable_bitmapscan"),
+            await captured.query_raw("SHOW jit"),
         ]
     assert captured.errors == []
     for entry in captured.plans:
+        assert entry.jit_functions == 0, entry.safe_report()
         for node in nodes(entry.node):
             relation = node.get("Relation Name")
             if relation in relations and node["Actual Loops"]:

@@ -105,6 +105,7 @@ def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
     )
     values["accountingWorker"].update(resources=role_resources)
     values["config"]["general_settings"].update(
+        accounting_microbatch_max_size=32,
         accounting_projection_batch_size=256,
         accounting_projection_max_concurrent_partitions=4,
         accounting_statement_timeout_ms=250,

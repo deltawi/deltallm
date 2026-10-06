@@ -233,6 +233,11 @@ class DynamicConfigManager:
     def get_app_config(self) -> AppConfig:
         return self._config.model_copy(deep=True)
 
+    def get_master_key(self) -> str | None:
+        """Read the immutable key from the current committed configuration."""
+
+        return self._config.general_settings.master_key
+
     def get_config_generation(self) -> int:
         return self._config_generation
 

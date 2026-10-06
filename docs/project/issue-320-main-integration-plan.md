@@ -20,9 +20,21 @@ failure-telemetry, observation, and worker-lane work. Those measures are now
 restored. Their full regression confirmation passed all 8,653 Python cases. Commit
 `eed8af71` passed all five exact-image checks. Its fresh cluster found a native
 database-limit mismatch before any load test started. The chart repair is now
-verified. A new image and qualification remain open. The experimental branch's
+verified at `f01ef9ff`, and all five image checks passed. Its generator proof and
+short 50 RPS stage passed. The short 100 and 200 RPS stages failed latency, and
+500 RPS failed rate, queue, and latency gates. No ten-minute stage started. The
+[finalization CPU remediation plan](issue-320-finalization-cpu-remediation.md)
+records the evidence and the next independently tested changes. The experimental branch's
 500 RPS result is not evidence for this clean replay. This branch is not ready to
 merge.
+
+The measured CPU-cost fixes are now implemented. The latest full component/chart
+confirmation passed 6,059 cases. Full application checks passed 1,649 cases.
+Full database and Redis confirmations passed 854 and 112 cases. All three
+migration paths passed through migration 143. Its function-local execution
+policy fixed the repeatable funding timeout; 61 focused policy, RPC, and retained-
+history plan checks passed. Exact-image and fresh RPS qualification remain open.
+The CPU remediation checklist preserves the failed gates and their confirmations.
 
 ### Restored-measure regression checkpoint
 
@@ -43,14 +55,17 @@ off the event loop and observes immediate and late worker exceptions.
 - [x] Commit the restored source and pass all five exact-image checks at `eed8af71`.
 - [x] Reproduce and repair the native role's rendered database-limit mismatch.
 - [x] Confirm the repair: 265 chart tests and all six deployment profiles passed.
-- [ ] Commit the repaired chart and pass all five new exact-image checks.
+- [x] Commit the repaired chart and pass all five new exact-image checks at `f01ef9ff`.
+- [x] Run the fresh short ladder and preserve its failed gates.
+- [ ] Complete the finalization CPU remediation checks.
 - [ ] Pass a fresh generator proof and short 50/100/200/500 RPS ladder.
 - [ ] Run all four ten-minute stages with the same image and fixed profile.
 - [ ] Save current raw evidence, exact charges, storage state, and final results.
 
-The earlier UI, migration, and generated-client gates remain valid. No SQL or UI
-source changed in this checkpoint. These regression results are not throughput
-results. Keep the plan active until new qualification is complete.
+The earlier UI gates remain valid. Migration 143 changes only three local
+function settings, and all three upgrade paths passed. The client was
+generated again. These regression results are not throughput results. Keep the
+plan active until new qualification is complete.
 
 ### Native deployment startup repair
 

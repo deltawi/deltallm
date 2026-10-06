@@ -1,7 +1,19 @@
 from pathlib import Path
+import tomllib
 
 from scripts.check_container_contract import railway_dockerfile
-from scripts.check_lifecycle_image import DATABASE_IMPORT_CHECK, MIGRATION_CHECK, image_smoke_checks
+from scripts.check_lifecycle_image import (
+    CHECK,
+    DATABASE_IMPORT_CHECK,
+    MIGRATION_CHECK,
+    image_smoke_checks,
+)
+
+
+def test_runtime_async_detector_is_locked_and_checked_in_the_actual_image():
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    assert "sniffio==1.3.1" in project["project"]["dependencies"]
+    assert "import sniffio" in CHECK
 
 
 def test_runtime_selects_bundled_native_migration_cli_without_changing_build_client():

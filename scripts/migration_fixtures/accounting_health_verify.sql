@@ -1,5 +1,18 @@
 DO $health_verify$
+DECLARE signature TEXT;
 BEGIN
+    FOREACH signature IN ARRAY ARRAY[
+        'deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)',
+        'deltallm_accounting_backlog_snapshot(bigint)',
+        'deltallm_accounting_project_read_models(bigint,text,uuid,integer,bigint,bigint[])'
+    ] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure(signature)
+              AND p.proconfig @> ARRAY['jit=off']
+        ) THEN
+            RAISE EXCEPTION 'accounting bounded execution policy is missing: %',signature;
+        END IF;
+    END LOOP;
     IF NOT EXISTS (
         SELECT 1 FROM pg_index i
         WHERE i.indexrelid=to_regclass('deltallm_accounting_terminal_oldest_work_idx')

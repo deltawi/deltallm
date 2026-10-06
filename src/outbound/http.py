@@ -8,17 +8,9 @@ from typing import Iterator
 
 import httpx
 
-_HTTPCORE_TRACE_LOGGERS = tuple(
-    logging.getLogger(name)
-    for name in (
-        "httpcore",
-        "httpcore.connection",
-        "httpcore.http11",
-        "httpcore.http2",
-        "httpcore.proxy",
-        "httpcore.socks",
-    )
-)
+from src.runtime_logging import HTTPCORE_TRACE_LOGGER_NAMES
+
+_HTTPCORE_TRACE_LOGGERS = tuple(logging.getLogger(name) for name in HTTPCORE_TRACE_LOGGER_NAMES)
 _HTTPCORE_LOG_GUARD_LOCK = Lock()
 _httpcore_log_guard_count = 0
 _httpcore_log_guard_previous_levels: tuple[int, ...] | None = None
@@ -43,7 +35,9 @@ def suppress_httpcore_debug_traces() -> Iterator[None]:
                 logger.level for logger in _HTTPCORE_TRACE_LOGGERS
             )
             for logger in _HTTPCORE_TRACE_LOGGERS:
-                logger.setLevel(max(logging.INFO, logger.getEffectiveLevel()))
+                safe_level = max(logging.INFO, logger.getEffectiveLevel())
+                if logger.level != safe_level:
+                    logger.setLevel(safe_level)
         _httpcore_log_guard_count += 1
     try:
         yield
@@ -57,7 +51,8 @@ def suppress_httpcore_debug_traces() -> Iterator[None]:
                     _httpcore_log_guard_previous_levels,
                     strict=True,
                 ):
-                    logger.setLevel(previous_level)
+                    if logger.level != previous_level:
+                        logger.setLevel(previous_level)
                 _httpcore_log_guard_previous_levels = None
 
 

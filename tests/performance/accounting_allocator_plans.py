@@ -16,11 +16,13 @@ import asyncpg
 class CapturedAccountingPlan:
     query: str = field(repr=False)
     node: dict[str, object] = field(repr=False)
+    jit_functions: int = 0
 
     def safe_report(self) -> dict[str, object]:
         return {
             "query_sha256": hashlib.sha256(self.query.encode()).hexdigest(),
             "plan": safe_plan(self.node),
+            "jit_functions": self.jit_functions,
         }
 
 
@@ -69,7 +71,13 @@ class AccountingPlanCapture:
             value = json.loads(message.message.split("plan:\n", 1)[1])
             if not isinstance(value["Query Text"], str) or not isinstance(value["Plan"], dict):
                 raise ValueError("invalid plan fields")
-            self.plans.append(CapturedAccountingPlan(value["Query Text"], value["Plan"]))
+            jit = value.get("JIT", {})
+            if not isinstance(jit, dict):
+                raise ValueError("invalid JIT fields")
+            functions = jit.get("Functions", 0)
+            if type(functions) is not int or not 0 <= functions <= 1_000_000:
+                raise ValueError("invalid JIT function count")
+            self.plans.append(CapturedAccountingPlan(value["Query Text"], value["Plan"], functions))
             self._bytes += size
         except (KeyError, ValueError, TypeError):
             self._error("plan capture returned invalid JSON")

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hmac
+from typing import TYPE_CHECKING
+
 from fastapi import Depends, Header, HTTPException, Request, status
 from starlette.requests import HTTPConnection
 
+from src.config import Settings
 from src.models.errors import AuthenticationError
 from src.metrics.request_phases import measure_request_phase, request_route
 from src.models.responses import UserAPIKeyAuth
@@ -14,6 +18,9 @@ from src.services.organization_lifecycle import (
     OrganizationLifecycleUnavailable,
 )
 from src.telemetry.event_identity import get_or_create_billing_event_id
+
+if TYPE_CHECKING:
+    from src.config_runtime.dynamic import DynamicConfigManager
 
 
 async def authenticate_request(
@@ -99,17 +106,15 @@ def auth_dependency() -> Depends:
 
 
 def _is_master_key(request: HTTPConnection, token: str) -> bool:
-    import hmac as _hmac
-
-    dcm = getattr(request.app.state, "dynamic_config_manager", None)
+    dcm: DynamicConfigManager | None = getattr(request.app.state, "dynamic_config_manager", None)
     if dcm is not None:
-        cfg = dcm.get_app_config()
-        configured = getattr(getattr(cfg, "general_settings", None), "master_key", None)
+        configured = dcm.get_master_key()
     else:
-        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+        settings: Settings | None = getattr(request.app.state, "settings", None)
+        configured = settings.master_key if settings is not None else None
     if not configured or not token:
         return False
-    return _hmac.compare_digest(token, configured)
+    return hmac.compare_digest(token, configured)
 
 
 async def _try_fallback_auth(request: HTTPConnection, raw_token: str) -> UserAPIKeyAuth | None:
