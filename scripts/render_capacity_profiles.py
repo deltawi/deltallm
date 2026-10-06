@@ -157,6 +157,11 @@ def table(helm: str) -> str:
         "",
         "The totals include API, batch, accounting roles, rollout overlap, migration, and reserved connections. The native request role owns two PostgreSQL connections. The native projection role owns eight connections. Both native roles have no Redis or provider connections.",
         "",
+        "For these two native roles, `accounting_hot_path_db_pool_size` owns the only",
+        "database pool. Helm uses this allocation for `db_pool_size` and the",
+        "`DELTALLM_DB_POOL_SIZE` startup setting. The legacy worker's control-pool default",
+        "does not set the native role's limit. API and legacy worker limits do not change.",
+        "",
         "| Profile | Peak API/request/projection processes | PostgreSQL used/maximum | Redis used/maximum |",
         "| --- | --- | --- | --- |",
     ]

@@ -139,6 +139,28 @@ confirmation passed. The first routing call-count test passed a string instead
 of a model-group list; its confirmation must select an actual deployment. Keep
 failed logs with confirmations. Do not describe failed runs as passing gates.
 
+### Native deployment startup repair
+
+Commit `eed8af71` passed all five exact-image checks, but fresh kind setup failed
+before generator proof or gateway load. Helm supplied the legacy worker's
+four-connection control limit while native projection declared eight connections.
+The native pool rejected the mismatch. Request and API roles then could not
+start because projection was not ready. The setup was stopped, its logs were
+saved, and its disposable cluster was removed. It has no RPS result.
+
+The chart now derives each minimal native role's database startup limit from its
+`accounting_hot_path_db_pool_size`. This matches the existing capacity report and
+actual dedicated pool. API and legacy worker limits do not change. Tests now
+check rendered configuration, environment, resolved settings, an overridden
+native allocation, and actual eight- and two-connection PostgreSQL pools. Both
+rendered regressions failed before the repair. All 18 native chart cases and
+seven real-role PostgreSQL cases passed after it. Full confirmation then passed
+all 265 chart tests and all six profile lint/render checks. Collection contains
+8,654 cases in exactly one lane each. Source lint, changed-file format, generated
+capacity reference, and diff checks passed. A new clean image and qualification
+remain required. No backend runtime, SQL, or UI source changed in this repair;
+the earlier full backend, migration, and UI gates remain valid.
+
 ## Fixed qualification differences
 
 The earlier source accepted 500 RPS with p95 234 ms, p99 448 ms and a 272.6-second
@@ -165,7 +187,10 @@ gates separately. No pause is allowed inside an arrival window.
   - [x] Component/Helm confirmation before metrics cleanup: 6,040 passed.
   - [x] Final component/Helm confirmation after metrics cleanup: 6,042 passed.
   - [x] Final application confirmation after metrics cleanup: 1,649 passed.
-- [ ] Commit clean source and pass all exact-image checks.
+- [x] Commit restored source and pass all five exact-image checks at `eed8af71`.
+- [x] Reproduce and repair the native deployment database-limit mismatch.
+- [x] Confirm all 265 chart tests and all six deployment profiles after the repair.
+- [ ] Pass all five exact-image checks on the repaired commit.
 - [ ] Pass a fresh generator proof and 50/100/200/500 short ladder.
 - [ ] Run all four ten-minute qualification stages with the same image/profile.
 - [ ] Save results, update the plan, and prepare the local merge handoff.

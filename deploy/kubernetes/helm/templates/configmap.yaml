@@ -5,6 +5,10 @@
 {{- $_ := set $generalSettings "deployment_capacity_role" .role -}}
 {{- $native := eq (default "assigned" $generalSettings.accounting_execution_mode) "local_journal" -}}
 {{- $minimal := and $native (has .role (list "accountingWorker" "accountingRequest")) -}}
+{{- if $minimal -}}
+{{- /* Native roles have one dedicated pool. Use its allocation for the database startup limit. */ -}}
+{{- $_ := set $generalSettings "db_pool_size" $generalSettings.accounting_hot_path_db_pool_size -}}
+{{- end -}}
 {{- if $native -}}
 {{- if or (not $generalSettings.accounting_protocol_enabled) (not $generalSettings.accounting_grants_enabled) -}}
 {{- fail "Native accounting requires its enabled protocol and funded grants" -}}

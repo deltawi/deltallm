@@ -4,7 +4,7 @@ import pytest
 import yaml
 
 from src.bootstrap.capacity_contract import DeploymentCapacityContract
-from src.config import AppConfig, Settings
+from src.config import AppConfig, Settings, resolve_database_settings
 from src.deployment_capacity_report import CapacityReport
 from tests.helm.test_batch_worker_split import (
     HELM_CHART_DIR,
@@ -59,6 +59,7 @@ def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_pat
         contract = DeploymentCapacityContract.load(config, Settings())
         assert contract is not None
         expected_pool = 8 if role == "accountingWorker" else 2
+        assert config.general_settings.db_pool_size == expected_pool
         contract.validate_minimal(config, Settings(), database=expected_pool)
         allocation = report.roles[role]
         assert allocation.pools.postgresql == expected_pool
@@ -68,6 +69,15 @@ def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_pat
         assert allocation.pools.accounting_http == 0
         container = deployment["spec"]["template"]["spec"]["containers"][0]
         env = {item["name"]: item for item in container["env"]}
+        assert env["DELTALLM_DB_POOL_SIZE"]["value"] == str(expected_pool)
+        database = resolve_database_settings(
+            config,
+            Settings(
+                database_url="postgresql://fixture:fixture@fixture/db",
+                db_pool_size=int(env["DELTALLM_DB_POOL_SIZE"]["value"]),
+            ),
+        )
+        assert database is not None and database.pool_size == expected_pool
         assert not {"REDIS_URL", "DELTALLM_MASTER_KEY", "DELTALLM_SALT_KEY"} & env.keys()
         assert ("DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET" in env) is (role == "accountingRequest")
         _by_kind_and_name(documents, "NetworkPolicy", name)
@@ -75,6 +85,30 @@ def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_pat
     service = _by_kind_and_name(documents, "Service", "deltallm-accounting-request")
     assert service["spec"]["type"] == "ClusterIP"
     assert service["spec"]["selector"]["app.kubernetes.io/component"] == "accounting-request"
+
+
+def test_native_pool_override_sets_config_environment_and_capacity_together():
+    documents = _render(
+        *arguments(
+            "--set", "accountingWorker.config.general_settings.accounting_hot_path_db_pool_size=12"
+        )
+    )
+    deployment = _deployment_by_pod_component(documents, "accounting-worker")
+    raw = _config_yaml(
+        _by_kind_and_name(documents, "ConfigMap", "deltallm-accounting-worker-config")
+    )
+    assert raw["general_settings"]["db_pool_size"] == 12
+    env = {
+        item["name"]: item
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert env["DELTALLM_DB_POOL_SIZE"]["value"] == "12"
+    report = CapacityReport.model_validate_json(
+        _by_kind_and_name(documents, "ConfigMap", "deltallm-dependency-capacity")["data"][
+            "report.json"
+        ]
+    )
+    assert report.roles["accountingWorker"].pools.postgresql == 12
 
 
 @pytest.mark.parametrize(

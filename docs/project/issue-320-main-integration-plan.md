@@ -17,8 +17,10 @@ UI checks, migration paths, and chart checks also passed. Full UI lint retains
 unchanged baseline findings. The exact image passed all five smoke checks. Its
 short ladder failed, and the retained-measure audit found missing Redis, routing,
 failure-telemetry, observation, and worker-lane work. Those measures are now
-restored. Their full regression confirmation passed all 8,653 Python cases. Fresh
-exact-image checks and gateway qualification remain open. The experimental branch's
+restored. Their full regression confirmation passed all 8,653 Python cases. Commit
+`eed8af71` passed all five exact-image checks. Its fresh cluster found a native
+database-limit mismatch before any load test started. The chart repair is now
+verified. A new image and qualification remain open. The experimental branch's
 500 RPS result is not evidence for this clean replay. This branch is not ready to
 merge.
 
@@ -38,7 +40,10 @@ off the event loop and observes immediate and late worker exceptions.
 - [x] Source lint, formatting, generated references, frozen lock, and container parity.
 - [x] All six deployment-profile lint and render checks.
 - [x] Preserve failed and interrupted runs with their confirmations.
-- [ ] Commit the restored source and pass all five new exact-image checks.
+- [x] Commit the restored source and pass all five exact-image checks at `eed8af71`.
+- [x] Reproduce and repair the native role's rendered database-limit mismatch.
+- [x] Confirm the repair: 265 chart tests and all six deployment profiles passed.
+- [ ] Commit the repaired chart and pass all five new exact-image checks.
 - [ ] Pass a fresh generator proof and short 50/100/200/500 RPS ladder.
 - [ ] Run all four ten-minute stages with the same image and fixed profile.
 - [ ] Save current raw evidence, exact charges, storage state, and final results.
@@ -46,6 +51,27 @@ off the event loop and observes immediate and late worker exceptions.
 The earlier UI, migration, and generated-client gates remain valid. No SQL or UI
 source changed in this checkpoint. These regression results are not throughput
 results. Keep the plan active until new qualification is complete.
+
+### Native deployment startup repair
+
+The `eed8af71` fresh setup failed before generator proof or gateway load. Helm
+kept the legacy worker's four-connection control limit while native projection
+declared eight connections. The native pool correctly rejected this mismatch.
+Request and API roles then refused admission because projection was not ready.
+The failed setup, pod errors, and exact-image logs remain in the evidence folder.
+Its disposable cluster is removed. No RPS result was produced by this setup.
+
+For minimal native roles, Helm now derives the database startup limit from
+`accounting_hot_path_db_pool_size`. Configuration, environment, capacity report,
+and the actual dedicated pool have one allocation. API and legacy worker pools
+do not change. No capacity limit, timeout, or qualification gate was increased.
+Two new rendered-setting assertions failed before the repair. All 18 native
+chart cases and seven real-role PostgreSQL cases then passed. Full confirmation
+passed all 265 chart tests and all six profile lint/render checks. Collection
+contains 8,654 cases in exactly one lane each. Source lint, changed-file format,
+generated capacity reference, and diff checks passed. A new clean image and the
+complete RPS series remain open. The earlier full backend, migration, and UI
+gates remain valid; no backend runtime, SQL, or UI source changed in this repair.
 
 The migration-131 checkpoint passed all 7,829 tests and all three migration paths.
 The first PostgreSQL run failed two compatibility cases. Their unchanged modules

@@ -13,7 +13,7 @@ from src.bootstrap.accounting_remote import RemoteAccountingOwner
 from src.bootstrap.server_application import create_server_application
 from src.billing.accounting_http import AccountingHttpTransport
 from src.config import DatabaseConnectionSettings
-from src.db.accounting_pool import AccountingPostgresClient
+from src.db.accounting_pool import AccountingPostgresClient, AccountingPostgresManager
 from src.lifecycle_settings import LifecycleSettings
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.process_lifecycle import ProcessLifecycle
@@ -118,11 +118,23 @@ async def test_launcher_selected_roles_and_managed_api_use_the_migrated_native_p
 ):
     clients, generation = accounting_db
 
+    connected_pools = []
+    connect = AccountingPostgresManager.connect
+
+    async def capture_pool(manager, database, **limits):
+        await connect(manager, database, **limits)
+        connected_pools.append(manager._pool.get_max_size())
+
+    monkeypatch.setattr(AccountingPostgresManager, "connect", capture_pool)
+
     def role_app(role):
         initial = startup(role, accounting_protocol_generation=generation)
         configured = type(initial)(
             settings=initial.settings.model_copy(
-                update={"database_url": os.environ["DATABASE_URL"]}
+                update={
+                    "database_url": os.environ["DATABASE_URL"],
+                    "db_pool_size": initial.app_config.general_settings.accounting_hot_path_db_pool_size,
+                }
             ),
             file_config=initial.file_config,
             app_config=initial.app_config,
@@ -164,6 +176,9 @@ async def test_launcher_selected_roles_and_managed_api_use_the_migrated_native_p
     try:
         async with projection.router.lifespan_context(projection):
             async with request.router.lifespan_context(request):
+                projected = projection.state.accounting_role_state.runtime
+                assert connected_pools == [8, 2]
+                assert len(projected._lifecycle.producers) == 7
                 # Production roles are separate processes. In-process ASGI calls
                 # must not inherit the RPC role's parent shutdown context.
                 token = shutdown_owner.set(ShutdownOwner(api_lifecycle))
