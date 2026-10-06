@@ -1482,7 +1482,29 @@ all 40,000 events; the corrected query stayed at one event per seek and cost
 the full index layout; it does not explain the remaining load failure. Keep
 `/private/tmp/issue320-real-index-plans.H979ZO`.
 
-- [ ] Capture an unchanged-image eight-CPU 500 SQL-cost diagnostic, extending
+- [x] Capture an unchanged-image eight-CPU 500 SQL-cost diagnostic, extending
   only the already-verified 78-field numeric host sampler.
-- [ ] Identify the remaining growing operation before another runtime change.
+- [x] Identify the remaining growing operation before another runtime change.
 - [ ] Reproduce it independently, then fix and verify through its existing owner.
+
+The new SQL diagnostic completed all 30,000 requests, p95 77.75 ms, p99
+131.23 ms, zero errors/drops; exact accounting and 12.19-second drain passed.
+Slope +0.11067 failed. Preserve
+`native-d93237b6-500-8cpu-8g-60s-sql-costs-20261006`. Terminal claims stayed
+around 0.56–0.66 ms; terminal commits about 3.0–3.8 ms. Reporting claims grew
+from 0.35 to 2.51 ms and about 283 to 651 shared hits per call. Progress
+observation also grew. Four reporting lanes each rediscover all 64 cells.
+This diagnostic adds host sampling and is not release qualification. All
+resources restored. Do not apply a speculative materialization planner change.
+
+Reconsider disjoint discovery only as a new private comparison on the corrected
+query, not as adoption of the earlier failed prototype. Its original
+`1aaf2bda` failure remains preserved. All 39 new discovery/cold/retained/money
+checks passed, including complete 64-cell coverage and sixteen checks per lane
+in four planner modes. One private pytest import-rewrite warning remains.
+Keep the four existing lanes, global observer, limits, and money proofs. No
+timing hooks, new worker, or resource increase. If the comparison helps,
+production adoption must use explicit validated lane scope, not worker-ID parsing.
+
+- [ ] Complete the corrected-image private 500 disjoint-discovery comparison.
+- [ ] Adopt only if measured useful, with explicit scope and normal-image proof.
