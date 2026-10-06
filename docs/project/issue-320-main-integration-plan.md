@@ -45,6 +45,10 @@ missing-index denial, caller-unwind tests, and upgrade policy checks are now
 implemented. All 130 affected PostgreSQL and 194 focused component/tool cases
 passed, as did rollback-forward and all three migration paths. Final style
 checks passed. This does not close the earlier full-PostgreSQL limitation.
+The first migration-147 image failed its offline native CLI check because a
+library engine was not packaged. The canonical builder now eagerly invokes that
+CLI; Railway parity and 76 focused checks pass. Runtime remains offline, read-only,
+and non-root. The failed image is retained; its replacement is not yet accepted.
 Retain every result; do not loosen gates or call selected diagnostics release
 evidence. This branch is not ready to merge until a new exact image, canonical
 series, and remaining verification are complete.

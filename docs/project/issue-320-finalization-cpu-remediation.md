@@ -1788,3 +1788,24 @@ in `artifacts/qualification/verification-terminal-commit-cold-20261007`.
 The owned fixture is stopped before building or load. This targeted result
 does not close the earlier full-PostgreSQL limitation. No new image or capacity
 pass is claimed yet.
+
+### Offline native CLI engine packaging
+
+The first migration-147 image build hit VM DNS failure; the restricted build-only
+TLS relay retry built the normal image. A network-host attempt hit a Debian HTTP
+403 and is also retained. The offline runtime check then failed: the native CLI
+required a library engine absent from the new image and tried to download it into
+the non-root, read-only runtime. Comparing engine inventories with the preceding
+passing image identified the exact missing file, not a runtime permission problem.
+Keep all failures in `native-image-f9af9487-20261007`; that image is not accepted.
+
+- [x] Make the builder execute the bundled native CLI after Python generation/fetch.
+- [x] Regenerate the matching Railway Dockerfile and add a build-order regression.
+- [x] Pass 76 focused packaging/qualification-tool tests, frozen container parity,
+  lint, format, and diff checks. No dependency, runtime permission, or gate changed.
+- [ ] Commit, rebuild, and pass all five network-disabled/read-only exact-image checks.
+- [ ] Confirm packaged migration 147, image revision/digest, and absent proxy settings.
+- [ ] Repeat upper-tier retained-history load before the canonical full qualification.
+
+This packaging-only correction does not require repeating the already completed
+SQL migration verification. Actual image checks and load remain required.

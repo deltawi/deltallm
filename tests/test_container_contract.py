@@ -28,6 +28,17 @@ def test_railway_container_retains_the_same_native_migration_cli():
     assert Path("deploy/railway/Dockerfile").read_text() == railway_dockerfile()
 
 
+def test_native_cli_fetches_its_engine_during_the_image_build():
+    source = Path("Dockerfile").read_text()
+    generate = source.index("RUN prisma generate")
+    fetch_python_engine = source.index("prisma py fetch", generate)
+    fetch_native_engine = source.index(
+        "/opt/prisma/binaries/node_modules/.bin/prisma -v", fetch_python_engine
+    )
+    assert generate < fetch_python_engine < fetch_native_engine < source.index("FROM base\n")
+    assert '["prisma", "-v"]' in CHECK
+
+
 def test_generated_client_uses_recursive_types_and_build_time_bytecode():
     schema = Path("prisma/schema.prisma").read_text()
     assert "recursive_type_depth        = -1" in schema.split("datasource db", 1)[0]

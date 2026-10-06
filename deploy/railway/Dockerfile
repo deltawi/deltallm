@@ -51,7 +51,9 @@ RUN \
       *) exit 2 ;; \
     esac
 COPY prisma ./prisma
-RUN prisma generate --schema=./prisma/schema.prisma && prisma py fetch
+# Fetch both the Python client engine and the native CLI engine before offline startup.
+RUN prisma generate --schema=./prisma/schema.prisma && prisma py fetch \
+    && /opt/prisma/binaries/node_modules/.bin/prisma -v
 # Compile the generated client at build time, not during bounded startup.
 RUN python -m compileall -q /opt/venv/lib/python3.11/site-packages/prisma
 COPY src ./src
