@@ -33,8 +33,21 @@ confirmation passed 6,059 cases. Full application checks passed 1,649 cases.
 Full database and Redis confirmations passed 854 and 112 cases. All three
 migration paths passed through migration 143. Its function-local execution
 policy fixed the repeatable funding timeout; 61 focused policy, RPC, and retained-
-history plan checks passed. Exact-image and fresh RPS qualification remain open.
-The CPU remediation checklist preserves the failed gates and their confirmations.
+history plan checks passed. Commit `476904b4` passed all five image checks.
+Its first load run failed queue gates and the 200 RPS accounting drain. An
+approved isolated rerun stopped Rancher temporarily and used the same image,
+resources, profile, and limits. Short 50, 100, and 200 RPS passed all gates.
+Short 500 RPS still failed; no ten-minute stage started. Rancher and the user's
+original contexts are restored. The CPU remediation checklist retains both runs.
+
+The remaining immutable terminal boundary is now implemented through the same
+proof, transport, queue, and journal owners. All 249 focused checks passed.
+The instrumented conversion diagnostic fell from 5.20 to 1.84 seconds for
+3,200 entries. This is not an RPS result. Full confirmation passed all 8,704
+collected cases: 6,089 component/chart, 1,649 application, 854 PostgreSQL, and
+112 Redis. Source, lock, image-export, configuration, and capacity checks passed.
+A new exact image and fresh short and ten-minute qualification remain. The user
+approved temporary Rancher shutdown for that series, followed by restart.
 
 ### Restored-measure regression checkpoint
 

@@ -4,20 +4,22 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-import json
 import math
 from typing import Protocol
 
 from src.billing.accounting_local_leases import LocalPermitFinalization
-from src.billing.accounting_local_receipts import LocalReceiptStore, RetainedLocalReceipt
-from src.billing.accounting_protocol import AccountingFinalization, FinalizationReceipt
+from src.billing.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting_protocol import FinalizationReceipt
+from src.billing.accounting_terminal_snapshots import (
+    FrozenLocalTerminal,
+    LocalTerminalValue,
+    freeze_terminal_snapshots,
+)
 from src.billing.accounting_terminal_receipts import (
     JournalReceipt,
     TerminalReceipt,
     TerminalReceiptType,
 )
-from src.billing.accounting_snapshots import finalization_bytes
-from src.billing.durable_microbatch import DurableBatchFull
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.accounting_permit_results import invalid_result
 from src.db.telemetry_acceptance import AcceptanceFailure
@@ -25,7 +27,7 @@ from src.db.telemetry_acceptance import AcceptanceFailure
 
 class LocalTerminalPersistence(Protocol):
     async def finalize_batch(
-        self, values: Sequence[LocalPermitFinalization], *, expires_at: float
+        self, values: Sequence[LocalTerminalValue], *, expires_at: float
     ) -> Sequence[TerminalReceipt]: ...
 
 
@@ -55,9 +57,9 @@ class LocalTerminalOwner:
         return self._receipts is receipts
 
     async def finalize_batch(
-        self, values: Sequence[LocalPermitFinalization], *, expires_at: float
+        self, values: Sequence[LocalTerminalValue], *, expires_at: float
     ) -> tuple[TerminalReceipt, ...]:
-        frozen = freeze_local_terminals(values, generation=self._generation)
+        frozen = freeze_terminal_snapshots(values, generation=self._generation)
         if not frozen:
             return ()
         _caller_deadline(expires_at)
@@ -65,11 +67,23 @@ class LocalTerminalOwner:
             results = await self._persistence.finalize_batch(frozen, expires_at=expires_at)
         acknowledgements = validated_terminal_acks(frozen, results, receipt_type=self._receipt_type)
         prepared = self._receipts.prepare_acknowledgements(
-            tuple((value.receipt, ack) for value, ack in zip(frozen, acknowledgements, strict=True))
+            tuple((value, ack) for value, ack in zip(frozen, acknowledgements, strict=True))
         )
         _caller_deadline(expires_at)
         self._receipts._commit_acknowledgements(prepared)
         return acknowledgements
+
+    async def finalize_documents(
+        self, values: Sequence[bytes], *, expires_at: float
+    ) -> tuple[TerminalReceipt, ...]:
+        if len(values) > 256:
+            raise ValueError("local terminal batch exceeds its entry limit")
+        if 2 + sum(map(len, values)) + max(0, len(values) - 1) > 1_048_576:
+            raise ValueError("local terminal batch exceeds its byte limit")
+        snapshots = tuple(
+            FrozenLocalTerminal(value, generation=self._generation) for value in values
+        )
+        return await self.finalize_batch(snapshots, expires_at=expires_at)
 
 
 def _caller_deadline(expires_at: float) -> None:
@@ -80,46 +94,17 @@ def _caller_deadline(expires_at: float) -> None:
 def freeze_local_terminals(
     values: Sequence[LocalPermitFinalization], *, generation: int
 ) -> tuple[LocalPermitFinalization, ...]:
-    if len(values) > 256:
-        raise ValueError("local terminal batch exceeds its entry limit")
-    copies, size = [], 2
-    for value in values:
-        receipt = RetainedLocalReceipt.freeze(value.receipt).restore()
-        finalization = AccountingFinalization.model_validate_json(
-            finalization_bytes(value.finalization)
-        )
-        copy = LocalPermitFinalization(receipt=receipt, finalization=finalization)
-        if finalization.protocol_generation != generation:
-            raise ValueError("local terminal uses a stale generation")
-        encoded = json.dumps(
-            copy.model_dump(mode="json"),
-            allow_nan=False,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-        size += len(encoded) + bool(copies)
-        if size > 1_048_576:
-            raise DurableBatchFull("local terminal batch exceeds its byte limit")
-        copies.append(copy)
-    if len({copy.finalization.operation_id for copy in copies}) != len(copies):
-        raise ValueError("local terminal batch repeats an operation")
-    return tuple(copies)
+    return tuple(
+        value.restore() for value in freeze_terminal_snapshots(values, generation=generation)
+    )
 
 
 def local_terminal_bytes(value: LocalPermitFinalization, *, generation: int) -> bytes:
-    frozen = freeze_local_terminals((value,), generation=generation)[0]
-    return json.dumps(
-        frozen.model_dump(mode="json"),
-        allow_nan=False,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
+    return FrozenLocalTerminal(value, generation=generation).document
 
 
 def validated_terminal_acks(
-    values: Sequence[LocalPermitFinalization],
+    values: Sequence[LocalTerminalValue],
     results: Sequence[TerminalReceipt],
     *,
     receipt_type: TerminalReceiptType = FinalizationReceipt,
@@ -134,11 +119,23 @@ def validated_terminal_acks(
             copy = receipt_type.model_validate(result.model_dump())
         except ValueError:
             raise invalid_result() from None
-        finalization = value.finalization
+        generation = (
+            value.generation
+            if isinstance(value, FrozenLocalTerminal)
+            else value.finalization.protocol_generation
+        )
+        operation_id = (
+            value.operation_id
+            if isinstance(value, FrozenLocalTerminal)
+            else value.finalization.operation_id
+        )
+        outcome = (
+            value.outcome if isinstance(value, FrozenLocalTerminal) else value.finalization.outcome
+        )
         if (
-            copy.protocol_generation != finalization.protocol_generation
-            or copy.operation_id != finalization.operation_id
-            or copy.outcome is not finalization.outcome
+            copy.protocol_generation != generation
+            or copy.operation_id != operation_id
+            or copy.outcome is not outcome
         ):
             raise invalid_result()
         copies.append(copy)

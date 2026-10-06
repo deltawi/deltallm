@@ -135,8 +135,8 @@ class LocalAccountingService(AccountingProtocolService):
     async def _finalize(self, values: Sequence[bytes]) -> list[TerminalReceipt]:
         started = perf_counter()
         try:
-            results = await self._terminal.finalize_batch(
-                [LocalPermitFinalization.model_validate_json(value) for value in values],
+            results = await self._terminal.finalize_documents(
+                values,
                 expires_at=asyncio.get_running_loop().time()
                 + self._finalization_ack_budget_seconds,
             )

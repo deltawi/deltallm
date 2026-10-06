@@ -332,6 +332,76 @@ query shape. The exact `cc3113bd` image produced no temporary files and drained 
 90,000-request diagnostic in 16.9 seconds. This is the last code commit in the accepted
 500 RPS candidate.
 
+## Additional measures from the clean replay
+
+These measures follow the original 26. They are clean-main changes, not part of
+the earlier accepted experimental image. Read the current integration plan for
+their qualification state. Do not combine results from different images.
+
+### 27. Read the current master key without copying all configuration
+
+- Add a typed scalar read on the existing dynamic configuration owner.
+- Keep current-generation selection and constant-time key comparison.
+- Keep the control-plane copy API and failed-reload behavior unchanged.
+- Add no SQL or Redis call.
+
+The diagnostic found a full configuration copy on each inference request.
+Commit `476904b4` removes it and tests generation changes and copy isolation.
+
+### 28. Avoid repeated global logging-cache resets
+
+- Set all six HTTPcore trace levels through the existing startup owner.
+- Keep the reference-counted privacy guard and its concurrent-operation lock.
+- Do not call `setLevel` when the level is already correct.
+- Retain DEBUG suppression during success, failure, and cancellation.
+
+Commit `476904b4` tests zero level writes during normal operations. The change
+removes repeated global cache clearing without permitting sensitive traces.
+
+### 29. Ship the async detector used by the HTTP stack
+
+- Pin `sniffio==1.3.1` in the canonical frozen runtime lock.
+- Regenerate the container export without upgrading other packages.
+- Prove the package is present in the exact non-root image.
+
+The earlier profile showed repeated failed optional imports. Commit `476904b4`
+adds the detector without adding a client, pool, task, or configuration path.
+
+### 30. Match the two terminal aggregation stages
+
+- Use a native qualification maximum of 32 entries for both API and request roles.
+- Keep the production default of eight entries unchanged.
+- Keep the entry, byte, queue, dwell, deadline, pool, and resource limits.
+- Record the profile difference when comparing with an earlier image.
+
+Commit `476904b4` removes the API-8/request-32 stage mismatch. Matching maximums
+does not remove the need to measure actual batches and finalization queue wait.
+
+### 31. Keep short accounting SQL functions out of JIT compilation
+
+- Apply function-local `jit=off` to bulk local funding, backlog snapshot, and
+  read-model projection through append-only migration 143.
+- Keep query bodies, indexes, financial checks, and deadlines unchanged.
+- Restore the caller's JIT policy after both success and error.
+- Keep reporting and other database operations on their existing policy.
+
+Commit `476904b4` includes fail-first and controlled funding evidence, nested
+plan tests, and all three migration paths. Do not use a database-wide or pool
+override. Rollback resets only the three function settings.
+
+### 32. Reuse immutable terminal proofs inside each process
+
+- Validate the full nested financial graph at mutable and received-wire boundaries.
+- Retain canonical reservation, finalization, and proof identity as immutable bytes.
+- Reuse the accepted snapshot through transport, journal, recovery, and reply checks.
+- Release local proofs only after the complete reply batch passes validation.
+- Include stored documents and object overhead in the existing queue byte charge.
+
+The clean replay's signed in-process diagnostic fell from 5.20 to 1.84 seconds
+for 3,200 terminal entries. All 249 focused checks passed. This is instrumented
+conversion evidence, not a 500 RPS certificate. The wire and durable formats
+stay unchanged. No data migration, new policy owner, or larger limit is required.
+
 ## Important measures that were tested and rejected
 
 Do not replay these experiments as part of the integration:

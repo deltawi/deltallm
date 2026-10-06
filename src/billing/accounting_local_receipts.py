@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from src.billing.accounting_local_leases import LocalPermitGrant, LocalPermitReceipt
@@ -54,6 +55,17 @@ class RetainedLocalReceipt:
             and self.reservation_json == other.reservation_json
             and self.grant.model_dump(exclude=excluded) == other.grant.model_dump(exclude=excluded)
         )
+
+
+class FrozenReceiptIdentity(Protocol):
+    @property
+    def operation_id(self) -> UUID: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def retained_receipt(self) -> RetainedLocalReceipt: ...
 
 
 class LocalReceiptStore:
@@ -142,11 +154,18 @@ class LocalReceiptStore:
         self._commit_acknowledgements(self.prepare_acknowledgements(values))
 
     def prepare_acknowledgements(
-        self, values: Sequence[tuple[LocalPermitReceipt, TerminalReceipt]]
+        self, values: Sequence[tuple[LocalPermitReceipt | FrozenReceiptIdentity, TerminalReceipt]]
     ) -> tuple[tuple[UUID, RetainedLocalReceipt | None], ...]:
         if len(values) > 256:
             raise ValueError("local terminal acknowledgement exceeds its entry limit")
-        prepared = tuple(self._prepare_acknowledgement(receipt, ack) for receipt, ack in values)
+        prepared = tuple(
+            self._prepare_acknowledgement(receipt, ack)
+            if isinstance(receipt, LocalPermitReceipt)
+            else self._prepare_retained_acknowledgement(
+                receipt.operation_id, receipt.generation, receipt.retained_receipt, ack
+            )
+            for receipt, ack in values
+        )
         if len({key for key, _ in prepared}) != len(prepared):
             raise ValueError("local terminal acknowledgement repeats an operation")
         return prepared
@@ -170,8 +189,24 @@ class LocalReceiptStore:
             or terminal.protocol_generation != receipt.reservation.protocol_generation
         ):
             raise ValueError("local terminal acknowledgement does not match its issue")
+        return self._prepare_retained_acknowledgement(
+            operation_id,
+            receipt.reservation.protocol_generation,
+            RetainedLocalReceipt.freeze(receipt),
+            terminal,
+        )
+
+    def _prepare_retained_acknowledgement(
+        self,
+        operation_id: UUID,
+        generation: int,
+        proof: RetainedLocalReceipt,
+        terminal: TerminalReceipt,
+    ) -> tuple[UUID, RetainedLocalReceipt | None]:
+        if terminal.operation_id != operation_id or terminal.protocol_generation != generation:
+            raise ValueError("local terminal acknowledgement does not match its issue")
         retained = self._values.get(operation_id)
-        if retained is not None and not retained.same_issue(RetainedLocalReceipt.freeze(receipt)):
+        if retained is not None and not retained.same_issue(proof):
             raise ValueError("local receipt acknowledgement does not match its issue")
         return operation_id, retained
 

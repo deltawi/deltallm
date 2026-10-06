@@ -7,7 +7,18 @@ The final CPU remediation regression contains 8,674 cases: 6,059 component/chart
 passed. Migration 143 passed fresh, last-release, and shared-feature paths. Its
 three function-local execution settings remove the repeatable funding timeout
 without changing money checks, deadlines, or database-wide reporting policy.
-The exact-image and fixed-profile load gates remain open.
+Commit `476904b4` passed all five exact-image checks. Its isolated short 50,
+100, and 200 RPS stages passed. Short 500 RPS failed, so no ten-minute stage
+started. Host isolation used an approved temporary Rancher shutdown and restart.
+The unchanged first run and isolated rerun are both preserved.
+
+The clean replay adds six measured costs and corrections to the original
+26-measure record: scalar configuration reads, stable dependency logging,
+the frozen async detector, matched terminal aggregation, function-local SQL
+execution policy, and immutable terminal handoffs. The last is now implemented
+and passed 249 focused checks. Its full confirmation passed all 8,704 cases.
+Source, lock, image-export, configuration, and capacity checks passed again.
+The new exact image and fixed-profile load gates remain open.
 
 The source record is the earlier 26-measure extraction. The first clean image,
 `22f62c8c`, omitted request-path and worker measures even though its accounting

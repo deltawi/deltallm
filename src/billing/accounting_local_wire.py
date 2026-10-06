@@ -24,6 +24,7 @@ from src.billing.accounting_protocol import (
     ReserveDecision,
 )
 from src.billing.accounting_snapshots import reservation_bytes
+from src.billing.accounting_terminal_snapshots import LocalTerminalValue, freeze_terminal_snapshots
 from src.billing.selector_charge import FrozenBillingContract
 
 
@@ -160,21 +161,14 @@ def expand_compact_local_permits(
     return tuple(result)
 
 
-def wire_local_terminals(values: Sequence[LocalPermitFinalization], *, generation: int) -> bytes:
-    frozen = freeze_local_terminals(values, generation=generation)
-    return _batch_json(
-        tuple(
-            WireLocalTerminal(
-                grant=WireLocalGrant(
-                    **value.receipt.grant.model_dump(exclude={"observed_monotonic"})
-                ),
-                permit_ordinal=value.receipt.permit_ordinal,
-                reservation=value.receipt.reservation,
-                finalization=value.finalization,
-            )
-            for value in frozen
-        )
-    )
+def wire_local_terminals(values: Sequence[LocalTerminalValue], *, generation: int) -> bytes:
+    frozen = freeze_terminal_snapshots(values, generation=generation)
+    if not frozen:
+        raise ValueError("local wire batch must contain 1 to 256 entries")
+    body = b"[" + b",".join(value.wire_document() for value in frozen) + b"]"
+    if len(body) > 1_048_576:
+        raise ValueError("local wire batch exceeds its byte limit")
+    return body
 
 
 def restore_wire_terminals(

@@ -10,11 +10,11 @@ from pydantic import TypeAdapter
 
 from src.billing.accounting_http import AccountingHttpTransport
 from src.billing.accounting_local_leases import (
-    LocalPermitFinalization,
     LocalPermitGrant,
     LocalPermitReturn,
 )
-from src.billing.accounting_local_terminal import freeze_local_terminals, validated_terminal_acks
+from src.billing.accounting_local_terminal import validated_terminal_acks
+from src.billing.accounting_terminal_snapshots import LocalTerminalValue, freeze_terminal_snapshots
 from src.billing.accounting_local_wire import WireLocalGrant, wire_local_terminals
 from src.billing.accounting_protocol import PreissuedPermitAllocation, ReserveDecision
 from src.billing.accounting_rpc_contracts import (
@@ -139,11 +139,11 @@ class RemoteLocalLeasePersistence:
             raise invalid_result() from None
 
     async def finalize_batch(
-        self, values: Sequence[LocalPermitFinalization], *, expires_at: float
+        self, values: Sequence[LocalTerminalValue], *, expires_at: float
     ) -> tuple[JournalReceipt, ...]:
         if not values:
             return ()
-        values = freeze_local_terminals(values, generation=self._generation)
+        values = freeze_terminal_snapshots(values, generation=self._generation)
         payload = self._payload(
             values=wire_local_terminals(values, generation=self._generation),
             expires_at=expires_at,

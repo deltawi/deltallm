@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from src.billing.accounting_journal import JournalReceipt, TerminalJournalBatch, journal_batch
-from src.billing.accounting_local_leases import LocalPermitFinalization
+from src.billing.accounting_terminal_snapshots import LocalTerminalValue
 from src.db.accounting_batches import result_rows, with_recovery
 from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
 from src.db.accounting_permit_results import invalid_result
@@ -18,7 +18,7 @@ class AccountingJournalRepository:
         self._calls = AccountingDatabaseCalls(db, statement_budget_seconds=statement_budget_seconds)
 
     async def append_batch(
-        self, values: Sequence[LocalPermitFinalization], *, expires_at: float
+        self, values: Sequence[LocalTerminalValue], *, expires_at: float
     ) -> tuple[JournalReceipt, ...]:
         if not values:
             return ()
@@ -84,14 +84,13 @@ def _receipts(
 ) -> dict[str, JournalReceipt]:
     result = {}
     for value in batch.values:
-        finalization = value.finalization
-        key = str(finalization.operation_id)
+        key = str(value.operation_id)
         if key not in rows:
             continue
         row = rows[key]
         if (
             row.get("operation_id") != key
-            or row.get("outcome") != finalization.outcome.value
+            or row.get("outcome") != value.outcome.value
             or type(row.get("journal_sequence")) is not int
             or type(row.get("replayed")) is not bool
         ):
@@ -99,9 +98,9 @@ def _receipts(
         try:
             result[key] = JournalReceipt(
                 protocol_generation=batch.generation,
-                operation_id=finalization.operation_id,
+                operation_id=value.operation_id,
                 journal_sequence=row["journal_sequence"],
-                outcome=finalization.outcome,
+                outcome=value.outcome,
                 replayed=row["replayed"],
             )
         except ValueError:

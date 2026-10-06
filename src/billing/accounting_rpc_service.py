@@ -8,8 +8,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from src.billing.accounting_health import AccountingBacklogProbe
-from src.billing.accounting_local_leases import LocalPermitFinalization
-from src.billing.accounting_local_terminal import local_terminal_bytes
+from src.billing.accounting_terminal_snapshots import FrozenLocalTerminal, freeze_terminal_snapshots
 from src.billing.accounting_rpc_contracts import (
     AccountingRpcHealth,
     LocalFundingRequest,
@@ -41,7 +40,7 @@ from src.telemetry.lifecycle import (
 
 @dataclass(frozen=True, slots=True)
 class QueuedTerminal:
-    document: bytes
+    snapshot: FrozenLocalTerminal
     expires_at: float
 
 
@@ -87,7 +86,7 @@ class AccountingRpcService:
             max_batch_size=max_batch_size,
             max_pending=max_pending,
             dwell_seconds=dwell_seconds,
-            payload_size=lambda value: 2 * len(value.document) + 2048,
+            payload_size=lambda value: value.snapshot.retained_bytes,
             max_batch_bytes=1_048_576,
             max_retained_bytes=max_retained_bytes,
             observe_queue_wait=lambda seconds: observe_accounting_queue_wait(
@@ -178,12 +177,10 @@ class AccountingRpcService:
             value.restore(observed_monotonic=asyncio.get_running_loop().time())
             for value in request.values
         )
-        encoded = tuple(
-            local_terminal_bytes(value, generation=self._generation) for value in values
-        )
+        snapshots = freeze_terminal_snapshots(values, generation=self._generation)
         async with asyncio.timeout_at(expires_at):
             results = await asyncio.gather(
-                *(self.terminals.submit(QueuedTerminal(value, expires_at)) for value in encoded)
+                *(self.terminals.submit(QueuedTerminal(value, expires_at)) for value in snapshots)
             )
         return rpc_batch_bytes(tuple(results))
 
@@ -195,9 +192,7 @@ class AccountingRpcService:
         )
         try:
             result = await self._journal.append_batch(
-                tuple(
-                    LocalPermitFinalization.model_validate_json(value.document) for value in values
-                ),
+                tuple(value.snapshot for value in values),
                 expires_at=deadline,
             )
         except BaseException as exc:

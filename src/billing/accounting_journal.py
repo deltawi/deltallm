@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-import hashlib
 import json
 
-from src.billing.accounting_local_leases import LocalPermitFinalization
-from src.billing.accounting_local_terminal import freeze_local_terminals
+from src.billing.accounting_terminal_snapshots import (
+    FrozenLocalTerminal,
+    LocalTerminalValue,
+    freeze_terminal_snapshots,
+)
 from src.billing.accounting_terminal_receipts import JournalReceipt as JournalReceipt
-from src.billing.accounting_snapshots import finalization_bytes, reservation_bytes
-from src.billing.money import money_string
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,58 +19,38 @@ class TerminalJournalBatch:
     """Own complete immutable documents before the first persistence await."""
 
     generation: int
-    values: tuple[LocalPermitFinalization, ...]
+    values: tuple[FrozenLocalTerminal, ...]
     compact: str
     reservations: tuple[str, ...]
     finalizations: tuple[str, ...]
 
     @property
     def keys(self) -> tuple[str, ...]:
-        return tuple(str(value.finalization.operation_id) for value in self.values)
+        return tuple(str(value.operation_id) for value in self.values)
 
 
-def journal_batch(values: Sequence[LocalPermitFinalization]) -> TerminalJournalBatch:
-    generations = {value.finalization.protocol_generation for value in values}
+def journal_batch(values: Sequence[LocalTerminalValue]) -> TerminalJournalBatch:
+    generations = {
+        value.generation
+        if isinstance(value, FrozenLocalTerminal)
+        else value.finalization.protocol_generation
+        for value in values
+    }
     if len(generations) != 1:
         raise ValueError("a terminal journal batch requires one generation")
     generation = generations.pop()
-    frozen = freeze_local_terminals(values, generation=generation)
-    identities, reservations, finalizations = [], [], []
+    frozen = freeze_terminal_snapshots(values, generation=generation)
+    reservations, finalizations = [], []
     ordinals = set()
     for value in frozen:
-        proof = value.receipt
+        proof = value.retained_receipt
         ordinal = (proof.grant.grant_id, proof.permit_ordinal)
         if ordinal in ordinals:
             raise ValueError("a terminal journal batch repeats a grant ordinal")
         ordinals.add(ordinal)
-        reservation = reservation_bytes(proof.reservation)
-        finalization = finalization_bytes(value.finalization)
-        reservation_fields = proof.reservation.model_dump(mode="json")
-        reservations.append(reservation.decode())
-        finalizations.append(finalization.decode())
-        identities.append(
-            {
-                "operation_id": str(value.finalization.operation_id),
-                "grant_id": proof.grant.grant_id,
-                "grantee_id": proof.grant.grantee_id,
-                "fence_token": str(proof.grant.fence_token),
-                "permit_ordinal": proof.permit_ordinal,
-                "allowance_exact": money_string(proof.reservation.allowance),
-                "outcome": value.finalization.outcome.value,
-                "expires_at": proof.reservation.expires_at.isoformat(),
-                "subject": {
-                    "attribution": {
-                        key: getattr(proof.reservation.attribution, key)
-                        for key in ("api_key", "user_id", "team_id", "organization_id", "model")
-                    },
-                    "windows": reservation_fields["windows"],
-                    "allowance": reservation_fields["allowance"],
-                },
-                "reservation_sha256": hashlib.sha256(reservation).hexdigest(),
-                "finalization_sha256": hashlib.sha256(finalization).hexdigest(),
-            }
-        )
-    compact = json.dumps(identities, allow_nan=False, sort_keys=True, separators=(",", ":"))
+        reservations.append(value.reservation_json.decode())
+        finalizations.append(value.finalization_json.decode())
+    compact = (b"[" + b",".join(value.journal_identity_json for value in frozen) + b"]").decode()
     # The actual bound includes metadata and both document arrays, not just the
     # request DTO. Escaping a document inside an array also consumes capacity.
     size = len(compact.encode()) + sum(

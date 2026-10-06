@@ -15,6 +15,7 @@ from src.billing.accounting_protocol import (
     PreissuedPermitAllocation,
     ReserveDecision,
 )
+from src.billing.accounting_terminal_snapshots import FrozenLocalTerminal, LocalTerminalValue
 from src.db.accounting_batches import batch_payload, one_generation, result_rows, with_recovery
 from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
 from src.db.accounting_local_lease_results import (
@@ -136,10 +137,16 @@ class AccountingLocalLeaseRepository:
         return [results[key] for key in keys]
 
     async def finalize_batch(
-        self, finalizations: Sequence[LocalPermitFinalization], *, expires_at: float
+        self, finalizations: Sequence[LocalTerminalValue], *, expires_at: float
     ) -> list[FinalizationReceipt]:
         if not finalizations:
             return []
+        # The non-native adapter keeps its current payload contract. Restore a
+        # private graph here; native journal and transport owners reuse bytes.
+        finalizations = tuple(
+            value.restore() if isinstance(value, FrozenLocalTerminal) else value
+            for value in finalizations
+        )
         keys = [str(item.finalization.operation_id) for item in finalizations]
         generation = one_generation(item.finalization.protocol_generation for item in finalizations)
         if len(
