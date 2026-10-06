@@ -995,6 +995,39 @@ memory accounting and test exact-width and oversized payloads before release.
 
 - [x] Verify the redundant queue-boundary reconstruction in source.
 - [x] Verify existing financial paths and one retained snapshot through ACK.
-- [ ] Run the bounded retained-snapshot 500 RPS probe on the same image.
+- [x] Run the bounded retained-snapshot 500 RPS probe on the same image.
 - [ ] Implement only a supported change, preserve full-width contracts, and
   run source checks and immutable-image qualification before completion.
+
+### Retained-snapshot result and header-only probe
+
+The private retained-snapshot probe failed. It completed 5,199 of 15,000
+requests successfully, dropped 1,795 arrivals, and returned 8,006 HTTP 503
+responses. p95 was 3,415.45 ms and p99 was 4,116.57 ms. Native database
+deadlines came first, followed by accounting readiness failures and then a
+provider read error and cooldown. This does not establish that snapshot
+reuse fixes the latency problem. Do not ship the private prototype.
+
+Accounting drain missed its 180-second limit with one safely held uncertain
+provider operation. All grants and terminal and reporting queues were empty;
+no unsafe budget window was recorded. Charges matched all four scopes, but
+partial-run success identity remained unknown. Do not release that operation
+early or turn an unknown identity into success to pass the test.
+
+Keep `native-5b271273-500-8g-frozen-probe-20261006`, its private proof tests,
+and raw logs. Both VMs, original running workloads, and contexts were restored.
+No runtime source has changed.
+
+The API profile also recorded task-wrapper overhead in Starlette's base
+middleware. The next small private check bypasses that wrapper only for
+rate-limit response headers. It forwards the original receive stream, adds
+the same headers at response start, and does not buffer response bodies or
+create a child task. Admission, billing, deadlines, and accounting stay
+unchanged. Profiled cumulative time is a lead, not proof of an unprofiled
+percentage saving. Treat this probe as diagnostic, not release qualification.
+
+- [x] Reject the unsupported retained-snapshot prototype and preserve evidence.
+- [x] Verify header parity, streaming, cancellation, disconnect, and non-HTTP paths.
+  All 29 existing and private checks passed; both injected hooks compiled.
+- [ ] Run the same bounded 500 RPS header-only diagnostic.
+- [ ] Ship only a supported change, then qualify a fresh immutable image.

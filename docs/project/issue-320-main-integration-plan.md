@@ -213,6 +213,17 @@ be shipped as-is: full-width wire and retained-byte contracts must be
 separated and tested if it improves performance. Runtime source and the
 sealed `5b271273` image remain unchanged; full qualification is still open.
 
+The retained-snapshot diagnostic failed: 5,199/15,000 successes, 1,795
+dropped arrivals, 8,006 HTTP 503 responses, p95 3,415.45 ms, and p99
+4,116.57 ms. Native database deadlines preceded readiness failures and
+a provider read error. Drain failed with one safely held uncertain
+operation. Reject the private prototype; no runtime change is supported
+by this result. All original resources were restored and evidence kept.
+Next, verify a smaller private header-only ASGI wrapper and test it at
+500 RPS with the original financial behavior. Keep admission, durable
+acknowledgements, deadlines, resource limits, and all qualification gates.
+Do not rerun lower tiers during this iteration.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
