@@ -445,6 +445,21 @@ preservation, and unchanged failure waiting for both worker types. All 264
 affected component cases and 56 real PostgreSQL cases passed. This change is
 not yet load-qualified.
 
+### 36. Recheck reporting work after the checkpoint lock
+
+Native reporting first selects candidate partitions, then locks one checkpoint.
+Another worker can finish its work between those steps. The old query could
+claim the advanced checkpoint and return no event keys. Strict validation then
+reported an outage, although the database call succeeded, and left an empty
+lease live for 30 seconds.
+
+Lock the current checkpoint before the final indexed, single-row work lookup.
+If all work is done, do not claim it. If some work remains, return only that
+work. A controlled real-PostgreSQL test reproduced the old failure and verifies
+both cases, exact money, reporting counts, and absence of abandoned leases.
+Keep result validation, financial fences, lease bounds, and caller deadlines.
+No migration is needed. Fresh upper-tier qualification remains required.
+
 ## Important measures that were tested and rejected
 
 Do not replay these experiments as part of the integration:

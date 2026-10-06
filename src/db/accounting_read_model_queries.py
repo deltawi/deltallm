@@ -79,6 +79,8 @@ LEFT JOIN LATERAL (
 ) page ON c.accounting_partition IS NOT NULL
 """
 
+# Lock the current checkpoint before the second work check. A concurrent commit
+# can advance its frontier after the first candidate snapshot.
 CLAIM = (
     """
 WITH protocol AS MATERIALIZED (
@@ -103,12 +105,21 @@ WITH protocol AS MATERIALIZED (
  SELECT c.accounting_partition FROM candidates
  CROSS JOIN LATERAL unnest(candidates.parts) n
  CROSS JOIN LATERAL (
-  SELECT c.accounting_partition FROM deltallm_accounting_projection_checkpoints c
+  SELECT c.accounting_partition,c.last_sequence FROM deltallm_accounting_projection_checkpoints c
   WHERE c.projection_name=$1 AND c.protocol_name='primary' AND c.generation=$2
    AND c.accounting_partition=n
    AND (c.lease_expires_at IS NULL OR c.lease_expires_at<=clock_timestamp())
-  FOR UPDATE SKIP LOCKED
- ) c LIMIT 1
+  FOR UPDATE SKIP LOCKED OFFSET 0
+ ) c CROSS JOIN LATERAL (
+  SELECT 1 FROM deltallm_accounting_events e
+  WHERE e.protocol_name='primary' AND e.generation=$2
+   AND e.accounting_partition=c.accounting_partition
+   AND (e.protocol_name,e.generation,e.accounting_partition,e.sequence)>
+    ('primary',$2,c.accounting_partition,c.last_sequence)
+   AND e.event_type IN ('finalized','reconciled')
+  ORDER BY e.protocol_name,e.generation,e.accounting_partition,e.sequence LIMIT 1 OFFSET 0
+ ) pending
+ LIMIT 1
 ), claimed AS (
  UPDATE deltallm_accounting_projection_checkpoints c SET lease_owner=$3,lease_token=$4,
   lease_expires_at=clock_timestamp()+make_interval(secs=>$5::integer),

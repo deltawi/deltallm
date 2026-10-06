@@ -106,8 +106,23 @@ can schedule about 300 claim calls per second. Journal and reporting workers
 now reuse the existing bounded idle-wait owner, while active processing, failure
 backoff, financial fences, and health freshness remain unchanged. All 127
 focused checks passed. Affected component confirmation passed 264 cases, and
-real PostgreSQL confirmation passed 56 cases. New selected upper-tier results
-remain pending. Do not call this a completed 500 RPS fix.
+real PostgreSQL confirmation passed 56 cases. Its sealed `c1b3ee9d` image passed
+all five checks. Selected 200 RPS completed all 6,000 requests but failed the
+queue-slope gate. Selected 500 RPS completed 4,725/15,000 requests and failed
+with one unsettled operation. No lower tier or ten-minute stage ran.
+
+Bounded 500 RPS diagnostics then traced billing rejection to reporting health.
+The last diagnostic completed 13,812/15,000 requests, with 1,188 billing HTTP
+503 responses; all work drained in 12.12 seconds. A controlled PostgreSQL test
+reproduced a reporting claim race: another worker can advance the checkpoint
+after candidate selection, leaving an invalid empty claim and a live lease.
+The repair checks for remaining work after locking the current checkpoint.
+It keeps strict result validation and an indexed single-row lookup. This proves
+the race and its repair, not that all load failures are fixed. A new upper-tier
+run remains required. Focused confirmation passed 109 component cases and 37
+real PostgreSQL cases, including all four planner profiles. One existing role
+startup case failed, then passed unchanged alone. Both results are preserved.
+The earlier full PostgreSQL limitation remains open.
 
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four

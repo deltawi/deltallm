@@ -620,6 +620,64 @@ money-release rule, or qualification limit changes.
 - [x] Pass 127 focused worker and contract checks in 0.74 seconds.
 - [x] Pass 264 affected component checks in 4.22 seconds and 56 real PostgreSQL
   role, replay, recovery, reporting, and shutdown checks in 33.61 seconds.
-- [ ] Seal the new image and run selected upper tiers without lower-tier reruns.
+- [x] Seal `c1b3ee9d` and run selected upper tiers without lower-tier reruns.
 - [ ] Resolve remaining release-timeout or funding-response failures if they recur.
 - [ ] Pass upper-tier diagnostics, then complete final qualification.
+
+### Reporting checkpoint claim race
+
+The `c1b3ee9d` selected run completed all 6,000 requests at 200 RPS, with p95
+50.81 ms and p99 104.33 ms. Its queue slope was +0.22435, above the unchanged
++0.01 limit. It is not a pass. The 500 RPS stage completed 4,725/15,000
+requests, dropped 260 arrivals, and returned 10,015 HTTP 503 responses. One
+provisional operation remained after the 181.25-second failed drain. Keep
+`artifacts/qualification/native-c1b3ee9d-upper-20261006` as failed evidence.
+
+Three bounded 500 RPS diagnostics added cause checks, not release results:
+
+- `native-c1b3ee9d-500-diagnostic-20261006`: 6,730 successes, 278 dropped
+  arrivals, and seven provisional operations after the failed drain. Provider
+  failures entered cooldown, but the first diagnostic did not capture their
+  original cause.
+- `native-c1b3ee9d-500-provider-cause-20261006`: 13,851 successes and 1,149
+  billing HTTP 503 responses. No arrivals dropped. No provider error or
+  cooldown occurred. All work drained in 10.15 seconds. p95 was 441.26 ms
+  and p99 was 575.98 ms, so this is still a failed short diagnostic.
+- `native-c1b3ee9d-500-native-cause-20261006-2`: 13,812 successes and 1,188
+  billing HTTP 503 responses. No arrivals dropped. Reporting workers became
+  unavailable, then admission rejected funding. All work drained in 12.12
+  seconds. p95 was 323.01 ms and p99 was 433.16 ms. The first helper attempt,
+  without the `-2` suffix, stopped before any 500 RPS arrivals because it tried
+  to signal a completed setup pod. Preserve it as an interrupted helper run.
+
+The last trace recorded no database-call error. A successful query with an
+invalid result was therefore a specific hypothesis. The controlled database
+test confirmed it: worker B selects unfinished work, worker A commits all of
+that work and clears its lease, then B locks the advanced checkpoint. The old
+query claims the row but returns no event keys. Strict result validation then
+marks the worker unavailable. The committed empty lease remains live for 30
+seconds. Reporting health also blocks new billing requests.
+
+The repair locks the current checkpoint, then checks its current frontier with
+an indexed, single-row event lookup before it claims the row. Completed work
+returns a normal empty result with no new lease. Partially completed work
+returns only its remaining events. No health, result-validation, money, lease,
+pool, resource, deadline, or qualification bound is relaxed.
+
+- [x] Reproduce the invalid empty claim against unchanged runtime SQL.
+- [x] Repair the post-lock work check and prove both full and partial advancement.
+- [x] Confirm strict decoding, exact reporting effects, and all retained-history plans.
+- [ ] Seal the repair and run 500 RPS without repeating lower tiers.
+- [ ] Pass selected 200/500, then the complete fixed-image qualification once.
+
+Keep the initial query-plan failure: an outer existence check allowed a history
+scan under the alternate join profile. The bounded lookup replaces that shape.
+The host still has unrelated load. Do not call these isolated host results.
+
+Focused confirmation passed 109 component cases in 0.73 seconds and 37 real
+PostgreSQL cases in 27.37 seconds. All four planner profiles passed. The first
+bounded-query confirmation passed 41 cases but failed one existing native-role
+startup/cleanup case. That unchanged case passed alone in 1.64 seconds.
+Preserve all initial race, test-barrier, query-plan, and startup failures with
+their confirmations in `artifacts/qualification/verification-reporting-race-20261006`.
+This targeted result does not close the earlier full PostgreSQL limitation.
