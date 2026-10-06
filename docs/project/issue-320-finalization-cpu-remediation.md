@@ -956,4 +956,45 @@ to identify costly request work. Keep original single-batch scheduling and
 all existing limits. The profiler changes timing and cannot qualify release.
 
 - [x] Reject the failed private pipeline; keep runtime source unchanged.
-- [ ] Identify API CPU hotspots with one bounded profile before another change.
+- [x] Identify API CPU hotspots with one bounded profile before another change.
+
+### API CPU profile and immutable queue probe
+
+The three-second profile ran in one API process, with original single-batch
+scheduling. It recorded 4,397,647 function calls, 18,457 JSON encodes, 7,132
+Python model validations including nested calls, and 8,302 model serializer
+calls. JSON encoding was its largest individual internal-time entry. The
+profiled process used 2.89 CPU-seconds. These measurements include profiler
+overhead; do not treat them as uninstrumented per-request costs.
+
+All 15,000 stage requests succeeded and exact accounting passed, but the
+profiled stage failed latency (p95 1,456.36 ms; p99 1,847.82 ms). Its queue
+slope was negative, and accounting drained in 12.10 seconds. Preserve
+`native-5b271273-500-8g-cpu-profile-20261006` as diagnostic evidence. Both
+VM settings, original workloads, and contexts were restored.
+
+Source inspection found that `LocalAccountingService.finalize_operation`
+builds a validated `FrozenLocalTerminal`, extracts its document, and drops
+the cached fields. `LocalTerminalOwner.finalize_documents` then rebuilds the
+same snapshot when the queue drains. The remote and native wire boundaries
+still need their separate validation; this API queue reconstruction does not.
+
+The next private probe retains that immutable object through the original
+single queue, preserving durable acknowledgements and monetary proofs.
+It charges the complete snapshot conservatively inside the original byte
+budget. Five existing retry, paid-cache, ownership, and signed-wire checks
+passed. A direct snapshot-identity check passed with the repository bootstrap:
+one snapshot reaches persistence unchanged and all retained state clears
+after acknowledgement. The first standalone private test lacked that
+bootstrap and failed collection; its log remains preserved.
+
+This prototype uses the conservative retained charge for collection too.
+It does not establish full-width payload compatibility and must not be
+shipped as-is. If it helps the benchmark, separate wire-size and retained-
+memory accounting and test exact-width and oversized payloads before release.
+
+- [x] Verify the redundant queue-boundary reconstruction in source.
+- [x] Verify existing financial paths and one retained snapshot through ACK.
+- [ ] Run the bounded retained-snapshot 500 RPS probe on the same image.
+- [ ] Implement only a supported change, preserve full-width contracts, and
+  run source checks and immutable-image qualification before completion.

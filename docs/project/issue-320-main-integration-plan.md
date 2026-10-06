@@ -203,6 +203,16 @@ API process for three seconds under 500 RPS with original scheduling.
 Use that bounded CPU evidence to select the next change, not another
 increase in concurrency. Full qualification remains open.
 
+The three-second CPU profile identified heavy JSON encoding and model
+validation. Source shows a redundant API terminal snapshot construction:
+the service freezes it, keeps only its bytes, then reconstructs it on drain.
+The next private probe keeps the immutable snapshot in the original single
+queue and charges its full retained memory. Five existing financial-path
+checks and a direct one-snapshot ACK check passed. This prototype cannot
+be shipped as-is: full-width wire and retained-byte contracts must be
+separated and tested if it improves performance. Runtime source and the
+sealed `5b271273` image remain unchanged; full qualification is still open.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
