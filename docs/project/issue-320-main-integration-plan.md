@@ -300,6 +300,13 @@ queries, deadlines, and load gates are unchanged. Seal a new canonical image
 before upper-tier testing. This is verified write-churn reduction, not yet
 proof that 500 RPS qualifies. Preserve both `7b24cc12` failed load results.
 
+The fresh `1aaf2bda` image passed all five offline checks, and both packaged
+migration hashes match source. Its index digest is
+`sha256:c927258c258d910ffa9f79189c84323bb7180a8224568634af15728fefb296bd`.
+The build-only relay and verification fixture are stopped before testing.
+Proceed to uninstrumented selected 500, selected 200, and then the complete
+series only if preceding strict stages pass. No lower-tier iteration reruns.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

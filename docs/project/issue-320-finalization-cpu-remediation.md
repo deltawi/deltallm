@@ -1227,7 +1227,9 @@ readers retain bounded key plans, fence/replay correctness, and exact money.
 - [x] Preserve a failing retained-history heap-reuse regression before migration.
 - [x] Apply the guarded index-only migration and verify native/legacy behavior.
 - [x] Verify fresh/upgrade paths and rollback/forward reapplication.
-- [ ] Seal the new image, then run selected 500, 200, and the full strict series.
+- [x] Seal the new image and verify all five offline checks and migration hashes.
+- [ ] Pass selected 500 and 200 with the original strict gates.
+- [ ] Pass the full four-tier short and 600-second qualification series.
 
 The original regression failed with 0/2,048 heap-only updates. All nine reporting
 plan checks then passed with the guarded index-only migration, including all
@@ -1241,3 +1243,16 @@ Previous application-route verification still covers the unchanged Python;
 do not present this index-only check as a new full application-lane rerun.
 Rollback is `scripts/migration_fixtures/accounting_checkpoint_hot_update_rollback.sql`.
 Next, seal `20261006130000_accounting_checkpoint_hot_updates` in a fresh image.
+
+The canonical `deltallm-native:issue320-main-1aaf2bda` image is now sealed from
+commit `1aaf2bdae8165dc9083d217790280857ee028861`, with index digest
+`sha256:c927258c258d910ffa9f79189c84323bb7180a8224568634af15728fefb296bd`
+and arm64 platform digest
+`sha256:c2a4f56b3fecab039342b03194d204e05251fad6abe03e69dd699ff14bb8c9b1`.
+All five offline non-root checks passed. Both migration hashes match source;
+the new checkpoint migration SHA-256 is
+`b66ea9551d69a0b2aa319e7bad7c1c609f582205450e829f0396d32a7490d1cb`.
+The temporary allowlisted build relay is stopped, and no proxy environment
+entered the image. The owned PostgreSQL fixture is stopped with data retained.
+Run selected uninstrumented 500 for 60 seconds first in the declared eight-CPU
+environment, then selected 200 and the full series only on preceding passes.
