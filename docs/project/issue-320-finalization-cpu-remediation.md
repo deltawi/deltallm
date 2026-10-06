@@ -1101,4 +1101,65 @@ eight-CPU 60-second environment without the rejected private prototypes.
 Use it to locate the long wait before another runtime edit. Keep all
 financial checks and strict limits. This trace is not qualification.
 
-- [ ] Locate the tail wait with bounded timing on the unchanged image.
+- [x] Locate the tail wait with bounded timing on the unchanged image.
+
+The eight-CPU 60-second timing diagnostic failed: 29,937/30,000 successes,
+63 HTTP 503 responses, no drops, p95 940.71 ms, p99 1,453.29 ms, and slope
++4.7524. Accounting drained safely in 12.16 seconds. Preserve
+`native-5b271273-500-8cpu-8g-60s-wait-timing-20261006`; it is not qualification.
+All original resources were restored. Bounded snapshots cover only their
+armed interval, not all sixty arrival seconds. Do not report them as complete
+stage totals. Local finalization reached 889.93 ms; native materialization
+reached 510.56 ms. The trace also captured a journal-append lock timeout.
+DNS mean was 2.43 ms and maximum 279.46 ms. It is not a DNS-only failure.
+
+### Narrow terminal-claim capacity locks
+
+Source shows that an ordinary journal claim locks the same partition capacity
+row as foreground journal append, even though it changes only journal leases.
+It needs that lock only when marking exhausted entries failed and increasing
+`failed_entries`. The controlled PostgreSQL 15 check reproduced this coupling:
+an ordinary claim timed out behind a held capacity lock. Two exhausted-claim
+checks passed before the fix, proving that their counter lock remains needed.
+
+The append-only `20261006120000_accounting_terminal_claim_capacity_locks`
+migration restricts the lock's bounded candidate keys to entries with five
+attempts. It guards the exact installed function shape and fails closed on
+an unexpected definition. It does not add a query, remove a lease/fence or
+byte/entry limit, release capacity early, or change monetary calculations.
+All 30 full worker checks passed after the migration, including concurrent
+claims, retry, replay, expiry, cancellation, corrupt payloads, and exact money.
+
+This removes a demonstrated unnecessary contention point. It is not yet proof
+that 500 RPS qualifies. Verify retained-history plans, current/upgrade migration
+paths, and affected source gates before sealing a new immutable image.
+
+Rollout uses the existing coordinated Prisma migration job before application
+deployment. There is no schema or generated-client change. The explicit
+rollback script is `scripts/migration_fixtures/accounting_terminal_claim_lock_rollback.sql`.
+It restores the prior, more restrictive lock without deleting or changing
+records. Validate rollback and forward reapplication on the owned fixture.
+Do not edit applied migration files or manually rewrite migration history.
+
+- [x] Reproduce ordinary-claim contention before editing the function.
+- [x] Keep exhausted claims fenced and atomic; pass all 30 worker checks.
+- [x] Verify four retained-history planner modes for both claim branches.
+  All 54 existing affected PostgreSQL checks and four new exhausted-key
+  plan checks passed. The three focused lock checks passed again.
+- [x] Verify fresh/upgrade migrations and rollback/forward reapplication.
+  Fresh, v0.1.42, and shared-feature upgrade paths passed. Rollback reproduced
+  the original contention, and forward reapplication restored all three checks.
+- [ ] Complete affected source gates and seal a new image.
+- [ ] Pass selected upper tiers, then the full strict qualification series.
+
+Source verification completed: 30 worker checks, 54 affected PostgreSQL
+checks, four additional plan checks, 93 component checks, and all 1,649
+application-route checks passed. The generated client, touched-file lint,
+format, and diff checks passed. The application lane reported 147 warnings
+from existing test/dependency paths; no runtime Python code was changed.
+Keep all before, after, rollback, and confirmation logs in
+`artifacts/qualification/verification-terminal-claim-lock-20261006`.
+Next, seal the changed migration in a fresh canonical image, verify it,
+and run selected 500 then 200 in the declared eight-CPU environment.
+Use the same supported 60-second short duration and strict pass gates.
+Only start the full series after both upper tiers pass.

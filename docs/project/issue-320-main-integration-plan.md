@@ -247,6 +247,24 @@ host paging. Next, use the existing bounded terminal/RPC timing trace
 on this unchanged eight-CPU image to locate the remaining wait.
 Full qualification remains open.
 
+The eight-CPU wait trace captured a journal-append lock timeout. Source and
+a controlled PostgreSQL 15 regression identified an unnecessary contention
+point: normal background claims lock the same capacity row as foreground
+append, despite not updating it. A guarded append-only migration now locks
+that counter only for exhausted claims. The original ordinary-claim test
+failed, then all 30 worker checks passed with the change. Monetary effects,
+fences, limits, and pass gates remain unchanged. Retained-history plans,
+migration paths, rollback, source gates, and a new image still need verification.
+This is not a 500 RPS pass. Continue upper-tier testing before the full series.
+
+The lock-scope change passed all affected checks: 30 worker, 54 PostgreSQL,
+four additional retained-history plans, 93 component, and 1,649 complete
+application-route cases. Fresh, supported-release, and shared-feature
+upgrade migrations passed, as did rollback and forward reapplication.
+Client generation, lint, formatting, and diff checks passed. Next, seal
+the new SQL migration in a fresh canonical image and verify its exact
+artifact before selected upper-tier testing. All load gates remain open.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

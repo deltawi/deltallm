@@ -393,3 +393,96 @@ async def test_zero_and_fractional_charge_preserve_unresolved_provisional_state(
         str(item.operation_id),
     )
     assert rows[0]["accounting_state"] == "provisional"
+
+
+async def test_ordinary_claim_does_not_lock_unchanged_capacity(accounting_db):
+    clients, generation = accounting_db
+    db = clients[0]
+    await pending(db, generation)
+    connection = await asyncpg.connect(os.environ["DATABASE_URL"], timeout=5, command_timeout=5)
+    try:
+        async with connection.transaction():
+            await connection.fetch(
+                "SELECT accounting_partition FROM deltallm_accounting_terminal_capacity "
+                "WHERE protocol_name='primary' AND generation=$1 "
+                "ORDER BY accounting_partition FOR UPDATE",
+                generation,
+            )
+            repo = AccountingJournalWorkerRepository(db, statement_budget_seconds=0.25)
+            claim = await repo.claim(
+                generation=generation, worker_id="capacity-independent", expires_at=deadline()
+            )
+            assert len(claim.sequences) == 4
+            capacity = await connection.fetchrow(
+                "SELECT pending_entries,failed_entries FROM deltallm_accounting_terminal_capacity "
+                "WHERE protocol_name='primary' AND generation=$1",
+                generation,
+            )
+            assert capacity["pending_entries"] == 4
+            assert capacity["failed_entries"] == 0
+        assert await repo.materialize(claim, expires_at=deadline()) == 4
+        assert (await counts(db, generation))["charged"] == 0
+    finally:
+        await connection.close(timeout=5)
+
+
+@pytest.mark.parametrize("exhausted", [1, 4])
+async def test_exhausted_claim_still_locks_capacity_before_atomic_failure(accounting_db, exhausted):
+    clients, generation = accounting_db
+    db = clients[0]
+    _, _, _, accepted = await pending(db, generation)
+    failed_sequences = [ack.journal_sequence for ack in accepted[:exhausted]]
+    await db.execute_raw(
+        "UPDATE deltallm_accounting_terminal_journal SET attempts=5 WHERE sequence=ANY($1::bigint[])",
+        failed_sequences,
+    )
+    connection = await asyncpg.connect(os.environ["DATABASE_URL"], timeout=5, command_timeout=5)
+    task = None
+    try:
+        async with connection.transaction():
+            await connection.fetch(
+                "SELECT accounting_partition FROM deltallm_accounting_terminal_capacity "
+                "WHERE protocol_name='primary' AND generation=$1 "
+                "ORDER BY accounting_partition FOR UPDATE",
+                generation,
+            )
+            task = asyncio.create_task(
+                worker(db).claim(
+                    generation=generation, worker_id="failure-counter", expires_at=deadline()
+                )
+            )
+            blocker = await connection.fetchval("SELECT pg_backend_pid()")
+            async with asyncio.timeout(1):
+                while not await connection.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity "
+                    "WHERE $1::integer=ANY(pg_blocking_pids(pid)))",
+                    blocker,
+                ):
+                    await asyncio.sleep(0.005)
+            assert not task.done()
+            assert (
+                await connection.fetchval(
+                    "SELECT failed_entries FROM deltallm_accounting_terminal_capacity "
+                    "WHERE protocol_name='primary' AND generation=$1",
+                    generation,
+                )
+                == 0
+            )
+        claim = await task
+        assert len(claim.sequences) == 4 - exhausted
+        rows = await db.query_raw(
+            "SELECT pending_entries,failed_entries FROM deltallm_accounting_terminal_capacity "
+            "WHERE protocol_name='primary' AND generation=$1",
+            generation,
+        )
+        assert rows[0]["pending_entries"] == 4
+        assert rows[0]["failed_entries"] == exhausted
+        if claim.sequences:
+            assert await worker(db).materialize(claim, expires_at=deadline()) == 4 - exhausted
+        assert (await counts(db, generation))["charged"] == exhausted
+        assert await _settle_grants(db, generation) == 0
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await connection.close(timeout=5)

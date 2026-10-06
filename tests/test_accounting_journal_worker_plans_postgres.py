@@ -115,3 +115,41 @@ async def test_actual_claim_materialize_and_failure_plans_are_history_independen
         assert "deltallm_accounting_grant_windows" not in observed
     else:
         assert relations <= observed
+
+
+@pytest.mark.parametrize("planner", ["auto", "generic", "custom", "alternate_join"])
+async def test_exhausted_capacity_lock_probes_only_selected_journal_keys(accounting_db, planner):
+    clients, generation = accounting_db
+    db = clients[0]
+    await seed_worker_history(db, generation)
+    _, _, _, accepted = await pending(db, generation)
+    sequences = [ack.journal_sequence for ack in accepted]
+    await db.execute_raw(
+        "UPDATE deltallm_accounting_terminal_journal SET attempts=5 WHERE sequence=ANY($1::bigint[])",
+        sequences,
+    )
+    async with capture_accounting_plans(os.environ["DATABASE_URL"], planner=planner) as captured:
+        claim = await worker(captured).claim(
+            generation=generation, worker_id="exhausted-plan", limit=4, expires_at=deadline()
+        )
+    assert claim.sequences == ()
+    assert captured.errors == []
+    observed = False
+    for entry in captured.plans:
+        for node in nodes(entry.node):
+            if (
+                node.get("Relation Name") == "deltallm_accounting_terminal_journal"
+                and node["Actual Loops"]
+            ):
+                observed = True
+                assert node["Node Type"] != "Seq Scan", entry.safe_report()
+                assert node["Actual Rows"] <= 4, entry.safe_report()
+                assert node.get("Rows Removed by Filter", 0) <= 4, entry.safe_report()
+                assert node.get("Rows Removed by Index Recheck", 0) <= 4, entry.safe_report()
+    assert observed
+    rows = await db.query_raw(
+        "SELECT sum(pending_entries)::integer AS pending,sum(failed_entries)::integer AS failed "
+        "FROM deltallm_accounting_terminal_capacity WHERE protocol_name='primary' AND generation=$1",
+        generation,
+    )
+    assert rows[0]["pending"] == rows[0]["failed"] == 10004
