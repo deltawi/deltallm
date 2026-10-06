@@ -583,3 +583,43 @@ fence secret, or full document, and preserves the exact opaque grant ID.
 - [ ] Identify the upper-tier cause with selected diagnostics and controlled fault injection.
 - [ ] Implement and verify the confirmed runtime fix.
 - [ ] Pass selected 200 and 500 RPS, then the complete fixed-image qualification.
+
+### Native empty-claim polling
+
+The first selected 500 RPS diagnostic used sealed image `cd172bc7`. All five
+image checks and the 1,000 RPS generator proof passed. The gateway precheck then
+returned HTTP 503 (`spend_persistence_unavailable`). No 500 RPS arrival stage
+started. Keep this result as a failed precheck, not a throughput result.
+
+The bounded diagnostic recorded accounting health failures. Several API database
+probes timed out, and two organization-generation refreshers became stale. The
+projection role also recorded unobserved asyncpg connection-release timeouts.
+These observations show that required services lost health before the arrival
+stage. They do not prove why all earlier 500 RPS stages failed. The host retained
+unrelated CPU load and large swap use.
+
+The native profile has six processing lanes and a 20 ms poll interval. Empty
+lanes therefore schedule about 300 claim calls per second, before progress,
+presence, recovery, or connection-reset work. This repeats the empty-poll cost
+already removed from the spend/audit consumers. Reuse that bounded wait owner;
+do not add another task, queue, notification system, or database authority.
+
+PostgreSQL keeps every claim and financial fence. Empty successful claims now
+start at the configured interval and double to `max(interval, 1 second)`.
+Completed work resets the wait and starts another claim immediately. A wake
+received during a claim stays visible. Errors retain the existing health state,
+failure backoff, and caller deadline. Cross-process discovery can add up to the
+idle wait plus bounded database time. The normal one-second cap stays below the
+unchanged five-second reporting-health freshness bound. No pool, resource,
+money-release rule, or qualification limit changes.
+
+- [x] Preserve the failed selected precheck and bounded diagnostic data.
+- [x] Use the existing idle wait for journal and reporting lanes.
+- [x] Add deterministic checks for idle call reduction, active reset, wake
+  preservation, and unchanged failure backoff in both owners.
+- [x] Pass 127 focused worker and contract checks in 0.74 seconds.
+- [x] Pass 264 affected component checks in 4.22 seconds and 56 real PostgreSQL
+  role, replay, recovery, reporting, and shutdown checks in 33.61 seconds.
+- [ ] Seal the new image and run selected upper tiers without lower-tier reruns.
+- [ ] Resolve remaining release-timeout or funding-response failures if they recur.
+- [ ] Pass upper-tier diagnostics, then complete final qualification.

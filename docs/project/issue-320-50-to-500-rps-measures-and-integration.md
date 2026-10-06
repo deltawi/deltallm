@@ -429,6 +429,22 @@ Another process's work waits at most one second plus database time. All 113
 focused worker/handle/structure cases passed. Full regression and fixed-image
 qualification remain open. No pool, resource, or request deadline increased.
 
+### 35. Reduce checks of empty native processing queues
+
+Reuse `src/telemetry/worker_idle.py` in the existing journal and native reporting
+workers. The six native lanes previously used the profile's 20 ms interval for
+every empty claim, or about 300 claim calls per second before other work.
+Successful empty claims now double the idle wait up to the larger of the
+configured interval and one second. Completed work resets the wait and starts
+another claim immediately. Errors keep the original recovery backoff.
+
+No financial fence, health check, query, pool, or resource limit changes.
+Cross-process discovery can add the bounded idle wait plus database time.
+Eight new deterministic cases prove call reduction, active reset, wake
+preservation, and unchanged failure waiting for both worker types. All 264
+affected component cases and 56 real PostgreSQL cases passed. This change is
+not yet load-qualified.
+
 ## Important measures that were tested and rejected
 
 Do not replay these experiments as part of the integration:

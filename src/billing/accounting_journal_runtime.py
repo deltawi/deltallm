@@ -16,6 +16,7 @@ from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.accounting_permit_results import invalid_result
 from src.db.telemetry_acceptance import AcceptanceFailure
 from src.metrics.accounting_journal import JournalAction, JournalActionOutcome, journal_action
+from src.telemetry.worker_idle import IdleWorkerPoll
 from src.telemetry.lifecycle import (
     WorkerHealth,
     WorkerState,
@@ -76,6 +77,7 @@ class JournalProcessingWorker:
         self._task: asyncio.Task[None] | None = None
         self._started = asyncio.Event()
         self._wake = asyncio.Event()
+        self._idle = IdleWorkerPoll(self._wake)
         self._closing = False
         self._state = WorkerState.STARTING
         self._failures = 0
@@ -218,22 +220,27 @@ class JournalProcessingWorker:
 
     async def _run(self) -> None:
         while not self._closing:
+            self._idle.begin_claim()
             deadline = asyncio.get_running_loop().time() + self._config.call_budget_seconds
             try:
                 count = await self.run_once(expires_at=deadline)
                 self._state = WorkerState.STOPPING if self._closing else WorkerState.READY
                 self._failures = 0
             except (AccountingProtocolUnavailable, TimeoutError):
+                self._idle.reset()
                 self._state = WorkerState.STOPPING if self._closing else WorkerState.DEGRADED
                 self._failures = min(8, self._failures + 1)
                 count = 0
             self._started.set()
             if count:
+                self._idle.reset()
                 await asyncio.sleep(0)
                 continue
-            self._wake.clear()
             if self._closing:
                 return
+            if not self._failures:
+                await self._idle.wait(self._config.poll_seconds)
+                continue
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=self._next_delay())
             except TimeoutError:

@@ -63,6 +63,13 @@ at once. Spend rows and required audit envelopes are written in sink batches, wh
 expiry recovery, grant closure, window rollover, and backlog measurement run on the
 separate maintenance interval.
 
+Journal and native reporting lanes use the configured projection poll interval
+after the first empty claim. Each later empty successful claim doubles the idle
+wait, up to the larger of that interval and one second. Completed work resets
+the wait and starts the next claim immediately. A local wake also resets it.
+Cross-process work can wait for that idle interval plus bounded database time
+before discovery. Error backoff and required health checks do not change.
+
 ## Database preparation
 
 Apply the Prisma migrations first. Stop all legacy API and worker writers. Let

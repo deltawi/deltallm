@@ -18,6 +18,7 @@ from src.billing.accounting_read_model_health import ReadModelHealth, ReadModelP
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.accounting_permit_results import invalid_result
 from src.metrics.accounting import increment_accounting_projection
+from src.telemetry.worker_idle import IdleWorkerPoll
 from src.telemetry.lifecycle import (
     WorkerHealth,
     WorkerState,
@@ -61,6 +62,7 @@ class ReadModelProcessingWorker:
         self._started = asyncio.Event()
         self._startup_deadline: float | None = None
         self._wake = asyncio.Event()
+        self._idle = IdleWorkerPoll(self._wake)
         self._state = WorkerState.STARTING
         self._closing = False
         self._stop_failed = False
@@ -205,6 +207,7 @@ class ReadModelProcessingWorker:
 
     async def _run(self) -> None:
         while not self._closing:
+            self._idle.begin_claim()
             end = asyncio.get_running_loop().time() + self._config.call_budget_seconds
             if self._startup_deadline is not None:
                 end = min(end, self._startup_deadline)
@@ -214,6 +217,7 @@ class ReadModelProcessingWorker:
                 self._state = WorkerState.STOPPING if self._closing else WorkerState.READY
                 self._failures = 0
             except (AccountingProtocolUnavailable, TimeoutError):
+                self._idle.reset()
                 increment_accounting_projection("read_model_run", "unavailable")
                 if self._observe_progress:
                     self._progress_health.unavailable()
@@ -226,17 +230,16 @@ class ReadModelProcessingWorker:
                 self._started.set()
                 self._startup_deadline = None
             if count:
+                self._idle.reset()
                 await asyncio.sleep(0)
                 continue
-            self._wake.clear()
             if self._closing:
                 return
-            wait = (
-                self._config.poll_seconds
-                if not self._failures
-                else min(
-                    self._config.backoff_max_seconds, self._config.poll_seconds * 2**self._failures
-                )
+            if not self._failures:
+                await self._idle.wait(self._config.poll_seconds)
+                continue
+            wait = min(
+                self._config.backoff_max_seconds, self._config.poll_seconds * 2**self._failures
             )
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=random.uniform(wait * 0.8, wait))

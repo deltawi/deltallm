@@ -97,6 +97,18 @@ eligibility. Bounded open-grant evidence and that distinction passed 61 focused
 tool/PostgreSQL cases. Next, confirm the funding-acknowledgement and readiness
 failure paths, fix their proven cause, then run complete qualification once.
 
+The first selected 500 RPS diagnostic passed image checks and generator proof,
+but stopped on an accounting-unavailable gateway precheck. No 500 RPS arrival
+stage ran. Its bounded logs show failed accounting health, API database probe
+timeouts, and projection connection-release timeouts. The next runtime slice
+removes repeated empty native claims: six lanes at the profile's 20 ms interval
+can schedule about 300 claim calls per second. Journal and reporting workers
+now reuse the existing bounded idle-wait owner, while active processing, failure
+backoff, financial fences, and health freshness remain unchanged. All 127
+focused checks passed. Affected component confirmation passed 264 cases, and
+real PostgreSQL confirmation passed 56 cases. New selected upper-tier results
+remain pending. Do not call this a completed 500 RPS fix.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

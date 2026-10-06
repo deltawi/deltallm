@@ -39,6 +39,14 @@ that case passed unchanged alone in 1.59 seconds. These are not clean full-gate
 passes. Preserve the warmup timeout as unexplained, without reducing its cold
 concurrency coverage. No new exact-image result exists for this slice yet.
 
+The next measured-cost slice also removes repeated empty claims from the two
+native journal lanes and four native reporting lanes. These owners reuse the
+same bounded idle wait as the spend/audit workers. Eight new deterministic
+cases cover both owners. All 264 affected component cases and 56 real PostgreSQL
+role, replay, recovery, reporting, and shutdown cases passed. This slice has no
+load result yet. New iterations select only upper tiers; lower tiers need not
+run again for each change. Complete fixed-image qualification remains required.
+
 The source record is the earlier 26-measure extraction. The first clean image,
 `22f62c8c`, omitted request-path and worker measures even though its accounting
 slices passed their tests. Its short ladder failed. Keep those failures as
