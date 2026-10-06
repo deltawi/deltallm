@@ -8,6 +8,7 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 MODULES = (
+    "telemetry/worker_idle.py",
     "billing/accounting_terminal_snapshots.py",
     "billing/accounting_lane_group.py",
     "router/success_completion.py",

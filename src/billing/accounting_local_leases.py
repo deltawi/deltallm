@@ -66,7 +66,7 @@ class LocalDispatchPermit(DispatchPermit):
 
     @model_validator(mode="after")
     def validate_issue(self) -> LocalDispatchPermit:
-        proof = _validated_issue_proof(self.proof)
+        proof, _ = _validated_issue_proof(self.proof)
         reservation = proof.reservation
         if (
             self.decision is not ReserveDecision.DISPATCH
@@ -87,27 +87,30 @@ class LocalAccountingHandle(AccountingOperationHandle):
 
     @model_validator(mode="after")
     def validate_issue(self) -> LocalAccountingHandle:
-        proof = _validated_issue_proof(self.proof)
-        reservation = AccountingReservation.model_validate_json(reservation_bytes(self.reservation))
+        proof, proof_document = _validated_issue_proof(self.proof)
+        reservation_document = reservation_bytes(self.reservation)
         if (
-            reservation_bytes(proof.reservation) != reservation_bytes(reservation)
-            or self.dispatch_token != reservation.owner_token
+            proof_document != reservation_document
+            or self.dispatch_token != proof.reservation.owner_token
             or self.accounting_partition != proof.grant.accounting_partition
         ):
             raise ValueError("local operation proof does not match its handle")
+        reservation = AccountingReservation.model_validate_json(reservation_document)
         object.__setattr__(self, "proof", proof)
         object.__setattr__(self, "reservation", reservation)
         return self
 
 
-def _validated_issue_proof(proof: LocalPermitReceipt) -> LocalPermitReceipt:
+def _validated_issue_proof(proof: LocalPermitReceipt) -> tuple[LocalPermitReceipt, bytes]:
     # Model copies can bypass scalar validation. Recheck the full graph before
     # dispatch and give each handle its own request dictionaries.
-    return LocalPermitReceipt(
+    encoded = reservation_bytes(proof.reservation)
+    copy = LocalPermitReceipt(
         grant=LocalPermitGrant.model_validate(proof.grant.model_dump()),
         permit_ordinal=proof.permit_ordinal,
-        reservation=AccountingReservation.model_validate_json(reservation_bytes(proof.reservation)),
+        reservation=AccountingReservation.model_validate_json(encoded),
     )
+    return copy, encoded
 
 
 class LocalPermitReturn(FrozenBillingContract):

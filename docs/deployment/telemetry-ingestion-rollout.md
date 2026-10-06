@@ -93,6 +93,20 @@ The resolution and its necessary operator audit commit atomically.
 Do not resolve an uncertain row as failed only to force another send.
 Create a new server-owned email event only after you establish that the provider did not accept the original.
 
+## Idle consumer polling
+
+Spend and audit outbox consumers reduce database polling when a claim is empty.
+The first idle wait uses the configured ingestion flush interval.
+Each further empty claim doubles the wait, up to one second.
+A configured interval greater than one second remains unchanged.
+
+A durable enqueue in the same process wakes its consumer at once.
+Work from another process is found by the bounded poll.
+At the default 100 ms flush interval, idle detection can thus take up to one
+second plus database time. This is not a request acknowledgement delay.
+Busy processing, leases, retries, and shutdown keep their existing bounds.
+Startup and configuration changes reset the idle wait.
+
 ## Alerts and overload behavior
 
 Alert before capacity is exhausted, using both utilization and age:

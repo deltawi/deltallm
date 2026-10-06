@@ -387,7 +387,7 @@ resource observation includes startup and transfer windows, not only arrivals.
 
 ### Remaining measured-cost work
 
-- [ ] Profile the latest exact image and locate the remaining API CPU work.
+- [x] Profile the latest exact image and locate the remaining API CPU work.
   Keep instrumented results separate from release evidence.
 - [ ] Trace router-state rejection, provider-unavailable errors, and the four
   unsettled operations. Do not release uncertain capacity without durable proof.
@@ -395,3 +395,118 @@ resource observation includes startup and transfer windows, not only arrivals.
   Preserve complete validation, mutation isolation, and deadline behavior.
 - [ ] Run focused failure tests and all affected regression gates.
 - [ ] Repeat exact-image checks and the fixed-profile qualification series.
+
+The latest separate profile used image `5a28ca26` on disposable kind, with
+Rancher running. It is not release evidence. One API process handled 1,501
+requests, including warmup. It called `reservation_bytes` 13,509 times.
+The handle validator encoded two mutable input documents, then encoded both
+validated documents again for comparison. That duplicate comparison is now
+removed. The original exact bytes are reused; both full input checks and private
+copies remain. All 140 focused cases passed, including three new encoding and
+canonical-money cases. The 10,000-handle instrumented diagnostic fell from
+2.04 to 1.44 seconds. This is not request latency or an RPS result.
+
+The profile also traced most API database-client work to the existing legacy
+spend and audit outbox consumers. They continued to poll empty tables while
+native journal accounting handled the test traffic. Keep these consumers: they
+still own supported non-native and control-plane work. Change only their idle
+wait through one small typed helper, not their persistence or lifecycle.
+
+- [x] Capture the latest profile and its direct conversion/database callers.
+- [x] Remove duplicate handle encodes and retain exact canonical comparison.
+- [x] Extract one bounded empty-worker wait for the existing spend/audit owners.
+  Start at the configured flush interval, then double after empty claims up to
+  one second. Preserve an existing interval greater than one second.
+- [x] Clear the local wake signal before the claim, not after an empty result.
+  A local enqueue during a claim must interrupt the idle wait. Reset on work,
+  wakeup, startup, and reconfiguration. A different process's work is found by
+  the bounded poll. Durable acceptance, leases, retries, and shutdown remain.
+- [x] Prove empty-poll bounds, prompt local wakeup, cross-process poll bounds,
+  restart/reload reset, cancellation, and busy-worker behavior.
+- [ ] Confirm all affected gates and run the next exact-image series.
+
+This changes only idle background processing delay. With the default 100 ms
+flush interval, a quiet consumer eventually polls once per second, rather than
+ten times per second. New local durable work wakes it at once. Durable writes
+and request acknowledgement do not wait for this delay. No client response,
+financial release policy, pool, resource, or qualification limit changes.
+
+All 113 focused worker, handle, and structure cases passed. The 20 idle-wait
+cases cover the existing spend and audit owners, including startup reset,
+reconfiguration, busy processing, wakeup during a claim, cancellation, and
+shutdown. The deterministic default-interval check requires at most 64 claims
+in a virtual idle minute, rather than the previous 600. This is a call bound,
+not a load result. Source lint, formatting, and diff checks passed. Full
+confirmation used all 8,728 collected cases in five exclusive dependency
+lanes. Its failures and focused confirmations are recorded below. A new exact
+image and load series remain required.
+
+The first full database run passed 852 cases and failed two. The batch lease
+case found no immediately due row before it reached any lease assertion.
+The table stores due times at millisecond precision. A read-only check proved
+that rounding can put a newly stored due time after the next instant. The test
+now makes its row explicitly due, as the other lease-transition cases do.
+No production scheduling or lease assertion changes. The minimal-role case
+reported unready admission dependencies during startup. Both unchanged cases
+passed together in 1.44 seconds. This does not prove the startup cause or a
+product fix. Preserve the failed full run and repeat the full database gate.
+
+### Targeted confirmation and next load run
+
+The second full PostgreSQL run passed 852 cases and failed two different cases.
+The earlier two failures did not repeat. The new admission failure occurred
+while opening a transaction during the eight-connection warmup, before the
+admission race. The 200 ms acquisition deadline expired. The log does not prove
+why it expired. Keep the simultaneous cold-pool check and its original bounds.
+The proposed phased warmup was rejected by the safety check and was not applied.
+
+The new Realtime conflict failure claimed no immediately due outbox record.
+Recovery creates that record during the claim. Its due time has millisecond
+precision; the read-only precision check confirms that rounding can leave a new
+row in the future. The conflict case now runs recovery and sets only its own row
+explicitly due before claiming it. Receipt rejection and exact cost assertions
+remain. This does not change production scheduling or release money.
+
+Both unchanged failed cases passed together in 1.45 seconds. All affected
+Realtime and admission cases passed in the targeted 80-case check. That command
+passed 79 cases and failed one existing native statement-timeout case: the
+unavailable error had no native server error as its cause. The unchanged case
+passed alone in 1.59 seconds. This does not prove the cause or a product
+fix. Source lint and formatting passed all nine touched Python paths.
+
+Component/chart passed 6,113 cases, application passed 1,649, and Redis passed
+112. The batch and minimal-role confirmation passed all 26 cases. Preserve
+both failed full database runs and both focused confirmations. Do not report
+the full PostgreSQL gate as passed.
+
+The user requested faster iteration. Do not add optional runtime or evidence
+features before this load run, and do not repeat every full lane to seek a
+passing result. Seal the present candidate and run its exact image checks,
+then the fixed 50/100/200/500 RPS ladder. The known regression limitations remain
+part of the report. Keep the same profile, economic checks, and stop conditions.
+Only an all-pass short ladder starts the four ten-minute stages.
+
+- [x] Run the full affected lanes and preserve each failed result.
+- [x] Check the failed cases and affected modules without changing production bounds.
+- [x] Confirm source lint, format, and diff checks.
+- [ ] Seal the source and pass all five exact-image checks.
+- [ ] Run the fresh fixed-profile short ladder and retain every result.
+- [ ] Run all four ten-minute stages if the short ladder passes.
+
+### Follow-up failure evidence
+
+This follow-up is not a prerequisite for the next load series. Finish the
+current regression confirmation, seal its image, and run qualification first.
+If that run leaves unsettled operations, add this capture before another rerun.
+
+- [ ] Save each stage in the aggregate result before a failed drain stops the run.
+  Keep the same stop conditions and all pass limits.
+- [ ] After a failed drain, capture at most 64 unsettled operations from the
+  fixture database. Record scalar state, exact held amount, journal outcome,
+  and a fixed uncertainty class. Do not copy tenant, prompt, credential, or
+  full financial documents. Bound the query and mark unavailable data as unknown.
+- [ ] Prove the capture is read-only against PostgreSQL. Test result preservation,
+  truncation, failed capture, and cancellation before using the new capture.
+
+These are offline evidence changes. They add no request or arrival-window work.
+They do not release uncertain money or turn a failed stage into a pass.

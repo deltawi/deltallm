@@ -51,6 +51,7 @@ from src.telemetry.lifecycle import (
     task_failure_detail,
     wait_for_startup,
 )
+from src.telemetry.worker_idle import IdleWorkerPoll
 
 if TYPE_CHECKING:
     from src.db.billing_operation_recovery import BillingOperationRecovery
@@ -133,6 +134,7 @@ class SpendIngestionService:
         self.repository = SpendIngestionRepository(db_client)
         self._running = False
         self._wake = asyncio.Event()
+        self._idle_poll = IdleWorkerPoll(self._wake)
         self._worker: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._worker_started = asyncio.Event()
@@ -215,6 +217,7 @@ class SpendIngestionService:
             return
         if self._worker is not None and not self._worker.done():
             return
+        self._idle_poll.reset()
         self._worker_state = WorkerState.STARTING
         self._worker_detail = None
         self._worker_started.clear()
@@ -317,6 +320,8 @@ class SpendIngestionService:
         if worker_active and not worker_desired:
             await self._stop_worker_tasks(drain_pending=not config.enabled)
         self.config = config
+        self._idle_poll.reset()
+        self._wake.set()
         await self._fallback_gate.reconfigure(
             concurrency=config.fallback_max_concurrency,
             max_waiters=config.fallback_max_waiters,
@@ -551,21 +556,16 @@ class SpendIngestionService:
                 await asyncio.sleep(min(5.0, 0.1 * (2 ** min(consecutive_failures - 1, 6))))
 
     async def _worker_iteration(self) -> None:
+        self._idle_poll.begin_claim()
         try:
             records = await self._claim_batch()
         except Exception:
             increment_spend_ingestion_failure("claim")
             raise
         if not records:
-            self._wake.clear()
-            try:
-                await asyncio.wait_for(
-                    self._wake.wait(),
-                    timeout=self.config.flush_interval_seconds,
-                )
-            except TimeoutError:
-                pass
+            await self._idle_poll.wait(self.config.flush_interval_seconds)
             return
+        self._idle_poll.reset()
         started = perf_counter()
         await self._process_batch(records)
         observe_spend_ingestion_batch(len(records))

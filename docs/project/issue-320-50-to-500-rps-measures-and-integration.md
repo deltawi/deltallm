@@ -402,6 +402,33 @@ for 3,200 terminal entries. All 249 focused checks passed. This is instrumented
 conversion evidence, not a 500 RPS certificate. The wire and durable formats
 stay unchanged. No data migration, new policy owner, or larger limit is required.
 
+### 33. Compare local financial handles without duplicate encoding
+
+- Fully validate both mutable reservation inputs and retain their canonical bytes.
+- Compare those exact bytes, including canonical money representation.
+- Give each handle its own validated copies; retain owner and partition checks.
+- Remove only the second encoding of each already validated input.
+
+The 10,000-handle instrumented check fell from 2.04 to 1.44 seconds. Reservation
+encodes fell from 40,000 to 20,000. All 140 focused financial cases passed,
+including forged scalar copies, nested mutation, and canonical money mismatch.
+This is conversion evidence, not an RPS certificate.
+
+### 34. Reduce checks of empty legacy outboxes
+
+- Keep the existing spend/audit consumers for supported non-native work.
+- Start at the configured flush interval; double quiet waits up to one second.
+- Preserve a configured interval that is greater than one second.
+- Clear the wake signal before a claim so local work received during SQL is visible.
+- Reset on work, local wakeup, startup, and configuration changes.
+- Retain durable acceptance, claims, leases, retries, and owned shutdown.
+
+At the default 100 ms interval, the deterministic idle-minute check allows at
+most 64 claims, rather than the old 600. Local enqueue wakes the consumer at once.
+Another process's work waits at most one second plus database time. All 113
+focused worker/handle/structure cases passed. Full regression and fixed-image
+qualification remain open. No pool, resource, or request deadline increased.
+
 ## Important measures that were tested and rejected
 
 Do not replay these experiments as part of the integration:

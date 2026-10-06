@@ -46,6 +46,7 @@ from src.telemetry.lifecycle import (
     task_failure_detail,
     wait_for_startup,
 )
+from src.telemetry.worker_idle import IdleWorkerPoll
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,7 @@ class AuditService:
         self._closed = False
         self._started = False
         self._wake = asyncio.Event()
+        self._idle_poll = IdleWorkerPoll(self._wake)
         self.dropped_events = 0
         self.failed_events = 0
 
@@ -412,6 +414,8 @@ class AuditService:
         if worker_active and not worker_desired:
             await self._stop_durable_worker_tasks()
         self.ingestion_config = config
+        self._idle_poll.reset()
+        self._wake.set()
         if worker_desired and not worker_active:
             try:
                 await self._reconcile_durable_capacity()
@@ -432,6 +436,7 @@ class AuditService:
     def _launch_durable_worker_tasks(self) -> None:
         if self._worker_task is not None and not self._worker_task.done():
             return
+        self._idle_poll.reset()
         self._durable_worker_running = True
         self._worker_started.clear()
         self._cleanup_started.clear()
@@ -814,6 +819,7 @@ class AuditService:
                 await asyncio.sleep(min(5.0, 0.1 * (2 ** min(consecutive_failures - 1, 6))))
 
     async def _durable_worker_iteration(self) -> None:
+        self._idle_poll.begin_claim()
         try:
             records = await self.worker_ingestion_repository.claim_batch(
                 limit=self.ingestion_config.batch_size,
@@ -825,16 +831,10 @@ class AuditService:
             increment_audit_write_failure(path="claim")
             raise
         if not records:
-            self._wake.clear()
-            try:
-                await asyncio.wait_for(
-                    self._wake.wait(),
-                    timeout=self.ingestion_config.flush_interval_seconds,
-                )
-            except TimeoutError:
-                pass
+            await self._idle_poll.wait(self.ingestion_config.flush_interval_seconds)
             await self._publish_durable_backlog()
             return
+        self._idle_poll.reset()
         await self._process_durable_batch(records)
         await self._publish_durable_backlog()
 

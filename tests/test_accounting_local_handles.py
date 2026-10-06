@@ -1,5 +1,6 @@
 """Local proofs keep the same identity through request retries."""
 
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -123,3 +124,35 @@ async def test_original_request_mutation_cannot_change_a_constructed_dispatch_ha
     assert issued.proof.reservation.pricing_snapshot["version"] == "price-v1"
     assert operation.proof.reservation.pricing_snapshot["version"] == "price-v1"
     assert operation.reservation.audit_envelope["action"] != "after"
+
+
+@pytest.mark.parametrize("kind", ["permit", "handle"])
+async def test_proof_encoding_runs_only_at_the_two_mutable_boundaries(monkeypatch, kind):
+    from src.billing import accounting_local_leases
+
+    _, permit, handle = values()
+    original = accounting_local_leases.reservation_bytes
+    encoded = []
+
+    def counted(value):
+        result = original(value)
+        encoded.append(result)
+        return result
+
+    monkeypatch.setattr(accounting_local_leases, "reservation_bytes", counted)
+    if kind == "permit":
+        LocalDispatchPermit(**permit)
+        assert len(encoded) == 1
+    else:
+        LocalAccountingHandle(**handle)
+        assert len(encoded) == 2 and encoded[0] == encoded[1]
+
+
+async def test_equal_money_with_a_different_canonical_document_is_still_rejected():
+    proof, _, handle = values()
+    amount = proof.reservation.allowance
+    changed_amount = amount.quantize(Decimal("0.000000000000000001"))
+    assert amount == changed_amount and str(amount) != str(changed_amount)
+    handle["reservation"] = proof.reservation.model_copy(update={"allowance": changed_amount})
+    with pytest.raises(ValueError, match="does not match its handle"):
+        LocalAccountingHandle(**handle)

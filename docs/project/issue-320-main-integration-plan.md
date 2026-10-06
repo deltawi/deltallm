@@ -55,6 +55,24 @@ and the remaining measured-cost work. This branch is not ready to merge.
 
 ### Restored-measure regression checkpoint
 
+The latest measured-cost slice removes duplicate local-handle encodes and
+extracts bounded idle waiting for the existing spend/audit consumers. All 140
+focused financial cases and 113 focused worker/handle/structure cases passed.
+The second set includes 20 idle-wait cases. No persistence, financial release,
+request deadline, pool, resource, or qualification limit changed. The complete
+8,728-case confirmation finished. Component/chart, application, and Redis
+passed 6,113, 1,649, and 112 cases. The second full PostgreSQL run passed 852
+cases and failed two. Both unchanged failed cases passed in a focused check.
+The Realtime conflict case now sets its recovered row explicitly due, without
+changing receipt or money checks. The 80-case affected-module and allocation
+check passed 79 cases and failed one existing statement-timeout assertion.
+That unchanged case passed alone. All failed logs remain preserved; the full
+PostgreSQL gate is not a clean pass, and the warmup timeout cause remains open.
+Keep simultaneous cold-pool coverage and all original bounds. Use targeted
+checks for this iteration, then run the exact image on fresh kind. New image
+checks and load results remain open; the previous 500 RPS failure is still the
+current release result.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

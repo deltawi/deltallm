@@ -24,6 +24,21 @@ four unsettled operations after the drain bound. Budget state stayed safe.
 Rancher and both original contexts are restored. No ten-minute stage started.
 The remaining measured-cost work and final load gates remain open.
 
+Two further measured-cost changes are implemented but not load-qualified.
+Local handles reuse their two fully validated canonical input documents for
+exact comparison. Quiet spend/audit consumers use one bounded idle-wait helper
+through their existing lifecycle. Local enqueue remains prompt; remote enqueue
+is found within the one-second idle cap plus database time. All 140 financial
+and 113 worker/handle/structure focused cases passed. The 8,728-case collection
+is complete. Component/chart, application, and Redis passed 6,113, 1,649, and
+112 cases. Full PostgreSQL passed 852 cases and failed two; both unchanged
+cases passed together in 1.45 seconds. Targeted confirmation and one Realtime
+due-time setup repair retain all money, conflict, and deadline checks. The
+80-case confirmation passed 79 and failed one existing statement-timeout case;
+that case passed unchanged alone in 1.59 seconds. These are not clean full-gate
+passes. Preserve the warmup timeout as unexplained, without reducing its cold
+concurrency coverage. No new exact-image result exists for this slice yet.
+
 The source record is the earlier 26-measure extraction. The first clean image,
 `22f62c8c`, omitted request-path and worker measures even though its accounting
 slices passed their tests. Its short ladder failed. Keep those failures as

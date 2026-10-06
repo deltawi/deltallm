@@ -137,6 +137,13 @@ async def test_native_outbox_ack_rejects_expiry_and_old_attempt_for_same_worker(
     await store.write_many(
         [BatchAccountingWrite(claim, pending, uncertain(pending))], expires_at=deadline()
     )
+    # Millisecond timestamp rounding can leave an immediate enqueue in the future.
+    # This case tests lease fencing, not the scheduler's next due-time boundary.
+    await batch_db.execute_raw(
+        "UPDATE deltallm_batch_completion_outbox "
+        "SET next_attempt_at=NOW()-INTERVAL '1 second' WHERE item_id=$1",
+        claim.item_id,
+    )
     (first,) = await repository.claim_completion_outbox_due(worker_id="delivery", lease_seconds=30)
     await batch_db.execute_raw(
         "UPDATE deltallm_batch_completion_outbox SET lease_expires_at=NOW() WHERE completion_id=$1",
