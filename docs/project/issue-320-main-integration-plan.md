@@ -307,6 +307,14 @@ The build-only relay and verification fixture are stopped before testing.
 Proceed to uninstrumented selected 500, selected 200, and then the complete
 series only if preceding strict stages pass. No lower-tier iteration reruns.
 
+The `1aaf2bda` cold 500 run completed all 30,000 requests and passed latency
+(p95 78.41 ms/p99 131.83 ms), diagnostics, exact accounting, and safe drain.
+Only slope failed (+0.12560). Keep this failure. Next run the existing supported
+200→500 selected ladder on one instance to check the increasing-load pattern
+used by final qualification, without repeating 50/100. No thresholds, request
+counts, arrival exclusions, or delays change. Only proceed to the canonical
+full series if both selected stages pass. Cold-start capacity remains unproved.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

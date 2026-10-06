@@ -1256,3 +1256,18 @@ The temporary allowlisted build relay is stopped, and no proxy environment
 entered the image. The owned PostgreSQL fixture is stopped with data retained.
 Run selected uninstrumented 500 for 60 seconds first in the declared eight-CPU
 environment, then selected 200 and the full series only on preceding passes.
+
+The uninstrumented `1aaf2bda` cold 500 check completed 30,000 requests with
+zero errors/drops, p95 78.41 ms, p99 131.83 ms, exact accounting, and a
+12.15-second safe drain. Only strict slope failed (+0.12560). Keep
+`native-1aaf2bda-500-8cpu-8g-60s-exclusive-20261006` and all earlier failures.
+Both original VMs, exact running workloads, and contexts were restored.
+
+Next use the existing supported selected-tier schedule `200,500` on one
+disposable instance. This matches the increasing-load pattern of the canonical
+series and tests retained-state behavior without repeating 50 or 100. Both
+stages remain 60 seconds, count every request, and use the unchanged financial,
+latency, throughput, drain, and slope gates. No added warmup, excluded requests,
+or extra cooling delay. The cold failure remains a failure. Advance to one
+canonical full series only if both selected stages pass; do not claim the
+selected ladder itself is release qualification.
