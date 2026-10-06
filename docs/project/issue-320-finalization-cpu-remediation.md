@@ -1390,7 +1390,7 @@ nonterminal events and refreshed statistics, missing this case.
   cold cached plans, no statistics refresh, and all four planner modes.
 - [x] Add the single correlated-seek boundary to candidate discovery.
 - [x] Pass cold and existing retained-history/race/parity/fence checks.
-- [ ] Seal the query fix in a normal image and verify exact-image checks.
+- [x] Seal the query fix in a normal image and verify exact-image checks.
 - [ ] Recheck upper tiers, then run the full four-tier qualification on passes.
 
 All four original regression cases failed with 625 historical event rows per
@@ -1403,3 +1403,12 @@ This is a runtime query-only fix: no migration, client generation, caller planne
 settings, deadlines, queues, or financial calculation changed. Seal a fresh
 normal image; first compare selected 500 in the existing eight-CPU/8-GiB envelope,
 then selected 200 and the canonical full series only on preceding passes.
+
+The normal `deltallm-native:issue320-main-9c5fca15` image is sealed from
+`9c5fca1516890b813e8e5e056b7d7ba7d88d96ae`, index digest
+`sha256:70a690ec4bb71d7d3e90957896bc54c6ce9fbbe02b6da6a38a58d3410105b621`,
+arm64 platform digest
+`sha256:63b71031f32db8c8f0c827d59518b6623802b52b88b886cced1ff2f5502c490c`.
+All five offline/non-root runtime checks passed. Both existing migration hashes
+match their previously verified source. Cached build stages required no relay
+or network workaround. Load checks remain open; no 500 RPS pass is claimed yet.
