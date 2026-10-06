@@ -134,11 +134,9 @@ def test_accounting_protocol_requires_a_projection_owner():
 
 
 @pytest.mark.parametrize("role", ["config", "api.config", "accountingWorker.config"])
-@pytest.mark.parametrize(
-    "setting,adapter", [("realtime.enabled", "Realtime"), ("embeddings_batch_enabled", "batch")]
-)
-def test_v2_rejects_unmigrated_legacy_billing_roles(role: str, setting: str, adapter: str):
-    error = _render_error(
+@pytest.mark.parametrize("setting", ["realtime.enabled", "embeddings_batch_enabled"])
+def test_v2_roles_can_select_shared_feature_adapters(role: str, setting: str):
+    documents = _render(
         "--set",
         "config.general_settings.accounting_protocol_enabled=true",
         "--set",
@@ -146,7 +144,17 @@ def test_v2_rejects_unmigrated_legacy_billing_roles(role: str, setting: str, ada
         "--set",
         f"{role}.general_settings.{setting}=true",
     )
-    assert f"Accounting v2 requires a shared {adapter} billing adapter" in error
+    name = (
+        "deltallm-accounting-worker-config"
+        if role == "accountingWorker.config"
+        else "deltallm-config"
+    )
+    general = _config_yaml(_by_kind_and_name(documents, "ConfigMap", name))["general_settings"]
+    assert general["accounting_protocol_enabled"] is True
+    if setting == "realtime.enabled":
+        assert general["realtime"]["enabled"] is True
+    else:
+        assert general[setting] is True
 
 
 @pytest.mark.parametrize("setting", ["realtime.enabled", "embeddings_batch_enabled"])
@@ -196,6 +204,7 @@ def test_accounting_values_are_declared_in_helm_schema():
         "api",
         "batchWorker",
         "accountingWorker",
+        "accountingRequest",
     }
     for name in (
         "accounting_protocol_enabled",

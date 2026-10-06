@@ -15,6 +15,7 @@ from src.shutdown_watchdog import ShutdownWatchdog
 from src.startup_config import StartupConfig
 from src.config import resolve_database_settings
 from src.prisma_bootstrap import run_prisma_bootstrap
+from src.bootstrap.server_application import create_server_application
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,9 +50,7 @@ def main(argv: list[str] | None = None) -> int:
             signal.signal(handled, lambda *_: lifecycle.begin_drain())
     if lifecycle.draining:
         return 1
-    from src.main import create_app
-
-    app = create_app(startup=startup, lifecycle=lifecycle)
+    app = create_server_application(startup=startup, lifecycle=lifecycle)
     server = ManagedServer(
         uvicorn.Config(app, host=args.host, port=args.port, workers=1, lifespan="on"), lifecycle
     )

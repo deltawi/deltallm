@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.retry import classify_batch_retry
 from src.batch.worker_types import BatchRoutingRuntime
+from src.billing.accounting_service import AccountingProtocolService
+from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.callbacks import CallbackManager
 from src.rate_limit_policy import (
     RateLimitLease,
@@ -109,12 +111,15 @@ async def run_batch_request_preflight(
     request_data: dict[str, Any],
     call_type: str,
     routing_runtime: BatchRoutingRuntime,
+    native_accounting: AccountingProtocolService | None = None,
 ) -> BatchPreflightResult:
     endpoint = batch_call_type_for_endpoint(str(getattr(job, "endpoint", "")))
     started = perf_counter()
     resolved_auth = await resolve_batch_job_auth(app, job)
     auth = resolved_auth.auth
     try:
+        if native_accounting is not None and not resolved_auth.verified:
+            raise BatchAccountingUnavailable()
         callback_manager: CallbackManager = (
             getattr(app.state, "callback_manager", None) or CallbackManager()
         )
@@ -153,7 +158,9 @@ async def run_batch_request_preflight(
         )
 
         budget_service = getattr(app.state, "budget_service", None)
-        if budget_service is not None:
+        if native_accounting is not None and not native_accounting.worker_health.ready:
+            raise BatchAccountingUnavailable()
+        if budget_service is not None and native_accounting is None:
             await budget_service.check_budgets(
                 api_key=getattr(job, "created_by_api_key", None),
                 user_id=auth.user_id,

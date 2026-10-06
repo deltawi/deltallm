@@ -320,7 +320,8 @@ async def test_kubernetes_resources_are_attributed_without_pod_names(
     tmp_path: Path,
 ) -> None:
     class Cluster:
-        def kubectl(self, *args: str) -> object:
+        def kubectl(self, *args: str, timeout: float) -> object:
+            assert timeout == 2
             if "--raw" not in args:
                 payload = {
                     "items": [
@@ -363,6 +364,7 @@ async def test_kubernetes_resources_are_attributed_without_pod_names(
     evidence = recorder.evidence()
     assert evidence["missing_required_roles"] == []
     assert evidence["snapshots"] == 3
+    assert evidence["errors"] == 0
     assert "private" not in output.read_text()
     first = json.loads(output.read_text().splitlines()[0])
     assert first["sources"] == [

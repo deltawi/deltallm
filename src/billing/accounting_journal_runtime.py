@@ -79,6 +79,7 @@ class JournalProcessingWorker:
         self._closing = False
         self._state = WorkerState.STARTING
         self._failures = 0
+        self._stop_failed = False
 
     @property
     def task(self) -> asyncio.Task[None] | None:
@@ -96,7 +97,16 @@ class JournalProcessingWorker:
     def worker_health(self) -> WorkerHealth:
         if self._state is WorkerState.DISABLED:
             return WorkerHealth(self._state)
+        if self._state is WorkerState.FAILED:
+            return WorkerHealth(self._state, "runtime_failed")
         if self._task is not None and self._task.done():
+            if (
+                self._closing
+                and not self._stop_failed
+                and not self._task.cancelled()
+                and self._task.exception() is None
+            ):
+                return WorkerHealth(WorkerState.STOPPING)
             if self._task.cancelled():
                 return WorkerHealth(WorkerState.FAILED, "task_cancelled")
             if self._task.exception() is not None:
@@ -104,6 +114,13 @@ class JournalProcessingWorker:
             return WorkerHealth(WorkerState.FAILED, "task_stopped")
         detail = "persistence_unavailable" if self._state is WorkerState.DEGRADED else None
         return WorkerHealth(self._state, detail)
+
+    def stop_claims(self) -> None:
+        if not self._closing:
+            self._stop_failed = self.worker_health.state is WorkerState.FAILED
+        self._closing = True
+        self._state = WorkerState.STOPPING
+        self._wake.set()
 
     async def start(self, *, expires_at: float) -> None:
         _deadline(expires_at)
@@ -128,10 +145,8 @@ class JournalProcessingWorker:
 
     async def close(self, *, expires_at: float) -> bool:
         _deadline(expires_at)
-        failed = self.worker_health.state is WorkerState.FAILED
-        self._closing = True
-        self._state = WorkerState.STOPPING
-        self._wake.set()
+        failed = self._stop_failed or self.worker_health.state is WorkerState.FAILED
+        self.stop_claims()
         stopped = await stop_tasks_before_deadline((self._task,), deadline=expires_at)
         stopped = stopped and not self._gate.active and not failed
         self._state = WorkerState.DISABLED if stopped else WorkerState.FAILED

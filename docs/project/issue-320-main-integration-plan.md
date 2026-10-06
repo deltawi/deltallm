@@ -10,11 +10,13 @@ Accepted performance code: `cc3113bd`
 
 ## Current status
 
-Whole slices 1 through 8 are complete. Slices 9 and 10 have substantial verified
-foundations, but their runtime integration is not complete. Slices 11 through 14,
-the current-main Realtime, batch, and selector billing adapters, and final gateway
-qualification remain unfinished. The experimental branch's 500 RPS result is not
-evidence for this clean replay. This branch is not ready to merge.
+Slices 1 through 8 are complete. The runtime code for slices 9 through 14 is now
+connected, including native reporting and shared Realtime, batch, and selector
+accounting. All 8,562 Python tests, UI checks, migration paths, and chart checks
+passed their required gates. Full UI lint retains unchanged baseline findings.
+Container and gateway qualification checks remain open. The experimental branch's
+500 RPS result is not evidence for this clean replay. This branch is not ready to
+merge.
 
 The migration-131 checkpoint passed all 7,829 tests and all three migration paths.
 The first PostgreSQL run failed two compatibility cases. Their unchanged modules
@@ -35,6 +37,112 @@ Helm cases, all 745 PostgreSQL cases, and all three migration paths. Collection
 now contains 7,985 cases. Runtime selection, transport integration, current-main
 adapters, reporting lanes, and final RPS tests remain pending.
 
+The signed transport, native recovery, fenced projection presence, API-local
+owner graph, and minimal native role apps are now implemented. The role apps
+have real generation and migration checks. They do not load the inference
+bootstrap or provider adapters. The managed launcher and Helm now select them
+through the same startup-only role setting. The API owns one dedicated signed
+RPC pool and one local issue/return/monitor graph. Native facts and reporting
+readers are connected. The complete affected lanes, current-main adapters,
+container smoke, and RPS tests remain required.
+
+### Shared batch and Realtime checkpoint
+
+Batch now uses the shared accounting authority for single and grouped chat and
+embedding calls. It stores a bounded proof before provider dispatch. A claimed
+item cannot repeat a paid provider call after worker loss. The existing completion
+outbox owns terminal delivery. Its native transitions require both the live lease
+and the attempt fence. Prices and tenant attribution stay fixed during replay.
+No new feature pool, worker queue, or ledger was added.
+
+External cancellation tests found an embedding-group cleanup gap. One small
+execution owner now closes accounting, heartbeat, and policy resources on every
+exit. Native Realtime uses shared accounting health, not the disabled legacy spend
+worker. Legacy mode keeps its previous worker and recovery requirements.
+
+Evidence:
+
+- Actual batch provider and cancellation checks: 260 passed.
+- Mixed batch, selector, Realtime, HTTP, and cache accounting on PostgreSQL:
+  3 passed. All five budget scopes reconciled exact charges, unused reservations,
+  and uncertain outcomes. Duplicate completion delivery did not charge twice.
+- Migration 142: fresh, last-release, and shared-feature paths passed.
+- Final focused bootstrap, checkpoint, and Helm checks: 51 passed.
+
+Keep the earlier failed runs. Four final focused failures asserted that a
+disabled worker was unhealthy; disabled is an intentional state. One outbox test
+depended on an immediate due-time boundary. The corrected test sets due time with
+the database clock. No health rule or production timeout was weakened.
+
+The application lane passed 1,646 tests. The final database lane passed 845 cases
+and found two failures. One exposed an admission-monitor race: refreshing a
+healthy observation withdrew readiness before its result was known. The monitor
+and presence publisher now retain only fresh completed observations during a
+refresh. Failure, cancellation, task loss, and expiry still withdraw readiness.
+Barrier tests and actual Realtime/report checks passed 69 cases. The second
+failure was a stale report-plan assertion. The report now has a bounded selector
+primary-key lookup as well as the original scoped page index. Both are checked.
+The complete database lane must pass again; keep the failed run.
+
+Final qualification-tool, real-schema, and native chart checks passed 86 cases.
+The generator now has rate, duration, sample, task, response-byte, artifact, and
+drain limits. Native monitoring now selects both isolated roles and exposes the
+worker's real fresh-observation metric to autoscaling. Native production renders
+1,524 PostgreSQL connections within the unchanged 2,000 connection limit. Its
+45-pod placement calculation includes all peak roles without raising descriptor
+ceilings. Native evaluation renders 142/160 connections. These are arithmetic
+checks, not a gateway throughput result.
+
+### Remaining completion checklist
+
+- [x] Connect native HTTP/cache, Realtime, batch, selector, and reporting owners.
+- [x] Verify all three migration paths through migration 142.
+- [x] Verify mixed-feature exact charges, replay, owner loss, and cancellation.
+- [x] Fix readiness refresh races and add deterministic expiry/failure checks.
+- [x] Render complete native production/evaluation budgets and monitoring targets.
+- [x] Implement pinned kind qualification and independent evidence/economic gates.
+- [x] Complete final hermetic, application, PostgreSQL, Redis, and Helm lanes.
+- [x] Complete UI unit/build/lint comparison, frozen locks, references, collection,
+  and style. Full UI lint retains the unchanged 119 baseline findings.
+- [ ] Commit the tested source; build and smoke-test the exact non-root image.
+- [ ] Run the direct provider generator proof and short 50/100/200/500 RPS ladder.
+- [ ] Run all four ten-minute stages on that same image and fixed topology.
+- [ ] Save final raw evidence, exact reconciliation, storage state, and results.
+- [ ] Update the final plan and handoff. Do not push, open a PR, or merge without
+  a separate user request.
+
+### Final regression evidence
+
+- Application: 1,646 passed in 544.10 seconds.
+- PostgreSQL confirmation: 848 passed in 748.70 seconds, without required skips.
+- Redis: 105 passed in 16.72 seconds, without required skips.
+- Hermetic and Helm confirmation: 5,963 passed in 116.27 seconds.
+  Together the five completed lanes contain all 8,562 collected cases.
+- UI unit tests: 274 passed. Node 22.16.0 was used.
+- UI build: passed. Initial JavaScript is 378.43 kB gzip, identical to the isolated
+  `origin/main` build. The existing large-chunk warning remains.
+- UI lint: both touched files have zero findings. Full lint has 116 errors and
+  three warnings, identical to `origin/main`; the structured comparison has zero
+  new findings. Full lint is not a clean pass.
+- Collection: 8,562 cases, each in one lane: 5,704 hermetic, 1,646 application,
+  848 PostgreSQL, 105 Redis, and 259 Helm.
+- All five base/evaluation/production/native Helm lint and template checks passed.
+- Frozen lock, generated settings reference, capacity reference, container contract,
+  source lint, touched-file formatting, and whitespace checks passed.
+- The 45 new backend modules meet the 500-line and 80-line function limits.
+
+The first database confirmation passed 847 cases and failed the completed selector
+case. Its test waited for the first settled grant, not the whole generation. The
+selector grant could settle before the answer grant. A bounded event-driven wait
+now checks closed grants and completed native reporting. Exact totals and the
+original two/three-second deadlines are unchanged. All 13 real mixed-feature
+checks passed, followed by the complete 848-case database confirmation. Keep the
+failed confirmation in `issue320-final-postgres-confirmation.log`.
+
+Exact-image checks and gateway load evidence remain pending. These regression
+results do not establish an RPS result. Final logs are retained in the ignored
+`artifacts/qualification/verification-20261006` directory.
+
 ## Integration rules
 
 - PostgreSQL remains the durable economic source of truth.
@@ -50,6 +158,11 @@ adapters, reporting lanes, and final RPS tests remain pending.
   image.
 
 ## Progress
+
+The implementation boxes below describe the current source. Release checks are
+separate in the remaining completion checklist above. Later checkpoint sections
+retain the state at their recorded revision; their old pending notes do not
+override this current checklist.
 
 - [x] Create a clean managed worktree from the latest remote `main`.
 - [x] Create branch `codex/issue-320-main-integration`.
@@ -87,10 +200,10 @@ adapters, reporting lanes, and final RPS tests remain pending.
 - [x] Slice 8: probe the actual accounting pool and active generation for readiness.
 - [x] Slice 8: reject preparation and activation while legacy billing work is pending.
 - [x] Slice 8: reject unmigrated realtime, batch, and selector writers when v2 is on.
-- [ ] Before merge: add typed realtime, batch, and selector adapters to the shared
+- [x] Before merge: add typed realtime, batch, and selector adapters to the shared
   v2 budget and recovery authority. Prove mixed-feature recovery before removing
   the temporary checks. Legacy mode must retain every current main feature.
-- [ ] Slice 9: port pre-issued permits and local lease dispatch.
+- [x] Slice 9: port pre-issued permits and local lease dispatch.
 - [x] Slice 9: add the inactive fenced-permit schema and prove current grant parity.
 - [x] Slice 9: batch refill and claim work across subjects with a fixed database-call
   bound. Do not copy the source branch's sequential subject loop.
@@ -101,33 +214,33 @@ adapters, reporting lanes, and final RPS tests remain pending.
 - [x] Slice 9: verify the retained cursor byte budget with the required gates.
 - [x] Slice 9: add inactive immutable issued-receipt storage with both entry and
   byte limits. The local runtime must use this owner before activation.
-- [ ] Slice 9: prove local-lease funding, unused-suffix return, expiry, and conservative
+- [x] Slice 9: prove local-lease funding, unused-suffix return, expiry, and conservative
   owner-loss recovery before local dispatch can run.
 - [x] Slice 9: separate the local dispatch deadline from the terminal recovery
   deadline in the inactive schema and issue owner. Keep dispatch within the funded
   budget period and refill TTL. Runtime and transport selection are still pending.
-- [ ] Slice 9: retain typed cost bounds, the shared cache admission owner, and
+- [x] Slice 9: retain typed cost bounds, the shared cache admission owner, and
   missing-owner rejection when adding local or remote accounting clients.
-- [ ] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
-- [ ] Slice 9: keep protocol construction in the small accounting bootstrap owner.
+- [x] Slice 9: retain the legacy reporting default while accounting v2 is disabled.
+- [x] Slice 9: keep protocol construction in the small accounting bootstrap owner.
 - [x] Slice 9: verify immutable financial queue payloads, byte-bounded collection,
   and retained-byte limits across the required gates.
-- [ ] Slice 10: port the terminal journal and compact acknowledgement path.
-- [ ] Slice 11: split accounting transport and projection roles.
-- [ ] Slice 12: port bounded worker runtimes, economic settlement, and recovery limits.
-- [ ] Slice 12: complete bounded recovery verification and runtime integration.
+- [x] Slice 10: port the terminal journal and compact acknowledgement path.
+- [x] Slice 11: split accounting transport and projection roles.
+- [x] Slice 12: port bounded worker runtimes, economic settlement, and recovery limits.
+- [x] Slice 12: complete bounded recovery verification and runtime integration.
   Migration 126 already limits active-to-draining expiry transitions. Migration
   132 adds expiry and drain work indexes and limits inspected keys before close
   eligibility checks. Prove scan limits, retained-history plans, cursor loss,
   concurrent foreground admission, and upgrades. Do not edit an applied migration.
-- [ ] Slice 13: port terminal/read-model lanes and rollup sharding.
-- [ ] Slice 14: port settled-receipt and narrow streamed projection fast paths.
-- [ ] Run fresh and upgrade migration verification for the complete integrated chain.
-- [ ] Port the reproducible kind harness and bounded 500 RPS runner from the
-  source worktree. The current main runner is capped at 200 RPS. Verify generator
-  accounting, output limits, mock controls, and complete metric coverage before
-  qualification. Keep throughput, economic correctness, and latency gates separate
-  in the report.
+- [x] Slice 13: port terminal/read-model lanes and rollup sharding.
+- [x] Slice 14: port settled-receipt and narrow streamed projection fast paths.
+- [x] Run fresh and upgrade migration verification through migration 142.
+- [x] Port the reproducible kind harness and bounded 500 RPS gateway runner.
+  The direct-provider generator proof is capped at 1,000 RPS. Generator counts,
+  output limits, mock controls, role metrics, CPU counters, and separate throughput,
+  economic correctness, and latency gates have focused tests. Actual qualification
+  remains pending.
 - [ ] Run the 50, 100, 200, and short 500 RPS ladder on one clean kind image.
 - [ ] Run the ten-minute 500 RPS qualification only after the short ladder passes.
 - [ ] Complete the requested final 50, 100, 200, and 500 RPS tests on reproducible
@@ -1372,6 +1485,95 @@ PostgreSQL run passed in 681.18 seconds. No assertion or deadline was relaxed.
 
 ### Next: runtime and transport integration
 
+The request role will fund local grants, return unused suffixes, and accept
+terminal journals. The API replica keeps the existing local issue, cursor, and
+receipt owners. Do not move these owners into a load-balanced request worker:
+a terminal can reach another worker and leave the first worker's proof retained.
+Each signed call includes the complete generation and financial proof. Funding
+includes the API owner. PostgreSQL checks its fence and stable identities. A
+warm API reservation has zero SQL and zero transport calls. Cold funding and
+suffix returns each use one bounded batch. Terminal acceptance uses one bounded
+batch and the same journal replay authority. Projection and recovery have a
+separate pool. This replaces the source branch's central local-issue transport
+arrangement, not its economic protocol.
+
+Rollback keeps the assigned-grant path and disables local dispatch. Stop local
+admission first. Drain accepted terminals and return unused suffixes before role
+shutdown. Lost owners keep conservative funded charges in PostgreSQL. Never
+evict an unsettled proof or treat cached emptiness as a cluster cutover proof.
+
+- [x] Add the native recovery worker and strict three-action repository.
+- [x] Verify fixed calls, cancellation, overlap rejection, real journal settlement,
+  owner-loss charges, and missing-generation failure: 42 focused tests passed.
+  The first new expiry fixture violated dispatch/recovery deadline order; the
+  database rejected it. The corrected fixture keeps the constraint unchanged.
+- [ ] Connect recovery to the projection role and run the complete affected gates.
+- [x] Implement signed, byte-bounded funding, suffix-return, and journal routes.
+- [x] Keep the API local issue and receipt owners with a narrow generation probe.
+- [x] Verify transport and shared-service checks: 102 focused tests passed.
+  The first run found lifecycle test spies on the old private repository field.
+  The spies now use the generation-probe field. All assertions and deadlines stay
+  unchanged. One new fixture required an asynchronous test context.
+- [x] Verify cross-worker funding, terminal replay, exact charges, and local drain
+  with real PostgreSQL: 15 affected tests passed.
+- [x] Add durable, bounded projection-role presence. A cached empty backlog does
+  not prove that the projection tasks are alive in a different process.
+  Migration 134 adds 64 fixed health slots per generation and one primary index.
+  Each projection owner has a UUID fence and a ten-second lease. Its existing
+  recovery task renews the lease only after actual recovery, backlog, and journal
+  worker checks. Disabled workers cannot publish ready. No money or event history
+  is changed by presence. Four actual planner modes with 10,000 other generations
+  use at most 64 primary-key reads. The 14 affected native tests passed.
+- [x] Verify migration 134 on fresh, last-release, and shared-feature paths.
+  All three paths passed with 134 migrations. The verifier removed its owned
+  disposable databases. The migration is now immutable.
+- [ ] Connect one bounded admission monitor to the request and API lifecycles.
+  The API keeps one cached signed health observation; each request role samples
+  the backlog and fixed presence slots. Failed or stale observations block even
+  warm local issue before cursor commit, without per-request SQL or HTTP.
+  Terminal acceptance and fenced suffix return remain separate from admission.
+  The focused monitor run found a fixture that expected an exception from a
+  malformed dependency reply; the monitor correctly returns false and degrades.
+  Keep that fail-closed assertion. The corrected affected suite passed 247 tests.
+- [x] Build typed API-local, request, and projection runtime graphs. Real role
+  tests verify zero-call warm issue, exact journal settlement, loss of projection
+  presence, terminal acceptance during degraded admission, suffix returns, and
+  synchronous process withdrawal.
+- [x] Add minimal native role apps with fixed ingress and reserved health slots.
+  Each app uses one native pool and the existing shutdown owner. Workers stop
+  before their pool closes. Import-isolation checks found eager package exports
+  that loaded the full inference stack. Package owners are now explicit; the
+  API imports its existing services directly. Inference behavior is unchanged.
+  The affected app/lifecycle suite passed 113 tests. Four real-database role and
+  app tests passed. The initial new native fixtures used the wrong handle field
+  and settlement query name; only those fixtures changed, with unchanged limits.
+- [ ] Run all five lanes against the unchanged role-app source checkpoint.
+  The first run passed 5,616 component and Helm cases. The application lane
+  passed 1,645 cases and failed one malformed MCP request with HTTP 503.
+  All 16 rate-limit cases then passed unchanged in isolation. The assertion now
+  includes the safe response body for diagnosis. No timeout or assertion was
+  relaxed. The final safeguard suite passed 94 cases. A failed monitor remains
+  failed after close; an active observation prevents a false drain result.
+  The fixed snapshot is now at
+  `/Users/mehditantaoui/Documents/Challenges/deltallm/.worktrees/issue320-role-validation-v0aLpy`.
+  The completed run passed 5,619 component/Helm, 1,645 application,
+  760 PostgreSQL, and 105 Redis cases. It failed one application case and three
+  PostgreSQL cases. Two health-plan modes selected a scan of 10,000 completed
+  receipts; the partial queue index had many empty pages after prior tests.
+  Applied migration 137 keeps this lookup on the required ordered index inside
+  one database function. It does not change pool or database planner defaults.
+  All four actual nested plan modes now pass on the bloated index.
+  The other PostgreSQL failure is a realtime cleanup timeout. Its 12 isolated
+  cases pass, but the complete-lane cause is not yet proved.
+  The MCP failure occurs before the first repository call. The authentication
+  deadline expires before the first lookup check. The first probe reported no
+  garbage collection, but that probe replaced the exported callback
+  list instead of registering with the collector. Its GC result is not valid.
+  A second run with synchronous step timers passed all 1,646 application cases
+  in 537.85 seconds. This does not prove a fix. A new full-lane run registers
+  with the actual collector. No deadline, retry limit, or success assertion changed.
+- [ ] Add minimal role startup, deployment selection, and complete required gates.
+
 - [ ] Add typed, minimal accounting request and projection roles. Keep their
   pools, queues, ingress, and worker allocations separate from inference.
 - [ ] Connect signed transport to the shared local issue and terminal owners.
@@ -1383,6 +1585,296 @@ PostgreSQL run passed in 681.18 seconds. No assertion or deadline was relaxed.
   as a cluster drain or cutover proof.
 - [ ] Complete deployment arithmetic, configuration surfaces, role smoke tests,
   current-main adapters, and reporting work before final kind qualification.
+
+### Native spend and audit projection
+
+The immutable accounting event is the source of truth. The projection role writes
+usage facts, day/month rollups, canonical audit, and its checkpoint in one database
+transaction. It does not send events through the legacy spend or audit outboxes.
+The expanded reporting view is now selected after tenant, owner, exact-cost,
+retention, and writer-rollback checks pass. The view retains legacy history and removes duplicate
+event IDs. A reporting failure does not repeat a provider call or release a debit.
+
+The worker owns one task and one frozen handle of at most 256 event keys. Each
+page has a one-MiB source-byte limit. Payloads stay in PostgreSQL; Python does not
+retain a second copy of each wide event. Claims inspect at most 64 checkpoint
+slots. Event reads use a partial generation/partition/sequence index and a fixed
+page limit. Each commit checks the generation, worker, UUID lease, partition,
+prior sequence, exact page keys, and live lease. A stale worker cannot advance
+the checkpoint. Replays update rollups only for facts first inserted by the
+transaction. Malformed or missing facts make the worker unready, not empty.
+
+Rollup rows include the accounting partition as a shard. Readers sum the shards.
+This prevents independent workers from sharing one hot organization rollup row.
+The presence lease must check journal processing and read-model processing before
+it can publish ready. All tasks stop before their shared projection pool closes.
+
+The migration is expand-only. New fact indexes retain the existing reporting
+filters: tenant, account owner, team, key, user, model, provider, time, and tags.
+The fact insert has eleven indexes, including its primary and sequence keys.
+Each rollup has one primary and three reporting indexes. A finalized source event
+adds one partial projection index; reserved events do not enter it. No automatic
+deletion is added. Retain source events and recovery proof until all required
+checkpoints and financial effects are complete. Retain usage and audit under the
+existing tenant retention and export contract. Before a production rollout, run
+ANALYZE on the new tables and inspect vacuum, index growth, and projection age.
+Archival and purge remain explicit bounded maintenance, not inference work.
+
+- [ ] Add the append-only native fact/view/sharded-rollup schema.
+- [ ] Add bounded native page claims and one atomic fenced sink/checkpoint commit.
+- [ ] Add a supervised read-model worker and require it for projection presence.
+- [ ] Verify replay, stale lease, malformed data, byte caps, exact charges, audit,
+  sharded rollups, tenant/owner reporting, and rollback with real PostgreSQL.
+- [ ] Verify all migration paths and the complete affected lanes.
+
+Native reporting verification in progress:
+
+- [x] Add strict key-page claims, exact native facts, sharded rollups, canonical
+  redacted audit, and an atomic full-fence checkpoint transaction as drafts.
+- [x] Connect the read-model worker to projection task and presence ownership.
+- [x] Pass 176 focused worker, progress, recovery, presence, role, and structure
+  cases. Missing cells and stale observations stay unready.
+- [x] Run the draft SQL on real PostgreSQL inside a transaction that rolls back
+  all DDL and data. Twenty serial semantic cases pass, including replay, stale
+  fences, malformed input, source-byte caps, and prefix checks. This is a
+  diagnostic check, not the migrated PostgreSQL lane or qualification evidence.
+- [x] Apply and verify migrations 135–137 on all supported migration paths.
+  Fresh, last-release (`v0.1.42`), and shared-feature verification all pass.
+- [x] Prove two-worker behavior, bounded physical plans, reporting parity,
+  tenant/owner isolation, deletion, and rollback before selecting the new view.
+  The migrated database run passed 36 cases. Five health-plan/index-loss cases
+  also passed. Initial parity fixtures passed UUIDs without text conversion and
+  read exact amounts through a float JSON decoder; these fixture boundaries
+  now retain typed text. The larger checkpoint fixture exposed a real empty-
+  partition lookup problem: the global sequence index filtered 7,503 old rows.
+  The lookup now uses the complete indexed partition/sequence key. All four
+  actual plan modes pass with 10,000 retained events, facts, and checkpoints.
+- [ ] Verify the expanded readers and deletion inventory in the affected suites.
+
+### Native launcher and deployment integration
+
+Ownership and failure policy:
+
+- API and batch own their existing application graph plus one bounded accounting
+  HTTP pool. They do not open an unused direct accounting SQL pool. Warm local
+  issue retains its zero-database-call contract. Cold funding, terminal acceptance,
+  and unused returns use the same signed, deadline-bound transport.
+- `accountingRequest` owns a native SQL pool, terminal microbatcher, and bounded
+  dependency monitor. Its signed service is internal-only. It has no provider,
+  Redis, control-plane Prisma, or gateway credentials. Fixed replicas, rolling
+  surge, and retiring generations all count in deployment capacity.
+- `accountingWorker` in native mode owns one native SQL pool, journal processor,
+  native fact/audit projector, recovery worker, and fenced presence. It does not
+  run old spend/audit projection queues or import the inference runtime.
+- The full API still owns unrelated legacy control-plane audit/spend workers if
+  their outboxes are configured. Those pools are counted. The minimal native
+  projector is not their owner. Keep this compatibility responsibility explicit
+  until the other feature adapters are migrated.
+- Missing, stale, or failed observations close admission. Presence also requires
+  native read-model processing to be ready. A reporting failure does not repeat
+  provider work or release a debit.
+- API shutdown stops local issue, drains terminals, returns unused suffixes,
+  stops its monitor, then closes its transport. The parent owns the whole graph
+  before startup awaits, including failed-start cleanup. It never closes only
+  the exposed service and leaves the return worker running.
+
+Configuration and rollout:
+
+- `deployment_capacity_role` is the single startup-only selector, rendered even
+  without extended capacity. The native execution mode also requires a restart.
+- RPC origins are credential-free and port-allowlisted. They reuse the existing
+  bounded DNS/rebinding policy. Private CIDRs and local unencrypted HTTP require
+  explicit permission. Signing keys come from a pre-existing Kubernetes Secret,
+  not a plaintext ConfigMap or default key.
+- The native overlay uses kind's service CIDR as an example. Supply your actual
+  CIDR and PostgreSQL/monitoring network rules. Production native roles require
+  network protection. The bare overlay grants no general outbound access.
+- The request role has fixed replicas, fully counted. API saturation autoscaling
+  remains unchanged. Both accounting roles reuse one deployment template, image
+  command, probes, non-root security policy, resources, and drain contract.
+- Migrations 135–137 are applied and immutable. Fresh, last-release (`v0.1.42`),
+  and shared-feature upgrades pass. Writer rollback retains the combined reporting
+  view. An old image that cannot read native facts needs the documented backfill
+  and coordinator procedure; it is not an immediate safe image rollback.
+
+Checks and remaining work:
+
+- [x] Select minimal native roles before importing the full application.
+- [x] Remove the eager dynamic configuration import from the startup package.
+  The actual launcher graph imports no inference bootstrap or provider module.
+- [x] Own API local processing and its RPC pool through one managed closer.
+- [x] Match SQL allocation and readiness to the pools actually opened.
+- [x] Add request Service, role config, Secret reference, network protection,
+  disruption budgets, and exact four-role connection/descriptor arithmetic.
+- [x] Pass 87 focused launcher, lifecycle, readiness, and structure cases.
+- [x] Pass 79 existing Helm cases and 12 new native deployment cases.
+- [x] Pass 18 real-PostgreSQL launcher/reporting/retention/physical-plan cases.
+  The first launcher test shared RPC shutdown context with its API. It now binds
+  separate process owners. No production deadline or success assertion changed.
+- [ ] Finish complete application, PostgreSQL, Redis, Helm, and configuration gates.
+- [ ] Finish shared Realtime, batch, and selector billing/recovery adapters.
+- [ ] Finish narrow settled-receipt paths, image smoke, and kind qualification.
+
+The initial native production fixture declared 1,524 SQL connections against a
+1,000 limit: default API HPA maxima still count API-owned compatibility workers.
+Capacity validation correctly rejected it. The test pins one API replica to
+inspect the native contract. Production maxima and safety checks were not relaxed.
+
+### Slice 14: exact compact receipt settlement
+
+The experimental fast path skipped per-window reservation writes. That cannot
+be replayed unchanged: this branch's grant closer still reads those reservations
+and would lose charges. Change the writer and closer together, in append-only
+migration 138.
+
+Use the existing terminal journal as the durable compact receipt owner, not a
+new accounting ledger. A fully completed receipt with no unresolved attempts
+records its exact committed/provisional/released split and a checked
+`receipt_only` marker in the same transaction as its operation, event, grant
+counter, and payload deletion. Only these receipts skip duplicate per-window
+reservations. Uncertain and retry-ambiguous outcomes keep reservation-backed
+settlement and operator recovery.
+
+Grant closing adds compact receipt totals once per grant to the retained
+reservation totals. The existing grant/ordinal unique key bounds a grant to
+1,024 receipts; sorted grant/window/partition locks, limited candidate scans,
+and conservative unknown-owner debit remain unchanged. Reject a missing or
+inconsistent economic basis instead of closing a grant with a zero charge.
+Keep only narrow scalar proof metadata in the materializer's temporary array;
+stream the validated stored documents into their operation/event destinations.
+No new request-path round trip, table, queue, or index is introduced.
+
+The four added journal columns add one bounded row update, not four indexes.
+Existing journal retention must keep these receipts until grant settlement and
+archival verification are complete. Keep the existing vacuum/analyze schedule
+for the journal and payload tables. The metadata-only schema expansion leaves
+old rows on reservation-backed settlement. Rolling old Python readers continue
+to call the same database function signature. Do not roll back the SQL closer
+after receipt-only rows exist; disable new admission, finish settlement, and
+retain the expanded functions on writer rollback.
+
+- [x] Add compact receipt constraints and exact closer parity.
+- [x] Stream wide payloads without retaining duplicate JSON documents.
+- [ ] Prove mixed outcomes, every scope, lost replies, replay, concurrent workers,
+  owner loss, corrupted basis, and retained-history plans in real PostgreSQL.
+- [ ] Verify fresh, last-release, and shared-feature migrations and generated client.
+- [ ] Complete all regression lanes and the fixed-image kind qualifications.
+
+Migrations 138 and 139 are applied and immutable. The first physical-plan test
+found a real failure: an alternate planner read 10,004 payload rows. Migration
+139 uses a parameterized, indexed document lookup for each claimed receipt.
+All 53 focused PostgreSQL tests then passed. They include mixed completed and
+uncertain outcomes, lost replies, four planner settings, corrupt settlement
+bases, and native routing-cost reports. Keep the initial failure log.
+
+The full application test found eight old reporting fixture assertions. The
+fixtures now use the combined read view. Negative budget checks still reject
+reads from both old history and the combined view. The full component test
+found one old assertion that expected inline health SQL. The assertion now
+checks the bounded SQL function and its limits. The focused reporting, worker,
+Helm, and billing check passed all 161 tests. Complete lane confirmation remains
+required. The native worker saturation signal now includes terminal work and
+reporting work. An unavailable observation retains its last known value and
+timestamp. It does not publish zero.
+
+## Shared feature adapter sequence
+
+Keep PostgreSQL as the money authority. Reuse the existing local issue proofs,
+reservation queue, terminal queue, and grant recovery. Do not add a Realtime or
+batch accounting pool. Do not use HTTP request objects in these domain owners.
+
+- [x] Move the existing dispatch decision and frozen price fields to typed billing
+  modules. HTTP and cache keep explicit import facades until their callers move.
+- [x] Extract exact charge and uncertain-result preparation. Feature owners must
+  freeze terminal bytes and timestamps before the first persistence attempt.
+- [x] Add tests for shared policy parity and immutable replay inputs.
+- [x] Add the Realtime domain adapter, bounded turn proofs, exact replay, and
+  conservative disconnect recovery. Qualify all cost ceilings before dispatch.
+- [x] Connect batch claims, grouped provider work, and completion recovery to the
+  same native accounting service. Preserve item leases and owner epochs.
+- [x] Connect selector costs to that service with stable component identities.
+- [x] Prove mixed HTTP, cache, Realtime, batch, and selector recovery before
+  removing temporary startup checks.
+
+The initial shared Realtime check passed 122 tests after a test fixture correction.
+The local fake returned completed acknowledgements for uncertain receipts. The
+fixture now returns the actual submitted outcome. The production reply check
+was not changed. Four new PostgreSQL cases passed through the signed transport
+and native role graph. They cover response tokens, transcription tokens,
+transcription duration, every budget scope, duplicate receipts, disconnect
+debits, native facts, and owner denial. The Realtime startup check now selects
+the shared adapter. Complete WebSocket/SDK and regression verification remains
+required. The complete focused Realtime check then passed 328 tests. It includes
+late usage, duplicate close, lost replies, and turn lifetime limits. The batch
+startup check remains until its shared adapter passes recovery tests.
+
+The selector focused check passed 427 tests. Nine PostgreSQL tests passed for
+selector, routing costs, and Realtime. The selector cases prove exact charges
+across all five budget scopes, stable component identities, uncertain and unsent
+outcomes, and rejection of a foreign parent link. Native reports count the
+selector as a component, not as a second answer. No charge is copied into the
+old spend table. The first selector run passed 394 tests and found a reporting
+function above the size limit. The SQL now has one small query owner. The size
+limit was not changed.
+
+The full migration-139 PostgreSQL lane passed 806 tests and failed four native
+reporting plan tests. Retained operation history changed the planner's cost
+estimate. Migration 140 adds projection-local index settings and a required
+operation-key guard. All 34 focused database tests then passed, including all
+four planner settings, index loss, compact/direct receipt mixtures, and every
+budget scope. No applied migration or query-plan limit was changed. Complete
+lane confirmation remains required. Fresh install, last-release upgrade, and
+shared-feature upgrade all passed with migration 140.
+
+### Batch adapter design and checks
+
+Use the existing batch item and completion outbox as execution recovery owners.
+Use the shared accounting service as the only money owner. An item checkpoint
+is a provider replay fence. It is not another money ledger or worker queue.
+
+Before provider dispatch, freeze customer and provider prices and reserve a
+conservative allowance. Save the bounded proof under the live item claim and
+claim epoch. Do not hold a SQL transaction during a provider call. A new claim
+must not repeat a provider call after it finds a dispatch proof from an old
+claim. It must recover the stored result or keep an uncertain debit.
+
+Save completed output and immutable terminal bytes in the existing completion
+transaction. The outbox worker submits those bytes through the shared terminal
+queue. It then marks delivery complete under the live outbox lease and attempt
+count. A lost reply can repeat delivery, but cannot repeat a charge. Never fall
+back to old spend writes for a stored native completion.
+
+Keep proofs at or below 24 KiB and checkpoints at or below 64 KiB. Keep the
+existing group size, worker concurrency, retries, and lease limits. Group work
+must fund every item before dispatch. Checkpoint writes use one bounded SQL
+batch. Add no accounting pool, feature task, grant bank, or append-table index.
+Use a nullable item field in the next append-only migration. Old rows retain
+their old execution path. Drain native proofs before disabling native billing.
+
+- [x] Extract one exact token quote policy. Keep the old float result only at
+  the legacy display boundary. Prove price selection and metadata parity.
+- [x] Add the typed durable checkpoint and fenced repository. Prove stale
+  claim denial, tenant scope, payload bounds, fresh install, and upgrades.
+- [x] Connect single and grouped chat and embedding calls. Freeze prices before
+  dispatch and preserve the existing provider retry boundary.
+- [x] Connect completion delivery to shared accounting. Prove lost replies,
+  owner restart, duplicate delivery, and stale outbox attempt denial.
+- [x] Verify the supported managed-internal batch mode, cancellation, and mixed
+  features. Main does not implement a provider-managed executor. Do not add a
+  second executor to satisfy an obsolete source-branch checklist item.
+- [x] Remove the batch startup check only after these proofs pass.
+
+Evidence logs:
+
+- `/private/tmp/issue320-native-realtime-complete.log`: 328 passed.
+- `/private/tmp/issue320-native-selector-focused.log`: 394 passed, one failed.
+- `/private/tmp/issue320-native-selector-focused-2.log`: 427 passed.
+- `/private/tmp/issue320-native-selector-postgres.log`: nine passed.
+- `/private/tmp/issue320-migration140-paths.log`: all three paths passed.
+- `/private/tmp/issue320-native-features-app.log`: 1,646 application tests passed.
+- `/private/tmp/issue320-exact-token-policy-focused-2.log`: 139 passed. The shared
+  policy keeps decimal rates and the 18-place rounding rule. The old quote API
+  delegates to that policy. Invalid configured prices are unpriced, not free.
 
 ## Slice 9a: inactive permit foundation
 
@@ -1901,9 +2393,11 @@ migration rolled back fully. The failed marker was cleared on the private test
 database, and the corrected migration then passed all upgrade paths. No shared
 or historical migration was changed.
 
-Realtime, batch, and selector billing do not yet share v2 budget authority.
-The temporary startup and Helm checks prevent those combinations. They do not
-remove features from legacy mode. Shared adapters remain required before merge.
+At this earlier checkpoint, Realtime, batch, and selector billing did not share
+v2 budget authority. Realtime and selector adapters are now connected, as stated
+in the shared feature sequence above. Batch remains guarded. These checks do not
+remove features from legacy mode. Complete shared adapter verification remains
+required before merge.
 Capacity rendering now checks the accounting-worker role only when it is enabled.
 The regression tests retain main's batch storage and realtime capacity assertions.
 

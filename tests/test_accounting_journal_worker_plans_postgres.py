@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from src.billing.accounting_journal_claims import JournalFailure
+from src.billing.accounting_protocol import AccountingOutcome
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes
 from tests.test_accounting_journal_plans_postgres import seed_journal_history
@@ -56,13 +57,14 @@ async def seed_worker_history(db, generation):
 
 @pytest.mark.parametrize("planner", ["auto", "generic", "custom", "alternate_join"])
 @pytest.mark.parametrize("recover", [False, True])
+@pytest.mark.parametrize("outcome", [AccountingOutcome.COMPLETED, AccountingOutcome.UNCERTAIN])
 async def test_actual_claim_materialize_and_failure_plans_are_history_independent(
-    accounting_db, planner, recover
+    accounting_db, planner, recover, outcome
 ):
     clients, generation = accounting_db
     db = clients[0]
     await seed_worker_history(db, generation)
-    await pending(db, generation)
+    await pending(db, generation, outcome=outcome)
     relations = {
         "deltallm_accounting_grants",
         "deltallm_billing_operations",
@@ -105,4 +107,11 @@ async def test_actual_claim_materialize_and_failure_plans_are_history_independen
                 assert node["Actual Rows"] <= 4, entry.safe_report()
                 assert node.get("Rows Removed by Filter", 0) <= 4, entry.safe_report()
                 assert node.get("Rows Removed by Index Recheck", 0) <= 4, entry.safe_report()
-    assert relations <= observed
+    if outcome is AccountingOutcome.COMPLETED:
+        assert (
+            relations - {"deltallm_accounting_grant_windows", "deltallm_accounting_reservations"}
+            <= observed
+        )
+        assert "deltallm_accounting_grant_windows" not in observed
+    else:
+        assert relations <= observed

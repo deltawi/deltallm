@@ -16,6 +16,10 @@
 {{- if .Values.accountingWorker.enabled -}}
 {{- $roles = append $roles (dict "name" "accountingWorker" "config" $accountingWorker "replicas" $accountingWorkerReplicas "processes" $capacity.accountingWorkerProcessesPerPod) -}}
 {{- end -}}
+{{- if .Values.accountingRequest.enabled -}}
+{{- $request := (include "deltallm.accountingRequestConfigYaml" . | fromYaml).general_settings -}}
+{{- $roles = append $roles (dict "name" "accountingRequest" "config" $request "replicas" .Values.accountingRequest.replicaCount "processes" $capacity.accountingRequestProcessesPerPod) -}}
+{{- end -}}
 {{- $extended := $capacity.extended -}}
 {{- $dbTotal := add $capacity.postgresqlReservedConnections $extended.postgresqlMigrationConnections $extended.postgresqlOtherConnections -}}
 {{- $roleReports := dict -}}
@@ -25,6 +29,8 @@
 {{- range $role := $roles -}}
 {{- $processes := include "deltallm.peakRoleProcesses" (dict "replicas" $role.replicas "processes" $role.processes "strategy" $.Values.strategy "retiringGenerations" $capacity.retiringGenerations) | int -}}
 {{- $g := $role.config -}}
+{{- $native := eq $g.accounting_execution_mode "local_journal" -}}
+{{- $minimal := and $native (has $role.name (list "accountingWorker" "accountingRequest")) -}}
 {{- range $name := list "db_pool_size" "db_foreground_pool_size" "telemetry_db_pool_size" "telemetry_worker_db_pool_size" "redis_critical_max_connections" "redis_cache_max_connections" "redis_bulk_max_connections" -}}
 {{- if or (lt (int (get $g $name)) 1) (gt (int (get $g $name)) 10000) -}}
 {{- fail (printf "%s must be a finite connection count between 1 and 10000" $name) -}}
@@ -36,7 +42,7 @@
 {{- end -}}
 {{- end -}}
 {{- $db := add $g.db_pool_size $g.db_foreground_pool_size -}}
-{{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") $g.accounting_protocol_enabled -}}
+{{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") (and $g.accounting_protocol_enabled (not $native)) -}}
 {{- $db = add $db $g.telemetry_db_pool_size -}}
 {{- $spendWorker := and (eq $g.spend_ingestion_mode "outbox") $g.spend_ingestion_worker_enabled -}}
 {{- $auditWorker := and $g.audit_enabled (eq $g.audit_ingestion_mode "outbox") $g.audit_ingestion_worker_enabled -}}
@@ -46,12 +52,19 @@
 {{- end -}}
 {{- end -}}
 {{- $pools := dict "postgresql" $db "redisCritical" $g.redis_critical_max_connections "redisCache" (add $g.redis_cache_max_connections $g.redis_bulk_max_connections) "upstreamHttp" (mul $g.upstream_http_max_connections (add 1 $extended.proxyPoolsPerClient)) "controlHttp" (mul 100 (add 1 $extended.proxyPoolsPerClient)) "auxiliaryHttp" $extended.auxiliaryHttpConnectionsPerProcess -}}
+{{- $_ := set $pools "accountingHttp" 0 -}}
+{{- if $minimal -}}
+{{- $db = int $g.accounting_hot_path_db_pool_size -}}
+{{- $pools = dict "postgresql" $db "redisCritical" 0 "redisCache" 0 "upstreamHttp" 0 "controlHttp" 0 "auxiliaryHttp" 0 "accountingHttp" 0 -}}
+{{- else if $native -}}
+{{- $_ := set $pools "accountingHttp" $g.accounting_rpc_max_connections -}}
+{{- end -}}
 {{- $report := dict "maxReplicas" $role.replicas "processesPerPod" $role.processes "steadyProcesses" (mul $role.replicas $role.processes) "peakProcesses" $processes "pools" $pools -}}
 {{- $_ := set $roleReports $role.name $report -}}
 {{- $processTotal = add $processTotal $processes -}}
 {{- $dbTotal = add $dbTotal (mul $processes $db) -}}
-{{- $criticalTotal = add $criticalTotal (mul $processes $g.redis_critical_max_connections) -}}
-{{- $cacheTotal = add $cacheTotal (mul $processes (add $g.redis_cache_max_connections $g.redis_bulk_max_connections)) -}}
+{{- $criticalTotal = add $criticalTotal (mul $processes $pools.redisCritical) -}}
+{{- $cacheTotal = add $cacheTotal (mul $processes $pools.redisCache) -}}
 {{- range $prefix := list "db_" "db_background_" -}}
 {{- if or (gt (float64 (get $g (printf "%slock_timeout_seconds" $prefix))) (float64 (get $g (printf "%sstatement_timeout_seconds" $prefix)))) (gt (float64 (get $g (printf "%sstatement_timeout_seconds" $prefix))) (float64 (get $g (printf "%stransaction_timeout_seconds" $prefix)))) -}}
 {{- fail "Database deadlines require lock <= statement <= transaction" -}}
@@ -73,12 +86,12 @@
 {{- if gt $redisCriticalBudget (int $capacity.redisMaxClients) -}}
 {{- fail (printf "Peak Redis connection budget %d exceeds declared maximum %d" $redisTotal (int $capacity.redisMaxClients)) -}}
 {{- end -}}
-{{- range $env := concat .Values.env .Values.batchWorker.env .Values.accountingWorker.env -}}
+{{- range $env := concat .Values.env .Values.batchWorker.env .Values.accountingWorker.env .Values.accountingRequest.env -}}
 {{- if has $env.name (list "WEB_CONCURRENCY" "UVICORN_WORKERS" "DELTALLM_DB_POOL_SIZE" "DELTALLM_TELEMETRY_DB_POOL_SIZE") -}}
 {{- fail (printf "%s is owned by dependencyCapacity and rendered pool settings" $env.name) -}}
 {{- end -}}
 {{- end -}}
-{{- range $argument := concat .Values.command .Values.args .Values.batchWorker.command .Values.batchWorker.args .Values.accountingWorker.command .Values.accountingWorker.args -}}
+{{- range $argument := concat .Values.command .Values.args .Values.batchWorker.command .Values.batchWorker.args .Values.accountingWorker.command .Values.accountingWorker.args .Values.accountingRequest.command .Values.accountingRequest.args -}}
 {{- if or (eq $argument "--workers") (eq $argument "-w") (hasPrefix "--workers=" $argument) -}}
 {{- fail "Worker count flags are owned by dependencyCapacity; set the declared process counts" -}}
 {{- end -}}

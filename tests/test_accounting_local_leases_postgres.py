@@ -54,10 +54,18 @@ def terminal(item, grant):
     )
 
 
-async def funded(db, generation):
+async def funded(db, generation, *, owner_account_id=None):
     window_id = str(uuid4())
     await _create_window(db, generation, window_id)
     item = _reservation(generation, window_id)
+    if owner_account_id is not None:
+        item = item.model_copy(
+            update={
+                "attribution": item.attribution.model_copy(
+                    update={"owner_account_id": owner_account_id}
+                )
+            }
+        )
     grant = (await owner(db).allocate_batch([allocation(item)], expires_at=deadline()))[0]
     return window_id, item, grant
 

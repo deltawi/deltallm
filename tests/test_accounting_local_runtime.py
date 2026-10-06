@@ -21,7 +21,7 @@ from tests.test_accounting_protocol import finalization
 
 def state():
     funding, terminal, cursors, receipts, issuer, service = service_state(dwell_seconds=0)
-    service._repository.protocol_ready = AsyncMock(return_value=True)
+    service._generation_probe.protocol_ready = AsyncMock(return_value=True)
     returns = Returns()
     worker = LocalReturnWorker(returns, cursors, issuer, poll_seconds=0.01)
     runtime = LocalAccountingRuntime(service, worker)
@@ -37,9 +37,9 @@ async def test_start_requires_one_actual_generation_probe_and_owned_return_worke
     await runtime.start(expires_at=deadline())
     assert runtime.service is service and runtime.worker_health.ready
     assert worker.task is not None and not worker.task.done()
-    service._repository.protocol_ready.assert_awaited_once_with(7)
+    service._generation_probe.protocol_ready.assert_awaited_once_with(7)
     await runtime.start(expires_at=deadline())
-    assert service._repository.protocol_ready.await_count == 1
+    assert service._generation_probe.protocol_ready.await_count == 1
     assert await runtime.close(expires_at=deadline())
     assert runtime.worker_health.state is WorkerState.DISABLED
     with pytest.raises(RuntimeError, match="restart"):
@@ -116,7 +116,7 @@ async def test_issued_but_unreported_operation_cannot_be_called_a_complete_drain
 
 async def test_startup_failure_cleans_owners_and_never_selects_the_service():
     _, _, _, _, _, issuer, service, worker, runtime = state()
-    service._repository.protocol_ready.return_value = False
+    service._generation_probe.protocol_ready.return_value = False
     with pytest.raises(RuntimeError, match="generation"):
         await runtime.start(expires_at=deadline())
     assert all(task.done() for task in runtime._queue_tasks)
@@ -132,7 +132,7 @@ async def test_close_before_start_stops_issue_without_starting_admission_queues(
     _, _, _, _, _, issuer, service, _, runtime = state()
     assert await runtime.close(expires_at=deadline())
     assert service.reservations.task is service.finalizations.task is None
-    service._repository.protocol_ready.assert_not_awaited()
+    service._generation_probe.protocol_ready.assert_not_awaited()
     with pytest.raises(DurableBatchClosed):
         await issuer.reserve_batch(items(1), expires_at=deadline())
 
@@ -142,7 +142,7 @@ async def test_readiness_uses_the_actual_generation_and_fixed_health_details():
     await runtime.start(expires_at=deadline())
     try:
         assert await runtime.readiness_probe(expires_at=deadline())
-        service._repository.protocol_ready.return_value = False
+        service._generation_probe.protocol_ready.return_value = False
         assert not await runtime.readiness_probe(expires_at=deadline())
         worker.task.cancel()
         await asyncio.gather(worker.task, return_exceptions=True)
@@ -284,7 +284,7 @@ async def test_expired_startup_and_probe_do_not_create_tasks_or_database_calls()
     assert not await runtime.readiness_probe(expires_at=expired)
     assert worker.task is None and runtime._probe_task is None
     assert service.reservations.task is service.finalizations.task is None
-    service._repository.protocol_ready.assert_not_awaited()
+    service._generation_probe.protocol_ready.assert_not_awaited()
 
 
 @pytest.mark.parametrize("failure", ["cancel", "close"])

@@ -16,17 +16,18 @@ from src.bootstrap.accounting import (
     start_accounting_protocol,
     start_accounting_projection,
 )
+from src.bootstrap.accounting_remote import RemoteAccountingOwner
+from src.bootstrap.accounting_role_config import validate_accounting_role
+from src.bootstrap.server_application import accounting_owner_id
+from src.deployment_capacity_settings import resolve_capacity_settings
 from src.redis_runtime import startup_setting as _runtime_setting
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.selector import configure_selector_execution
-from src.billing import (
-    AlertService,
-    BudgetEnforcementService,
-    SpendLedgerService,
-    SpendIngestionConfig,
-    SpendIngestionService,
-    SpendTrackingService,
-)
+from src.billing.alerts import AlertService
+from src.billing.budget import BudgetEnforcementService
+from src.billing.ledger import SpendLedgerService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend import SpendTrackingService
 from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
 from src.billing.accounting_projection import AccountingProjectionWorker
 from src.billing.accounting_service import AccountingProtocolService
@@ -71,6 +72,7 @@ class RuntimeServicesRuntime:
     tier_policy_service: Any | None = None
     spend_ingestion_service: SpendIngestionService | None = None
     accounting_protocol_service: AccountingProtocolService | None = None
+    accounting_remote_owner: RemoteAccountingOwner | None = None
     accounting_projection_worker: AccountingProjectionWorker | None = None
     prompt_registry_service: PromptRegistryService | None = None
     budget_notification_worker: BudgetNotificationWorker | None = None
@@ -380,11 +382,25 @@ async def _init_runtime_services(
         None,
     )
     accounting_config = resolve_accounting_settings(general_settings, settings)
-    accounting_service = start_accounting_protocol(
-        accounting_config,
-        client=accounting_db_client,
-        owner_id=f"{socket.gethostname()}:{os.getpid()}:accounting-api",
-    )
+    accounting_role = resolve_capacity_settings(general_settings, settings).deployment_capacity_role
+    validate_accounting_role(accounting_config, accounting_role)
+    if accounting_config.accounting_execution_mode == "local_journal":
+        owner = RemoteAccountingOwner(
+            accounting_config,
+            app.state.process_lifecycle,
+            role=accounting_role,
+            owner_id=accounting_owner_id(),
+        )
+        runtime.accounting_remote_owner = owner
+        app.state.accounting_remote_owner = owner
+        await owner.start(expires_at=asyncio.get_running_loop().time() + 5)
+        accounting_service = owner.service
+    else:
+        accounting_service = start_accounting_protocol(
+            accounting_config,
+            client=accounting_db_client,
+            owner_id=f"{socket.gethostname()}:{os.getpid()}:accounting-api",
+        )
     runtime.accounting_protocol_service = accounting_service
     app.state.accounting_protocol_service = accounting_service
     app.state.accounting_max_provider_attempts = accounting_config.accounting_max_provider_attempts
@@ -630,7 +646,9 @@ async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
             cleanup.push_async_callback(prompt_shutdown)
         if runtime.accounting_projection_worker is not None:
             cleanup.push_async_callback(runtime.accounting_projection_worker.stop)
-        if runtime.accounting_protocol_service is not None:
+        if runtime.accounting_remote_owner is not None:
+            cleanup.push_async_callback(runtime.accounting_remote_owner.close)
+        elif runtime.accounting_protocol_service is not None:
             cleanup.push_async_callback(runtime.accounting_protocol_service.close)
         # Independent bounded drains overlap, before dependencies close. Adding
         # optional alerts must not add eleven seconds to the spend drain budget.

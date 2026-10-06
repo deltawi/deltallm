@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.billing.spend_read import SPEND_READ_SOURCE
 from src.db.organization_deletion_scope_inventory import (
     ORGANIZATION_SCOPE_INVENTORY_CTE_SQL,
     approval_attribution_predicate,
@@ -269,7 +270,7 @@ _ORGANIZATION_DELETION_PLAN_SQL_TEMPLATE = """
                           )
                       )
                 ) unresolved) AS unresolved_batch_ownership_records,
-                (SELECT COUNT(*)::int FROM deltallm_spendlog_events e
+                (SELECT COUNT(*)::int FROM __SPEND_READ_TABLE__ e
                   WHERE e.organization_id = o.organization_id) AS retained_spend_events,
                 (SELECT COUNT(*)::int FROM deltallm_auditevent e
                   WHERE e.organization_id = o.organization_id) AS retained_audit_events,
@@ -293,6 +294,7 @@ ORGANIZATION_DELETION_PLAN_SQL = (
     _ORGANIZATION_DELETION_PLAN_SQL_TEMPLATE.replace(
         "__SCOPE_INVENTORY_CTE__", ORGANIZATION_SCOPE_INVENTORY_CTE_SQL
     )
+    .replace("__SPEND_READ_TABLE__", SPEND_READ_SOURCE.table)
     .replace("__APPROVAL_ATTRIBUTION_PREDICATE__", approval_attribution_predicate())
     .replace("__SCOPED_ATTRIBUTION_PREDICATE__", scope_predicate("scoped"))
     .replace("__BINDING_ATTRIBUTION_PREDICATE__", scope_predicate("b"))

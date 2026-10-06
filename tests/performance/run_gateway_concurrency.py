@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 import json
 from pathlib import Path
@@ -121,13 +122,32 @@ def in_flight_series(run: RunResult) -> list[dict[str, float]]:
     return points
 
 
+def generator_evidence_failures(run: RunResult, *, target_rate: float) -> list[str]:
+    failures = []
+    if run.scheduled_count + run.generator_dropped_count != run.target_count:
+        failures.append("generator_target_accounting")
+    if len(run.samples) != run.scheduled_count:
+        failures.append("generator_completion_accounting")
+    if run.generator_dropped_count:
+        failures.append("generator_drops")
+    if run.scheduled_count / run.arrival_window_seconds < target_rate * 0.99:
+        failures.append("generator_offered_rate")
+    if run.generator_start_skew_seconds > 0.1:
+        failures.append("generator_start_skew")
+    lag = summarize(run, target_rate=target_rate)["scheduling_lag_seconds"]
+    if not isinstance(lag, dict) or lag["p95"] is None or lag["p95"] > 0.1:
+        failures.append("generator_scheduling_lag")
+    return failures
+
+
 async def measure(
     args: argparse.Namespace,
     *,
     resource_recorder: KubernetesResourceRecorder | None = None,
+    workload_runner: Callable[[], Awaitable[RunResult]] | None = None,
 ) -> dict[str, object]:
-    if not 0 < args.rate <= 200 or not 5 <= args.duration <= 600:
-        raise ValueError("Use rates up to 200 RPS and durations from 5 to 600 seconds")
+    if not 0 < args.rate <= 500 or not 5 <= args.duration <= 600:
+        raise ValueError("Use rates up to 500 RPS and durations from 5 to 600 seconds")
     manifest = read_manifest(args.server_manifest)
     endpoint = require_local_url(args.url, schemes={"http"})
     api_urls = [require_local_url(url, schemes={"http"}) for url in args.metrics_url]
@@ -141,11 +161,18 @@ async def measure(
         raise ValueError(
             "Provide one metrics endpoint for every declared accounting-worker process"
         )
+    worker_roles = getattr(
+        args, "accounting_worker_source_roles", ["accounting_worker"] * len(worker_urls)
+    )
+    if len(worker_roles) != len(worker_urls) or any(
+        role not in {"accounting_worker", "accounting_request"} for role in worker_roles
+    ):
+        raise ValueError("Provide one fixed accounting role for each worker metrics endpoint")
     metric_sources = [
         MetricSource(url=url, role="api", process=index) for index, url in enumerate(api_urls)
     ] + [
-        MetricSource(url=url, role="accounting_worker", process=index)
-        for index, url in enumerate(worker_urls)
+        MetricSource(url=url, role=role, process=index)
+        for index, (url, role) in enumerate(zip(worker_urls, worker_roles, strict=True))
     ]
     key = fixture_key()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -204,7 +231,7 @@ async def measure(
             before = await dependency_counts(db, redis)
             async with AsyncExitStack() as stack:
                 recorder = await stack.enter_async_context(
-                    MetricsRecorder(metric_sources, metrics_path)
+                    MetricsRecorder(metric_sources, metrics_path, interval_seconds=5)
                 )
                 if getattr(args, "dependency_diagnostics", False):
                     dependency_recorder = await stack.enter_async_context(
@@ -214,11 +241,15 @@ async def measure(
                     await stack.enter_async_context(resource_recorder)
                 arrival_start = perf_counter() - recorder.started
                 run = await recorder.run_workload(
-                    lambda: run_constant_arrival(
-                        rate=args.rate,
-                        duration_seconds=args.duration,
-                        max_in_flight=1000,
-                        request=request,
+                    workload_runner
+                    or (
+                        lambda: run_constant_arrival(
+                            rate=args.rate,
+                            duration_seconds=args.duration,
+                            max_in_flight=1000,
+                            request=request,
+                            drain_timeout_seconds=15,
+                        )
                     )
                 )
             after = await dependency_counts(db, redis)
@@ -265,24 +296,50 @@ async def measure(
                 for name in before.keys() | after.keys()
             },
             "qualification": "baseline_only",
+            "isolated_load_generator": workload_runner is not None,
+            "server_request_phases": {
+                phase: recorder.histogram_delta(
+                    "deltallm_request_phase_latency_seconds",
+                    labels={"route": "chat_completions", "phase": phase},
+                )
+                for phase in (
+                    "response_total",
+                    "application_total",
+                    "capacity_admission",
+                    "budget",
+                    "upstream_http",
+                    "after_response",
+                )
+            },
+            "accounting_database_latency": recorder.histogram_delta(
+                "deltallm_accounting_database_call_seconds",
+                roles=frozenset({"accounting_worker", "accounting_request"}),
+            ),
         }
     )
     diagnostic_failures: list[str] = []
     if getattr(args, "diagnostic_gate", False):
+        diagnostic_failures.extend(generator_evidence_failures(run, target_rate=args.rate))
         if dependency_recorder is None:
             diagnostic_failures.append("dependency_diagnostics_missing")
         elif dependency_recorder.snapshots < 2:
             diagnostic_failures.append("dependency_diagnostics_incomplete")
+        if dependency_recorder is not None and dependency_recorder.errors:
+            diagnostic_failures.append("dependency_diagnostics_errors")
+        if recorder.errors:
+            diagnostic_failures.append("metrics_scrape_errors")
         if resource_recorder is None:
             diagnostic_failures.append("resource_diagnostics_missing")
         else:
             resource_evidence = resource_recorder.evidence()
             if resource_evidence["snapshots"] < 2 or resource_evidence["missing_required_roles"]:
                 diagnostic_failures.append("resource_diagnostics_incomplete")
+            if resource_evidence["errors"]:
+                diagnostic_failures.append("resource_diagnostics_errors")
         if any(source["successful_scrapes"] < 2 for source in source_evidence):
             diagnostic_failures.append("insufficient_metrics_samples")
         if any(
-            source["source_role"] == "accounting_worker"
+            source["source_role"] in {"accounting_worker", "accounting_request"}
             and not source["accounting_metrics_observed"]
             for source in source_evidence
         ):
@@ -296,7 +353,9 @@ async def measure(
         report["qualification"] = (
             "diagnostic_passed" if not diagnostic_failures else "diagnostic_failed"
         )
-    raw_path, summary_path = write_results(run, report, args.output_dir)
+    raw_path, summary_path = write_results(
+        run, report, args.output_dir, compress=getattr(args, "compress_samples", False)
+    )
     if diagnostic_failures and getattr(args, "raise_on_diagnostic_failure", True):
         raise ValueError(f"Diagnostic evidence gate failed; see {summary_path}")
     return {"summary": str(summary_path), "raw": str(raw_path), **report}

@@ -67,6 +67,99 @@ model DeltaLLM_SpendLogEvents {
   @@map("deltallm_spendlog_events")
 }
 
+model DeltaLLM_AccountingUsageFactV2 {
+  event_id                  String   @id(map: "deltallm_accounting_usage_facts_v2_pkey")
+  accounting_sequence       BigInt   @unique(map: "deltallm_usage_facts_v2_sequence_key")
+  protocol_generation       BigInt
+  source_sha256             Bytes
+  operation_id              String
+  request_id                String
+  call_type                 String
+  api_key                   String
+  user_id                   String?
+  team_id                   String?
+  organization_id           String?
+  owner_account_id          String?
+  end_user_id               String?
+  model                     String
+  deployment_model          String?
+  provider                  String?
+  api_base                  String?
+  spend                     Float
+  provider_cost             Float?
+  spend_exact               Decimal  @db.Decimal(38, 18)
+  provider_cost_exact       Decimal? @db.Decimal(38, 18)
+  billing_unit              String?
+  pricing_tier              String?
+  total_tokens              Int      @default(0)
+  input_tokens              Int      @default(0)
+  output_tokens             Int      @default(0)
+  cached_input_tokens       Int      @default(0)
+  cached_output_tokens      Int      @default(0)
+  input_audio_tokens        Int      @default(0)
+  output_audio_tokens       Int      @default(0)
+  input_characters          Int      @default(0)
+  output_characters         Int      @default(0)
+  duration_seconds          Float    @default(0)
+  image_count               Int      @default(0)
+  rerank_units              Int      @default(0)
+  start_time                DateTime @db.Timestamptz(6)
+  end_time                  DateTime @db.Timestamptz(6)
+  latency_ms                Int?
+  cache_hit                 Boolean  @default(false)
+  cache_key                 String?
+  request_tags              String[]
+  unpriced_reason           String?
+  pricing_fields_used       Json?
+  usage_snapshot            Json?
+  metadata                  Json?
+  status                    String   @default("success")
+  http_status_code          Int?
+  error_type                String?
+  source_occurred_at        DateTime @db.Timestamptz(6)
+  projected_at              DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([organization_id, start_time, event_id], map: "deltallm_usage_facts_v2_org_time_id_idx")
+  @@index([owner_account_id, start_time, event_id], map: "deltallm_usage_facts_v2_owner_time_id_idx")
+  @@index([team_id, start_time, event_id], map: "deltallm_usage_facts_v2_team_time_id_idx")
+  @@index([api_key, start_time, event_id], map: "deltallm_usage_facts_v2_api_key_time_id_idx")
+  @@index([user_id, start_time, event_id], map: "deltallm_usage_facts_v2_user_time_id_idx")
+  @@index([model, start_time, event_id], map: "deltallm_usage_facts_v2_model_time_id_idx")
+  @@index([provider, start_time, event_id], map: "deltallm_usage_facts_v2_provider_time_id_idx")
+  @@index([start_time, event_id], map: "deltallm_usage_facts_v2_time_id_idx")
+  @@index([request_tags], type: Gin, map: "deltallm_usage_facts_v2_request_tags_gin_idx")
+  @@map("deltallm_accounting_usage_facts_v2")
+}
+
+model DeltaLLM_AccountingUsageRollupV2 {
+  bucket_kind              String
+  bucket_start             DateTime @db.Timestamptz(6)
+  organization_id          String   @default("")
+  team_id                  String   @default("")
+  user_id                  String   @default("")
+  owner_account_id         String   @default("")
+  api_key                  String   @default("")
+  model                    String   @default("")
+  provider                 String   @default("")
+  status                   String   @default("success")
+  rollup_shard             Int      @default(0) @db.SmallInt
+  request_count            BigInt   @default(0)
+  spend_exact              Decimal  @default(0) @db.Decimal(38, 18)
+  provider_cost_exact      Decimal  @default(0) @db.Decimal(38, 18)
+  total_tokens             BigInt   @default(0)
+  input_tokens             BigInt   @default(0)
+  output_tokens            BigInt   @default(0)
+  cached_input_tokens      BigInt   @default(0)
+  cached_output_tokens     BigInt   @default(0)
+  updated_at               DateTime @default(now()) @db.Timestamptz(6)
+
+  @@id([bucket_kind, bucket_start, organization_id, team_id, user_id, owner_account_id, api_key, model, provider, status, rollup_shard], map: "deltallm_usage_rollups_v2_pkey")
+  @@index([organization_id, bucket_kind, bucket_start], map: "deltallm_usage_rollups_v2_org_bucket_idx")
+  @@index([team_id, bucket_kind, bucket_start], map: "deltallm_usage_rollups_v2_team_bucket_idx")
+  @@index([owner_account_id, bucket_kind, bucket_start], map: "deltallm_usage_rollups_v2_owner_bucket_idx")
+  @@map("deltallm_accounting_usage_rollups_v2")
+}
+
 model DeltaLLM_TeamModelSpendCounter {
   team_id     String
   model       String
@@ -680,6 +773,7 @@ model DeltaLLM_AccountingProtocol {
   windows    DeltaLLM_AccountingBudgetWindow[]
   grants     DeltaLLM_AccountingGrant[]
   recovery_cursor DeltaLLM_AccountingRecoveryCursor?
+  projection_presence DeltaLLM_AccountingProjectionPresence[]
 
   @@id([protocol_name, generation])
   @@map("deltallm_accounting_protocols")
@@ -783,6 +877,20 @@ model DeltaLLM_AccountingRecoveryCursor {
   @@map("deltallm_accounting_recovery_cursors")
 }
 
+model DeltaLLM_AccountingProjectionPresence {
+  protocol_name String @default("primary")
+  generation BigInt
+  slot Int
+  owner_token String? @db.Uuid
+  expires_at DateTime @default(dbgenerated("'1970-01-01 00:00:00+00'::timestamp with time zone")) @db.Timestamptz
+  ready Boolean @default(false)
+
+  protocol DeltaLLM_AccountingProtocol @relation(fields: [protocol_name, generation], references: [protocol_name, generation], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([protocol_name, generation, slot])
+  @@map("deltallm_accounting_projection_presence")
+}
+
 model DeltaLLM_AccountingTerminalCapacity {
   protocol_name String @default("primary")
   generation BigInt
@@ -825,6 +933,10 @@ model DeltaLLM_AccountingTerminalJournal {
   updated_at DateTime @default(now()) @db.Timestamptz
   completed_at DateTime? @db.Timestamptz
   last_error_code String?
+  receipt_only Boolean @default(false)
+  committed_exact Decimal? @db.Decimal(38, 18)
+  provisional_exact Decimal? @db.Decimal(38, 18)
+  released_exact Decimal? @db.Decimal(38, 18)
 
   capacity DeltaLLM_AccountingTerminalCapacity @relation(fields: [protocol_name, generation, accounting_partition], references: [protocol_name, generation, accounting_partition], onDelete: Restrict, onUpdate: Restrict)
   grant DeltaLLM_AccountingGrant @relation(fields: [grant_id], references: [grant_id], onDelete: Restrict, onUpdate: Restrict)
@@ -1927,6 +2039,7 @@ model DeltaLLM_BatchItem {
   status             String
   request_body       Json
   selector_checkpoint Json?
+  accounting_checkpoint Json?
   response_body      Json?
   error_body         Json?
   usage              Json?

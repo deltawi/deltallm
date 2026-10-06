@@ -53,18 +53,36 @@ async def test_missing_accounting_service_is_not_ready():
     assert await probes["accounting_database"]() is False
 
 
-@pytest.mark.parametrize("feature", ["realtime", "batch"])
-def test_v2_cannot_start_an_unmigrated_legacy_billing_writer(feature):
+@pytest.mark.parametrize("outbox", [False, True])
+def test_native_readiness_requires_only_the_pools_its_api_actually_owns(outbox):
+    probes = dependency_probes(
+        State(
+            {
+                "accounting_protocol_enabled": True,
+                "accounting_execution_mode": "local_journal",
+                "audit_ingestion_mode": "outbox" if outbox else "legacy",
+            }
+        )
+    )
+    assert "accounting_database" in probes
+    assert ("telemetry_database" in probes) is outbox
+
+
+def test_v2_can_select_the_shared_batch_billing_adapter():
     general = GeneralSettings(
         accounting_protocol_enabled=True,
-        realtime=RealtimeSettings(enabled=feature == "realtime"),
-        embeddings_batch_enabled=feature == "batch",
+        embeddings_batch_enabled=True,
     )
-    with pytest.raises(
-        RuntimeError,
-        match=f"shared {feature if feature == 'batch' else 'Realtime'} billing adapter",
-    ):
-        resolve_accounting_settings(general, Settings())
+    config = resolve_accounting_settings(general, Settings())
+    assert config.accounting_protocol_enabled
+
+
+def test_v2_can_select_the_shared_realtime_billing_adapter():
+    config = resolve_accounting_settings(
+        GeneralSettings(accounting_protocol_enabled=True, realtime=RealtimeSettings(enabled=True)),
+        Settings(),
+    )
+    assert config.accounting_protocol_enabled
 
 
 def test_legacy_mode_preserves_realtime_and_batch_configuration():

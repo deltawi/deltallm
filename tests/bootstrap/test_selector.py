@@ -4,6 +4,7 @@ import pytest
 from starlette.datastructures import State
 
 from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.selector_native import NativeSelectorBilling
 from src.bootstrap.selector import configure_selector_execution
 from src.db.billing_operation_recovery import BillingOperationRecovery
 from src.router.selection.runtime import SelectorExecutionFactory
@@ -75,22 +76,27 @@ def test_selector_cannot_start_without_durable_spend_worker(
     assert state.routing_runtime_generation_store.require_snapshot() is previous
 
 
-@pytest.mark.parametrize("selectors", [{}, {"selected": object()}])
-def test_v2_cannot_activate_a_legacy_selector_writer(monkeypatch, selectors):
-    state = State({"routing_runtime_generation_store": RoutingRuntimeGenerationStore()})
-    spend = SimpleNamespace(accounting=object())
-    monkeypatch.setattr(
-        "src.bootstrap.selector.require_routing_runtime_generation",
-        lambda _: SimpleNamespace(selectors=selectors),
+def test_v2_selector_uses_shared_accounting_and_never_creates_a_legacy_recovery_owner():
+    accounting = SimpleNamespace(worker_health=SimpleNamespace(ready=True))
+    spend = SimpleNamespace(
+        accounting=accounting,
+        config=SimpleNamespace(enabled=True, worker_enabled=True),
+        worker_health=SimpleNamespace(ready=True),
     )
-    if selectors:
-        with pytest.raises(RuntimeError, match="shared selector billing adapter"):
-            configure_selector_execution(state, spend)
-    else:
-        configure_selector_execution(state, spend)
-        assert state.selector_execution_factory is None
-    state.routing_runtime_generation_store.replace(SimpleNamespace(selectors={}))
+    state = State(
+        {
+            "routing_runtime_generation_store": RoutingRuntimeGenerationStore(),
+            "http_client": object(),
+            "provider_error_mapper_registry": object(),
+            "settings": SimpleNamespace(openai_base_url="https://mock.test/v1"),
+            "route_group_repository": SimpleNamespace(),
+        }
+    )
+    configure_selector_execution(state, spend)
+    billing = state.selector_execution_factory._billing
+    assert isinstance(billing, NativeSelectorBilling) and billing.accounting is accounting
+    assert not hasattr(spend, "operation_recovery")
+    state.route_group_repository.selector_activation_check()
+    accounting.worker_health.ready = False
     with pytest.raises(BillingOperationUnavailable):
-        state.routing_runtime_generation_store.replace(
-            SimpleNamespace(selectors={"selected": object()})
-        )
+        state.route_group_repository.selector_activation_check()

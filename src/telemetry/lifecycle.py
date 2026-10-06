@@ -4,7 +4,7 @@ import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Iterable
+from typing import Iterable, Protocol
 
 from src.shutdown import retain_unfinished
 
@@ -26,6 +26,11 @@ class WorkerHealth:
     @property
     def ready(self) -> bool:
         return self.state in {WorkerState.DISABLED, WorkerState.READY}
+
+
+class WorkerHealthSource(Protocol):
+    @property
+    def worker_health(self) -> WorkerHealth: ...
 
 
 async def wait_for_startup(

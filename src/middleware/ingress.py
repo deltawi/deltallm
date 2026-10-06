@@ -23,7 +23,7 @@ from src.metrics.admission import (
     ingress_queue_seconds,
     ingress_rejections,
 )
-from src.middleware.errors import anthropic_error_response
+from src.middleware.error_responses import anthropic_error_response
 from src.process_lifecycle import ProcessLifecycle
 
 

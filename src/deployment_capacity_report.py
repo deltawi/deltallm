@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
 Count = Annotated[int, Field(ge=0, le=10**12, strict=True)]
-Role = Literal["api", "batchWorker", "accountingWorker"]
+Role = Literal["api", "batchWorker", "accountingWorker", "accountingRequest"]
 MAX_REPORT_BYTES = 2 * 1024 * 1024
 
 
@@ -24,6 +24,7 @@ class PoolAllocation(ReportModel):
     upstream_http: Count
     control_http: Count
     auxiliary_http: Count
+    accounting_http: Count = 0
 
 
 class ProcessDescriptors(ReportModel):
@@ -74,7 +75,7 @@ class CapacityReport(ReportModel):
     schema_version: Literal[1]
     extended: bool
     production: bool
-    roles: dict[Role, RoleAllocation] = Field(min_length=1, max_length=3)
+    roles: dict[Role, RoleAllocation] = Field(min_length=1, max_length=4)
     peak_processes: Count
     postgresql_connections: Count
     redis_critical_connections: Count

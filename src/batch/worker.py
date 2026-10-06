@@ -61,6 +61,7 @@ from src.metrics import (
 )
 from src.router.usage import record_router_usage
 from src.routers.embeddings import _execute_embedding
+from src.batch.accounting_native import NativeBatchBilling
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ class BatchExecutorWorker:
         storage: BatchArtifactStorage,
         config: BatchWorkerConfig,
         model_capacity_resolver: Any | None = None,
+        native_billing: NativeBatchBilling | None = None,
     ) -> None:
         self.app = app
         self.repository = repository
@@ -157,6 +159,7 @@ class BatchExecutorWorker:
             observe_item_execution_latency=self._call_observe_item_execution_latency,
             start_heartbeat=self._call_start_heartbeat,
             stop_heartbeat=self._call_stop_heartbeat,
+            native_billing=native_billing,
         )
 
     def _sync_dependencies(self) -> None:

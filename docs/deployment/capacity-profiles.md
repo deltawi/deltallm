@@ -17,6 +17,21 @@ No credentials or live dependency limits are verified by this table.
 | Evaluation | 1 | 1 | off | off | 20/8/5/5 | 64/16/16 | 250m/1000m | 512Mi/1Gi | no |
 | Production | 3–12 HPA | 1 | 100 | 300/100 | 20/8/5/5 | 64/16/16 | 500m/2000m | 1Gi/2Gi | yes |
 | Experiment | 2 | 1 | 100 | 100/50 | 20/8/5/5 | 64/16/16 | 1/2 | 2Gi/4Gi | yes |
+| Native evaluation | 1 | 1 | off | off | 20/8/5/5 | 64/16/16 | 250m/1000m | 512Mi/1Gi | no |
+| Native production | 3–12 HPA | 1 | 100 | 300/100 | 20/8/5/5 | 64/16/16 | 500m/2000m | 1Gi/2Gi | yes |
+
+## Peak dependency budgets
+
+The totals include API, batch, accounting roles, rollout overlap, migration, and reserved connections. Native roles each own two PostgreSQL connections and no Redis or provider connections.
+
+| Profile | Peak API/request/projection processes | PostgreSQL used/maximum | Redis used/maximum |
+| --- | --- | --- | --- |
+| Base | 5/0/0 | 160/1000 | 544/2000 |
+| Evaluation | 3/0/0 | 100/100 | 352/2000 |
+| Production | 37/0/0 | 1508/2000 | 3680/5000 |
+| Experiment | 7/0/0 | 368/2000 | 800/5000 |
+| Native evaluation | 3/3/3 | 142/160 | 352/2000 |
+| Native production | 37/4/4 | 1524/2000 | 3680/5000 |
 
 Production and experiment mount the typed `report.json` capacity contract and reject a mismatch at startup. These allocation, ingress, preflight and transport settings require a restart; a durable configuration update cannot silently change them. The base and evaluation profiles do not enable the production contract.
 

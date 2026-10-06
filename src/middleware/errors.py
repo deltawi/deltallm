@@ -18,6 +18,10 @@ from src.models.errors import (
     ProxyError,
     RateLimitError,
 )
+from src.middleware.error_responses import (
+    anthropic_error_payload as anthropic_error_payload,
+    anthropic_error_response as anthropic_error_response,
+)
 from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import (
     maybe_log_proxy_error,
@@ -55,56 +59,6 @@ def proxy_error_response(exc: ProxyError) -> JSONResponse:
     ):
         headers["Retry-After"] = str(retry_after)
     return JSONResponse(status_code=exc.status_code, content=_serialize_error(exc), headers=headers)
-
-
-def _anthropic_error_type(status_code: int) -> str:
-    if status_code == 400:
-        return "invalid_request_error"
-    if status_code == 401:
-        return "authentication_error"
-    if status_code == 403:
-        return "permission_error"
-    if status_code == 404:
-        return "not_found_error"
-    if status_code == 413:
-        return "request_too_large"
-    if status_code == 429:
-        return "rate_limit_error"
-    if status_code == 503:
-        return "overloaded_error"
-    return "api_error"
-
-
-def anthropic_error_response(
-    *,
-    status_code: int,
-    message: str,
-    error_type: str | None = None,
-    headers: dict[str, str] | None = None,
-) -> JSONResponse:
-    """Render one error envelope for every Anthropic Messages failure boundary."""
-
-    return JSONResponse(
-        status_code=status_code,
-        content=anthropic_error_payload(
-            status_code=status_code,
-            message=message,
-            error_type=error_type,
-        ),
-        headers=headers or {},
-    )
-
-
-def anthropic_error_payload(
-    *, status_code: int, message: str, error_type: str | None = None
-) -> dict[str, object]:
-    return {
-        "type": "error",
-        "error": {
-            "type": error_type or _anthropic_error_type(status_code),
-            "message": message,
-        },
-    }
 
 
 def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:

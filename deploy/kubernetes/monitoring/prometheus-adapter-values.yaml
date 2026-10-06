@@ -33,6 +33,25 @@ rules:
           and
           (time() - timestamp(<<.Series>>{<<.LabelMatchers>>,allocation="inference",deltallm_role="api"}) < 45)
         )
+    - seriesQuery: 'deltallm_accounting_native_oldest_work_age_seconds{deltallm_role="accounting-worker",namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name:
+        matches: ^deltallm_accounting_native_oldest_work_age_seconds$
+        as: deltallm_accounting_native_oldest_work_age_seconds
+      # Fresh scrapes alone do not prove that the dependency check succeeded.
+      metricsQuery: >-
+        max by (<<.GroupBy>>) (
+          <<.Series>>{<<.LabelMatchers>>,deltallm_role="accounting-worker"}
+          and on (namespace,pod)
+          (deltallm_accounting_native_work_observation_available{<<.LabelMatchers>>,deltallm_role="accounting-worker"} == 1)
+          and on (namespace,pod)
+          (time() - deltallm_accounting_native_work_observed_timestamp_seconds{<<.LabelMatchers>>,deltallm_role="accounting-worker"} < 10)
+          and
+          (time() - timestamp(<<.Series>>{<<.LabelMatchers>>,deltallm_role="accounting-worker"}) < 45)
+        )
 resources:
   requests:
     cpu: 100m

@@ -15,6 +15,7 @@ accountingWorker:
 config:
   general_settings:
     accounting_protocol_enabled: true
+    accounting_execution_mode: assigned
     accounting_protocol_generation: 1
     spend_ingestion_mode: outbox
     audit_ingestion_mode: outbox

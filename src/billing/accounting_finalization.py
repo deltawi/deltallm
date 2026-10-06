@@ -6,13 +6,12 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
-from src.billing.accounting_protocol import (
-    AccountingFinalization,
-    AccountingOperationHandle,
-    AccountingOutcome,
-)
+from src.billing.accounting_protocol import AccountingOperationHandle
 from src.billing.accounting_service import AccountingProtocolService
-from src.billing.money import canonical_money, money_string
+from src.billing.accounting_terminal_preparation import (
+    prepare_accounting_charge,
+    prepare_accounting_uncertain,
+)
 from src.billing.spend_operations import SpendPersistenceUnavailable
 
 
@@ -84,42 +83,22 @@ class AccountingSpendFinalizer:
         payload: Mapping[str, object],
     ) -> None:
         service = self._require_accounting(operation, event_id=event_id)
-        accepted_payload = dict(payload)
-        exact_charge = canonical_money(
-            accepted_payload.get("cost_exact", accepted_payload.get("cost"))
-        )
-        accepted_payload["cost"] = money_string(exact_charge)
-        accepted_payload["cost_exact"] = money_string(exact_charge)
-        accepted_payload["spend_event_version"] = 2
         final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
-        await service.finalize_operation(
+        finalization = prepare_accounting_charge(
             operation,
-            AccountingFinalization(
-                protocol_generation=operation.reservation.protocol_generation,
-                operation_id=operation.reservation.operation_id,
-                owner_token=operation.reservation.owner_token,
-                request_fingerprint=operation.reservation.request_fingerprint,
-                component_id="provider",
+            payload=payload,
+            occurred_at=datetime.now(UTC),
+            audit_envelope=accounting_audit_envelope(
+                operation,
                 event_id=final_event_id,
-                outcome=AccountingOutcome.COMPLETED,
-                exact_charge=exact_charge,
-                spend_payload=accepted_payload,
-                audit_envelope=accounting_audit_envelope(
-                    operation,
-                    event_id=final_event_id,
-                    status="success",
-                    metadata={
-                        "attempt_count": len(operation.attempts),
-                        "cache_hit": accepted_payload.get("cache_hit") is True,
-                    },
-                ),
-                occurred_at=datetime.now(UTC),
-                # A failed provider attempt can still be billable. Until a
-                # provider receipt proves otherwise, retain the unused part of
-                # the reservation as an explicit provisional debit.
-                unresolved_attempts=max(0, len(operation.attempts) - 1),
+                status="success",
+                metadata={
+                    "attempt_count": len(operation.attempts),
+                    "cache_hit": payload.get("cache_hit") is True,
+                },
             ),
         )
+        await service.finalize_operation(operation, finalization)
 
     async def log_failure(
         self,
@@ -139,26 +118,18 @@ class AccountingSpendFinalizer:
             or "provider_outcome_unknown"
         )
         final_event_id = uuid5(operation.reservation.operation_id, "provider-finalization:v2")
-        await service.finalize_operation(
+        finalization = prepare_accounting_uncertain(
             operation,
-            AccountingFinalization(
-                protocol_generation=operation.reservation.protocol_generation,
-                operation_id=operation.reservation.operation_id,
-                owner_token=operation.reservation.owner_token,
-                request_fingerprint=operation.reservation.request_fingerprint,
-                component_id="provider",
+            reason=reason,
+            occurred_at=datetime.now(UTC),
+            audit_envelope=accounting_audit_envelope(
+                operation,
                 event_id=final_event_id,
-                outcome=AccountingOutcome.UNCERTAIN,
-                audit_envelope=accounting_audit_envelope(
-                    operation,
-                    event_id=final_event_id,
-                    status="error",
-                    metadata={
-                        "attempt_count": len(operation.attempts),
-                        "uncertainty_reason": reason,
-                    },
-                ),
-                occurred_at=datetime.now(UTC),
-                uncertainty_reason=reason,
+                status="error",
+                metadata={
+                    "attempt_count": len(operation.attempts),
+                    "uncertainty_reason": reason,
+                },
             ),
         )
+        await service.finalize_operation(operation, finalization)

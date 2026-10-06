@@ -66,6 +66,30 @@ WITH activity AS (
 ), accounting AS (
     SELECT
         COALESCE(sum(calls) FILTER (
+            WHERE query LIKE '%deltallm_accounting_allocate_local_permit_grants_batch%'
+        ), 0)::bigint AS native_funding_calls,
+        COALESCE(sum(calls) FILTER (
+            WHERE query LIKE '%deltallm_accounting_append_terminal_journal%'
+        ), 0)::bigint AS native_terminal_ack_calls,
+        COALESCE(sum(calls) FILTER (
+            WHERE query LIKE '%deltallm_accounting_materialize_terminal_journal%'
+        ), 0)::bigint AS native_materialization_calls,
+        COALESCE(sum(calls) FILTER (
+            WHERE query LIKE '%deltallm_accounting_project_read_models%'
+        ), 0)::bigint AS native_reporting_calls,
+        COALESCE(sum(total_exec_time) FILTER (
+            WHERE query LIKE '%deltallm_accounting_allocate_local_permit_grants_batch%'
+               OR query LIKE '%deltallm_accounting_append_terminal_journal%'
+               OR query LIKE '%deltallm_accounting_materialize_terminal_journal%'
+               OR query LIKE '%deltallm_accounting_project_read_models%'
+        ), 0)::double precision AS native_exec_milliseconds,
+        COALESCE(sum(wal_bytes) FILTER (
+            WHERE query LIKE '%deltallm_accounting_allocate_local_permit_grants_batch%'
+               OR query LIKE '%deltallm_accounting_append_terminal_journal%'
+               OR query LIKE '%deltallm_accounting_materialize_terminal_journal%'
+               OR query LIKE '%deltallm_accounting_project_read_models%'
+        ), 0)::double precision AS native_wal_bytes,
+        COALESCE(sum(calls) FILTER (
             WHERE query LIKE '%deltallm_accounting_admit_grant_batch%'
                OR query LIKE '%deltallm_accounting_ensure_grants_batch%'
                OR query LIKE '%deltallm_accounting_reserve_grant_batch%'
@@ -166,6 +190,12 @@ POSTGRESQL_FIELDS = {
     "accounting_maintenance_calls",
     "legacy_spend_calls",
     "legacy_audit_calls",
+    "native_funding_calls",
+    "native_terminal_ack_calls",
+    "native_materialization_calls",
+    "native_reporting_calls",
+    "native_exec_milliseconds",
+    "native_wal_bytes",
 }
 
 REDIS_FIELDS = {
@@ -183,7 +213,15 @@ REDIS_FIELDS = {
     "keyspace_misses",
 }
 
-RESOURCE_ROLES = {"api", "accounting_worker", "postgresql", "redis"}
+RESOURCE_ROLES = {
+    "api",
+    "accounting_worker",
+    "accounting_request",
+    "load_generator",
+    "provider",
+    "postgresql",
+    "redis",
+}
 _QUANTITY = re.compile(r"^(?P<number>[0-9]+(?:\.[0-9]+)?)(?P<suffix>n|u|m|Ki|Mi|Gi|Ti)?$")
 
 
@@ -307,6 +345,12 @@ def _resource_role(labels: dict[str, object]) -> str | None:
         return "api"
     if component == "accounting-worker":
         return "accounting_worker"
+    if component == "accounting-request":
+        return "accounting_request"
+    if component == "load-generator":
+        return "load_generator"
+    if fixture == "provider":
+        return "provider"
     if fixture == "postgres" or name == "postgresql":
         return "postgresql"
     if fixture == "redis" or name == "redis":
@@ -355,9 +399,9 @@ class KubernetesResourceRecorder:
         return self
 
     def _collect_sync(self) -> list[dict[str, object]]:
-        pods_result = self.cluster.kubectl("get", "pods", "-o", "json")
+        pods_result = self.cluster.kubectl("get", "pods", "-o", "json", timeout=2)
         usage_result = self.cluster.kubectl(
-            "get", "--raw", "/apis/metrics.k8s.io/v1beta1/namespaces/lifecycle/pods"
+            "get", "--raw", "/apis/metrics.k8s.io/v1beta1/namespaces/lifecycle/pods", timeout=2
         )
         pods = json.loads(pods_result.stdout)
         usage = json.loads(usage_result.stdout)

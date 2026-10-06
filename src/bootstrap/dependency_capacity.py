@@ -14,6 +14,8 @@ from src.database_settings import DatabaseAllocationSettings
 from src.db.allocation_config import resolve_allocation_settings
 from src.redis_runtime import RedisLimits, startup_setting
 from src.bootstrap.capacity_contract import DeploymentCapacityContract
+from src.bootstrap.accounting_config import read_accounting_settings
+from src.accounting_settings import AccountingProtocolSettings
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,7 @@ class DependencyAllocationSnapshot:
     telemetry_connections: int
     telemetry_worker_connections: int
     spend_operations: SpendOperationAllocation
+    accounting: AccountingProtocolSettings
     deployment: DeploymentCapacityContract | None = None
 
     @classmethod
@@ -35,7 +38,10 @@ class DependencyAllocationSnapshot:
         accounting_enabled = bool(
             startup_setting(general, settings, "accounting_protocol_enabled", False)
         )
-        telemetry_enabled = accounting_enabled or any(
+        accounting = read_accounting_settings(general, settings)
+        telemetry_enabled = (
+            accounting_enabled and accounting.accounting_execution_mode == "assigned"
+        ) or any(
             startup_setting(general, settings, field, "legacy") == "outbox"
             for field in ("audit_ingestion_mode", "spend_ingestion_mode")
         )
@@ -76,6 +82,7 @@ class DependencyAllocationSnapshot:
             spend_operations=SpendOperationAllocation.resolve(
                 general, settings, telemetry_connections=telemetry.pool_size if telemetry else 0
             ),
+            accounting=accounting,
             deployment=DeploymentCapacityContract.load(config, settings),
         )
 

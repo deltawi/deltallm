@@ -98,6 +98,19 @@ async def test_empty_tick_uses_no_materialization_or_failure_call():
     assert runtime.retained_claim is None
 
 
+async def test_synchronous_process_withdrawal_stops_claims_without_reporting_a_false_failure():
+    persistence = Persistence()
+    runtime = worker(persistence)
+    await runtime.start(expires_at=deadline())
+    calls = len(persistence.claim_calls)
+    runtime.stop_claims()
+    await runtime.task
+    assert runtime.worker_health.state is WorkerState.STOPPING
+    assert len(persistence.claim_calls) == calls
+    assert await runtime.close(expires_at=deadline())
+    assert runtime.worker_health.state is WorkerState.DISABLED
+
+
 @pytest.mark.parametrize("phase", ["cancel", "timeout"])
 async def test_interrupted_commit_retains_exact_handle_and_retries_without_a_new_claim(phase):
     owned = claim()

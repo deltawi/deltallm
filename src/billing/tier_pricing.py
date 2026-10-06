@@ -6,6 +6,11 @@ from typing import Any, Literal
 
 from src.billing.cost import BillingResult, ModelPricing, completion_cost, get_model_pricing
 from src.billing.pricing import pricing_from_model_info
+from src.billing.token_quote_policy import (
+    ExactTokenQuote,
+    TokenQuoteContext,
+    resolve_exact_token_quote,
+)
 from src.providers.resolution import resolve_upstream_model
 
 PricingMode = Literal["sync", "batch"]
@@ -147,6 +152,51 @@ class TokenBillingResolution:
     missing_pricing_fields: tuple[str, ...] = ()
 
 
+def resolve_exact_token_quote_pricing(
+    resolution: PricingResolution,
+    *,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    prompt_tokens_cached: int = 0,
+    cache_hit: bool = False,
+    mode: PricingMode | None = None,
+    pricing_view: PricingView = "customer",
+) -> ExactTokenQuote:
+    """Select one exact quote from the frozen price inputs."""
+    catalog = (
+        resolution.catalog_token_pricing
+        if resolution.catalog_pricing_frozen
+        else get_model_pricing(resolution.provider_model or model)
+    )
+    if (
+        not resolution.catalog_pricing_frozen
+        and catalog is None
+        and resolution.provider_model != model
+    ):
+        catalog = get_model_pricing(model)
+    context = TokenQuoteContext(
+        info=(
+            resolution.customer_model_info
+            if pricing_view == "customer"
+            else resolution.provider_model_info
+        ),
+        mode=mode or resolution.requested_mode,
+        view=pricing_view,
+        catalog=catalog,
+        provider_fields=resolution.provider_pricing_fields,
+        tier_fields=resolution.tier_pricing_fields,
+        tier_applied=resolution.tier_pricing_applied,
+    )
+    return resolve_exact_token_quote(
+        context,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        prompt_tokens_cached=prompt_tokens_cached,
+        cache_hit=cache_hit,
+    )
+
+
 def resolve_token_quote_pricing(
     resolution: PricingResolution,
     *,
@@ -158,270 +208,24 @@ def resolve_token_quote_pricing(
     mode: PricingMode | None = None,
     pricing_view: PricingView = "customer",
 ) -> TokenQuotePricing:
-    """Resolve a complete token quote without treating absent rates as zero."""
-    requested_mode = mode or resolution.requested_mode
-    prompt_tokens = max(0, int(prompt_tokens))
-    completion_tokens = max(0, int(completion_tokens))
-    cached_prompt_tokens = min(
-        prompt_tokens,
-        max(0, int(prompt_tokens_cached)),
+    """Keep the legacy result shape through the shared quote policy."""
+    exact = resolve_exact_token_quote_pricing(
+        resolution,
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        prompt_tokens_cached=prompt_tokens_cached,
+        cache_hit=cache_hit,
+        mode=mode,
+        pricing_view=pricing_view,
     )
-    if cache_hit and prompt_tokens > 0 and cached_prompt_tokens == 0:
-        cached_prompt_tokens = prompt_tokens
-    uncached_prompt_tokens = max(0, prompt_tokens - cached_prompt_tokens)
-    info = (
-        resolution.customer_model_info
-        if pricing_view == "customer"
-        else resolution.provider_model_info
-    )
-    request_price = _configured_price(info, "cost_per_request")
-    sync_fields_present = any(
-        _configured_price(info, field_name) is not None
-        for field_name in ("input_cost_per_token", "output_cost_per_token")
-    )
-    batch_fields_present = any(
-        _configured_price(info, field_name) is not None
-        for field_name in ("batch_input_cost_per_token", "batch_output_cost_per_token")
-    )
-    batch_multiplier = _configured_price(info, "batch_price_multiplier")
-    cache_fields_present = cache_hit and any(
-        _configured_price(info, field_name) is not None
-        for field_name in (
-            "input_cost_per_token_cache_hit",
-            "output_cost_per_token_cache_hit",
-        )
-    )
-    has_metered_usage = prompt_tokens > 0 or completion_tokens > 0
-
-    effective_request_price = float(request_price or 0.0)
-    request_fields: list[str] = []
-    request_sources: set[PricingSource] = set()
-    if request_price is not None:
-        request_fields.append("cost_per_request")
-        request_sources.add(
-            _pricing_field_source_for_view(
-                resolution,
-                "cost_per_request",
-                pricing_view=pricing_view,
-            )
-        )
-    if (
-        requested_mode == "batch"
-        and not batch_fields_present
-        and batch_multiplier is not None
-        and request_price is not None
-    ):
-        effective_request_price *= max(0.0, batch_multiplier)
-        request_fields.append("batch_price_multiplier")
-        request_sources.add(
-            _pricing_field_source_for_view(
-                resolution,
-                "batch_price_multiplier",
-                pricing_view=pricing_view,
-            )
-        )
-
-    if not has_metered_usage:
-        if request_price is None:
-            return TokenQuotePricing(
-                pricing=None,
-                unpriced_reason="missing_usage_for_billing_mode",
-            )
-        return TokenQuotePricing(
-            pricing=ModelPricing(cost_per_request=effective_request_price),
-            pricing_fields_used=tuple(request_fields),
-            pricing_sources_used=tuple(sorted(request_sources)),
-            request_only=True,
-        )
-
-    selected_mode_fields_present = (
-        sync_fields_present
-        or (requested_mode == "batch" and batch_fields_present)
-        or cache_fields_present
-    )
-    if request_price is not None and not selected_mode_fields_present:
-        return TokenQuotePricing(
-            pricing=ModelPricing(cost_per_request=effective_request_price),
-            pricing_fields_used=tuple(request_fields),
-            pricing_sources_used=tuple(sorted(request_sources)),
-            request_only=True,
-        )
-
-    catalog_pricing = (
-        resolution.catalog_token_pricing
-        if resolution.catalog_pricing_frozen
-        else get_model_pricing(resolution.provider_model or model)
-    )
-    if (
-        not resolution.catalog_pricing_frozen
-        and catalog_pricing is None
-        and resolution.provider_model != model
-    ):
-        # Azure/custom deployment identifiers are often not catalog model
-        # names. Preserve the public-name fallback only when the served model
-        # itself cannot be priced.
-        catalog_pricing = get_model_pricing(model)
-    resolved_rates: dict[str, float] = {}
-    fields_used = list(request_fields)
-    sources_used = set(request_sources)
-    missing_fields: list[str] = []
-    cache_rates: dict[str, float] = {}
-
-    def select_regular_rate(
-        sync_field: str,
-    ) -> tuple[float | None, str, PricingSource | None]:
-        selected_field = sync_field
-        selected_rate: float | None = None
-        selected_source: PricingSource | None = None
-        if requested_mode == "batch" and batch_fields_present:
-            batch_field = (
-                "batch_input_cost_per_token"
-                if sync_field == "input_cost_per_token"
-                else "batch_output_cost_per_token"
-            )
-            batch_rate = _configured_price(info, batch_field)
-            if batch_rate is not None:
-                selected_field = batch_field
-                selected_rate = batch_rate
-                selected_source = _pricing_field_source_for_view(
-                    resolution,
-                    batch_field,
-                    pricing_view=pricing_view,
-                )
-
-        if selected_rate is None:
-            sync_rate = _configured_price(info, sync_field)
-            if sync_rate is not None:
-                selected_rate = sync_rate
-                selected_source = _pricing_field_source_for_view(
-                    resolution,
-                    sync_field,
-                    pricing_view=pricing_view,
-                )
-            elif not sync_fields_present and catalog_pricing is not None:
-                selected_rate = float(getattr(catalog_pricing, sync_field))
-                selected_source = "default"
-
-        if (
-            selected_rate is not None
-            and requested_mode == "batch"
-            and not batch_fields_present
-            and batch_multiplier is not None
-        ):
-            selected_rate *= max(0.0, batch_multiplier)
-            if "batch_price_multiplier" not in fields_used:
-                fields_used.append("batch_price_multiplier")
-            sources_used.add(
-                _pricing_field_source_for_view(
-                    resolution,
-                    "batch_price_multiplier",
-                    pricing_view=pricing_view,
-                )
-            )
-        return selected_rate, selected_field, selected_source
-
-    def select_cache_rate(
-        cache_field: str,
-        sync_field: str,
-    ) -> tuple[float | None, str, PricingSource | None]:
-        configured_cache_rate = _configured_price(info, cache_field)
-        if configured_cache_rate is not None:
-            return (
-                configured_cache_rate,
-                cache_field,
-                _pricing_field_source_for_view(
-                    resolution,
-                    cache_field,
-                    pricing_view=pricing_view,
-                ),
-            )
-        if not sync_fields_present and catalog_pricing is not None:
-            catalog_cache_rate = getattr(catalog_pricing, cache_field)
-            if catalog_cache_rate is not None:
-                return float(catalog_cache_rate), cache_field, "default"
-        return select_regular_rate(sync_field)
-
-    def record_rate(
-        *,
-        target_field: str,
-        missing_field: str,
-        selected: tuple[float | None, str, PricingSource | None],
-        cache_rate: bool = False,
-    ) -> None:
-        selected_rate, selected_field, selected_source = selected
-        if selected_rate is None or selected_source is None:
-            missing_fields.append(missing_field)
-            return
-        if cache_rate:
-            cache_rates[target_field] = selected_rate
-        else:
-            resolved_rates[target_field] = selected_rate
-        fields_used.append(selected_field)
-        sources_used.add(selected_source)
-
-    if uncached_prompt_tokens > 0:
-        record_rate(
-            target_field="input_cost_per_token",
-            missing_field="input_cost_per_token",
-            selected=select_regular_rate("input_cost_per_token"),
-        )
-    if cached_prompt_tokens > 0:
-        record_rate(
-            target_field="input_cost_per_token_cache_hit",
-            missing_field="input_cost_per_token_cache_hit",
-            selected=select_cache_rate(
-                "input_cost_per_token_cache_hit",
-                "input_cost_per_token",
-            ),
-            cache_rate=True,
-        )
-    if completion_tokens > 0:
-        if cache_hit:
-            selected_output = select_cache_rate(
-                "output_cost_per_token_cache_hit",
-                "output_cost_per_token",
-            )
-            output_is_cache_rate = selected_output[1] == "output_cost_per_token_cache_hit"
-            record_rate(
-                target_field=(
-                    "output_cost_per_token_cache_hit"
-                    if output_is_cache_rate
-                    else "output_cost_per_token"
-                ),
-                missing_field=(
-                    "output_cost_per_token_cache_hit"
-                    if output_is_cache_rate
-                    else "output_cost_per_token"
-                ),
-                selected=selected_output,
-                cache_rate=output_is_cache_rate,
-            )
-        else:
-            record_rate(
-                target_field="output_cost_per_token",
-                missing_field="output_cost_per_token",
-                selected=select_regular_rate("output_cost_per_token"),
-            )
-
-    if missing_fields:
-        return TokenQuotePricing(
-            pricing=None,
-            pricing_fields_used=tuple(dict.fromkeys(fields_used)),
-            pricing_sources_used=tuple(sorted(sources_used)),
-            missing_pricing_fields=tuple(missing_fields),
-            unpriced_reason="no_configured_pricing",
-        )
-
     return TokenQuotePricing(
-        pricing=ModelPricing(
-            input_cost_per_token=resolved_rates.get("input_cost_per_token", 0.0),
-            output_cost_per_token=resolved_rates.get("output_cost_per_token", 0.0),
-            input_cost_per_token_cache_hit=cache_rates.get("input_cost_per_token_cache_hit"),
-            output_cost_per_token_cache_hit=cache_rates.get("output_cost_per_token_cache_hit"),
-            cost_per_request=effective_request_price,
-        ),
-        pricing_fields_used=tuple(dict.fromkeys(fields_used)),
-        pricing_sources_used=tuple(sorted(sources_used)),
+        pricing=None if exact.pricing is None else exact.pricing.legacy_pricing(),
+        pricing_fields_used=exact.pricing_fields_used,
+        pricing_sources_used=exact.pricing_sources_used,
+        missing_pricing_fields=exact.missing_pricing_fields,
+        unpriced_reason=exact.unpriced_reason,
+        request_only=exact.request_only,
     )
 
 
@@ -741,37 +545,6 @@ def _configured_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]
             key for key in _PRICING_KEYS if key in model_info and model_info.get(key) is not None
         )
     )
-
-
-def _configured_price(model_info: Mapping[str, Any], field_name: str) -> float | None:
-    if field_name not in model_info or model_info.get(field_name) is None:
-        return None
-    try:
-        return float(model_info[field_name])
-    except (TypeError, ValueError):
-        return None
-
-
-def _pricing_field_source(
-    resolution: PricingResolution,
-    field_name: str,
-) -> PricingSource:
-    if resolution.tier_pricing_applied and field_name in resolution.tier_pricing_fields:
-        return "tier"
-    if field_name in resolution.provider_pricing_fields:
-        return "deployment"
-    return "default"
-
-
-def _pricing_field_source_for_view(
-    resolution: PricingResolution,
-    field_name: str,
-    *,
-    pricing_view: PricingView,
-) -> PricingSource:
-    if pricing_view == "provider":
-        return "deployment" if field_name in resolution.provider_pricing_fields else "default"
-    return _pricing_field_source(resolution, field_name)
 
 
 def _legacy_deployment_token_price(

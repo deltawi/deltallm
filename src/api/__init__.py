@@ -1,3 +1,1 @@
-from .auth import router as auth_router
-
-__all__ = ["auth_router"]
+"""API routers are imported and registered by their explicit application owners."""

@@ -26,6 +26,10 @@
 {{- fail "Batch worker autoscaling.scaleDownStabilizationSeconds must cover pod termination grace" -}}
 {{- end -}}
 {{- $accounting := .Values.accountingWorker.autoscaling -}}
+{{- $accountingGeneral := (include "deltallm.accountingWorkerConfigYaml" . | fromYaml).general_settings -}}
+{{- if and .Values.accountingWorker.enabled $accounting.enabled $accounting.oldestEventAge.enabled (eq $accountingGeneral.accounting_execution_mode "local_journal") (ne $accounting.oldestEventAge.metricName "deltallm_accounting_native_oldest_work_age_seconds") -}}
+{{- fail "Native accounting autoscaling requires the native terminal/reporting age metric" -}}
+{{- end -}}
 {{- if and .Values.accountingWorker.enabled $accounting.enabled (gt (int $accounting.minReplicas) (int $accounting.maxReplicas)) -}}
 {{- fail "Accounting worker HPA minReplicas must not exceed maxReplicas" -}}
 {{- end -}}
@@ -48,12 +52,19 @@
 {{- $configs := dict "api" (include "deltallm.apiConfigYaml" . | fromYaml) -}}
 {{- if .Values.batchWorker.enabled -}}{{- $_ := set $configs "batchWorker" (include "deltallm.batchWorkerConfigYaml" . | fromYaml) -}}{{- end -}}
 {{- if .Values.accountingWorker.enabled -}}{{- $_ := set $configs "accountingWorker" (include "deltallm.accountingWorkerConfigYaml" . | fromYaml) -}}{{- end -}}
+{{- if .Values.accountingRequest.enabled -}}{{- $_ := set $configs "accountingRequest" (include "deltallm.accountingRequestConfigYaml" . | fromYaml) -}}{{- end -}}
 {{- range $roleName, $config := $configs -}}
 {{- $g := $config.general_settings -}}
+{{- $native := eq $g.accounting_execution_mode "local_journal" -}}
+{{- $minimal := and $native (has $roleName (list "accountingWorker" "accountingRequest")) -}}
+{{- if and $native (or (not $.Values.networkPolicy.enabled) (not $.Values.accountingWorker.enabled) (not $.Values.accountingRequest.enabled)) -}}
+{{- fail "Production native accounting requires network protection and both isolated roles" -}}
+{{- end -}}
+{{- if not $minimal -}}
 {{- range $flag := list "gateway_ingress_enabled" "gateway_preflight_capacity_enabled" "audit_enabled" -}}
 {{- if not (get $g $flag) -}}{{- fail (printf "Production requires %s" $flag) -}}{{- end -}}
 {{- end -}}
-{{- if or (not $.Values.accountingWorker.enabled) (eq $roleName "accountingWorker") -}}
+{{- if or $native (not $.Values.accountingWorker.enabled) (eq $roleName "accountingWorker") -}}
 {{- range $flag := list "spend_ingestion_worker_enabled" "audit_ingestion_worker_enabled" -}}
 {{- if not (get $g $flag) -}}{{- fail (printf "Production requires %s on the telemetry worker role" $flag) -}}{{- end -}}
 {{- end -}}
@@ -66,6 +77,7 @@
 {{- end -}}
 {{- if or (ne $g.model_deployment_source "db_only") $g.model_deployment_bootstrap_from_config -}}
 {{- fail "Production provider capacity requires a pre-seeded DB-only deployment catalog" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

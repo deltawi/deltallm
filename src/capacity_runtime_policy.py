@@ -20,6 +20,8 @@ class CapacityRuntimePolicy(BaseModel):
     spend_ingestion_worker_enabled: bool
     spend_operation_intents_enabled: bool
     accounting_protocol_enabled: bool
+    accounting_execution_mode: str
+    accounting_grants_enabled: bool
     accounting_projection_worker_enabled: bool
     model_deployment_source: str
     model_deployment_bootstrap_from_config: bool
@@ -36,13 +38,34 @@ class CapacityRuntimePolicy(BaseModel):
         return cls.model_validate(general.model_dump(include=set(cls.model_fields)))
 
     def validate_production(
-        self, *, role: str = "api", accounting_worker_present: bool = False
+        self,
+        *,
+        role: str = "api",
+        accounting_worker_present: bool = False,
+        accounting_request_present: bool = False,
     ) -> None:
+        if self.accounting_execution_mode == "local_journal":
+            if not (
+                self.accounting_protocol_enabled
+                and self.accounting_grants_enabled
+                and accounting_worker_present
+                and accounting_request_present
+                and self.accounting_projection_worker_enabled == (role == "accountingWorker")
+            ):
+                raise RuntimeError("Runtime native accounting topology is incompatible")
+            if role in {"accountingRequest", "accountingWorker"}:
+                return
+            # Minimal native processors do not consume unrelated legacy outboxes.
+            accounting_worker_present = False
         owns_durable_workers = not accounting_worker_present or role == "accountingWorker"
         durable_workers_ready = not owns_durable_workers or (
             self.audit_ingestion_worker_enabled
             and self.spend_ingestion_worker_enabled
-            and (not self.accounting_protocol_enabled or self.accounting_projection_worker_enabled)
+            and (
+                not self.accounting_protocol_enabled
+                or self.accounting_execution_mode == "local_journal"
+                or self.accounting_projection_worker_enabled
+            )
         )
         required = (
             self.gateway_ingress_enabled,

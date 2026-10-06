@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -290,10 +291,20 @@ async def test_snapshot_repository_has_one_bounded_read_and_no_health_write():
     assert value == snapshot() and len(db.calls) == 1
     query, arguments = db.calls[0]
     assert arguments == (7,)
-    assert "generate_series(0,63)" in query
-    assert "ORDER BY accepted_at,sequence LIMIT 1" in query
-    assert "OFFSET 0" in query and "sum(capacity.pending_entries)" in query
+    assert query.strip() == "SELECT * FROM deltallm_accounting_backlog_snapshot($1)"
     assert not any(word in query.upper() for word in ("UPDATE ", "INSERT ", "DELETE "))
+
+
+def test_snapshot_sql_function_keeps_fixed_cells_and_ordered_queue_head():
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "prisma/migrations/20261006050000_accounting_bounded_health_plan/migration.sql"
+    ).read_text()
+    assert "generate_series(0,63)" in migration
+    assert "ORDER BY j.accepted_at,j.sequence LIMIT 1" in migration
+    assert "OFFSET 0" in migration and "sum(capacity.pending_entries)" in migration
+    assert "SET enable_seqscan=off SET enable_bitmapscan=off" in migration
+    assert "indisvalid AND i.indisready" in migration
 
 
 @pytest.mark.parametrize(

@@ -20,9 +20,7 @@ from src.config import (
     resolve_salt_key,
     resolve_telemetry_database_settings,
 )
-from src.config_runtime import (
-    DynamicConfigManager,
-)
+from src.config_runtime.dynamic import DynamicConfigManager
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
@@ -218,6 +216,10 @@ async def _init_infrastructure_runtime(
         )
     )
     app.state.accounting_protocol_enabled = accounting_protocol_enabled
+    app.state.accounting_execution_mode = startup_allocations.accounting.accounting_execution_mode
+    assigned_accounting = (
+        accounting_protocol_enabled and app.state.accounting_execution_mode == "assigned"
+    )
     durable_telemetry_enabled = startup_allocations.telemetry_connections > 0
     telemetry_worker_enabled = startup_allocations.telemetry_worker_connections > 0
     telemetry_database_connected = False
@@ -251,7 +253,7 @@ async def _init_infrastructure_runtime(
                     2,
                 )
             )
-            if accounting_protocol_enabled
+            if assigned_accounting
             else 0
         )
         if accounting_connections + settlement_connections >= telemetry_database_settings.pool_size:
@@ -271,7 +273,7 @@ async def _init_infrastructure_runtime(
             )
             if telemetry_settlement_prisma_manager.client is None:
                 raise RuntimeError("Spend recovery requires its settlement allocation")
-        if accounting_protocol_enabled:
+        if assigned_accounting:
             accounting_statement_seconds = (
                 float(
                     _startup_setting(

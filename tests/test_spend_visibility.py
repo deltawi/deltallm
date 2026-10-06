@@ -9,6 +9,10 @@ from src.services.spend_visibility import apply_spend_visibility, resolve_spend_
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_one_expanded_read_source_keeps_native_and_legacy_history_visible():
+    assert get_spend_read_source().table == "deltallm_spend_read_events_v2"
+
+
 def test_self_visibility_uses_only_the_authenticated_account() -> None:
     scope = AuthScope(
         account_id="acct-1",
@@ -60,16 +64,22 @@ def test_team_visibility_takes_precedence_over_self_visibility() -> None:
 
 
 def test_visibility_cache_payload_isolated_by_account() -> None:
-    first = resolve_spend_visibility(AuthScope(
-        account_id="acct-1",
-        org_permissions_by_id={"org-1": {Permission.SPEND_READ_SELF}},
-        effective_permissions={Permission.SPEND_READ_SELF},
-    ), scoped_views_enabled=True)
-    second = resolve_spend_visibility(AuthScope(
-        account_id="acct-2",
-        org_permissions_by_id={"org-1": {Permission.SPEND_READ_SELF}},
-        effective_permissions={Permission.SPEND_READ_SELF},
-    ), scoped_views_enabled=True)
+    first = resolve_spend_visibility(
+        AuthScope(
+            account_id="acct-1",
+            org_permissions_by_id={"org-1": {Permission.SPEND_READ_SELF}},
+            effective_permissions={Permission.SPEND_READ_SELF},
+        ),
+        scoped_views_enabled=True,
+    )
+    second = resolve_spend_visibility(
+        AuthScope(
+            account_id="acct-2",
+            org_permissions_by_id={"org-1": {Permission.SPEND_READ_SELF}},
+            effective_permissions={Permission.SPEND_READ_SELF},
+        ),
+        scoped_views_enabled=True,
+    )
 
     assert first.cache_payload() != second.cache_payload()
     assert first.cache_payload()["version"] == 5
@@ -105,24 +115,22 @@ def test_elevated_visibility_cache_payload_uses_only_the_active_scope() -> None:
         },
     )
 
-    first = resolve_spend_visibility(
-        first_scope, "organization", scoped_views_enabled=True
-    )
-    second = resolve_spend_visibility(
-        second_scope, "organization", scoped_views_enabled=True
-    )
+    first = resolve_spend_visibility(first_scope, "organization", scoped_views_enabled=True)
+    second = resolve_spend_visibility(second_scope, "organization", scoped_views_enabled=True)
 
-    assert first.cache_payload() == second.cache_payload() == {
-        "version": 5,
-        "active_view": "organization",
-        "organization_ids": ["org-1"],
-    }
+    assert (
+        first.cache_payload()
+        == second.cache_payload()
+        == {
+            "version": 5,
+            "active_view": "organization",
+            "organization_ids": ["org-1"],
+        }
+    )
     assert resolve_spend_visibility(
         first_scope, "team", scoped_views_enabled=True
     ).cache_payload() != (
-        resolve_spend_visibility(
-            second_scope, "team", scoped_views_enabled=True
-        ).cache_payload()
+        resolve_spend_visibility(second_scope, "team", scoped_views_enabled=True).cache_payload()
     )
 
 
@@ -153,10 +161,12 @@ def test_mixed_role_can_select_each_non_overlapping_view() -> None:
 
 
 def test_self_visibility_without_an_active_membership_fails_closed() -> None:
-    visibility = resolve_spend_visibility(AuthScope(
-        account_id="acct-1",
-        effective_permissions={Permission.SPEND_READ_SELF},
-    ))
+    visibility = resolve_spend_visibility(
+        AuthScope(
+            account_id="acct-1",
+            effective_permissions={Permission.SPEND_READ_SELF},
+        )
+    )
     clauses: list[str] = []
     params: list[object] = []
 
@@ -172,18 +182,21 @@ def test_self_visibility_without_an_active_membership_fails_closed() -> None:
 
 
 def test_multi_org_self_visibility_keeps_all_memberships_behind_owner_filter() -> None:
-    visibility = resolve_spend_visibility(AuthScope(
-        account_id="acct-1",
-        org_permissions_by_id={
-            "org-a": {Permission.SPEND_READ_SELF},
-            "org-b": {Permission.SPEND_READ_SELF},
-        },
-        team_permissions_by_id={
-            "team-a": {Permission.SPEND_READ_SELF},
-            "team-b": {Permission.SPEND_READ_SELF},
-        },
-        effective_permissions={Permission.SPEND_READ_SELF},
-    ), scoped_views_enabled=True)
+    visibility = resolve_spend_visibility(
+        AuthScope(
+            account_id="acct-1",
+            org_permissions_by_id={
+                "org-a": {Permission.SPEND_READ_SELF},
+                "org-b": {Permission.SPEND_READ_SELF},
+            },
+            team_permissions_by_id={
+                "team-a": {Permission.SPEND_READ_SELF},
+                "team-b": {Permission.SPEND_READ_SELF},
+            },
+            effective_permissions={Permission.SPEND_READ_SELF},
+        ),
+        scoped_views_enabled=True,
+    )
     clauses: list[str] = []
     params: list[object] = []
 
@@ -196,8 +209,7 @@ def test_multi_org_self_visibility_keeps_all_memberships_behind_owner_filter() -
     )
 
     assert clauses == [
-        "(s.owner_account_id = $1 AND "
-        "(s.organization_id IN ($2, $3) OR s.team_id IN ($4, $5)))"
+        "(s.owner_account_id = $1 AND (s.organization_id IN ($2, $3) OR s.team_id IN ($4, $5)))"
     ]
     assert params == ["acct-1", "org-a", "org-b", "team-a", "team-b"]
 
@@ -221,16 +233,13 @@ def test_scoped_views_stay_hidden_until_the_cluster_gate_is_enabled() -> None:
 
 def test_spend_scope_migrations_are_online_and_do_not_guess_historical_owners() -> None:
     cursor_sql = (
-        _REPOSITORY_ROOT
-        / "prisma/migrations/20260810120000_spend_log_cursor_indexes/migration.sql"
+        _REPOSITORY_ROOT / "prisma/migrations/20260810120000_spend_log_cursor_indexes/migration.sql"
     ).read_text()
     owner_sql = (
-        _REPOSITORY_ROOT
-        / "prisma/migrations/20260810140000_spend_owner_scope/migration.sql"
+        _REPOSITORY_ROOT / "prisma/migrations/20260810140000_spend_owner_scope/migration.sql"
     ).read_text()
     owner_index_sql = (
-        _REPOSITORY_ROOT
-        / "prisma/migrations/20260810150000_spend_owner_scope_index/migration.sql"
+        _REPOSITORY_ROOT / "prisma/migrations/20260810150000_spend_owner_scope_index/migration.sql"
     ).read_text()
 
     assert "CONCURRENTLY" not in cursor_sql

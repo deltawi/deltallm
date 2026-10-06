@@ -9,9 +9,12 @@ from src.router.execution import get_failover_original_error
 
 class BatchPublicErrorCode(StrEnum):
     SELECTOR_CHECKPOINT_UNAVAILABLE = "batch_selector_checkpoint_unavailable"
+    ACCOUNTING_CHECKPOINT_UNAVAILABLE = "batch_accounting_checkpoint_unavailable"
 
     @property
     def message(self) -> str:
+        if self is BatchPublicErrorCode.ACCOUNTING_CHECKPOINT_UNAVAILABLE:
+            return "Batch billing proof is unavailable; provider work cannot be repeated safely"
         return "Batch selector checkpoint is unavailable; selection cannot be repeated safely"
 
 

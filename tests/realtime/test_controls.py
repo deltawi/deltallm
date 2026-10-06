@@ -83,3 +83,76 @@ async def test_mismatched_provider_setup_denies_upgrade(patch):
         await prepare_session(
             socket, target=target(), limits=RealtimeLimits(), max_output_tokens=4096
         )
+
+
+@pytest.mark.parametrize(
+    "format", [None, {"type": "audio/pcmu"}, {"type": "audio/pcm", "rate": 16000}]
+)
+def test_duration_admission_rejects_changed_audio_format(format):
+    with pytest.raises(RealtimeError, match="PCM"):
+        validate_controls(
+            {"type": "session.update", "session": {"audio": {"input": {"format": format}}}},
+            profile="transcription",
+            max_output_tokens=4096,
+            duration_pcm=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "format", [None, {"type": "audio/pcma"}, {"type": "audio/pcm", "rate": 24000}]
+)
+async def test_duration_handshake_requires_confirmed_bounded_format(format):
+    socket = Socket()
+    socket.incoming.put_nowait('{"type":"session.created"}')
+    socket.incoming.put_nowait(
+        json.dumps(
+            {
+                "type": "session.updated",
+                "session": {
+                    "type": "transcription",
+                    "audio": {
+                        "input": {
+                            "format": format,
+                            "turn_detection": None,
+                            "transcription": {"model": "provider-model"},
+                        }
+                    },
+                },
+            }
+        )
+    )
+    if format == {"type": "audio/pcm", "rate": 24000}:
+        await prepare_session(
+            socket,
+            target=target("transcription"),
+            limits=RealtimeLimits(),
+            max_output_tokens=4096,
+            duration_pcm=True,
+        )
+        setup = json.loads(await socket.outgoing.get())
+        assert setup["session"]["audio"]["input"]["format"] == format
+    else:
+        with pytest.raises(RealtimeError, match="PCM"):
+            await prepare_session(
+                socket,
+                target=target("transcription"),
+                limits=RealtimeLimits(),
+                max_output_tokens=4096,
+                duration_pcm=True,
+            )
+
+
+@pytest.mark.parametrize(
+    "profile,model", [("realtime", "provider-model"), ("transcription", "other")]
+)
+def test_client_cannot_add_unadmitted_transcription_or_change_its_model(profile, model):
+    with pytest.raises(RealtimeError):
+        validate_controls(
+            {
+                "type": "session.update",
+                "session": {"audio": {"input": {"transcription": {"model": model}}}},
+            },
+            profile=profile,
+            max_output_tokens=4096,
+            transcription_model="provider-model",
+        )

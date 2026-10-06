@@ -1,0 +1,28 @@
+{{- if .Values.accountingRequest.enabled }}
+{{ include "deltallm.accountingRoleDeployment" (dict "root" . "values" .Values.accountingRequest "configTemplate" "deltallm.accountingRequestConfigYaml" "fullnameTemplate" "deltallm.accountingRequestFullname" "labelsTemplate" "deltallm.accountingRequestLabels" "selectorsTemplate" "deltallm.accountingRequestSelectorLabels" "component" "accounting-request" "processes" .Values.dependencyCapacity.accountingRequestProcessesPerPod) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deltallm.accountingRequestFullname" . }}
+  labels:
+    {{- include "deltallm.accountingRequestLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+  selector:
+    {{- include "deltallm.accountingRequestSelectorLabels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deltallm.accountingRequestFullname" . }}-config
+  labels:
+    {{- include "deltallm.accountingRequestLabels" . | nindent 4 }}
+data:
+  config.yaml: |
+{{ include "deltallm.accountingRequestConfigYaml" . | indent 4 }}
+{{- end }}

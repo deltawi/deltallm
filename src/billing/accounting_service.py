@@ -33,7 +33,7 @@ class AccountingProtocolService:
 
     def __init__(
         self,
-        repository: AccountingProtocolRepository,
+        repository: AccountingProtocolRepository | None,
         *,
         generation: int,
         max_batch_size: int = 8,
@@ -121,7 +121,7 @@ class AccountingProtocolService:
         await self.finalizations.close(timeout_seconds=timeout_seconds)
 
     async def readiness_probe(self) -> bool:
-        if not self.worker_health.ready:
+        if not self.worker_health.ready or self._repository is None:
             return False
         return await self._repository.protocol_ready(self.generation)
 
@@ -157,6 +157,8 @@ class AccountingProtocolService:
         return await self.finalize(finalization)
 
     async def _reserve(self, values: Sequence[bytes]) -> list[DispatchPermit]:
+        if self._repository is None:
+            raise RuntimeError("assigned accounting persistence is missing")
         started = perf_counter()
         try:
             results = await self._repository.reserve_batch(
@@ -176,6 +178,8 @@ class AccountingProtocolService:
         return results
 
     async def _finalize(self, values: Sequence[bytes]) -> list[TerminalReceipt]:
+        if self._repository is None:
+            raise RuntimeError("assigned accounting persistence is missing")
         started = perf_counter()
         try:
             results = await self._repository.finalize_batch(

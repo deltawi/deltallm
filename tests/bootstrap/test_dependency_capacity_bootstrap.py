@@ -1,6 +1,8 @@
 from src.bootstrap.dependency_capacity import DependencyAllocationSnapshot
 from src.config import Settings
 from src.config_runtime.loader import build_app_config
+from tests.test_accounting_native_config import native
+import pytest
 
 
 def test_effective_snapshot_preserves_file_and_environment_precedence():
@@ -78,3 +80,21 @@ def test_accounting_api_does_not_allocate_a_worker_pool_without_worker_ownership
     assert api_snapshot.telemetry_worker_connections == 0
     assert worker_snapshot.telemetry_connections == 5
     assert worker_snapshot.telemetry_worker_connections == 5
+
+
+def test_native_api_does_not_allocate_an_unused_assigned_accounting_pool():
+    settings = Settings(database_url="postgresql://fixture:fixture@fixture/db")
+    initial = build_app_config({"general_settings": native().model_dump(exclude_unset=True)})
+    snapshot = DependencyAllocationSnapshot.build(initial, settings)
+    assert snapshot.accounting.accounting_execution_mode == "local_journal"
+    assert snapshot.telemetry_connections == snapshot.telemetry_worker_connections == 0
+    # The native pool belongs only to the isolated request/projection role.
+    changed = build_app_config(
+        {
+            "general_settings": native(accounting_rpc_max_connections=32).model_dump(
+                exclude_unset=True
+            )
+        }
+    )
+    with pytest.raises(RuntimeError, match="allocation settings"):
+        snapshot.validate_effective(changed, settings)

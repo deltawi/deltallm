@@ -298,6 +298,9 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
         exc: Exception,
         decision: BatchRetryDecision,
     ) -> bool:
+        if any(prepared.item.accounting_checkpoint is not None for prepared in prepared_items):
+            await self._close_native_batch_items(prepared_items)
+            return False
         if not decision.retryable:
             return False
         if not self.config.microbatch_retry_enabled:
@@ -415,6 +418,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
         async with AsyncExitStack() as cleanup:
             for prepared in prepared_items:
                 cleanup.push_async_callback(self._release_owned_chat_policy_lease, prepared)
+            cleanup.push_async_callback(self._close_native_batch_items, prepared_items)
             await self._execute_owned_chat_microbatch_chunk(job, prepared_items, cleanup)
 
     async def _execute_owned_chat_microbatch_chunk(
@@ -483,6 +487,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 input_tokens=chunk_input_tokens,
             )
             try:
+                await self._fund_native_batch_attempt(job, prepared_items, deployment)
                 raw_results = await deployment_executor.execute_chat_microbatch(
                     requests=[prepared.payload for prepared in prepared_items],
                     deployment=deployment,
@@ -624,6 +629,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
+                    native_execution=prepared.native_accounting,
                     model_name=prepared.model_name,
                     exc=exc,
                     deployment_id=None,
@@ -657,6 +663,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
+                    native_execution=prepared.native_accounting,
                     model_name=prepared.model_name,
                     exc=result.error,
                     deployment_id=served_deployment_id or None,
@@ -676,6 +683,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
+                    native_execution=prepared.native_accounting,
                     model_name=prepared.model_name,
                     exc=exc,
                     deployment_id=served_deployment_id or None,
@@ -738,6 +746,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 context_label=f"chat_microbatch:{served_deployment_id or 'unknown'}",
             )
             if persisted:
+                self._native_completion_saved(success_prepared)
                 for prepared in success_prepared:
                     self._observe_item_execution_latency(
                         status="success",
@@ -772,6 +781,7 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
+                    native_execution=prepared.native_accounting,
                     model_name=prepared.model_name,
                     exc=exc,
                     deployment_id=None,

@@ -96,3 +96,19 @@ def test_adapter_tls_and_fresh_per_pod_metric_rule():
     assert "max by (<<.GroupBy>>)" in rule["metricsQuery"]
     assert "timestamp(" in rule["metricsQuery"]
     assert "or vector(0)" not in rule["metricsQuery"]
+
+
+def test_native_adapter_requires_successful_fresh_dependency_observation():
+    values = yaml.safe_load((MONITORING / "prometheus-adapter-values.yaml").read_text())
+    rule = next(
+        rule
+        for rule in values["rules"]["custom"]
+        if rule["name"]["as"] == "deltallm_accounting_native_oldest_work_age_seconds"
+    )
+    assert 'deltallm_role="accounting-worker"' in rule["seriesQuery"]
+    query = rule["metricsQuery"]
+    assert "native_work_observation_available" in query and "== 1" in query
+    assert "native_work_observed_timestamp_seconds" in query and "< 10" in query
+    assert "timestamp(" in query and "< 45" in query
+    assert "or vector(0)" not in query
+    assert rule["resources"]["overrides"]["pod"] == {"resource": "pod"}

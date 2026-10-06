@@ -27,6 +27,9 @@ from src.billing.accounting_protocol import (
 )
 from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull
 from src.db.accounting_permit_results import invalid_result
+from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.telemetry_acceptance import AcceptanceFailure
+from src.telemetry.lifecycle import WorkerHealthSource, WorkerState
 
 
 class LocalFundingPersistence(Protocol):
@@ -46,6 +49,7 @@ class LocalPermitIssuer:
         *,
         target_operations: int = 32,
         minimum_validity_seconds: float = 0.1,
+        admission_health: WorkerHealthSource | None = None,
     ) -> None:
         if type(target_operations) is not int or not 1 <= target_operations <= 1024:
             raise ValueError("local funding target must be between 1 and 1024")
@@ -61,6 +65,7 @@ class LocalPermitIssuer:
             cursors, receipts, minimum_validity_seconds=minimum_validity_seconds
         )
         self._closed = False
+        self._admission_health = admission_health
 
     @property
     def admission(self) -> LocalAdmissionOwner:
@@ -79,6 +84,13 @@ class LocalPermitIssuer:
 
     def stop_admission(self) -> None:
         self._closed = True
+
+    @property
+    def admission_ready(self) -> bool:
+        return not self._closed and (
+            self._admission_health is None
+            or self._admission_health.worker_health.state is WorkerState.READY
+        )
 
     async def reserve_batch(
         self, values: Sequence[AccountingReservation], *, expires_at: float
@@ -151,3 +163,5 @@ class LocalPermitIssuer:
     def _check_open(self) -> None:
         if self._closed:
             raise DurableBatchClosed("local admission is closed")
+        if not self.admission_ready:
+            raise AccountingProtocolUnavailable(AcceptanceFailure.DATABASE_UNAVAILABLE)

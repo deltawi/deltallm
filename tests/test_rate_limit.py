@@ -279,7 +279,7 @@ async def test_invalid_mcp_envelope_does_not_consume_rate_quota(
     }
     response = await client.post("/mcp", headers=headers, content=content)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     assert response.json()["error"]["code"] == expected_code
     assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
 

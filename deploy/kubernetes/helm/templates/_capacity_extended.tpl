@@ -11,8 +11,10 @@
 {{- $peakPods := 0 -}}
 {{- range $name, $role := $report.roles -}}
 {{- $peakPods = add $peakPods (div $role.peakProcesses $role.processesPerPod) -}}
-{{- $configTemplate := ternary "deltallm.apiConfigYaml" (ternary "deltallm.accountingWorkerConfigYaml" "deltallm.batchWorkerConfigYaml" (eq $name "accountingWorker")) (eq $name "api") -}}
+{{- $configTemplate := include "deltallm.roleConfigTemplate" $name -}}
 {{- $g := (include $configTemplate $root | fromYaml).general_settings -}}
+{{- $native := eq $g.accounting_execution_mode "local_journal" -}}
+{{- $minimal := and $native (has $name (list "accountingWorker" "accountingRequest")) -}}
 {{- $realtime := default (dict) (get $g "realtime") -}}
 {{- if and $e.enabled (get $realtime "enabled") -}}
 {{- $sockets := int (get $realtime "max_connections") -}}
@@ -25,17 +27,22 @@
 {{- end -}}
 {{- end -}}
 {{- $engines := 2 -}}
-{{- $telemetry := or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") $g.accounting_protocol_enabled -}}
+{{- $telemetry := or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") (and $g.accounting_protocol_enabled (not $native)) -}}
 {{- $spendWorker := and (eq $g.spend_ingestion_mode "outbox") $g.spend_ingestion_worker_enabled -}}
 {{- $auditWorker := and $g.audit_enabled (eq $g.audit_ingestion_mode "outbox") $g.audit_ingestion_worker_enabled -}}
 {{- $projectionWorker := and $g.accounting_protocol_enabled $g.accounting_projection_worker_enabled -}}
 {{- if $telemetry -}}{{- $engines = add $engines 1 -}}{{- end -}}
 {{- if or $spendWorker $auditWorker $projectionWorker -}}{{- $engines = add $engines 1 -}}{{- end -}}
 {{- if and $g.spend_operation_intents_enabled (not $g.accounting_protocol_enabled) -}}{{- $engines = add $engines 1 -}}{{- end -}}
+{{- if $minimal -}}{{- $engines = 0 -}}{{- end -}}
 {{- $p := $role.pools -}}
 {{/* Prisma's HTTPX client uses the default 100-connection ceiling per engine. */}}
-{{- $pythonFD := add $p.upstreamHttp $p.controlHttp $p.auxiliaryHttp $p.redisCritical $p.redisCache (mul $engines 100) $fd.inboundConnectionsPerProcess $fd.otherPerProcess $fd.headroomPerProcess -}}
+{{- $pythonFD := add $p.upstreamHttp $p.controlHttp $p.auxiliaryHttp $p.accountingHttp $p.redisCritical $p.redisCache (mul $engines 100) $fd.inboundConnectionsPerProcess $fd.otherPerProcess $fd.headroomPerProcess -}}
 {{- $engineFD := add (max $g.db_pool_size $g.db_foreground_pool_size $g.telemetry_db_pool_size $g.telemetry_worker_db_pool_size) 100 $fd.otherPerProcess $fd.headroomPerProcess -}}
+{{- if $minimal -}}
+{{- $pythonFD = add $pythonFD $p.postgresql -}}
+{{- $engineFD = 0 -}}
+{{- end -}}
 {{- $podFD := mul (add $pythonFD (mul $engines $engineFD)) $role.processesPerPod -}}
 {{- $maxPodFD = max $maxPodFD $podFD -}}
 {{- $_ := set $role "fileDescriptors" (dict "python" $pythonFD "engine" $engineFD "engineProcesses" $engines "pod" $podFD) -}}
@@ -56,14 +63,16 @@
 {{- $tpm := int $domain.reservedTpm -}}
 {{- $concurrent := int $domain.reservedConcurrency -}}
 {{- range $roleName, $role := $report.roles -}}
+{{- $configTemplate := include "deltallm.roleConfigTemplate" $roleName -}}
+{{- $g := (include $configTemplate $root | fromYaml).general_settings -}}
+{{- $minimal := and (eq $g.accounting_execution_mode "local_journal") (has $roleName (list "accountingWorker" "accountingRequest")) -}}
 {{- $requestRate := ternary $domain.apiRpmPerProcess $domain.workerRpmPerProcess (eq $roleName "api") -}}
+{{- if $minimal -}}{{- $requestRate = 0 -}}{{- end -}}
 {{- $attempts := include "deltallm.capacityProduct" (list $role.peakProcesses $requestRate $domain.attemptsPerRequest) | int64 -}}
 {{- $rpm = add $rpm $attempts -}}
 {{- $tpm = add $tpm (include "deltallm.capacityProduct" (list $attempts $domain.tokensPerAttempt) | int64) -}}
 {{/* Conservatively allow all upstream transports to target each failover domain. */}}
 {{- $concurrent = add $concurrent (mul $role.peakProcesses $role.pools.upstreamHttp) -}}
-{{- $configTemplate := ternary "deltallm.apiConfigYaml" (ternary "deltallm.accountingWorkerConfigYaml" "deltallm.batchWorkerConfigYaml" (eq $roleName "accountingWorker")) (eq $roleName "api") -}}
-{{- $g := (include $configTemplate $root | fromYaml).general_settings -}}
 {{- $realtime := default (dict) (get $g "realtime") -}}
 {{- if get $realtime "enabled" -}}
 {{- $concurrent = add $concurrent (mul $role.peakProcesses (int (get $realtime "max_connections"))) -}}

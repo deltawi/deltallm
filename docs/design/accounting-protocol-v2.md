@@ -1,8 +1,13 @@
 # Accounting protocol v2 architecture decision
 
-Status: clean-main integration in progress. Tracking: issue 320. The HTTP accounting
-core is behind startup-only configuration. Main's other billing paths still need
-shared adapters. This branch is not ready for production activation or merge.
+Status: clean-main integration in progress. Tracking: issue 320. HTTP, cache,
+Realtime, selector, and batch now share accounting authority. Native reporting
+and isolated roles are connected. Final regression, container, and gateway load
+checks remain open. This branch is not ready for production activation or merge.
+
+Sections named "Inactive" record earlier gated implementation steps. They are
+development history, not the current runtime selector. The current native mode
+is the startup-only `accounting_execution_mode: local_journal` setting.
 
 ## Decision
 
@@ -21,9 +26,10 @@ with two acknowledgements:
    grant. A set-based reconciler periodically moves the aggregate into authoritative
    budget windows and releases unused escrow.
 
-The immutable accounting event stream is the write authority. A dedicated, fenced
-worker projects it to the existing spend ledger and required audit outbox. Existing
-spend and audit stores remain compatibility read models until their consumers migrate.
+The immutable accounting event stream is the write authority. In native mode, a
+fenced worker projects it to native usage facts, audit facts, and sharded rollups.
+Reporting reads old and new retained records without writing new native charges
+to the legacy spend ledger. Assigned mode retains its compatibility projector.
 
 ## Current integration boundary
 
@@ -35,24 +41,28 @@ cache hit reserves its known charge and records a terminal result before success
 It reserves one accounting slot, but no extra provider-attempt allowance. It does
 not call a provider.
 
-Realtime, batch completion, and selector billing still use main's legacy write owner.
-They cannot run beside v2 grants until they use the same budget authority and recovery
-owner. Startup and Helm reject v2 with realtime or batch enabled. Selector startup
-and dynamic activation also reject v2. These checks are temporary safety limits,
-not a complete compatibility implementation.
+Realtime, batch completion, and selector billing now use typed adapters to the
+same authority. Real-database mixed-feature checks cover exact charges, all five
+budget scopes, replay, uncertain results, and unused funding. The temporary
+startup and Helm checks were removed after these proofs passed. Legacy mode
+retains main's previous behavior.
 
-The clean integration must add typed adapters for these three paths before merge or
-mixed-feature qualification. Remove each check only after real-dependency tests prove
-shared admission, exactly-once settlement, retries, and recovery after process loss.
+Batch persists an immutable checkpoint before provider dispatch. Item claim
+epochs fence that write. The existing completion outbox stores terminal results
+and delivers them through shared accounting. Its native transitions also require
+the live completion lease and attempt number. Reclaim never repeats a paid
+provider call. Unknown work stays charged as provisional until valid evidence
+settles it. No new batch ledger, pool, queue, or feature worker is added.
 
 ## Ownership and invariants
 
-- API processes own reservation and finalization queues. They never keep a database
+- API processes own bounded local issue and terminal queues. They never keep a database
   connection open during provider I/O.
 - PostgreSQL functions own lock ordering, budget arithmetic, idempotency, protocol
   generation checks, grant lifecycle, and the dispatch transition.
-- The accounting worker owns expiry recovery, renewable-window rollover, and legacy
-  projections. Per-partition leases fence duplicate workers.
+- The request role owns signed funding, unused-suffix return, and durable terminal
+  acceptance. The projection role owns canonical processing, expiry recovery,
+  renewable-window rollover, and native reporting. Leases fence duplicate workers.
 - A replayed reservation never returns a dispatch token. Database uncertainty before
   the reservation acknowledgement means no provider call.
 - A provider call with no proven terminal outcome retains its full unused allowance as
@@ -72,11 +82,11 @@ because overload or process loss could make provider work unbillable. A single q
 for admission and terminal writes was rejected because an admission burst could
 starve the finalizations needed to release capacity.
 
-A separate network accounting ingestor was not added to the mandatory request path.
-The database function already appends the durable journal in the same transaction as
-the dispatch decision, while grants remove the repeated hot-window mutation. An extra
-service hop is reserved as a measured follow-up only if the durable append benchmark
-shows PostgreSQL journal I/O, rather than window contention, is the remaining limit.
+Native mode now has a signed request role. It owns bounded durable calls and
+does not load provider adapters or the API bootstrap. Warm local issue needs no
+SQL call. Cold funding and terminal acceptance use one bounded batch each.
+This separates API scheduling from database work without moving money authority
+out of PostgreSQL.
 
 ## Failure and overload behavior
 
@@ -156,14 +166,22 @@ and activation. One PostgreSQL function owns this check. Operators must stop all
 legacy writers first, then let accepted work settle. The check does not fence every
 legacy request and does not make a mixed-version online cutover safe.
 
-To roll back only grant allocation, set `accounting_grants_enabled: false` and roll API
+In assigned mode, to roll back only grant allocation, set `accounting_grants_enabled: false` and roll API
 processes. New requests then use the original direct-window v2 functions; keep the
-accounting worker running until existing grants have closed. To stop all v2 admissions,
-disable the protocol startup flag and roll API processes. Keep the accounting worker
-and active generation available until reserved operations finalize, expiry recovery
-completes, and projection lag reaches zero. Do not drop accounting tables or downgrade
-the worker while provisional debits remain. A generation can then be fenced; retained
-events and windows remain an auditable record.
+accounting worker running until existing grants have closed. Stop traffic before a
+full accounting rollback. Keep the active authority and compatible workers available
+until reservations, expiry recovery, and reporting drain. In assigned mode, verify
+that every legacy scope counter includes the projected charges before disabling v2.
+Do not drop accounting tables or downgrade the worker while provisional debits remain.
+A generation can be fenced only after its retained money and work are reconciled.
+
+Native mode does not update legacy spend counters. An empty queue does not make
+those counters current. After native charges exist, rollback must keep native
+accounting enabled and use a native-compatible image. Do not switch to assigned
+mode, disable v2, or restart legacy writers as a rollback. A reverse balance
+migration is not supplied or verified by this change. Such a migration needs
+separate exact-scope reconciliation and writer fences before legacy admission
+can resume. Retain native facts, budget windows, receipts, and checkpoints.
 
 ## Compatibility removal
 
@@ -172,6 +190,43 @@ audit queries, notifications, and operator tools read the accounting event/windo
 models directly, and after a release proves no consumer depends on legacy counters or
 outboxes. That removal needs its own migration and parity evidence; this change does
 not silently create a second long-term ledger.
+
+### Native batch schema and rollback
+
+Migrations 141 and 142 add the nullable `accounting_checkpoint` item field and
+its bounded envelope checks. Old rows stay null. New and changed rows must meet
+both constraints. The checks use `NOT VALID` to avoid scanning retained batch
+history during expansion. No data backfill is required for old null rows.
+
+Apply these migrations through the existing release migration job. They use a
+two-second lock limit and a thirty-second statement limit. If the job cannot
+obtain the lock, stop rollout and schedule the bounded migration again. Do not
+edit an applied migration or increase a request-path timeout.
+
+Constraint validation is optional maintenance after rollout. Use the same
+coordinated release owner and a measured maintenance window:
+
+```sql
+BEGIN;
+SET LOCAL lock_timeout = '2s';
+SET LOCAL statement_timeout = '30s';
+ALTER TABLE deltallm_batch_item VALIDATE CONSTRAINT batch_accounting_checkpoint_bound;
+ALTER TABLE deltallm_batch_item VALIDATE CONSTRAINT batch_accounting_checkpoint_envelope;
+COMMIT;
+```
+
+If validation exceeds its bound, the transaction rolls back. New writes remain
+protected by the existing checks. Do not treat an unvalidated historical check
+as a reason to bypass the native checkpoint owner.
+
+Before rolling native accounting back, stop new admissions and batch creation.
+Keep native API, batch, request, and projection owners available until item
+proofs and completion receipts settle, unused suffixes return, grants close,
+and reporting reaches its final checkpoints. Uncertain debits need evidence;
+they are not unused money. Retain the additive schema and compatible closer.
+An old writer must not resume a stored native item or completion receipt.
+Draining batch work does not permit a switch to legacy budget counters. Follow
+the native-compatible rollback requirement above.
 
 ## Inactive permit foundation
 

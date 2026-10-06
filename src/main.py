@@ -5,24 +5,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
-from src.bootstrap import (
-    BootstrapStatus,
-    format_bootstrap_summary,
-    init_audit_runtime,
-    init_auth_runtime,
-    init_batch_runtime,
-    init_email_runtime,
+from src.bootstrap.status import BootstrapStatus, format_bootstrap_summary
+from src.bootstrap.audit import init_audit_runtime, shutdown_audit_runtime
+from src.bootstrap.auth import init_auth_runtime, shutdown_auth_runtime
+from src.bootstrap.batch import init_batch_runtime, shutdown_batch_runtime
+from src.bootstrap.email import init_email_runtime, shutdown_email_runtime
+from src.bootstrap.infrastructure import (
     init_infrastructure_runtime,
-    init_runtime_services,
-    init_routing_runtime,
-    shutdown_audit_runtime,
-    shutdown_auth_runtime,
-    shutdown_batch_runtime,
-    shutdown_email_runtime,
     shutdown_infrastructure_runtime,
-    shutdown_runtime_services,
-    shutdown_routing_runtime,
 )
+from src.bootstrap.runtime_services import init_runtime_services, shutdown_runtime_services
+from src.bootstrap.routing import init_routing_runtime, shutdown_routing_runtime
 from src.bootstrap.metrics import start_runtime_metrics
 from src.bootstrap.realtime import init_realtime_runtime
 from src.bootstrap.lifecycle import process_scope, mark_process_serving, shutdown_readiness

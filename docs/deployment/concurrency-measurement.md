@@ -114,7 +114,7 @@ uv run python -m tests.performance.run_gateway_concurrency \
 Restart the gateway from the candidate revision, regenerate its manifest, repeat
 the warmup, and run with `--label after`. Keep resources, dependency data shape,
 worker settings, and provider behavior fixed. Compare cold-cache runs separately.
-The runner accepts 5–600 seconds and up to 200 offered RPS, with 1,000 maximum
+The runner accepts 5–600 seconds and up to 500 offered RPS, with 1,000 maximum
 client requests in flight and a ten-second total timeout per request.
 
 For multiple API processes, expose each process's metrics separately and repeat
@@ -148,6 +148,68 @@ records `qualification: baseline_only`; it does not certify this target. Review
 failures, generator drops, scrape coverage, actual admitted work, durable backlog,
 and resource evidence before making any capacity claim. Higher short-request
 rates, 500 live streams, overload, and one-pod loss are separate workloads.
+
+## Native accounting qualification on kind
+
+Use `tests.performance.run_native_qualification` for the complete native
+accounting profile. This is not the legacy baseline above. First pass the
+regression, migration, chart, UI, and container checks. Commit the tested source,
+then build that commit with the repository Dockerfile. The runner rejects a dirty
+checkout, a reused output directory, or an image whose source hash differs from
+the checkout. Use kind v0.31.0. The cluster owner pins Kubernetes v1.34.3 by digest
+and creates a separate kubeconfig. It does not use the current cluster or Rancher.
+
+```bash
+export DOCKER_CONTEXT=your-isolated-test-runtime
+docker build -t deltallm-native:qualification .
+uv run python -m scripts.check_lifecycle_image --image deltallm-native:qualification \
+  --output artifacts/qualification/native-image-smoke
+uv run python -m tests.performance.run_native_qualification \
+  --kind /path/to/kind-v0.31.0 --image deltallm-native:qualification \
+  --output artifacts/qualification/native-qualification-fresh
+```
+
+The owned two-node cluster has four API processes, two minimal accounting request
+processes, and one native projection process. Each API and accounting process has
+a two-core CPU limit and a 1 GiB memory limit. The generator has four synchronized
+processes, a four-core CPU limit, a 1 GiB memory limit, and at most 1,000 active
+requests. Record the Docker VM's physical CPU and memory as well: these are
+container limits, not dedicated physical cores. HPA is off during this series.
+
+Traffic uses four direct in-cluster per-pod services, with one generator shard per
+API process. This isolates the gateway from ingress or load-balancer behavior.
+It does not certify an external edge. The same generator must first pass a direct
+1,000 RPS provider check. It then runs 30-second checks at 50, 100, 200, and 500
+RPS. All four short checks must pass before the ten-minute series starts at those
+same rates. No cooldown occurs inside an arrival window. Between stages, the
+runner records and waits for grants, terminal work, reservations, and native
+reporting to drain. It does not clear the ledger or restart dependencies.
+
+Each stage has three independent results:
+
+- Throughput: at least 99.9 percent valid fixed responses and complete generator,
+  metrics, dependency, and resource evidence. Missing observations are failures.
+- Economics: every successful response has the exact fixture charge, all four
+  budget scopes match native facts, reservations drain, and the legacy spend
+  table receives no native charge. The separate warmup charge is included.
+- Latency: client p95 at most 150 ms, p99 at most 300 ms, and client in-flight
+  slope at most 0.01 requests per second over the middle 80 percent of arrivals.
+
+Raw samples are compressed JSONL. Fixed error codes, client phases, source
+metrics, resources, PostgreSQL/Redis deltas, and exact reconciliation are retained.
+Bounded cgroup CPU counter reads run before and after each stage, outside arrivals.
+Their window includes warmup and artifact transfer. Generator counters cover its
+container lifetime. Missing counters and resets stay explicit; they are not zero.
+Client in-flight slope is not a server queue measurement; inspect the recorded
+ingress and accounting queue gauges too. Dependency deltas include background
+work. Do not subtract independent percentile values to claim gateway overhead.
+After the series, a bounded offline vacuum/analyze check records append-heavy
+table and index sizes and vacuum state. It is not part of request latency.
+
+Do not change code, resource limits, prices, or budgets during the series. If a
+failure requires a code change, build a new clean image and start a new evidence
+directory. Keep the failed evidence. These fixed short requests do not replace
+streaming, batch, Realtime, provider-loss, or production-scale tenant tests.
 
 The separate [instrumentation regression sample](../project/benchmarks/concurrency-observability/summary.json)
 uses an in-process ASGI fixture, fake Redis/provider, 10 RPS, and 200 requests

@@ -78,6 +78,38 @@ def test_migration_verifier_checks_the_partial_oldest_terminal_index_and_counter
         assert contract in sql
 
 
+def test_migration_verifier_checks_projection_presence_bounds_and_fences(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_presence("unused", "postgresql://localhost/test")
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "PRIMARY KEY (protocol_name, generation, slot)",
+        "confdeltype='c' AND confupdtype='r'",
+        "slot >= 0%slot <= 63",
+        "isfinite(expires_at)",
+        "NOT ready%owner_token IS NOT NULL",
+    ):
+        assert contract in sql
+
+
+def test_migration_verifier_checks_native_reporting_contracts(monkeypatch):
+    execute = Mock()
+    monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)
+    verify_migration_paths._verify_accounting_native_reporting(
+        "unused", "postgresql://localhost/test"
+    )
+    sql = execute.call_args.kwargs["sql"]
+    for contract in (
+        "numeric_precision=38 AND numeric_scale=18",
+        "UNIQUE (accounting_sequence)",
+        "rollup_shard)",
+        "enable_seqscan=off",
+        "indisvalid AND indisready",
+    ):
+        assert contract in sql
+
+
 def test_migration_verifier_checks_each_bounded_window_funding_lookup(monkeypatch) -> None:
     execute = Mock()
     monkeypatch.setattr(verify_migration_paths, "_db_execute", execute)

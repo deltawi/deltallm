@@ -1,0 +1,54 @@
+# Apply after eval or production values. This is a complete native role bundle.
+# Provision a stable, at-least-32-byte signing key in this Secret before rollout.
+# The CIDR below is the reproducible kind service range; override it for your cluster.
+runtime:
+  accounting:
+    existingSecret:
+      name: deltallm-accounting-rpc
+      signingKey: accounting-rpc-signing-secret
+
+dependencyCapacity:
+  extended:
+    fileDescriptors:
+      # 37 peak API pods plus four request and four projection pods. Keep the
+      # existing process and node descriptor ceilings; account for every role.
+      maxPodsPerNode: 45
+
+accountingRequest:
+  enabled: true
+  replicaCount: 1
+
+accountingWorker:
+  enabled: true
+  replicaCount: 1
+  autoscaling:
+    oldestEventAge:
+      metricName: deltallm_accounting_native_oldest_work_age_seconds
+  config:
+    general_settings:
+      accounting_projection_poll_interval_ms: 20
+      accounting_projection_maintenance_interval_ms: 1000
+
+networkPolicy:
+  enabled: true
+  # Add explicit PostgreSQL and monitoring rules for your environment. With no
+  # egress rule, this profile denies non-DNS traffic until operators add those rules.
+
+config:
+  general_settings:
+    accounting_protocol_enabled: true
+    accounting_execution_mode: local_journal
+    accounting_grants_enabled: true
+    accounting_protocol_generation: 1
+    accounting_rpc_allow_http: true
+    accounting_rpc_allowed_ports: [4000]
+    accounting_rpc_allowed_private_cidrs: [10.96.0.0/12]
+    accounting_rpc_max_connections: 16
+    accounting_local_max_subjects: 1024
+    accounting_projection_poll_interval_ms: 20
+    accounting_projection_maintenance_interval_ms: 1000
+    audit_enabled: true
+    audit_ingestion_mode: outbox
+    audit_ingestion_worker_enabled: true
+    spend_ingestion_mode: outbox
+    spend_ingestion_worker_enabled: true

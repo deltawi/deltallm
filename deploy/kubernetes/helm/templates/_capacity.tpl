@@ -30,3 +30,8 @@
 {{- end -}}
 {{- $value | int64 -}}
 {{- end -}}
+
+{{- define "deltallm.roleConfigTemplate" -}}
+{{- $templates := dict "api" "deltallm.apiConfigYaml" "batchWorker" "deltallm.batchWorkerConfigYaml" "accountingWorker" "deltallm.accountingWorkerConfigYaml" "accountingRequest" "deltallm.accountingRequestConfigYaml" -}}
+{{- required "Unknown capacity role" (get $templates .) -}}
+{{- end -}}

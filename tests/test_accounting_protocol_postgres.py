@@ -59,6 +59,24 @@ async def accounting_db():
         yield clients, generation
     finally:
         await db.execute_raw(
+            "DELETE FROM deltallm_accounting_usage_rollups_v2 WHERE api_key IN "
+            "(SELECT api_key FROM deltallm_accounting_usage_facts_v2 WHERE protocol_generation=$1)",
+            generation,
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_accounting_usage_facts_v2 WHERE protocol_generation=$1",
+            generation,
+        )
+        await db.execute_raw(
+            "DELETE FROM deltallm_auditevent WHERE event_id IN ("
+            "SELECT CASE WHEN audit_envelope_json->>'event_id' ~ "
+            "'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' "
+            "THEN (audit_envelope_json->>'event_id')::uuid "
+            "ELSE md5('deltallm-accounting-audit:v2:'||event_id)::uuid END "
+            "FROM deltallm_accounting_events WHERE protocol_name='primary' AND generation=$1)",
+            generation,
+        )
+        await db.execute_raw(
             "DELETE FROM deltallm_accounting_terminal_journal WHERE generation=$1", generation
         )
         await db.execute_raw(

@@ -6,10 +6,17 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Literal, TypeVar
-from uuid import UUID, uuid4
+from typing import TypeVar
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import Request
+
+from src.billing.accounting_admission import (
+    ACCOUNTING_RECOVERY_LIFETIME,
+    admit_accounting_reservation,
+    reservation_audit_envelope as _reservation_audit_envelope,
+)
+from src.billing.accounting_pricing import accounting_pricing_snapshot as _pricing_snapshot
 
 from src.billing.frozen_pricing import freeze_operation_pricing
 from src.billing.accounting_protocol import (
@@ -17,11 +24,9 @@ from src.billing.accounting_protocol import (
     AccountingAttribution,
     AccountingOperationHandle,
     AccountingReservation,
-    ReserveDecision,
     request_fingerprint,
 )
 from src.billing.accounting_service import AccountingProtocolService
-from src.billing.accounting_local_leases import LocalAccountingHandle, LocalDispatchPermit
 from src.billing.provider_allowance import (
     ProviderRequestBounds,
     conservative_provider_allowance,
@@ -37,9 +42,9 @@ from src.billing.spend_ingestion import SpendIngestionService
 from src.billing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
 from src.providers.resolution import resolve_provider
 from src.models.responses import UserAPIKeyAuth
-from src.models.errors import BudgetExceededError
 from src.router.router import Deployment
 from src.telemetry.event_identity import get_or_create_billing_event_id
+from src.telemetry.selector_decision import ProtectedSelectorDecision
 
 T = TypeVar("T")
 
@@ -88,52 +93,6 @@ def operation_pricing(
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         mode="sync",
     )
-
-
-def _pricing_snapshot(pricing: PricingResolution) -> dict[str, str | int | bool | None]:
-    # Only billing dimensions and version identifiers; never arbitrary model_info.
-    result: dict[str, str | int | bool | None] = {
-        "source": pricing.source,
-        "currency": "USD",
-        "rounding": "ROUND_HALF_EVEN:1e-18",
-        "tier_version_id": pricing.tier_version_id,
-        "tier_assignment_id": pricing.tier_assignment_id,
-    }
-    for view, fields in (
-        ("customer", pricing.customer_model_info),
-        ("provider", pricing.provider_model_info),
-    ):
-        for field in (
-            "input_cost_per_token",
-            "output_cost_per_token",
-            "input_cost_per_token_cache_hit",
-            "output_cost_per_token_cache_hit",
-            "input_cost_per_character",
-            "output_cost_per_character",
-            "input_cost_per_second",
-            "output_cost_per_second",
-            "input_cost_per_image",
-            "output_cost_per_image",
-            "input_cost_per_audio_token",
-            "output_cost_per_audio_token",
-            "cost_per_request",
-        ):
-            value = fields.get(field)
-            if value is not None:
-                result[f"{view}.{field}"] = str(value)
-    catalog = pricing.catalog_token_pricing
-    if catalog is not None:
-        for field in (
-            "input_cost_per_token",
-            "output_cost_per_token",
-            "input_cost_per_token_cache_hit",
-            "output_cost_per_token_cache_hit",
-            "cost_per_request",
-        ):
-            value = getattr(catalog, field)
-            if value is not None:
-                result[f"catalog.{field}"] = str(value)
-    return result
 
 
 async def durable_provider_call(
@@ -278,50 +237,6 @@ async def _accounted_provider_call(
     return await execute()
 
 
-async def admit_accounting_reservation(
-    accounting: AccountingProtocolService,
-    *,
-    reservation: AccountingReservation,
-    attempt: AccountingAttempt,
-) -> AccountingOperationHandle:
-    try:
-        permit = await accounting.reserve(reservation)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        raise SpendPersistenceUnavailable() from None
-    if permit.decision is ReserveDecision.BUDGET_EXHAUSTED:
-        raise BudgetExceededError()
-    if permit.decision is not ReserveDecision.DISPATCH:
-        raise SpendPersistenceUnavailable()
-    if (
-        permit.dispatch_token is None
-        or permit.accounting_partition is None
-        or permit.protocol_generation != reservation.protocol_generation
-        or permit.operation_id != reservation.operation_id
-    ):
-        raise SpendPersistenceUnavailable()
-    if isinstance(permit, LocalDispatchPermit):
-        try:
-            return LocalAccountingHandle(
-                reservation=reservation,
-                dispatch_token=permit.dispatch_token,
-                accounting_partition=permit.accounting_partition,
-                attempts=(attempt,),
-                proof=permit.proof,
-            )
-        except (TypeError, ValueError):
-            raise SpendPersistenceUnavailable() from None
-    if accounting.requires_local_proof:
-        raise SpendPersistenceUnavailable()
-    return AccountingOperationHandle(
-        reservation=reservation,
-        dispatch_token=permit.dispatch_token,
-        accounting_partition=permit.accounting_partition,
-        attempts=(attempt,),
-    )
-
-
 def _reuse_accounting_allowance(
     previous: AccountingOperationHandle,
     *,
@@ -377,6 +292,11 @@ def _provider_reservation(
             "path": request.url.path,
         },
     )
+    prices = dict(attempt.pricing_snapshot)
+    decision = getattr(request.state, "route_decision", None)
+    if isinstance(decision, dict) and isinstance(decision.get("selector"), dict):
+        ProtectedSelectorDecision.model_validate(decision["selector"])
+        prices["selector_event_id"] = str(uuid5(operation_id, "selector:v1"))
     return AccountingReservation(
         protocol_generation=generation,
         operation_id=operation_id,
@@ -384,13 +304,13 @@ def _provider_reservation(
         request_fingerprint=fingerprint,
         attribution=attribution,
         allowance=allowance,
-        pricing_snapshot=attempt.pricing_snapshot,
+        pricing_snapshot=prices,
         audit_envelope=_reservation_audit_envelope(
             attribution,
             operation_id=operation_id,
             allowance=allowance,
         ),
-        expires_at=datetime.now(UTC) + timedelta(minutes=14),
+        expires_at=datetime.now(UTC) + ACCOUNTING_RECOVERY_LIFETIME,
     )
 
 
@@ -403,40 +323,3 @@ def _store_pricing_snapshot(
     snapshots = getattr(request.state, "spend_operation_pricing", {})
     snapshots[(model, deployment.deployment_id)] = pricing
     request.state.spend_operation_pricing = snapshots
-
-
-def _reservation_audit_envelope(
-    attribution: AccountingAttribution,
-    *,
-    operation_id: UUID,
-    allowance: Decimal,
-    action: Literal[
-        "ACCOUNTING_PROVIDER_RESERVED", "ACCOUNTING_CACHE_RESERVED"
-    ] = "ACCOUNTING_PROVIDER_RESERVED",
-    cache_hit: bool = False,
-) -> dict[str, object]:
-    metadata: dict[str, str | bool] = {"allowance_exact": str(allowance)}
-    if cache_hit:
-        metadata["cache_hit"] = True
-    event = {
-        "action": action,
-        "organization_id": attribution.organization_id,
-        "actor_type": "api_key",
-        "actor_id": attribution.user_id or attribution.api_key,
-        "api_key": attribution.api_key,
-        "resource_type": "model",
-        "resource_id": attribution.model,
-        "request_id": str(operation_id),
-        "correlation_id": str(operation_id),
-        "status": "success",
-        "metadata": metadata,
-        "event_id": f"{operation_id}:reservation",
-    }
-    payload = {"event": event, "payloads": [], "critical": True}
-    return {
-        "event_id": f"{operation_id}:reservation:audit",
-        "record_type": "audit_event",
-        "organization_id": attribution.organization_id,
-        "payload": payload,
-        "redacted_payload": payload,
-    }

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import asyncpg
@@ -113,10 +113,14 @@ class AccountingPostgresManager:
         acquisition_seconds: float,
         statement_seconds: float,
         lock_seconds: float,
+        allocation: Literal["shared", "dedicated"] = "shared",
     ) -> None:
         if self._pool is not None:
             raise RuntimeError("accounting PostgreSQL pool is already connected")
-        if not 1 <= pool_size < database_settings.pool_size:
+        if allocation not in {"shared", "dedicated"}:
+            raise ValueError("accounting PostgreSQL allocation is invalid")
+        maximum = database_settings.pool_size - int(allocation == "shared")
+        if type(pool_size) is not int or not 1 <= pool_size <= maximum:
             raise RuntimeError(
                 "accounting hot-path pool must leave at least one telemetry connection"
             )

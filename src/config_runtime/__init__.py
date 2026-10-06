@@ -1,4 +1,3 @@
-from src.config_runtime.dynamic import DynamicConfigManager
 from src.config_runtime.loader import build_app_config, deep_merge, load_yaml_dict
 from src.config_runtime.secrets import (
     AWSSecretManager,
@@ -10,7 +9,6 @@ from src.config_runtime.secrets import (
 __all__ = [
     "AWSSecretManager",
     "AzureSecretManager",
-    "DynamicConfigManager",
     "GCPSecretManager",
     "SecretResolver",
     "build_app_config",

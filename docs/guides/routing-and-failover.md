@@ -64,6 +64,18 @@ curl "$BASE_URL/v1/chat/completions" \
 
 Check deployment health and recent fallback events before sending production traffic.
 
+## Selector billing with native accounting
+
+A model selector can make a paid provider call before the answer call. With
+native accounting enabled, both calls use the shared accounting service. Each
+call reserves its cost allowance before dispatch. The selector has a stable
+component identity linked to the answer. Retries do not create a second charge.
+
+The routing-cost report includes selector cost in the parent answer. It does not
+count the selector as a second answer. A missing or foreign component is unknown,
+not zero. An uncertain provider result retains a conservative debit. Native
+charges are not copied into the old spend table.
+
 ## Next steps
 
 - [Route Groups in the Admin UI](../admin-ui/route-groups.md)

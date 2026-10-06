@@ -2,20 +2,34 @@
 {{- $root := .root -}}
 {{- $cfg := .config -}}
 {{- $generalSettings := deepCopy (default (dict) $cfg.general_settings) -}}
-{{- if $generalSettings.accounting_protocol_enabled -}}
-{{- $realtime := default (dict) $generalSettings.realtime -}}
-{{- if $realtime.enabled -}}
-{{- fail "Accounting v2 requires a shared Realtime billing adapter" -}}
+{{- $_ := set $generalSettings "deployment_capacity_role" .role -}}
+{{- $native := eq (default "assigned" $generalSettings.accounting_execution_mode) "local_journal" -}}
+{{- $minimal := and $native (has .role (list "accountingWorker" "accountingRequest")) -}}
+{{- if $native -}}
+{{- if or (not $generalSettings.accounting_protocol_enabled) (not $generalSettings.accounting_grants_enabled) -}}
+{{- fail "Native accounting requires its enabled protocol and funded grants" -}}
 {{- end -}}
-{{- if $generalSettings.embeddings_batch_enabled -}}
-{{- fail "Accounting v2 requires a shared batch billing adapter" -}}
+{{- if not $minimal -}}
+{{- if not $generalSettings.accounting_request_url -}}
+{{- $_ := set $generalSettings "accounting_request_url" (printf "http://%s:%v" (include "deltallm.accountingRequestFullname" $root) $root.Values.service.port) -}}
+{{- end -}}
+{{- end -}}
+{{- if ne .role "accountingWorker" -}}
+{{- if not $root.Values.runtime.accounting.existingSecret.name -}}
+{{- fail "Native accounting requires runtime.accounting.existingSecret.name" -}}
+{{- end -}}
+{{- $_ := set $generalSettings "accounting_rpc_signing_secret" "os.environ/DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET" -}}
 {{- end -}}
 {{- end -}}
 {{- if $root.Values.dependencyCapacity.extended.enabled -}}
 {{- $_ := set $generalSettings "deployment_capacity_path" "/app/capacity/report.json" -}}
-{{- $_ := set $generalSettings "deployment_capacity_role" .role -}}
 {{- end -}}
 {{- $_ := set $generalSettings "batch_webhook_encryption_key" "os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY" -}}
+{{- if $minimal }}
+model_list: []
+router_settings: {}
+deltallm_settings: {}
+{{- else }}
 model_list:
 {{ toYaml $cfg.model_list | indent 2 }}
 
@@ -61,7 +75,7 @@ deltallm_settings:
     {{- else }}
     {}
     {{- end }}
-
+{{- end }}
 general_settings:
 {{ toYaml $generalSettings | indent 2 }}
 {{- end -}}
@@ -73,6 +87,9 @@ general_settings:
 {{- end -}}
 {{- if .Values.accountingWorker.enabled -}}
 {{- $accountingApiDefaults := dict "general_settings" (dict "accounting_projection_worker_enabled" false "spend_ingestion_worker_enabled" false "audit_ingestion_worker_enabled" false) -}}
+{{- if eq .Values.config.general_settings.accounting_execution_mode "local_journal" -}}
+{{- $accountingApiDefaults = dict "general_settings" (dict "accounting_projection_worker_enabled" false) -}}
+{{- end -}}
 {{- $apiConfig = mergeOverwrite $apiConfig $accountingApiDefaults -}}
 {{- end -}}
 {{- $apiValues := default (dict) (get .Values "api") -}}
@@ -127,7 +144,16 @@ general_settings:
 {{- $workerConfig = mergeOverwrite $workerConfig $workerDefaults -}}
 {{- $accountingValues := default (dict) (get .Values "accountingWorker") -}}
 {{- $workerConfig = mergeOverwrite $workerConfig (default (dict) (get $accountingValues "config")) -}}
+{{- if eq $workerConfig.general_settings.accounting_execution_mode "local_journal" -}}
+{{- $workerConfig = mergeOverwrite $workerConfig (dict "general_settings" (dict "audit_ingestion_worker_enabled" false "spend_ingestion_worker_enabled" false)) -}}
+{{- end -}}
 {{ include "deltallm.configYaml" (dict "root" . "config" $workerConfig "role" "accountingWorker") }}
+{{- end -}}
+{{- define "deltallm.accountingRequestConfigYaml" -}}
+{{- $requestConfig := deepCopy .Values.config -}}
+{{- $requestConfig = mergeOverwrite $requestConfig (default (dict) .Values.accountingRequest.config) -}}
+{{- $requestConfig = mergeOverwrite $requestConfig (dict "general_settings" (dict "accounting_projection_worker_enabled" false "audit_ingestion_worker_enabled" false "spend_ingestion_worker_enabled" false)) -}}
+{{ include "deltallm.configYaml" (dict "root" . "config" $requestConfig "role" "accountingRequest") }}
 {{- end -}}
 {{- define "deltallm.validateBatchConfig" -}}
 {{- $apiConfig := include "deltallm.apiConfigYaml" . | fromYaml -}}
@@ -214,8 +240,10 @@ general_settings:
 {{- end -}}
 {{- $realtime := default (dict) (get $apiGeneral "realtime") -}}
 {{- if get $realtime "enabled" -}}
+{{- if not $apiGeneral.accounting_protocol_enabled -}}
 {{- if or (ne (get $apiGeneral "spend_ingestion_mode") "outbox") (not (get $apiGeneral "spend_ingestion_worker_enabled")) -}}
 {{- fail "Realtime requires spend_ingestion_mode=outbox and spend_ingestion_worker_enabled=true" -}}
+{{- end -}}
 {{- end -}}
 {{- $realtimeDrain := addf (float64 (default 5 (get $realtime "cleanup_seconds"))) (float64 (default 10 (get $realtime "write_seconds"))) -}}
 {{- if le $terminationGraceSeconds (addf $telemetryDrainSeconds $realtimeDrain) -}}
@@ -238,14 +266,28 @@ general_settings:
 {{- end -}}
 {{- $accountingConfig := include "deltallm.accountingWorkerConfigYaml" . | fromYaml -}}
 {{- $accountingGeneral := default (dict) (get $accountingConfig "general_settings") -}}
+{{- $native := eq $apiGeneral.accounting_execution_mode "local_journal" -}}
+{{- if $native -}}
+{{- if or (not $.Values.accountingRequest.enabled) (ne $accountingGeneral.accounting_execution_mode "local_journal") (not $accountingGeneral.accounting_projection_worker_enabled) -}}
+{{- fail "Native accounting requires its separate request and projection roles" -}}
+{{- end -}}
+{{- $requestGeneral := (include "deltallm.accountingRequestConfigYaml" . | fromYaml).general_settings -}}
+{{- if or (ne $requestGeneral.accounting_execution_mode "local_journal") (ne (int64 $requestGeneral.accounting_protocol_generation) (int64 $apiGeneral.accounting_protocol_generation)) -}}
+{{- fail "API and accounting request must use the same native mode and generation" -}}
+{{- end -}}
+{{- else -}}
 {{- if or (not (get $accountingGeneral "accounting_protocol_enabled")) (not (get $accountingGeneral "accounting_projection_worker_enabled")) (ne (get $accountingGeneral "audit_ingestion_mode") "outbox") (not (get $accountingGeneral "audit_ingestion_worker_enabled")) (ne (get $accountingGeneral "spend_ingestion_mode") "outbox") (not (get $accountingGeneral "spend_ingestion_worker_enabled")) -}}
 {{- fail "accounting worker requires protocol v2, its projection worker, and durable spend/audit outbox workers" -}}
+{{- end -}}
 {{- end -}}
 {{- if ne (int64 (get $apiGeneral "accounting_protocol_generation")) (int64 (get $accountingGeneral "accounting_protocol_generation")) -}}
 {{- fail "API and accounting worker must use the same accounting_protocol_generation" -}}
 {{- end -}}
 {{- else if and (get $apiGeneral "accounting_protocol_enabled") (not (get $apiGeneral "accounting_projection_worker_enabled")) -}}
 {{- fail "accounting_protocol_enabled requires an accounting projection worker" -}}
+{{- end -}}
+{{- if and .Values.accountingRequest.enabled (ne $apiGeneral.accounting_execution_mode "local_journal") -}}
+{{- fail "Accounting request role requires native local_journal mode" -}}
 {{- end -}}
 {{- if .Values.batchWorker.enabled -}}
 {{- $workerConfig := include "deltallm.batchWorkerConfigYaml" . | fromYaml -}}

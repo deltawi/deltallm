@@ -38,10 +38,12 @@ class SelectorService:
         *,
         admission: SelectorAdmission | None = None,
         after_admission: Callable[[], Awaitable[None]] | None = None,
+        cleanup: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._hop = hop
         self._admission = admission
         self._after_admission = after_admission
+        self._cleanup = cleanup
 
     async def select_once(
         self,
@@ -106,6 +108,27 @@ class SelectorService:
         return decision
 
     async def _execute(
+        self,
+        *,
+        state: RequestSelectorState,
+        payload: ChatCompletionRequest,
+        token_estimate: int,
+        policy: LLMTierSelectorPolicy,
+        identity: SelectorPolicyIdentity,
+    ) -> SelectorDecision:
+        try:
+            return await self._execute_admitted(
+                state=state,
+                payload=payload,
+                token_estimate=token_estimate,
+                policy=policy,
+                identity=identity,
+            )
+        finally:
+            if self._cleanup is not None:
+                await self._cleanup()
+
+    async def _execute_admitted(
         self,
         *,
         state: RequestSelectorState,

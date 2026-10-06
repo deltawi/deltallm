@@ -97,6 +97,24 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
+{{- define "deltallm.accountingRequestFullname" -}}
+{{- printf "%s-accounting-request" (include "deltallm.fullname" . | trunc 44 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "deltallm.accountingRequestSelectorLabels" -}}
+app.kubernetes.io/name: {{ printf "%s-accounting-request" (include "deltallm.name" . | trunc 44 | trimSuffix "-") }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: accounting-request
+{{- end -}}
+
+{{- define "deltallm.accountingRequestLabels" -}}
+helm.sh/chart: {{ include "deltallm.chart" . }}
+{{ include "deltallm.accountingRequestSelectorLabels" . }}
+app.kubernetes.io/part-of: {{ include "deltallm.name" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{- define "deltallm.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "deltallm.fullname" .) .Values.serviceAccount.name -}}

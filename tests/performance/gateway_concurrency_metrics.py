@@ -22,6 +22,7 @@ MAX_SAMPLES_PER_SCRAPE = 10000
 MAX_SNAPSHOTS = 3602
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
 T = TypeVar("T")
+MetricIdentity = tuple[str, tuple[tuple[str, str], ...]]
 HISTOGRAMS = (
     "deltallm_telemetry_acceptance_phase_seconds",
     "deltallm_telemetry_acceptance_events_per_commit",
@@ -34,6 +35,7 @@ HISTOGRAMS = (
     "deltallm_accounting_batch_seconds",
     "deltallm_accounting_queue_wait_seconds",
     "deltallm_accounting_database_call_seconds",
+    "deltallm_accounting_journal_worker_action_seconds",
     "deltallm_bounded_work_seconds",
     "deltallm_readiness_refresh_seconds",
     "deltallm_shutdown_phase_seconds",
@@ -83,6 +85,19 @@ ALLOWED_NAMES = {
     "deltallm_accounting_projection_actions_total",
     "deltallm_accounting_projection_backlog",
     "deltallm_accounting_projection_oldest_event_age_seconds",
+    "deltallm_accounting_queue_retained_bytes",
+    "deltallm_accounting_permit_actions_total",
+    "deltallm_accounting_permit_bank_subjects",
+    "deltallm_accounting_permit_bank_available",
+    "deltallm_accounting_permit_bank_retained_bytes",
+    "deltallm_accounting_journal_worker_actions_total",
+    "deltallm_accounting_read_model_progress_available",
+    "deltallm_accounting_read_model_observed_timestamp_seconds",
+    "deltallm_accounting_read_model_pending_partitions",
+    "deltallm_accounting_read_model_oldest_head_age_seconds",
+    "deltallm_accounting_native_oldest_work_age_seconds",
+    "deltallm_accounting_native_work_observation_available",
+    "deltallm_accounting_native_work_observed_timestamp_seconds",
 } | {name + suffix for name in HISTOGRAMS for suffix in ("_bucket", "_count", "_sum")}
 LABEL_VALUES = {
     "stage": {
@@ -110,6 +125,7 @@ LABEL_VALUES = {
         "telemetry_settlement_database",
     },
     "queue": {"audit", "spend", "reservation", "finalization"},
+    "lane": {str(value) for value in range(8)},
     "phase": PHASES
     | {phase.value for phase in AcceptancePhase}
     | {
@@ -157,6 +173,8 @@ LABEL_VALUES = {
         "cancelled",
         "timeout",
         "hook_failed",
+        "stale",
+        "error",
     },
     "transaction_scope": {"owned", "external"},
     "route": ROUTES,
@@ -203,9 +221,56 @@ LABEL_VALUES = {
         "finalize_grant",
         "finalize_direct",
         "recover_finalization",
+        "allocate_local_permit_grants",
+        "allocate_permit_grants",
+        "claim_permits",
+        "return_local_permits",
+        "append_local_terminal",
+        "claim_terminal_journal",
+        "materialize_terminal_journal",
+        "claim_read_model",
+        "read_model_progress",
+        "append_terminal_journal",
+        "recover_terminal_journal",
+        "recover_terminal_claim",
+        "recover_terminal_materialization",
+        "fail_terminal_journal",
+        "terminal_backlog_snapshot",
+        "finalize_local_permits",
+        "recover_local_permit_grants",
+        "recover_local_permit_returns",
+        "recover_local_permit_finalizations",
+        "recover_permit_grants",
+        "recover_permit_claims",
+        "initialize_read_model",
+        "verify_read_model_cells",
+        "recover_read_model_claim",
+        "project_read_model",
+        "presence_initialize",
+        "presence_acquire",
+        "presence_publish",
+        "presence_release",
+        "presence_snapshot",
+        "recovery_expired_grants",
+        "recovery_expired_operations",
+        "recovery_settle_grants",
     },
     "decision": {"dispatch", "replay", "budget_exhausted", "capacity_exhausted"},
-    "action": {"recovered", "window_rolled", "event_projected", "iteration"},
+    "action": {
+        "recovered",
+        "window_rolled",
+        "event_projected",
+        "iteration",
+        "claim",
+        "materialize",
+        "failure",
+        "read_model_commit",
+        "read_model_run",
+        "refill",
+        "issue",
+        "return",
+        "retire",
+    },
     "response": {"started", "not_started"},
     "integration": {"prometheus", "langfuse", "opentelemetry", "s3", "custom"},
 }
@@ -221,11 +286,11 @@ class MetricValue:
 @dataclass(frozen=True)
 class MetricSource:
     url: str
-    role: Literal["api", "accounting_worker"]
+    role: Literal["api", "accounting_worker", "accounting_request"]
     process: int
 
     def __post_init__(self) -> None:
-        if self.role not in ("api", "accounting_worker"):
+        if self.role not in ("api", "accounting_worker", "accounting_request"):
             raise ValueError("unsupported metrics source role")
         if not 0 <= self.process < 16:
             raise ValueError("metrics source process must be between zero and fifteen")
@@ -263,9 +328,14 @@ def _safe_labels(labels: dict[str, str]) -> bool:
 
 
 class MetricsRecorder:
-    def __init__(self, sources: list[str | MetricSource], output: Path) -> None:
+    def __init__(
+        self, sources: list[str | MetricSource], output: Path, *, interval_seconds: float = 1
+    ) -> None:
         if not 1 <= len(sources) <= 32:
             raise ValueError("provide one to thirty-two distinct per-process metrics endpoints")
+        if not math.isfinite(interval_seconds) or not 0.1 <= interval_seconds <= 60:
+            raise ValueError("metrics interval must be between 0.1 and 60 seconds")
+        self.interval_seconds = interval_seconds
         self.sources = [
             source
             if isinstance(source, MetricSource)
@@ -282,6 +352,9 @@ class MetricsRecorder:
         self.successful_scrapes = [0] * len(self.sources)
         self.failed_scrapes = [0] * len(self.sources)
         self.metric_names = [set[str]() for _ in self.sources]
+        self._baseline_captured = [False] * len(self.sources)
+        self._first_values = [dict[MetricIdentity, float]() for _ in self.sources]
+        self._last_values = [dict[MetricIdentity, float]() for _ in self.sources]
         self._bytes_written = 0
         self._file: TextIO | None = None
         self._client: httpx.AsyncClient | None = None
@@ -295,7 +368,7 @@ class MetricsRecorder:
         try:
             self._client = httpx.AsyncClient(
                 timeout=1.0,
-                limits=httpx.Limits(max_connections=16, max_keepalive_connections=16),
+                limits=httpx.Limits(max_connections=16, max_keepalive_connections=0),
                 follow_redirects=False,
                 trust_env=False,
             )
@@ -343,7 +416,7 @@ class MetricsRecorder:
                     if len(body) + len(chunk) > MAX_METRICS_BYTES:
                         raise ValueError("metrics byte budget exceeded")
                     body.extend(chunk)
-        return select_metrics(body.decode("utf-8"), buckets=buckets)
+        return await asyncio.to_thread(select_metrics, body.decode("utf-8"), buckets=buckets)
 
     async def snapshot(self, *, buckets: bool = False) -> None:
         assert self._file is not None
@@ -369,6 +442,13 @@ class MetricsRecorder:
             else:
                 self.successful_scrapes[index] += 1
                 self.metric_names[index].update(item.name for item in result)
+                self._capture_values(
+                    index,
+                    {
+                        (item.name, tuple(sorted(item.labels.items()))): item.value
+                        for item in result
+                    },
+                )
                 record = {
                     "offset_seconds": offset,
                     "source": index,
@@ -402,7 +482,7 @@ class MetricsRecorder:
     async def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=1.0)
+                await asyncio.wait_for(self._stop.wait(), timeout=self.interval_seconds)
             except TimeoutError:
                 await self.snapshot()
 
@@ -423,3 +503,122 @@ class MetricsRecorder:
         finally:
             if self._file is not None:
                 self._file.close()
+
+    def _capture_values(self, source: int, values: dict[MetricIdentity, float]) -> None:
+        if not self._baseline_captured[source]:
+            self._first_values[source] = values.copy()
+            self._baseline_captured[source] = True
+        # A bounded scrape may omit a previously observed series when a label has
+        # no current samples. Cumulative counters do not become zero in that case:
+        # retain their last observation so the workload delta remains causal.
+        if len(self._last_values[source].keys() | values.keys()) > MAX_SAMPLES_PER_SCRAPE:
+            raise ValueError("retained metric identity budget exceeded")
+        self._last_values[source].update(values)
+
+    def counter_delta(
+        self,
+        name: str,
+        *,
+        labels: dict[str, str] | None = None,
+        roles: frozenset[str] = frozenset({"api"}),
+    ) -> float:
+        """Return one same-window counter delta across the selected process roles."""
+
+        return sum(
+            item["delta"]
+            for item in self.counter_deltas_by_source(name, labels=labels, roles=roles)
+        )
+
+    def counter_deltas_by_source(
+        self,
+        name: str,
+        *,
+        labels: dict[str, str] | None = None,
+        roles: frozenset[str] = frozenset({"api"}),
+    ) -> list[dict[str, object]]:
+        """Return same-window counter deltas without exposing endpoint identity."""
+
+        required = labels or {}
+        result: list[dict[str, object]] = []
+        for index, source in enumerate(self.sources):
+            if source.role not in roles or not self._baseline_captured[index]:
+                continue
+            first, last = self._first_values[index], self._last_values[index]
+            identities = {
+                identity
+                for identity in first.keys() | last.keys()
+                if identity[0] == name
+                and all(dict(identity[1]).get(key) == value for key, value in required.items())
+            }
+            source_delta = 0.0
+            for identity in identities:
+                identity_delta = last.get(identity, 0.0) - first.get(identity, 0.0)
+                if identity_delta < 0:
+                    raise ValueError("metrics counter decreased during workload")
+                source_delta += identity_delta
+            result.append(
+                {
+                    "source_role": source.role,
+                    "source_process": source.process,
+                    "delta": source_delta,
+                }
+            )
+        return result
+
+    def histogram_delta(
+        self,
+        name: str,
+        *,
+        labels: dict[str, str] | None = None,
+        roles: frozenset[str] = frozenset({"api"}),
+    ) -> dict[str, float | None]:
+        """Return a bounded same-window histogram summary across process roles."""
+
+        if name not in HISTOGRAMS:
+            raise ValueError("histogram is not allowlisted")
+        required = labels or {}
+        count = 0.0
+        total = 0.0
+        buckets: dict[float, float] = {}
+        for index, source in enumerate(self.sources):
+            if source.role not in roles or not self._baseline_captured[index]:
+                continue
+            first, last = self._first_values[index], self._last_values[index]
+            for identity in first.keys() | last.keys():
+                metric_name, identity_labels = identity
+                if metric_name not in {
+                    name + "_count",
+                    name + "_sum",
+                    name + "_bucket",
+                }:
+                    continue
+                label_values = dict(identity_labels)
+                if not all(label_values.get(key) == value for key, value in required.items()):
+                    continue
+                delta = last.get(identity, 0.0) - first.get(identity, 0.0)
+                if delta < 0:
+                    raise ValueError("metrics counter decreased during workload")
+                if metric_name == name + "_count":
+                    count += delta
+                elif metric_name == name + "_sum":
+                    total += delta
+                elif metric_name == name + "_bucket" and "le" in label_values:
+                    upper_bound = float(label_values["le"])
+                    buckets[upper_bound] = buckets.get(upper_bound, 0.0) + delta
+
+        def percentile(value: float) -> float | None:
+            if count <= 0:
+                return None
+            threshold = count * value
+            for upper_bound, cumulative in sorted(buckets.items()):
+                if cumulative >= threshold:
+                    return upper_bound
+            return None
+
+        return {
+            "count": count,
+            "mean": total / count if count else None,
+            "p50_upper_bound": percentile(0.50),
+            "p95_upper_bound": percentile(0.95),
+            "p99_upper_bound": percentile(0.99),
+        }

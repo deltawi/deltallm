@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
     from src.batch.selector_execution import BatchSelectorExecution
+    from src.batch.accounting_execution import BatchAccountingExecution
 
 from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
+from src.models.responses import UserAPIKeyAuth
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.router.runtime_generation import RoutingRuntimeGenerationStore
 from src.router.router import Router
@@ -193,9 +195,10 @@ class _PreparedEmbeddingItem:
     microbatch_ineligible_reason: str | None
     microbatch_weight: int | None
     execution_signature: _ExecutionSignature
-    policy_auth: Any | None = None
+    policy_auth: UserAPIKeyAuth | None = None
     policy_lease: Any | None = None
     policy_lease_refresher: Any | None = None
+    native_accounting: BatchAccountingExecution | None = None
 
 
 @dataclass(slots=True)
@@ -210,7 +213,8 @@ class _PreparedChatItem:
     failover_kwargs: dict[str, Any]
     request_shim: _RequestShim
     routing_generation: BatchRoutingRuntime
-    policy_auth: Any | None = None
+    policy_auth: UserAPIKeyAuth | None = None
     policy_lease: Any | None = None
     policy_lease_refresher: Any | None = None
     selector: BatchSelectorExecution | None = None
+    native_accounting: BatchAccountingExecution | None = None

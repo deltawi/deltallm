@@ -9,6 +9,8 @@ from typing import Any
 from src.batch.backpressure import BatchModelGroupDeferred
 from src.batch.error_sanitization import persisted_batch_error_message
 from src.batch.models import BatchItemRecord, BatchJobRecord
+from src.batch.accounting_native import NativeBatchBilling
+from src.batch.accounting_execution import BatchAccountingExecution
 from src.batch.public_errors import exception_public_error_code
 from src.batch.retry import (
     BatchRetryCategory,
@@ -27,7 +29,34 @@ logger = logging.getLogger(__name__)
 
 
 class WorkerFailureHandlingMixin:
+    native_billing: NativeBatchBilling | None = None
+
     async def _mark_item_failed(
+        self,
+        *,
+        job: BatchJobRecord,
+        item: BatchItemRecord,
+        model_name: str,
+        exc: Exception,
+        deployment_id: str | None,
+        started_at_monotonic: float,
+        native_execution: BatchAccountingExecution | None = None,
+    ) -> None:
+        if self.native_billing is not None:
+            if native_execution is not None:
+                await self.native_billing.close_group([native_execution])
+            elif item.accounting_checkpoint is not None:
+                await self.native_billing.fail_items([item], worker_id=self.config.worker_id)
+        await self._mark_item_failed_after_accounting(
+            job=job,
+            item=item,
+            model_name=model_name,
+            exc=exc,
+            deployment_id=deployment_id,
+            started_at_monotonic=started_at_monotonic,
+        )
+
+    async def _mark_item_failed_after_accounting(
         self,
         *,
         job: BatchJobRecord,
@@ -181,6 +210,8 @@ class WorkerFailureHandlingMixin:
         decision: BatchRetryDecision,
         retry_delay_seconds: int,
     ) -> BatchRetryTerminalReason | None:
+        if item.accounting_checkpoint is not None:
+            return BatchRetryTerminalReason.NOT_RETRYABLE
         if not decision.retryable:
             return decision.terminal_reason or BatchRetryTerminalReason.NOT_RETRYABLE
         if item.attempts >= self.config.max_attempts:

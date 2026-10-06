@@ -9,7 +9,14 @@ from src.realtime.errors import RealtimeError, new_event_id
 from src.realtime.protocol import encode_event, parse_event
 
 
-def validate_controls(event: Mapping[str, object], *, profile: str, max_output_tokens: int) -> None:
+def validate_controls(
+    event: Mapping[str, object],
+    *,
+    profile: str,
+    max_output_tokens: int,
+    duration_pcm: bool = False,
+    transcription_model: str | None = None,
+) -> None:
     """Manual native turns give admission a boundary before provider work starts."""
     if profile == "transcription" and str(event.get("type", "")).startswith(
         ("response.", "conversation.item.")
@@ -29,6 +36,33 @@ def validate_controls(event: Mapping[str, object], *, profile: str, max_output_t
         audio = control.get("audio")
         audio_input = audio.get("input") if isinstance(audio, Mapping) else None
         if isinstance(audio_input, Mapping):
+            if (
+                duration_pcm
+                and "format" in audio_input
+                and not _duration_pcm(audio_input["format"])
+            ):
+                raise RealtimeError(
+                    "unsupported_audio_format", "Duration accounting requires 24 kHz PCM audio"
+                )
+            transcription = audio_input.get("transcription")
+            if profile == "realtime" and transcription is not None:
+                raise RealtimeError(
+                    "unsupported_profile", "Response sessions cannot add transcription work"
+                )
+            if (
+                profile == "transcription"
+                and transcription_model is not None
+                and (
+                    "transcription" in audio_input
+                    and (
+                        not isinstance(transcription, Mapping)
+                        or transcription.get("model") != transcription_model
+                    )
+                )
+            ):
+                raise RealtimeError(
+                    "invalid_session", "The transcription model must match admission"
+                )
             if audio_input.get("turn_detection") is not None:
                 raise RealtimeError(
                     "automatic_turns_unsupported", "Realtime currently requires manual turn control"
@@ -63,6 +97,7 @@ async def prepare_session(
     target: OpenAIRealtimeTarget,
     limits: RealtimeLimits,
     max_output_tokens: int,
+    duration_pcm: bool = False,
 ) -> TextSocket:
     """Confirm manual control before the client can send the first audio byte."""
     created_text = await upstream.receive_text()
@@ -72,6 +107,8 @@ async def prepare_session(
             "upstream_session_invalid", "Upstream did not create a Realtime session"
         )
     input_controls: dict[str, object] = {"turn_detection": None}
+    if duration_pcm:
+        input_controls["format"] = {"type": "audio/pcm", "rate": 24000}
     session: dict[str, object] = {"type": target.profile, "audio": {"input": input_controls}}
     if target.profile == "transcription":
         input_controls["transcription"] = {"model": target.upstream_model}
@@ -99,6 +136,10 @@ async def prepare_session(
         raise RealtimeError(
             "upstream_session_invalid", "Upstream did not confirm manual turn control"
         )
+    if duration_pcm and not _duration_pcm(inputs.get("format")):
+        raise RealtimeError(
+            "upstream_session_invalid", "Upstream did not confirm the bounded PCM audio format"
+        )
     if target.profile == "transcription":
         transcription = inputs.get("transcription")
         if (
@@ -118,3 +159,11 @@ async def prepare_session(
         )
     # Preserve both native events in order. Setup completes before HTTP upgrade.
     return _PreparedSocket(upstream, [created_text, updated_text])
+
+
+def _duration_pcm(value: object) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and value.get("type") == "audio/pcm"
+        and (type(value.get("rate")) is int and value["rate"] == 24000)
+    )

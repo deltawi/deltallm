@@ -521,6 +521,7 @@ class BatchItemRepository:
                 i.status,
                 i.request_body,
                 i.selector_checkpoint,
+                i.accounting_checkpoint,
                 i.response_body,
                 i.error_body,
                 i.usage,

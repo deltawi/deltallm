@@ -12,11 +12,7 @@ from src.deployment_capacity_settings import DeploymentCapacitySettings, resolve
 from src.ingress import IngressLimits
 from src.realtime.config import RealtimeSettings
 from src.redis_runtime import redis_connection_options, startup_setting
-from src.upstream_http import (
-    CONTROL_HTTP_MAX_CONNECTIONS,
-    build_upstream_http_limits,
-    environment_proxy_pool_count,
-)
+from src.bootstrap.accounting_config import read_accounting_settings
 
 
 @dataclass(frozen=True)
@@ -38,21 +34,28 @@ class DeploymentCapacityContract:
             policy.validate_production(
                 role=allocation.deployment_capacity_role,
                 accounting_worker_present="accountingWorker" in report.roles,
+                accounting_request_present="accountingRequest" in report.roles,
             )
         return cls(allocation, report, policy)
 
     def validate(
         self, config: AppConfig, settings: Settings, *, database: int, critical: int, cache: int
     ) -> None:
+        from src.upstream_http import (
+            CONTROL_HTTP_MAX_CONNECTIONS,
+            build_upstream_http_limits,
+            environment_proxy_pool_count,
+        )
+
         if resolve_capacity_settings(config.general_settings, settings) != self.settings:
             raise RuntimeError("Deployment capacity settings require a restart")
         if CapacityRuntimePolicy.from_general(config.general_settings) != self.policy:
             raise RuntimeError("Deployment capacity policy requires a restart")
-        role = self.report.roles[self.settings.deployment_capacity_role]
         proxies = environment_proxy_pool_count()
         if proxies != self.report.proxy_pools_per_client:
             raise RuntimeError("Proxy transport count differs from deployment capacity allocation")
         limits = build_upstream_http_limits(config.general_settings)
+        accounting = read_accounting_settings(config.general_settings, settings)
         actual = PoolAllocation(
             postgresql=database,
             redis_critical=critical,
@@ -62,15 +65,56 @@ class DeploymentCapacityContract:
             # Optional SDK/callback transports are an explicit operator reserve,
             # not a counted application-owned pool. Do not claim runtime parity.
             auxiliary_http=0,
+            accounting_http=(
+                accounting.accounting_rpc_max_connections
+                if accounting.accounting_execution_mode == "local_journal"
+                else 0
+            ),
         )
+        self._validate_pools(actual)
+        self._validate_realtime_capacity(config, settings)
+        self._validate_descriptors()
+        self._validate_redis_domain(config, settings)
+
+    def validate_minimal(self, config: AppConfig, settings: Settings, *, database: int) -> None:
+        if resolve_capacity_settings(config.general_settings, settings) != self.settings:
+            raise RuntimeError("Deployment capacity settings require a restart")
+        if CapacityRuntimePolicy.from_general(config.general_settings) != self.policy:
+            raise RuntimeError("Deployment capacity policy requires a restart")
+        accounting = read_accounting_settings(config.general_settings, settings)
+        if (
+            accounting.accounting_execution_mode != "local_journal"
+            or self.settings.deployment_capacity_role
+            not in {"accountingRequest", "accountingWorker"}
+        ):
+            raise RuntimeError("Minimal allocation requires a native accounting role")
+        self._validate_pools(
+            PoolAllocation(
+                postgresql=database,
+                redis_critical=0,
+                redis_cache=0,
+                upstream_http=0,
+                control_http=0,
+                auxiliary_http=0,
+                accounting_http=0,
+            )
+        )
+        role = self.report.roles[self.settings.deployment_capacity_role]
+        if role.file_descriptors.engine_processes != 0:
+            raise RuntimeError("Native accounting role must not allocate a Prisma engine")
+        self._validate_descriptors()
+
+    def _validate_pools(self, actual: PoolAllocation) -> None:
+        role = self.report.roles[self.settings.deployment_capacity_role]
         if actual != role.pools.model_copy(update={"auxiliary_http": 0}):
             raise RuntimeError("Runtime pools differ from deployment capacity allocation")
-        self._validate_realtime_capacity(config, settings)
+
+    def _validate_descriptors(self) -> None:
+        role = self.report.roles[self.settings.deployment_capacity_role]
         soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
         needed = max(role.file_descriptors.python, role.file_descriptors.engine)
         if soft_limit != resource.RLIM_INFINITY and soft_limit < needed:
             raise RuntimeError("Process file descriptor limit is below deployment allocation")
-        self._validate_redis_domain(config, settings)
 
     def _validate_realtime_capacity(self, config: AppConfig, settings: Settings) -> None:
         realtime = startup_setting(

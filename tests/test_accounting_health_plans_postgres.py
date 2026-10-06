@@ -5,6 +5,7 @@ import os
 import pytest
 
 from src.db.accounting_health import AccountingBacklogRepository
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes
 from tests.test_accounting_journal_plans_postgres import seed_journal_history
@@ -56,9 +57,17 @@ async def test_actual_terminal_health_plan_does_not_scan_receipt_or_generation_h
             os.environ["DATABASE_URL"], planner=planner
         ) as captured:
             repo = AccountingBacklogRepository(captured, statement_budget_seconds=2)
+            defaults = [
+                await captured.query_raw("SHOW enable_seqscan"),
+                await captured.query_raw("SHOW enable_bitmapscan"),
+            ]
             for _ in range(6):
                 value = await repo.snapshot(generation=generation, expires_at=deadline())
                 assert value.pending_entries == value.outstanding_operations == 4
+            assert defaults == [
+                await captured.query_raw("SHOW enable_seqscan"),
+                await captured.query_raw("SHOW enable_bitmapscan"),
+            ]
         assert captured.errors == []
         observed = set()
         for entry in captured.plans:
@@ -73,6 +82,7 @@ async def test_actual_terminal_health_plan_does_not_scan_receipt_or_generation_h
                 assert node.get("Rows Removed by Filter", 0) == 0, entry.safe_report()
                 assert node.get("Rows Removed by Index Recheck", 0) == 0, entry.safe_report()
         assert observed == {
+            "pg_index",
             "deltallm_accounting_protocols",
             "deltallm_accounting_partitions",
             "deltallm_accounting_terminal_capacity",
@@ -87,3 +97,26 @@ async def test_actual_terminal_health_plan_does_not_scan_receipt_or_generation_h
             await db.execute_raw(
                 f"DELETE FROM {relation} WHERE generation=ANY($1::bigint[])", owned
             )
+
+
+async def test_missing_queue_head_index_fails_closed_and_transaction_restores_it(
+    accounting_db,
+):
+    clients, generation = accounting_db
+    db = clients[0]
+    # Only this isolated test transaction loses the index. Error unwind restores it.
+    with pytest.raises(AccountingProtocolUnavailable):
+        async with db.tx() as transaction:
+            await transaction.execute_raw("DROP INDEX deltallm_accounting_terminal_oldest_work_idx")
+            await AccountingBacklogRepository(transaction, statement_budget_seconds=2).snapshot(
+                generation=generation, expires_at=deadline()
+            )
+    restored = await db.query_raw(
+        "SELECT indisvalid AND indisready AS usable FROM pg_index "
+        "WHERE indexrelid='deltallm_accounting_terminal_oldest_work_idx'::regclass"
+    )
+    assert restored == [{"usable": True}]
+    snapshot = await AccountingBacklogRepository(db, statement_budget_seconds=2).snapshot(
+        generation=generation, expires_at=deadline()
+    )
+    assert snapshot.sampled_drained

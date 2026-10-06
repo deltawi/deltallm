@@ -5,6 +5,10 @@ from __future__ import annotations
 from prisma import Prisma
 
 from src.accounting_settings import AccountingProtocolSettings
+from src.bootstrap.accounting_config import (
+    resolve_accounting_settings as resolve_accounting_settings,
+    validate_legacy_accounting_writers as validate_legacy_accounting_writers,
+)
 from src.billing.accounting_projection import (
     AccountingCompatibilityProjector,
     AccountingProjectionConfig,
@@ -19,35 +23,6 @@ from src.db.accounting_projection import AccountingProjectionRepository
 from src.db.accounting_protocol import AccountingProtocolRepository
 from src.db.audit_ingestion import AuditIngestionRepository
 from src.redis_runtime import startup_setting
-from src.realtime.config import RealtimeSettings
-
-
-def resolve_accounting_settings(
-    general: GeneralSettings, settings: Settings
-) -> AccountingProtocolSettings:
-    defaults = AccountingProtocolSettings()
-    config = AccountingProtocolSettings.model_validate(
-        {
-            field: startup_setting(general, settings, field, getattr(defaults, field))
-            for field in AccountingProtocolSettings.model_fields
-        }
-    )
-    validate_legacy_accounting_writers(config, general=general, settings=settings)
-    return config
-
-
-def validate_legacy_accounting_writers(
-    config: AccountingProtocolSettings, *, general: GeneralSettings, settings: Settings
-) -> None:
-    if not config.accounting_protocol_enabled:
-        return
-    realtime = startup_setting(general, settings, "realtime", RealtimeSettings())
-    if not isinstance(realtime, RealtimeSettings):
-        raise RuntimeError("Accounting requires validated Realtime settings")
-    if realtime.enabled:
-        raise RuntimeError("Accounting v2 requires a shared Realtime billing adapter")
-    if startup_setting(general, settings, "embeddings_batch_enabled", False):
-        raise RuntimeError("Accounting v2 requires a shared batch billing adapter")
 
 
 def start_accounting_protocol(
@@ -58,6 +33,8 @@ def start_accounting_protocol(
 ) -> AccountingProtocolService | None:
     if not config.accounting_protocol_enabled:
         return None
+    if config.accounting_execution_mode != "assigned":
+        raise RuntimeError("local journal requires its native runtime owner")
     if client is None:
         raise RuntimeError("accounting protocol requires the dedicated accounting database pool")
     statement_seconds = config.accounting_statement_timeout_ms / 1000.0

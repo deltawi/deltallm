@@ -17,8 +17,14 @@ from src.batch import (
     BatchStaleLeaseSweeperConfig,
     BatchStaleLeaseSweeperWorker,
 )
-from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
+from src.batch.completion_outbox import (
+    BatchCompletionOutboxWorker,
+    BatchCompletionOutboxWorkerConfig,
+)
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.batch.accounting_native import NativeBatchBilling
+from src.billing.accounting_service import AccountingProtocolService
+from src.bootstrap.batch_runtime.accounting import build_native_batch_billing
 from src.batch.webhooks import BatchWebhookCipher
 from src.batch.webhooks.delivery import BatchWebhookHTTPSender
 from src.batch.webhooks.network_policy import BatchWebhookNetworkPolicy
@@ -60,8 +66,15 @@ def start_batch_workers(
     runtime: BatchRuntime,
     core: BatchCoreComponents,
 ) -> BatchWebhookCipher | None:
-    _start_executor_worker(app, cfg, repository, runtime, core)
-    _start_completion_outbox_worker(app, cfg, repository, runtime)
+    native_billing = build_native_batch_billing(app.state, cfg.general_settings, repository)
+    _start_executor_worker(app, cfg, repository, runtime, core, native_billing=native_billing)
+    _start_completion_outbox_worker(
+        app,
+        cfg,
+        repository,
+        runtime,
+        accounting=None if native_billing is None else native_billing.accounting,
+    )
     _start_webhook_observability_worker(app, cfg, repository, runtime)
     webhook_cipher = _start_webhook_worker(app, cfg, repository, runtime)
     _start_maintenance_workers(app, cfg, repository, runtime, core)
@@ -74,6 +87,8 @@ def _start_executor_worker(
     repository: BatchRepository,
     runtime: BatchRuntime,
     core: BatchCoreComponents,
+    *,
+    native_billing: NativeBatchBilling | None = None,
 ) -> None:
     general = cfg.general_settings
     if not general.embeddings_batch_worker_enabled:
@@ -172,6 +187,8 @@ def _start_executor_worker(
     }
     if runtime.model_capacity_resolver is not None:
         worker_kwargs["model_capacity_resolver"] = runtime.model_capacity_resolver
+    if native_billing is not None:
+        worker_kwargs["native_billing"] = native_billing
     runtime.worker = BatchExecutorWorker(**worker_kwargs)
     mark_scheduler_config_applied = getattr(runtime.worker, "mark_scheduler_config_applied", None)
     if callable(mark_scheduler_config_applied):
@@ -187,6 +204,8 @@ def _start_completion_outbox_worker(
     cfg: Any,
     repository: BatchRepository,
     runtime: BatchRuntime,
+    *,
+    accounting: AccountingProtocolService | None = None,
 ) -> None:
     general = cfg.general_settings
     if not general.embeddings_batch_completion_outbox_worker_enabled:
@@ -195,6 +214,7 @@ def _start_completion_outbox_worker(
     runtime.completion_outbox_worker = BatchCompletionOutboxWorker(
         app=app,
         repository=repository,
+        **({"accounting": accounting} if accounting is not None else {}),
         config=BatchCompletionOutboxWorkerConfig(
             worker_id=_batch_worker_id("batch-completion-outbox"),
             poll_interval_seconds=general.embeddings_batch_poll_interval_seconds,
@@ -256,12 +276,8 @@ def _start_webhook_worker(
             ),
             max_concurrency=webhook_concurrency,
             lease_seconds=int(getattr(general, "batch_webhook_lease_seconds", 30)),
-            retry_initial_seconds=int(
-                getattr(general, "batch_webhook_retry_initial_seconds", 5)
-            ),
-            retry_max_seconds=int(
-                getattr(general, "batch_webhook_retry_max_seconds", 3_600)
-            ),
+            retry_initial_seconds=int(getattr(general, "batch_webhook_retry_initial_seconds", 5)),
+            retry_max_seconds=int(getattr(general, "batch_webhook_retry_max_seconds", 3_600)),
         ),
         audit_service=getattr(app.state, "audit_service", None),
     )
@@ -299,9 +315,7 @@ def _start_webhook_observability_worker(
             failure_interval_seconds=min(5.0, refresh_interval),
         ),
     )
-    runtime.webhook_observability_task = create_task(
-        runtime.webhook_observability_worker.run()
-    )
+    runtime.webhook_observability_task = create_task(runtime.webhook_observability_worker.run())
     app.state.batch_webhook_observability_worker = runtime.webhook_observability_worker
     app.state.batch_webhook_observability_task = runtime.webhook_observability_task
 

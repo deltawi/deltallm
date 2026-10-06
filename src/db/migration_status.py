@@ -13,7 +13,7 @@ MAX_MIGRATION_RECORDS = 4096
 
 
 class MigrationQuery(Protocol):
-    async def query_raw(self, query: str) -> list[dict[str, object]]: ...
+    async def query_raw(self, query: str) -> Sequence[Mapping[str, object]]: ...
 
 
 class MigrationVerificationError(RuntimeError):

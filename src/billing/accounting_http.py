@@ -26,8 +26,20 @@ from src.outbound.network_policy import (
     OutboundResolutionError,
 )
 
-AccountingEndpoint = Literal["/health", "/reserve/compact/batch", "/finalize/local/batch"]
-_ENDPOINTS = {"/health", "/reserve/compact/batch", "/finalize/local/batch"}
+AccountingEndpoint = Literal[
+    "/health",
+    "/reserve/compact/batch",
+    "/finalize/local/batch",
+    "/allocate/local/batch",
+    "/return/local/batch",
+]
+_ENDPOINTS = {
+    "/health",
+    "/reserve/compact/batch",
+    "/finalize/local/batch",
+    "/allocate/local/batch",
+    "/return/local/batch",
+}
 
 
 class AccountingHttpTransport:

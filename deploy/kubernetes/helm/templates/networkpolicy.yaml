@@ -20,6 +20,15 @@ spec:
   {{- end }}
   {{- if or .Values.networkPolicy.allowDns .Values.networkPolicy.egress }}
   egress:
+    {{- if .Values.accountingRequest.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "deltallm.accountingRequestSelectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.service.port }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.networkPolicy.allowDns }}
     - to:
         - namespaceSelector: {}

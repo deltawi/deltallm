@@ -8,6 +8,7 @@ from src.billing.operation_reservation import (
     OperationReservationStore,
     SoftSelectorOperation,
 )
+from src.billing.selector_native import NativeSelectorBilling
 from src.cache.execution_eligibility import ResponseCacheEligibility
 from src.providers.chat_upstream import ChatAdapterLookup
 from src.router.selection.capacity import CapacityAdmittedSelectorHop, SelectorCapacityOwner
@@ -34,7 +35,7 @@ class SelectorExecutionFactory:
         *,
         client: httpx.AsyncClient,
         adapters: ChatAdapterLookup,
-        billing: OperationReservationStore,
+        billing: OperationReservationStore | NativeSelectorBilling,
         default_openai_base_url: str,
         accounting_ready: Callable[[], bool],
     ) -> None:
@@ -53,6 +54,13 @@ class SelectorExecutionFactory:
         after_admission: Callable[[], Awaitable[None]] | None = None,
     ) -> SelectorService:
         self.require_ready()
+        billing = self._billing
+        cleanup = None
+        if isinstance(billing, NativeSelectorBilling):
+            billing = billing.bind(
+                operation, max_input_tokens=qualified.capacity.token_allowance - 64
+            )
+            cleanup = billing.close
         provider = SelectorProviderHop(
             client=self._client,
             adapters=self._adapters,
@@ -62,7 +70,7 @@ class SelectorExecutionFactory:
         hop: SelectorModelHop = CapacityAdmittedSelectorHop(
             owner=capacity_owner,
             bounds=qualified.capacity,
-            hop=AccountedSelectorHop(store=self._billing, operation=operation, hop=provider),
+            hop=AccountedSelectorHop(store=billing, operation=operation, hop=provider),
         )
         if not classifier_allowed:
             hop = _PolicyRejectedHop()
@@ -70,9 +78,8 @@ class SelectorExecutionFactory:
         return SelectorService(
             hop,
             after_admission=after_admission,
-            admission=ReservedSelectorAdmission(
-                store=self._billing, operation=operation, cache=cache
-            ),
+            cleanup=cleanup,
+            admission=ReservedSelectorAdmission(store=billing, operation=operation, cache=cache),
         )
 
     def require_ready(self) -> None:

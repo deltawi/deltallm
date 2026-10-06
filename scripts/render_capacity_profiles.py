@@ -20,6 +20,16 @@ PROFILES = {
         "values-capacity-experiment.yaml",
         "values-capacity-fixture.yaml",
     ),
+    "Native evaluation": (
+        "values-eval.yaml",
+        "values-accounting-eval.yaml",
+        "values-accounting-native.yaml",
+    ),
+    "Native production": (
+        "values-production.yaml",
+        "values-capacity-fixture.yaml",
+        "values-accounting-native.yaml",
+    ),
 }
 
 
@@ -86,6 +96,7 @@ def render(helm: str, overlays: tuple[str, ...]) -> dict:
 
 
 def table(helm: str) -> str:
+    rendered = {name: render(helm, overlays) for name, overlays in PROFILES.items()}
     lines = [
         "---",
         "title: Rendered capacity profiles",
@@ -103,8 +114,7 @@ def table(helm: str) -> str:
         "| Profile | API pods | API processes/pod | Ingress active | Shared preflight global/org | DB pools control/foreground/telemetry/worker | Redis critical/cache/bulk | CPU request/limit | Memory request/limit | Production contract |",
         "| --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- |",
     ]
-    for name, overlays in PROFILES.items():
-        info = render(helm, overlays)
+    for name, info in rendered.items():
         g, r, dep, res, hpa = (
             info[key] for key in ("config", "report", "deployment", "resources", "hpa")
         )
@@ -140,6 +150,25 @@ def table(helm: str) -> str:
         memory = f"{res['requests']['memory']}/{res['limits']['memory']}"
         lines.append(
             f"| {name} | {pods} | {r['roles']['api']['processesPerPod']} | {gate} | {preflight} | {db} | {redis} | {cpu} | {memory} | {'yes' if r['production'] else 'no'} |"
+        )
+    lines += [
+        "",
+        "## Peak dependency budgets",
+        "",
+        "The totals include API, batch, accounting roles, rollout overlap, migration, and reserved connections. Native roles each own two PostgreSQL connections and no Redis or provider connections.",
+        "",
+        "| Profile | Peak API/request/projection processes | PostgreSQL used/maximum | Redis used/maximum |",
+        "| --- | --- | --- | --- |",
+    ]
+    for name, info in rendered.items():
+        report = info["report"]
+        roles = report["roles"]
+        peak = "/".join(
+            str(roles.get(role, {}).get("peakProcesses", 0))
+            for role in ("api", "accountingRequest", "accountingWorker")
+        )
+        lines.append(
+            f"| {name} | {peak} | {report['postgresqlConnections']}/{report['postgresqlMaximum']} | {report['redisConnections']}/{report['redisMaximum']} |"
         )
     lines += [
         "",

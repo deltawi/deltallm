@@ -8,7 +8,7 @@ from decimal import Decimal, DecimalException, ROUND_CEILING, localcontext
 
 from src.billing.money import canonical_money
 from src.billing.spend_operations import SpendPersistenceUnavailable
-from src.billing.tier_pricing import PricingResolution
+from src.billing.tier_pricing import PricingResolution, resolve_exact_token_quote_pricing
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +62,13 @@ def _attempt_allowance(
     info = pricing.customer_model_info
     request_rate = _decimal_rate(info.get("cost_per_request"))
     if call_type in {"completion", "embedding", "rerank"}:
-        return _token_allowance(pricing, model_info, bounds, request_rate)
+        return _token_allowance(
+            pricing,
+            model_info,
+            bounds,
+            request_rate,
+            output_metered=call_type == "completion",
+        )
     if call_type == "image_generation":
         image_rate = max(
             _decimal_rate(info.get("input_cost_per_image")),
@@ -111,6 +117,8 @@ def _token_allowance(
     model_info: Mapping[str, object],
     bounds: ProviderRequestBounds,
     request_rate: Decimal,
+    *,
+    output_metered: bool,
 ) -> Decimal:
     tokens = pricing.customer_token_pricing or pricing.catalog_token_pricing
     if tokens is None:
@@ -123,6 +131,13 @@ def _token_allowance(
         _decimal_rate(tokens.output_cost_per_token),
         _decimal_rate(tokens.output_cost_per_token_cache_hit),
     )
+    if pricing.requested_mode == "batch":
+        exact_rates = _batch_token_ceiling_rates(pricing, output_metered=output_metered)
+        input_rate, output_rate, request_rate = (
+            exact_rates.input_rate,
+            exact_rates.output_rate,
+            exact_rates.request_rate,
+        )
     input_ceiling = _positive_int(
         model_info.get("max_input_tokens") or model_info.get("max_tokens")
     ) or _positive_int(tokens.context_window)
@@ -143,6 +158,48 @@ def _token_allowance(
         input_ceiling * input_rate * bounds.input_items * bounds.output_items
         + output_ceiling * output_rate * bounds.output_items
         + request_rate
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenCeilingRates:
+    input_rate: Decimal
+    output_rate: Decimal
+    request_rate: Decimal
+
+
+def _batch_token_ceiling_rates(
+    pricing: PricingResolution,
+    *,
+    output_metered: bool,
+) -> _TokenCeilingRates:
+    ordinary = resolve_exact_token_quote_pricing(
+        pricing,
+        model=pricing.callable_model,
+        prompt_tokens=1,
+        completion_tokens=int(output_metered),
+        mode="batch",
+    ).pricing
+    cached = resolve_exact_token_quote_pricing(
+        pricing,
+        model=pricing.callable_model,
+        prompt_tokens=1,
+        completion_tokens=int(output_metered),
+        cache_hit=True,
+        mode="batch",
+    ).pricing
+    if ordinary is None or cached is None:
+        raise SpendPersistenceUnavailable()
+    return _TokenCeilingRates(
+        input_rate=max(
+            ordinary.input_cost_per_token,
+            cached.input_cost_per_token_cache_hit or cached.input_cost_per_token,
+        ),
+        output_rate=max(
+            ordinary.output_cost_per_token,
+            cached.output_cost_per_token_cache_hit or cached.output_cost_per_token,
+        ),
+        request_rate=max(ordinary.cost_per_request, cached.cost_per_request),
     )
 
 

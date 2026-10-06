@@ -25,6 +25,7 @@
         "apiProcessesPerPod",
         "batchWorkerProcessesPerPod",
         "accountingWorkerProcessesPerPod",
+        "accountingRequestProcessesPerPod",
         "retiringGenerations",
         "postgresqlMaxConnections",
         "postgresqlReservedConnections",
@@ -47,6 +48,9 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 32
+        },
+        "accountingRequestProcessesPerPod": {
+          "type": "integer", "minimum": 1, "maximum": 32
         },
         "retiringGenerations": {
           "type": "integer",
@@ -550,6 +554,33 @@
         }
       }
     },
+    "accountingRequest": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "priorityClassName": { "type": "string" },
+        "command": { "type": "array" },
+        "args": { "type": "array" },
+        "env": { "type": "array" },
+        "envFrom": { "type": "array" },
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" },
+        "resources": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array" },
+        "config": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "general_settings": { "$ref": "#/properties/config/properties/general_settings" }
+          }
+        }
+      }
+    },
     "dependencyWait": {
       "type": "object",
       "additionalProperties": true,
@@ -588,6 +619,20 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "accounting": {
+          "type": "object", "additionalProperties": false,
+          "required": ["existingSecret"],
+          "properties": {
+            "existingSecret": {
+              "type": "object", "additionalProperties": false,
+              "required": ["name", "signingKey"],
+              "properties": {
+                "name": {"type": "string", "maxLength": 253},
+                "signingKey": {"type": "string", "minLength": 1, "maxLength": 253}
+              }
+            }
+          }
+        },
         "database": {
           "type": "object",
           "additionalProperties": true,
@@ -825,6 +870,20 @@
             "telemetry_worker_startup_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 60 },
             "telemetry_shutdown_drain_timeout_seconds": { "type": "number", "minimum": 0.1, "maximum": 300 },
             "accounting_protocol_enabled": { "type": "boolean" },
+            "accounting_execution_mode": { "type": "string", "enum": ["assigned", "local_journal"] },
+            "accounting_request_url": { "type": ["string", "null"], "maxLength": 2048 },
+            "accounting_rpc_signing_secret": { "type": ["string", "null"], "maxLength": 4096 },
+            "accounting_rpc_allow_http": { "type": "boolean" },
+            "accounting_rpc_allowed_ports": {
+              "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+              "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            },
+            "accounting_rpc_allowed_private_cidrs": {
+              "type": "array", "maxItems": 16, "uniqueItems": true,
+              "items": { "type": "string", "maxLength": 128 }
+            },
+            "accounting_rpc_max_connections": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "accounting_local_max_subjects": { "type": "integer", "minimum": 1, "maximum": 4096 },
             "accounting_protocol_generation": { "type": "integer", "minimum": 1 },
             "accounting_microbatch_max_size": { "type": "integer", "minimum": 1, "maximum": 256 },
             "accounting_microbatch_dwell_ms": { "type": "integer", "minimum": 0, "maximum": 50 },
@@ -1056,7 +1115,8 @@
               "enum": [
                 "api",
                 "batchWorker",
-                "accountingWorker"
+                "accountingWorker",
+                "accountingRequest"
               ]
             }
           }

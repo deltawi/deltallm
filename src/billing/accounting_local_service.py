@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from time import perf_counter
+from typing import Protocol
 
 from src.billing.accounting_local_issuer import LocalPermitIssuer
 from src.billing.accounting_local_leases import LocalAccountingHandle, LocalPermitFinalization
@@ -18,12 +19,16 @@ from src.billing.accounting_protocol import (
 from src.billing.accounting_service import AccountingProtocolService, _record_batch_failure
 from src.billing.accounting_terminal_receipts import TerminalReceipt
 from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull
-from src.db.accounting_protocol import AccountingProtocolRepository
 from src.metrics.accounting import (
     increment_accounting_decision,
     increment_accounting_failure,
     observe_accounting_batch,
 )
+from src.telemetry.lifecycle import WorkerHealth, WorkerState
+
+
+class AccountingGenerationPersistence(Protocol):
+    async def protocol_ready(self, generation: int) -> bool: ...
 
 
 class LocalAccountingService(AccountingProtocolService):
@@ -31,7 +36,7 @@ class LocalAccountingService(AccountingProtocolService):
 
     def __init__(
         self,
-        repository: AccountingProtocolRepository,
+        repository: AccountingGenerationPersistence,
         *,
         generation: int,
         issuer: LocalPermitIssuer,
@@ -54,8 +59,9 @@ class LocalAccountingService(AccountingProtocolService):
             raise ValueError("local accounting owners must share generation and issued proofs")
         self._issuer = issuer
         self._terminal = terminal
+        self._generation_probe = repository
         super().__init__(
-            repository,
+            None,
             generation=generation,
             max_batch_size=max_batch_size,
             dwell_seconds=dwell_seconds,
@@ -75,6 +81,18 @@ class LocalAccountingService(AccountingProtocolService):
     @property
     def issuer(self) -> LocalPermitIssuer:
         return self._issuer
+
+    @property
+    def worker_health(self) -> WorkerHealth:
+        health = super().worker_health
+        if health.state is WorkerState.READY and not self._issuer.admission_ready:
+            return WorkerHealth(WorkerState.DEGRADED, "admission_unready")
+        return health
+
+    async def readiness_probe(self) -> bool:
+        return self.worker_health.ready and await self._generation_probe.protocol_ready(
+            self.generation
+        )
 
     async def close(self, *, timeout_seconds: float = 5.0) -> None:
         self._issuer.stop_admission()

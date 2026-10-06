@@ -54,7 +54,8 @@ def dependency_probes(state: State) -> dict[str, Probe]:
     }:
         databases["telemetry_database"] = "telemetry_prisma_manager"
     if getattr(state, "accounting_protocol_enabled", False):
-        databases["telemetry_database"] = "telemetry_prisma_manager"
+        if getattr(state, "accounting_execution_mode", "assigned") == "assigned":
+            databases["telemetry_database"] = "telemetry_prisma_manager"
 
         async def accounting() -> object:
             service = getattr(state, "accounting_protocol_service", None)
@@ -171,6 +172,12 @@ def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
                     False,
                 )
             ),
+        ),
+        (
+            "accounting_native_runtime",
+            "accounting_remote_owner",
+            startup_setting(general, state.settings, "accounting_execution_mode", "assigned")
+            == "local_journal",
         ),
     )
     inventory = [

@@ -40,6 +40,7 @@ HEALTH_PATHS = frozenset(
         "/metrics",
         "/health/deployments",
         "/health/fallback-events",
+        "/internal/accounting/v1/health",
     }
 )
 

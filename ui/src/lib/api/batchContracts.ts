@@ -2,7 +2,7 @@
 export type BatchItemError = {
   message: string;
   type: 'BatchItemError' | 'BatchItemCancelled';
-  code?: 'batch_selector_checkpoint_unavailable';
+  code?: 'batch_selector_checkpoint_unavailable' | 'batch_accounting_checkpoint_unavailable';
   retryable?: boolean;
   retry_category?: string;
   terminal_reason?: string;

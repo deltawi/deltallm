@@ -218,6 +218,14 @@ general_settings:
   # Accounting v2 replaces lifecycle write amplification with one batched
   # reservation ACK before dispatch and one batched terminal ACK.
   accounting_protocol_enabled: false
+  accounting_execution_mode: assigned # local_journal requires the complete native role bundle.
+  accounting_request_url: null
+  accounting_rpc_signing_secret: os.environ/DELTALLM_ACCOUNTING_RPC_SIGNING_SECRET
+  accounting_rpc_allow_http: false
+  accounting_rpc_allowed_ports: [443]
+  accounting_rpc_allowed_private_cidrs: []
+  accounting_rpc_max_connections: 16
+  accounting_local_max_subjects: 1024
   accounting_protocol_generation: 1
   accounting_microbatch_max_size: 8
   accounting_microbatch_dwell_ms: 2

@@ -70,6 +70,9 @@ class EmbeddingWorkerExecutionMixin:
             request_data=dump_request_for_preflight(embedding_request),
             call_type="embedding",
             routing_runtime=routing_generation,
+            native_accounting=None
+            if self.native_billing is None
+            else self.native_billing.accounting,
         )
         embedding_request = preflight.payload
 
@@ -329,6 +332,9 @@ class EmbeddingWorkerExecutionMixin:
         exc: Exception,
         decision: BatchRetryDecision,
     ) -> bool:
+        if any(prepared.item.accounting_checkpoint is not None for prepared in prepared_items):
+            await self._close_native_batch_items(prepared_items)
+            return False
         if not decision.retryable:
             return False
 
@@ -467,6 +473,7 @@ class EmbeddingWorkerExecutionMixin:
             await self._mark_item_failed(
                 job=job,
                 item=prepared.item,
+                native_execution=prepared.native_accounting,
                 model_name=prepared.model_name,
                 exc=exc,
                 deployment_id=None,
@@ -489,10 +496,12 @@ class EmbeddingWorkerExecutionMixin:
             async def _execute_for_deployment(
                 deployment: Any,
             ) -> tuple[dict[str, Any], str | None, str | None]:
-                data = await self._execute_embedding(
-                    prepared.request_shim, prepared.payload, deployment
+                return await self._execute_batch_embedding_attempt(
+                    job,
+                    [prepared],
+                    prepared.payload,
+                    deployment,
                 )
-                return self._sanitize_embedding_response(data)
 
             (
                 (response_body, api_base, deployment_model),
@@ -595,6 +604,7 @@ class EmbeddingWorkerExecutionMixin:
                 context_label="single",
             )
             if persisted:
+                self._native_completion_saved([prepared])
                 self._observe_item_execution_latency(
                     status="success",
                     latency_seconds=perf_counter() - prepared.started_at_monotonic,
@@ -613,6 +623,7 @@ class EmbeddingWorkerExecutionMixin:
             await self._mark_item_failed(
                 job=job,
                 item=prepared.item,
+                native_execution=prepared.native_accounting,
                 model_name=prepared.model_name,
                 exc=exc,
                 deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "")
@@ -621,26 +632,19 @@ class EmbeddingWorkerExecutionMixin:
             )
             return
         finally:
+            await self._close_native_batch_items([prepared])
             if item_heartbeat is not None:
                 await self._stop_heartbeat_fn(item_heartbeat)
             await self._release_prepared_policy_lease(prepared)
 
-    async def _execute_prepared_microbatch_chunk(
+    async def _execute_owned_embedding_chunk(
         self,
         job,
         prepared_items: list[_PreparedEmbeddingItem],
         *,
         process_item: Callable[[Any, Any], Awaitable[None]],
+        item_heartbeats: dict[str, asyncio.Task[None]],
     ) -> None:
-        prepared_items = await self._acquire_embedding_policy_leases_for_chunk(
-            job=job, prepared_items=prepared_items
-        )
-        if not prepared_items:
-            return
-        if len(prepared_items) <= 1:
-            await self._execute_prepared_item(job, prepared_items[0])
-            return
-
         batch_id = job.batch_id
         chunk_size = len(prepared_items)
         first_item = prepared_items[0]
@@ -648,7 +652,6 @@ class EmbeddingWorkerExecutionMixin:
             [prepared.request_context for prepared in prepared_items]
         )
         item_ids = [prepared.item.item_id for prepared in prepared_items]
-        item_heartbeats: dict[str, asyncio.Task[None]] = {}
         item_lease_lost = asyncio.Event()
         served_deployment = None
 
@@ -681,10 +684,16 @@ class EmbeddingWorkerExecutionMixin:
             async def _execute_for_deployment(
                 deployment: Any,
             ) -> tuple[dict[str, Any], str | None, str | None, list[dict[str, Any]]]:
-                data = await self._execute_embedding(
-                    first_item.request_shim, chunk_payload, deployment
+                (
+                    response_body,
+                    api_base,
+                    deployment_model,
+                ) = await self._execute_batch_embedding_attempt(
+                    job,
+                    prepared_items,
+                    chunk_payload,
+                    deployment,
                 )
-                response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
                 item_responses = self._validate_embedding_microbatch_response(
                     response_body=response_body,
                     expected_count=chunk_size,
@@ -744,7 +753,6 @@ class EmbeddingWorkerExecutionMixin:
                     decision=retry_decision,
                 )
                 if requeued:
-                    await self._release_prepared_policy_leases(prepared_items)
                     return
             increment_batch_microbatch_isolation_fallback()
             logger.warning(
@@ -763,131 +771,129 @@ class EmbeddingWorkerExecutionMixin:
                 await process_item(job, prepared.item)
             return
 
-        try:
-            api_provider = resolve_provider(served_deployment.deltallm_params)
-            api_base = api_base or served_deployment.deltallm_params.get("api_base")
-            deployment_model = deployment_model or (
-                str(served_deployment.deltallm_params.get("model") or "") or None
+        api_provider = resolve_provider(served_deployment.deltallm_params)
+        api_base = api_base or served_deployment.deltallm_params.get("api_base")
+        deployment_model = deployment_model or (
+            str(served_deployment.deltallm_params.get("model") or "") or None
+        )
+        served_deployment_id = str(
+            getattr(served_deployment, "deployment_id", None)
+            or getattr(first_item.primary_deployment, "deployment_id", None)
+            or ""
+        )
+        await self._record_upstream_success_runtime_hooks(
+            batch_id=batch_id,
+            deployment_id=served_deployment_id,
+            mode=router_usage_mode_for_batch_endpoint(job.endpoint),
+            usage=dict(response_body.get("usage") or {}),
+            reference=",".join(item_ids),
+        )
+        completion_rows: list[dict[str, Any]] = []
+        for prepared, item_response, usage in zip(
+            prepared_items, item_responses, usage_allocations, strict=False
+        ):
+            normalized_response_body = self._build_single_item_embedding_response_body(
+                chunk_response=response_body,
+                item_response=item_response,
+                usage=usage,
+                api_provider=api_provider,
+                model_fallback=deployment_model,
             )
-            served_deployment_id = str(
-                getattr(served_deployment, "deployment_id", None)
-                or getattr(first_item.primary_deployment, "deployment_id", None)
-                or ""
+            item_costs = self._batch_item_costs(
+                prepared=prepared,
+                usage=usage,
+                served_deployment=served_deployment,
             )
-            await self._record_upstream_success_runtime_hooks(
-                batch_id=batch_id,
-                deployment_id=served_deployment_id,
-                mode=router_usage_mode_for_batch_endpoint(job.endpoint),
-                usage=dict(response_body.get("usage") or {}),
-                reference=",".join(item_ids),
+            billed_cost = item_costs.billed_cost
+            provider_cost = item_costs.provider_cost
+            pricing = item_costs.pricing
+            customer_billing = item_costs.customer_billing
+            provider_billing = item_costs.provider_billing
+            completion_rows.append(
+                {
+                    "prepared": prepared,
+                    "response_body": normalized_response_body,
+                    "usage": usage,
+                    "provider_cost": provider_cost,
+                    "billed_cost": billed_cost,
+                    "pricing_metadata": pricing.spend_metadata(
+                        provider_cost=provider_cost,
+                        billing=customer_billing.billing,
+                        provider_billing=provider_billing.billing,
+                        effective_pricing_sources=(customer_billing.pricing_sources_used),
+                        missing_pricing_fields=(customer_billing.missing_pricing_fields),
+                        pricing_tier="batch",
+                    ),
+                }
             )
-            completion_rows: list[dict[str, Any]] = []
-            for prepared, item_response, usage in zip(
-                prepared_items, item_responses, usage_allocations, strict=False
+
+        for prepared in prepared_items:
+            if item_lease_lost.is_set() or not await self._renew_item_lease_once(
+                prepared.item.item_id,
+                claim_epoch=prepared.item.claim_epoch,
             ):
-                normalized_response_body = self._build_single_item_embedding_response_body(
-                    chunk_response=response_body,
-                    item_response=item_response,
-                    usage=usage,
-                    api_provider=api_provider,
-                    model_fallback=deployment_model,
+                item_lease_lost.set()
+                self._observe_prepared_items_lease_lost(prepared_items)
+                logger.warning(
+                    "batch embedding microbatch completion skipped after lease loss batch_id=%s size=%s item_ids=%s",
+                    batch_id,
+                    chunk_size,
+                    item_ids,
                 )
-                item_costs = self._batch_item_costs(
-                    prepared=prepared,
-                    usage=usage,
-                    served_deployment=served_deployment,
-                )
-                billed_cost = item_costs.billed_cost
-                provider_cost = item_costs.provider_cost
-                pricing = item_costs.pricing
-                customer_billing = item_costs.customer_billing
-                provider_billing = item_costs.provider_billing
-                completion_rows.append(
-                    {
-                        "prepared": prepared,
-                        "response_body": normalized_response_body,
-                        "usage": usage,
-                        "provider_cost": provider_cost,
-                        "billed_cost": billed_cost,
-                        "pricing_metadata": pricing.spend_metadata(
-                            provider_cost=provider_cost,
-                            billing=customer_billing.billing,
-                            provider_billing=provider_billing.billing,
-                            effective_pricing_sources=(customer_billing.pricing_sources_used),
-                            missing_pricing_fields=(customer_billing.missing_pricing_fields),
-                            pricing_tier="batch",
-                        ),
-                    }
-                )
-
-            for prepared in prepared_items:
-                if item_lease_lost.is_set() or not await self._renew_item_lease_once(
-                    prepared.item.item_id,
-                    claim_epoch=prepared.item.claim_epoch,
-                ):
-                    item_lease_lost.set()
-                    self._observe_prepared_items_lease_lost(prepared_items)
-                    logger.warning(
-                        "batch embedding microbatch completion skipped after lease loss batch_id=%s size=%s item_ids=%s",
-                        batch_id,
-                        chunk_size,
-                        item_ids,
-                    )
-                    await self._stop_heartbeat_tasks(item_heartbeats.values())
-                    item_heartbeats.clear()
-                    return
-            await self._stop_heartbeat_tasks(item_heartbeats.values())
-            item_heartbeats.clear()
-
-            persisted = await self._persist_completion_rows_with_outbox(
-                items=[
-                    {
-                        "item_id": row["prepared"].item.item_id,
-                        "claim_epoch": row["prepared"].item.claim_epoch,
-                        "response_body": row["response_body"],
-                        "usage": row["usage"],
-                        "provider_cost": row["provider_cost"],
-                        "billed_cost": row["billed_cost"],
-                        "outbox_payload": self._build_completion_outbox_payload(
-                            job=job,
-                            prepared=row["prepared"],
-                            usage=row["usage"],
-                            api_provider=api_provider,
-                            billed_cost=row["billed_cost"],
-                            provider_cost=row["provider_cost"],
-                            api_base=api_base,
-                            deployment_model=deployment_model,
-                            pricing_metadata=row["pricing_metadata"],
-                        ),
-                        "outbox_max_attempts": COMPLETION_OUTBOX_MAX_ATTEMPTS,
-                    }
-                    for row in completion_rows
-                ],
-                item_ids=item_ids,
-                context_label=(
-                    f"microbatch:{served_deployment_id or getattr(first_item.primary_deployment, 'deployment_id', None) or 'unknown'}"
-                ),
-            )
-            if not persisted:
+                await self._stop_heartbeat_tasks(item_heartbeats.values())
+                item_heartbeats.clear()
                 return
+        await self._stop_heartbeat_tasks(item_heartbeats.values())
+        item_heartbeats.clear()
 
-            for row in completion_rows:
-                self._observe_item_execution_latency(
-                    status="success",
-                    latency_seconds=perf_counter() - row["prepared"].started_at_monotonic,
-                    reference=row["prepared"].item.item_id,
-                )
-            logger.info(
-                "batch embedding microbatch succeeded batch_id=%s primary_deployment_id=%s served_deployment_id=%s size=%s item_ids=%s",
-                batch_id,
-                getattr(first_item.primary_deployment, "deployment_id", None),
-                served_deployment_id,
-                chunk_size,
-                item_ids,
+        persisted = await self._persist_completion_rows_with_outbox(
+            items=[
+                {
+                    "item_id": row["prepared"].item.item_id,
+                    "claim_epoch": row["prepared"].item.claim_epoch,
+                    "response_body": row["response_body"],
+                    "usage": row["usage"],
+                    "provider_cost": row["provider_cost"],
+                    "billed_cost": row["billed_cost"],
+                    "outbox_payload": self._build_completion_outbox_payload(
+                        job=job,
+                        prepared=row["prepared"],
+                        usage=row["usage"],
+                        api_provider=api_provider,
+                        billed_cost=row["billed_cost"],
+                        provider_cost=row["provider_cost"],
+                        api_base=api_base,
+                        deployment_model=deployment_model,
+                        pricing_metadata=row["pricing_metadata"],
+                    ),
+                    "outbox_max_attempts": COMPLETION_OUTBOX_MAX_ATTEMPTS,
+                }
+                for row in completion_rows
+            ],
+            item_ids=item_ids,
+            context_label=(
+                f"microbatch:{served_deployment_id or getattr(first_item.primary_deployment, 'deployment_id', None) or 'unknown'}"
+            ),
+        )
+        if not persisted:
+            return
+
+        self._native_completion_saved(prepared_items)
+
+        for row in completion_rows:
+            self._observe_item_execution_latency(
+                status="success",
+                latency_seconds=perf_counter() - row["prepared"].started_at_monotonic,
+                reference=row["prepared"].item.item_id,
             )
-        finally:
-            await self._stop_heartbeat_tasks(item_heartbeats.values())
-            await self._release_prepared_policy_leases(prepared_items)
+        logger.info(
+            "batch embedding microbatch succeeded batch_id=%s primary_deployment_id=%s served_deployment_id=%s size=%s item_ids=%s",
+            batch_id,
+            getattr(first_item.primary_deployment, "deployment_id", None),
+            served_deployment_id,
+            chunk_size,
+            item_ids,
+        )
 
     async def _acquire_embedding_policy_leases_for_chunk(
         self,
@@ -906,6 +912,7 @@ class EmbeddingWorkerExecutionMixin:
                 await self._mark_item_failed(
                     job=job,
                     item=prepared.item,
+                    native_execution=prepared.native_accounting,
                     model_name=prepared.model_name,
                     exc=exc,
                     deployment_id=None,

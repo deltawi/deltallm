@@ -25,7 +25,7 @@ the API for reading supplied text verbatim.
 The gateway rejects these profiles and inputs:
 
 - Automatic VAD.
-- Scopes with budget caps.
+- Scopes with budget caps when legacy spend accounting is selected.
 - Token or audio quota profiles.
 - Legacy key concurrency caps.
 - Configured guardrails.
@@ -41,7 +41,8 @@ Do not remove an organization's limits to permit a session connection.
 
 ## Configure
 
-Realtime requires Redis, a migrated database, and the enabled durable spend worker:
+Realtime requires Redis and a migrated database. Legacy accounting also requires
+the enabled durable spend worker:
 
 ```yaml
 general_settings:
@@ -102,6 +103,42 @@ model_list:
 For a token-metered transcription model, use `realtime_usage_type: tokens` and
 configure input text, input audio, and output text prices. Missing cache discounts
 use the corresponding full input price. Missing required prices deny admission.
+
+### Native accounting
+
+When accounting protocol v2 is enabled, Realtime uses the same reservation and
+terminal journal as HTTP. Each turn reserves its cost before provider work.
+Key, user, team, organization, and team-model caps use the same PostgreSQL budget
+windows. Realtime does not create another database pool or charge the legacy
+spend ledger. Native readiness checks the shared accounting owner. It does not
+require the legacy spend worker. Drain old accepted receipts before activation.
+Legacy mode retains its existing spend worker and recovery owner.
+
+Token-priced deployments must declare the provider's hard `max_input_tokens`
+limit in `model_info`. Token-priced transcription also needs the provider's
+hard `max_output_tokens` limit. Verify these limits with the exact provider
+model before production use. The gateway cannot turn a declared estimate into
+a provider limit. A missing limit denies the session. Response output remains
+bounded by the configured `realtime.max_output_tokens`.
+
+Duration-priced native transcription requires mono, 16-bit PCM at 24 kHz.
+The gateway sets and checks this format before the connection is accepted.
+Clients cannot change it during that session. Admission reserves the configured
+session input-byte ceiling at 48,000 decoded bytes per second. It rounds the
+allowance up. This bound does not assume that audio arrives at wall-clock speed.
+Legacy accounting keeps its existing format support.
+
+Native turn replay state has an 8 MiB byte limit and an 8,192-entry limit.
+Admission reserves 64 KiB of replay space before it requests a permit. An
+accepted terminal reply reduces that charge to 2 KiB until session cleanup.
+Pending proofs are not evicted. A full store denies new turns before dispatch.
+Session cleanup uses at most eight terminal submissions at a time.
+
+Long sessions can contain multiple turns. A native turn's accounting deadline
+is at most 14 minutes. Health checks stop a turn early enough to leave time
+for the existing write and cleanup deadlines. Missing, excessive, or unknown
+usage keeps the reserved amount as an explicit provisional debit. It does not
+become a zero-cost receipt or a successful terminal response.
 
 ## Client flow
 
@@ -170,8 +207,11 @@ For transcription, pass `model="live-transcription"` and
 
 ## Operations and recovery
 
-A terminal result is forwarded only after its usage receipt is durable. The
-existing spend worker applies it once to the existing ledger and scope totals.
+A terminal result is forwarded only after its usage receipt is durable. With
+legacy accounting, the existing spend worker applies it once to the existing
+ledger and scope totals. With accounting v2, the shared terminal journal owns the
+receipt. Its workers update the native facts and exact budget windows. They do
+not copy charges into the legacy spend table.
 Repeated identical receipts have one economic effect. Conflicting or unknown
 usage stops the session. A disconnect, process failure, or missing receipt leaves
 a pending accounting record; recovery never retries provider work or assumes a
@@ -191,10 +231,11 @@ If Redis cannot confirm the release, the session closes and finalization retries
 within the existing cleanup deadline. Durable usage is retained. If cleanup also
 fails, Realtime readiness fails and the shared permit expires by its lease deadline.
 
-The journal retains frozen attribution, rate cards, normalized usage and state;
+The selected accounting owner retains frozen attribution, rate cards, normalized usage and state;
 it does not retain audio, transcripts, instructions, or provider credentials.
-Unresolved records count against the bounded journal capacity. Settled journal
-records expire after 30 days; pending records need reconciliation from authoritative
+Unresolved records count against its bounded capacity. Legacy settled journal
+records expire after 30 days. Native records follow the accounting v2 retention
+policy. Pending records need reconciliation from authoritative
 provider usage before they can be resolved. No automatic refund or estimate is made.
 
 Monitor `deltallm_realtime_active_sessions`, `deltallm_realtime_sessions_total`
