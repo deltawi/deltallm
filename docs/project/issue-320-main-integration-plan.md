@@ -46,8 +46,12 @@ The instrumented conversion diagnostic fell from 5.20 to 1.84 seconds for
 3,200 entries. This is not an RPS result. Full confirmation passed all 8,704
 collected cases: 6,089 component/chart, 1,649 application, 854 PostgreSQL, and
 112 Redis. Source, lock, image-export, configuration, and capacity checks passed.
-A new exact image and fresh short and ten-minute qualification remain. The user
-approved temporary Rancher shutdown for that series, followed by restart.
+Commit `5a28ca26` passed all five new exact-image checks and generator proof.
+Its isolated short 50, 100, and 200 RPS stages passed all gates. Short 500 RPS
+failed rate, latency, queue, diagnostics, and drain gates. Four operations stayed
+unsettled with safe provisional capacity. No ten-minute stage started. Rancher
+and both original contexts are restored. The CPU plan records this new result
+and the remaining measured-cost work. This branch is not ready to merge.
 
 ### Restored-measure regression checkpoint
 

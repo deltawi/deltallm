@@ -283,10 +283,10 @@ client, pool, setting, migration, or compatibility service is needed.
   identities, stale generations, size bounds, cancellation, and reply mismatch.
 - [x] Prove that native handoffs do not repeat full snapshot conversion.
 - [x] Run all affected regression gates and preserve their raw logs.
-- [ ] Commit clean source and pass all five checks on its exact image.
-- [ ] Repeat the short 50/100/200/500 RPS ladder with Rancher stopped.
+- [x] Commit clean source and pass all five checks on its exact image.
+- [x] Repeat the short 50/100/200/500 RPS ladder with Rancher stopped.
 - [ ] Complete all four ten-minute stages on that same image and cluster.
-- [ ] Restore Rancher and the user's contexts, then record final evidence.
+- [x] Restore Rancher and the user's contexts, then record this run's evidence.
 
 The snapshot stores immutable bytes and scalar identity. Its retained grant has
 no mutable nested graph. Caller-facing restored graphs are private copies.
@@ -333,3 +333,65 @@ both conversion profiles are retained under
 The user approved another temporary Rancher shutdown for the new fixed-image
 qualification. Restart Rancher and restore the original contexts after the
 tests, including after a failed gate. Do not delete Rancher data.
+
+## Snapshot image qualification checkpoint
+
+Clean code `5a28ca26` passed all five exact-image checks. Its arm64 platform
+manifest is `sha256:8f81fa16b99094f8eb40673977fb764fd0e4ad1c76e04865bb924cdf134bc6a1`.
+The Docker manifest-list ID is
+`sha256:829b42c0c7984a22a664fc608a2b988560544db547e08215781e60d8f7b91dc1`.
+Do not treat these two identities as interchangeable. The generator proof
+passed 10,000/10,000 requests at 1,000 RPS. Rancher was stopped for this approved
+series and restarted afterward. Its node is Ready, both original contexts are
+restored, and the disposable cluster is removed. No Rancher data was deleted.
+
+| Short rate | Successful/offered | p95 | p99 | Result |
+| --- | ---: | ---: | ---: | --- |
+| 50 RPS | 1,500/1,500 | 28.15 ms | 112.25 ms | Pass |
+| 100 RPS | 3,000/3,000 | 27.73 ms | 89.94 ms | Pass |
+| 200 RPS | 6,000/6,000 | 57.12 ms | 199.84 ms | Pass |
+| 500 RPS | 12,048/15,000 | 3,394.09 ms | 4,129.31 ms | Fail |
+
+The 500 RPS generator started 12,874 requests and dropped 2,126 arrivals.
+It received 826 HTTP 503 responses: 753 `no_healthy_deployments` and 73
+unclassified HTTP errors. Queue slope was positive, at 38.56 requests per second.
+Five metrics scrapes failed. Accounting did not drain within 180 seconds: four
+operations remained unsettled. Terminal, reporting, spend, and audit queues were
+empty, and no grant remained open. The committed scope counters matched durable
+facts, but each scope retained 0.098328 provisional capacity. Budget state stayed
+safe. This is not an economic pass, and failed-request charge identity is not
+proved. No ten-minute stage started.
+
+Raw samples, metrics, resource observations, economics, wrapper, host snapshot,
+and run log remain under
+`artifacts/qualification/native-5a28ca26-isolated-20261006`. Image checks remain
+under `artifacts/qualification/native-image-5a28ca26-20261006`.
+The top-level `results.json` contains only the first three stages because the
+500 RPS drain raised an error. Its complete result is in
+`short-500rps/qualification.json`; do not omit it from the report.
+
+The terminal change reduced measured finalization batch time from approximately
+307 ms to 158 ms, and mean finalization queue wait from 1.15 seconds to 252 ms.
+The new run used 720 batches for 12,053 terminal entries, versus 403 batches for
+11,326 entries in the earlier isolated run. Batch size and workload changed under
+saturation, so these observations are not an isolated normal-latency benchmark.
+They show that the terminal cost fell but did not remove the load limit.
+
+Captured logs show Redis acquisition deadlines and full allocation on API
+processes. Router state then became unavailable, which caused fail-closed route
+rejection. The public `no_healthy_deployments` label is not proof that the mock
+provider failed. One log also reports `Provider unavailable`; its exact source
+still needs tracing. API processes reached approximately one CPU core each.
+Request workers, PostgreSQL, and Redis did not show the same CPU limit. The
+resource observation includes startup and transfer windows, not only arrivals.
+
+### Remaining measured-cost work
+
+- [ ] Profile the latest exact image and locate the remaining API CPU work.
+  Keep instrumented results separate from release evidence.
+- [ ] Trace router-state rejection, provider-unavailable errors, and the four
+  unsettled operations. Do not release uncertain capacity without durable proof.
+- [ ] Remove the measured repeated work through its existing typed owner.
+  Preserve complete validation, mutation isolation, and deadline behavior.
+- [ ] Run focused failure tests and all affected regression gates.
+- [ ] Repeat exact-image checks and the fixed-profile qualification series.

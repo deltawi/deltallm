@@ -18,7 +18,11 @@ the frozen async detector, matched terminal aggregation, function-local SQL
 execution policy, and immutable terminal handoffs. The last is now implemented
 and passed 249 focused checks. Its full confirmation passed all 8,704 cases.
 Source, lock, image-export, configuration, and capacity checks passed again.
-The new exact image and fixed-profile load gates remain open.
+Commit `5a28ca26` passed all five new image checks and generator proof.
+Its isolated short 50/100/200 RPS stages passed. Short 500 RPS failed, including
+four unsettled operations after the drain bound. Budget state stayed safe.
+Rancher and both original contexts are restored. No ten-minute stage started.
+The remaining measured-cost work and final load gates remain open.
 
 The source record is the earlier 26-measure extraction. The first clean image,
 `22f62c8c`, omitted request-path and worker measures even though its accounting
