@@ -53,11 +53,12 @@ Mutation controls such as Edit, Add Team, Add Member, Asset Access, and tier ass
 | --- | --- |
 | RPM | Maximum requests per minute across all keys in the org |
 | TPM | Maximum tokens per minute across all keys in the org |
+| Output TPM | Provider output per admission minute across text models, teams, and keys; blank means no organization output limit |
 | RPH | Maximum requests per hour across all keys in the org |
 | RPD | Maximum requests per day across all keys in the org |
 | TPD | Maximum tokens per day across all keys in the org |
 
-All limits are optional. Only configured limits are enforced. Organization limits act as a shared cap — all teams and keys within the org contribute to the same counters.
+All limits are optional. Only configured limits are enforced. Organization limits act as a shared cap — all teams and keys within the org contribute to the same counters. Output TPM requires explicit request caps and shared Redis coordination. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
 
 ## Why it matters
 

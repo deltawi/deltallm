@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.services.output_limit_lua import OUTPUT_ADMISSION_LUA
 from src.services.redis_lua import RedisLuaScript
 from src.services.parallel_lease_lua import PARALLEL_LEASE_LUA
 
@@ -518,3 +519,11 @@ return results
 )
 
 RATE_AND_FAIR_SHARE_LUA = RedisLuaScript(RATE_AND_FAIR_SHARE_SCRIPT)
+
+RATE_AND_FAIR_SHARE_OUTPUT_LUA = RedisLuaScript(
+    OUTPUT_ADMISSION_LUA
+    + RATE_AND_FAIR_SHARE_SCRIPT.replace(
+        "local results = {1, rate_n, fair_n}",
+        "if not output_result_fits(rate_n, fair_n) then return output_error() end\nlocal results = {1, rate_n, fair_n}",
+    ).replace("return results", "return output_commit(results)")
+)

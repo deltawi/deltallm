@@ -56,6 +56,24 @@ def _observe(
         observer(phase, outcome, perf_counter() - start)
 
 
+def _handle_transport_error(
+    error: Exception,
+    observer: HopObserver | None,
+    output_observer: Callable[[int | None], None] | None,
+    bounded: BoundedChatResponse | None,
+    started: float,
+) -> None:
+    if isinstance(error, httpx.PoolTimeout):
+        # No connection was acquired, so the provider generated no output.
+        if output_observer is not None:
+            output_observer(0)
+        _observe(observer, "upstream_http", "error", started)
+        if bounded is not None:
+            raise ChatHopError(ChatHopFailureCause.TRANSPORT_ERROR) from None
+    else:
+        _observe(observer, "upstream_http", "error", started)
+
+
 async def execute_chat_hop(
     *,
     client: httpx.AsyncClient,
@@ -67,6 +85,8 @@ async def execute_chat_hop(
     observer: HopObserver | None = None,
     bounded: BoundedChatResponse | None = None,
     receipt_observer: TokenReceiptObserver | None = None,
+    output_observer: Callable[[int | None], None] | None = None,
+    dispatch_observer: Callable[[], None] | None = None,
 ) -> ChatCompletionResponse:
     """Shared single-attempt transport; clients and answer accounting belong to callers."""
     request_url = f"{upstream.api_base}{upstream.endpoint}"
@@ -79,6 +99,8 @@ async def execute_chat_hop(
     )
     started = perf_counter()
     try:
+        if dispatch_observer is not None:
+            dispatch_observer()
         response = await _send(
             client,
             request_url,
@@ -88,8 +110,8 @@ async def execute_chat_hop(
             timeout=timeout,
             bounded=bounded,
         )
-    except Exception:
-        _observe(observer, "upstream_http", "error", started)
+    except Exception as exc:
+        _handle_transport_error(exc, observer, output_observer, bounded, started)
         raise
     _observe(
         observer, "upstream_http", "error" if response.status_code >= 400 else "success", started
@@ -111,10 +133,17 @@ async def execute_chat_hop(
     try:
         if bounded is not None:
             canonical = await upstream.adapter.translate_single_success_response(
-                response, model_name, receipt_observer=receipt_observer
+                response,
+                model_name,
+                receipt_observer=receipt_observer,
+                **({"output_observer": output_observer} if output_observer is not None else {}),
             )
         else:
-            canonical = await upstream.adapter.translate_success_response(response, model_name)
+            canonical = await upstream.adapter.translate_success_response(
+                response,
+                model_name,
+                **({"output_observer": output_observer} if output_observer is not None else {}),
+            )
     except ProxyError:
         if bounded is not None:
             raise ChatHopError(ChatHopFailureCause.INVALID_RESPONSE) from None
@@ -144,6 +173,9 @@ async def _send(
                 timeout=timeout,
                 bound=bounded,
             )
+        except httpx.PoolTimeout:
+            # Keep this proof of no dispatch until the hop observes zero output.
+            raise
         except httpx.TimeoutException:
             raise ChatHopError(ChatHopFailureCause.TRANSPORT_ERROR) from None
         except httpx.HTTPError:

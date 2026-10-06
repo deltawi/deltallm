@@ -4,12 +4,14 @@ import json
 import time
 from collections.abc import Mapping
 from typing import Any, AsyncIterator
+from collections.abc import Callable
 
 import httpx
 
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
+from src.services.output_limit_types import complete_output_count
 from src.providers.token_receipt import ProviderTokenReceipt, native_token_receipt
 from src.providers.base import (
     ProviderAdapter,
@@ -127,6 +129,24 @@ def _is_valid_gemini_success_payload(data: Mapping[str, Any]) -> bool:
 
 
 class GeminiAdapter(ProviderAdapter):
+    def complete_output_count(self, payload: object) -> int | None:
+        usage = payload.get("usageMetadata") if isinstance(payload, Mapping) else None
+        if not isinstance(usage, Mapping):
+            return None
+        candidates = complete_output_count({"completion_tokens": usage.get("candidatesTokenCount")})
+        thoughts = complete_output_count({"completion_tokens": usage.get("thoughtsTokenCount")})
+        if candidates is None:
+            return None
+        if "thoughtsTokenCount" not in usage:
+            prompt = complete_output_count({"completion_tokens": usage.get("promptTokenCount")})
+            total = complete_output_count({"completion_tokens": usage.get("totalTokenCount")})
+            if prompt is None or total != prompt + candidates:
+                return None
+            thoughts = 0
+        if thoughts is None:
+            return None
+        return complete_output_count({"completion_tokens": candidates + thoughts})
+
     def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
         return native_token_receipt(
             payload,
@@ -201,8 +221,9 @@ class GeminiAdapter(ProviderAdapter):
             generation_config["temperature"] = canonical_request.temperature
         if canonical_request.top_p is not None:
             generation_config["topP"] = canonical_request.top_p
-        if canonical_request.max_tokens is not None:
-            generation_config["maxOutputTokens"] = canonical_request.max_tokens
+        output_cap = canonical_request.max_completion_tokens or canonical_request.max_tokens
+        if output_cap is not None:
+            generation_config["maxOutputTokens"] = output_cap
         if canonical_request.stop:
             generation_config["stopSequences"] = (
                 canonical_request.stop
@@ -263,6 +284,7 @@ class GeminiAdapter(ProviderAdapter):
         provider_stream: AsyncIterator[str],
         *,
         model_name: str | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> AsyncIterator[str]:
         # Native Gemini stream translation is not implemented in this phase.
         if False:

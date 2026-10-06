@@ -1,3 +1,5 @@
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
@@ -152,6 +154,7 @@ export default function TeamCreate() {
   const [budgetValue, setBudgetValue] = useState('');
   const [rpmValue, setRpmValue] = useState('');
   const [tpmValue, setTpmValue] = useState('');
+  const [outputTpm, setOutputTpm] = useState('');
   const [rphEnabled, setRphEnabled] = useState(false);
   const [rpdEnabled, setRpdEnabled] = useState(false);
   const [tpdEnabled, setTpdEnabled] = useState(false);
@@ -269,6 +272,7 @@ export default function TeamCreate() {
         max_budget: budgetEnabled && budgetValue ? Number(budgetValue) : undefined,
         rpm_limit: rpmEnabled && rpmValue ? Number(rpmValue) : undefined,
         tpm_limit: tpmEnabled && tpmValue ? Number(tpmValue) : undefined,
+        output_tpm_limit: parseOutputTpm(outputTpm),
         rph_limit: rphEnabled && rphValue ? Number(rphValue) : undefined,
         rpd_limit: rpdEnabled && rpdValue ? Number(rpdValue) : undefined,
         tpd_limit: tpdEnabled && tpdValue ? Number(tpdValue) : undefined,
@@ -569,6 +573,8 @@ export default function TeamCreate() {
                   </div>
                 )}
               </div>
+
+              <OutputTpmField value={outputTpm} onChange={setOutputTpm} />
 
               {/* RPH */}
               <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">

@@ -24,6 +24,7 @@ from src.providers.base import (
     validate_provider_success_payload,
 )
 from src.providers.openai_stream_contract import inspect_openai_stream_choices
+from src.providers.output_usage import OutputStreamEvidence, compatible_output_count
 
 
 def validate_openai_single_result(payload: object) -> None:
@@ -111,9 +112,12 @@ async def translate_openai_compatible_stream(
     *,
     classify_failure: ProviderFailureClassifier,
     normalize_usage: Callable[[object], dict[str, JsonValue]] | None = None,
+    output_observer: Callable[[int | None], None] | None = None,
+    output_count: Callable[[object], int | None] = compatible_output_count,
 ) -> AsyncIterator[str]:
     """Validate an OpenAI-compatible stream before releasing its pre-output frames."""
 
+    evidence = OutputStreamEvidence(output_count) if output_observer is not None else None
     pending: list[str] = []
     pending_chars = 0
     pending_unknown_output_candidate = False
@@ -141,6 +145,8 @@ async def translate_openai_compatible_stream(
                     else ProviderStreamValidationFailureReason.TERMINAL_BEFORE_OUTPUT
                 )
                 raise _invalid_stream_response_error(reason)
+            if output_observer is not None:
+                output_observer(evidence.complete(terminal=True))
             yield line
             return
 
@@ -158,10 +164,6 @@ async def translate_openai_compatible_stream(
         if "error" in payload:
             raise _map_openai_compatible_stream_error(payload, classify_failure)
 
-        if normalize_usage is not None and payload.get("usage"):
-            payload = {**payload, "usage": normalize_usage(payload["usage"])}
-            line = "data: " + json.dumps(payload, separators=(",", ":"))
-
         choices = payload.get("choices")
         if not isinstance(choices, list):
             raise _invalid_stream_response_error(
@@ -171,6 +173,13 @@ async def translate_openai_compatible_stream(
             raise _invalid_stream_response_error(
                 ProviderStreamValidationFailureReason.INVALID_CHOICES
             )
+
+        if evidence is not None:
+            evidence.observe(payload, choices)
+
+        if normalize_usage is not None and payload.get("usage"):
+            payload = {**payload, "usage": normalize_usage(payload["usage"])}
+            line = "data: " + json.dumps(payload, separators=(",", ":"))
 
         classified_stop = _content_filter_stop(choices)
         if classified_stop and not emitted_output:
@@ -207,6 +216,9 @@ async def translate_openai_compatible_stream(
         raise _invalid_stream_response_error(
             ProviderStreamValidationFailureReason.INCOMPLETE_STREAM
         )
+
+    if output_observer is not None:
+        output_observer(evidence.complete())
 
 
 def _valid_stream_choices(choices: list[object]) -> bool:

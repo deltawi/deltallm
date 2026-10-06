@@ -1,3 +1,5 @@
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
@@ -104,6 +106,7 @@ export default function TeamDetail() {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '',
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -183,6 +186,7 @@ export default function TeamDetail() {
       max_budget: team.max_budget != null ? String(team.max_budget) : '',
       rpm_limit: team.rpm_limit != null ? String(team.rpm_limit) : '',
       tpm_limit: team.tpm_limit != null ? String(team.tpm_limit) : '',
+      output_tpm_limit: team.output_tpm_limit != null ? String(team.output_tpm_limit) : '',
       rph_limit: team.rph_limit != null ? String(team.rph_limit) : '',
       rpd_limit: team.rpd_limit != null ? String(team.rpd_limit) : '',
       tpd_limit: team.tpd_limit != null ? String(team.tpd_limit) : '',
@@ -261,6 +265,7 @@ export default function TeamDetail() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
@@ -710,6 +715,7 @@ export default function TeamDetail() {
                           placeholder="Unlimited"
                         />
                       </div>
+              <OutputTpmField value={form.output_tpm_limit} onChange={(value) => setForm({ ...form, output_tpm_limit: value })} />
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">RPH Limit</label>
                         <input

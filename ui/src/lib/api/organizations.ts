@@ -58,7 +58,7 @@ export interface OrganizationServicePolicy {
   overlay_count: number;
   hard_caps_configured: boolean;
   organization_hard_caps: Partial<Record<
-    'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit',
+    'output_tpm_limit' | 'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit',
     number
   >>;
   legacy_model_limits_configured: boolean;
@@ -88,6 +88,7 @@ export interface OrganizationRecord {
   budget_reset_at?: string | null;
   rpm_limit?: number | null;
   tpm_limit?: number | null;
+  output_tpm_limit?: number | null;
   rph_limit?: number | null;
   rpd_limit?: number | null;
   tpd_limit?: number | null;
@@ -123,6 +124,7 @@ export interface OrganizationCreatePayload {
   budget_reset_at?: string;
   rpm_limit?: number;
   tpm_limit?: number;
+  output_tpm_limit?: number | null;
   rph_limit?: number;
   rpd_limit?: number;
   tpd_limit?: number;

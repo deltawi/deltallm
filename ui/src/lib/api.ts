@@ -3,6 +3,7 @@ import type { BatchItemError } from './api/batchContracts';
 import type { ManagedAssetAccess, ManagedAssetAccessInput } from './api/managedAssets';
 export type { Paginated, Pagination } from './api/pagination';
 import { apiFetch, withQuery } from './api/transport';
+import { updateRuntimeOutputTpm } from './api/runtimeUsers';
 import {
   organizationRecordsApi,
   type OrganizationTierAssignment,
@@ -350,6 +351,7 @@ export interface ApiKey {
   max_budget: number | null;
   rpm_limit: number | null;
   tpm_limit: number | null;
+  output_tpm_limit?: number | null;
   rph_limit: number | null;
   rpd_limit: number | null;
   tpd_limit: number | null;
@@ -1106,6 +1108,7 @@ export interface TeamRecord {
   spend?: number | null;
   rpm_limit?: number | null;
   tpm_limit?: number | null;
+  output_tpm_limit?: number | null;
   rph_limit?: number | null;
   rpd_limit?: number | null;
   tpd_limit?: number | null;
@@ -1774,6 +1777,7 @@ export const keys = {
 };
 
 export const users = {
+  updateOutputTpm: updateRuntimeOutputTpm,
   assetVisibility: (userId: string, params?: Omit<AssetVisibilityParams, 'user_id'>) =>
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-visibility`, params)),
   assetAccess: (userId: string, params?: ScopedAssetAccessParams) =>
@@ -1956,6 +1960,7 @@ export interface RuntimeUserProfile {
   spend?: number | null;
   rpm_limit?: number | null;
   tpm_limit?: number | null;
+  output_tpm_limit?: number | null;
   rph_limit?: number | null;
   rpd_limit?: number | null;
   tpd_limit?: number | null;

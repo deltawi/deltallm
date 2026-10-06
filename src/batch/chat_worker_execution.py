@@ -476,6 +476,14 @@ class ChatWorkerExecutionMixin(ChatItemExecutionMixin, ChatDispatchMixin):
             deployment: Any,
         ) -> Sequence[Any] | ProviderAttemptResult[Sequence[Any]]:
             nonlocal last_retryable_microbatch_exc
+            if any(
+                item.policy_lease is not None
+                and item.policy_lease.rate_limit_lease.output_context is not None
+                for item in prepared_items
+            ):
+                raise ServiceUnavailableError(
+                    code="chat_microbatch_unsupported", affects_deployment_health=False
+                )
             deployment_executor = self._resolve_chat_microbatch_capable_executor(
                 first_item,
                 deployment=deployment,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from typing import Any, AsyncIterator
+from collections.abc import Callable
+from src.providers.output_usage import compatible_output_count
 
 import httpx
 
@@ -49,6 +51,9 @@ _CONTENT_MESSAGE_MARKERS = ("content management policy", "responsible ai policy"
 
 
 class AzureOpenAIAdapter(ProviderAdapter):
+    def complete_output_count(self, payload: object) -> int | None:
+        return compatible_output_count(payload)
+
     def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
         return openai_token_receipt(payload)
 
@@ -96,10 +101,13 @@ class AzureOpenAIAdapter(ProviderAdapter):
         provider_stream: AsyncIterator[str],
         *,
         model_name: str | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> AsyncIterator[str]:
         async for chunk in translate_openai_compatible_stream(
             provider_stream,
             classify_failure=self._classify_failure,
+            output_observer=output_observer,
+            output_count=self.complete_output_count,
         ):
             yield chunk
 

@@ -1,3 +1,5 @@
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
@@ -127,6 +129,7 @@ export default function Teams() {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '',
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -144,7 +147,7 @@ export default function Teams() {
 
   const resetForm = () => {
     setForm({
-      team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '',
+      team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', output_tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '',
       asset_access_mode: 'inherit', selected_callable_keys: [], selected_access_group_keys: [],
     });
     setAssetSearchInput('');
@@ -283,6 +286,7 @@ export default function Teams() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
@@ -312,6 +316,7 @@ export default function Teams() {
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
+      output_tpm_limit: row.output_tpm_limit != null ? String(row.output_tpm_limit) : '',
       rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
       rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
       tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
@@ -549,6 +554,7 @@ export default function Teams() {
                       <RateLimitSummary
                         rpm_limit={t.rpm_limit}
                         tpm_limit={t.tpm_limit}
+                        output_tpm_limit={t.output_tpm_limit}
                         rph_limit={t.rph_limit}
                         rpd_limit={t.rpd_limit}
                         tpd_limit={t.tpd_limit}
@@ -694,6 +700,7 @@ export default function Teams() {
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per minute</p>
             </div>
+              <OutputTpmField value={form.output_tpm_limit} onChange={(value) => setForm({ ...form, output_tpm_limit: value })} />
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
               <input

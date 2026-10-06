@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, AsyncIterator
 
 import httpx
 
 from src.models.errors import FailureClassification, InvalidRequestError, ProxyError
 from src.models.requests import ChatCompletionRequest
+from src.services.output_limit_types import complete_output_count
 from src.models.responses import ChatCompletionResponse
 from src.providers.token_receipt import ProviderTokenReceipt, anthropic_token_receipt
 from src.providers.base import (
@@ -194,6 +195,14 @@ class AnthropicAdapter(ProviderAdapter):
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
 
+    def complete_output_count(self, payload: object) -> int | None:
+        usage = payload.get("usage") if isinstance(payload, Mapping) else None
+        return (
+            complete_output_count({"completion_tokens": usage.get("output_tokens")})
+            if isinstance(usage, Mapping)
+            else None
+        )
+
     async def translate_request(
         self, canonical_request: ChatCompletionRequest, provider_config: dict[str, Any]
     ) -> dict[str, Any]:
@@ -246,7 +255,9 @@ class AnthropicAdapter(ProviderAdapter):
             "messages": anthropic_messages or [{"role": "user", "content": ""}],
             "max_tokens": resolve_provider_required_chat_output_tokens(
                 provider_config,
-                canonical_request.max_tokens,
+                canonical_request.max_completion_tokens
+                if canonical_request.max_completion_tokens is not None
+                else canonical_request.max_tokens,
             ),
         }
         if system_messages:
@@ -342,6 +353,7 @@ class AnthropicAdapter(ProviderAdapter):
         provider_stream: AsyncIterator[str],
         *,
         model_name: str | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> AsyncIterator[str]:
         stream_id = f"chatcmpl-anthropic-{int(time.time() * 1000)}"
         model = model_name or "anthropic"
@@ -350,6 +362,7 @@ class AnthropicAdapter(ProviderAdapter):
         finish_reason: str | None = None
         saw_message_start = False
         saw_terminal_delta = False
+        final_output: int | None = None
         # Maps Anthropic content-block indexes to OpenAI tool_calls indexes.
         tool_call_indexes: dict[int, int] = {}
 
@@ -502,6 +515,13 @@ class AnthropicAdapter(ProviderAdapter):
                 if not stop_reason:
                     continue
                 saw_terminal_delta = True
+                if output_observer is not None:
+                    usage = event.get("usage")
+                    final_output = (
+                        complete_output_count({"completion_tokens": usage.get("output_tokens")})
+                        if isinstance(usage, Mapping)
+                        else None
+                    )
                 finish_map = {
                     "end_turn": "stop",
                     "stop_sequence": "stop",
@@ -523,6 +543,8 @@ class AnthropicAdapter(ProviderAdapter):
             if event_type == "message_stop":
                 if not saw_message_start or not saw_terminal_delta:
                     raise invalid_provider_response_error()
+                if output_observer is not None:
+                    output_observer(final_output)
                 if not sent_role:
                     yield role_chunk()
                     sent_role = True

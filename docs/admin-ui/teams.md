@@ -29,11 +29,12 @@ the applicable organization or team update capability. See [Access requirements]
 | --- | --- |
 | RPM | Maximum requests per minute across all keys in the team |
 | TPM | Maximum tokens per minute across all keys in the team |
+| Output TPM | Provider output per admission minute across text models and keys; blank means no team output limit |
 | RPH | Maximum requests per hour across all keys in the team |
 | RPD | Maximum requests per day across all keys in the team |
 | TPD | Maximum tokens per day across all keys in the team |
 
-All limits are optional. Only configured limits are enforced. Team limits act as a shared cap — all keys within the team contribute to the same counters. Team limits must fall within the parent organization's limits.
+All limits are optional. Only configured limits are enforced. Team limits act as a shared cap — all keys within the team contribute to the same counters. All configured parent organization limits also apply. Output TPM requires explicit request caps and shared Redis coordination. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
 
 ## Self-Service Key Policy
 

@@ -116,6 +116,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         db_client=prisma_manager.client,
         redis_client=redis_client,
         file_config=file_config,
+        output_policy_degraded_mode=settings.redis_degraded_mode,
     )
     await dynamic_config_manager.initialize()
     cfg = dynamic_config_manager.get_app_config()

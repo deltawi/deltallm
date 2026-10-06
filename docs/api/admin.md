@@ -6,6 +6,8 @@ These endpoints back the Admin UI, but you can also use them directly for automa
 
 ## Quick Success Path
 
+Caller policies accept `output_tpm_limit` on key and team create/update endpoints, organization create/update endpoints, and runtime-user updates (`PUT /ui/api/users/{user_id}`). Reads and lists return the stored value. Use a strict integer from 1 through 2,147,483,647, or `null`. Omitted updates preserve the policy; `null` clears it. Self-service key creation cannot exceed a configured team output limit. See [Output TPM requirements](../features/rate-limiting.md#output-tokens-per-minute).
+
 Most operators use the admin API in this order:
 
 1. Log in with the master key or an authenticated admin session

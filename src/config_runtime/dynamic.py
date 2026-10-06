@@ -90,7 +90,9 @@ class DynamicConfigManager:
         secret_resolver: SecretResolver | None = None,
         channel_name: str = "config_updates",
         poll_interval_seconds: float | None = 30.0,
+        output_policy_degraded_mode: str = "fail_open",
     ) -> None:
+        self.output_policy_degraded_mode = output_policy_degraded_mode
         self.db = db_client
         self.redis = redis_client
         self.file_config = deepcopy(file_config)
@@ -382,6 +384,26 @@ class DynamicConfigManager:
         forced_modified_keys: tuple[str, ...] = (),
         app_config: AppConfig | None = None,
     ) -> bool:
+        candidate = app_config or self._build_app_config(db_config)
+        current_settings = self._config.general_settings
+        next_settings = candidate.general_settings
+        output_contract_changed = (
+            current_settings.enable_jwt_auth != next_settings.enable_jwt_auth
+            or current_settings.custom_auth != next_settings.custom_auth
+            or current_settings.redis_degraded_mode != next_settings.redis_degraded_mode
+            or self._config.router_settings.timeout != candidate.router_settings.timeout
+        )
+        if self.db is not None and output_contract_changed:
+            from src.services.output_policy_configuration import (
+                validate_output_policy_configuration,
+            )
+
+            await validate_output_policy_configuration(
+                self.db,
+                candidate,
+                redis_available=self.redis is not None,
+                degraded_mode=next_settings.redis_degraded_mode or self.output_policy_degraded_mode,
+            )
         previous_app_config = self._config
         new_app_config = app_config or self._build_app_config(db_config)
         if self._config_generation > 0:

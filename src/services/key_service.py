@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from src.db.key_repository import KeyTokenScope, read_key_tokens_for_scope
 from src.db.repositories import KeyRepository
 from src.models.errors import AuthenticationError
 from src.models.responses import UserAPIKeyAuth
@@ -110,7 +111,7 @@ class KeyService:
         if self.redis is None:
             return
         cache_key = self._cache_key(token_hash)
-        await self.redis.delete(cache_key)
+        await self.redis.delete(cache_key, f"key:v4:{token_hash}")
 
     async def invalidate_keys_for_team(self, team_id: str) -> int:
         return await self._invalidate_keys_by_scope("team_id", team_id)
@@ -131,39 +132,16 @@ class KeyService:
         ):
             raise CacheInvalidationBackendUnavailable("database unavailable")
 
-    async def _invalidate_keys_by_scope(self, scope_column: str, scope_value: str) -> int:
+    async def _invalidate_keys_by_scope(self, scope_column: KeyTokenScope, scope_value: str) -> int:
         prisma = getattr(self.repository, "prisma", None)
         if self.redis is None or prisma is None:
             return 0
-        if scope_column == "organization_id":
-            rows = await prisma.query_raw(
-                """
-                SELECT v.token FROM deltallm_verificationtoken v
-                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
-                LEFT JOIN deltallm_teamtable t ON t.team_id = COALESCE(v.team_id, u.team_id)
-                WHERE t.organization_id = $1
-                """,
-                scope_value,
-            )
-        elif scope_column == "team_id":
-            rows = await prisma.query_raw(
-                """
-                SELECT v.token FROM deltallm_verificationtoken v
-                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
-                WHERE COALESCE(v.team_id, u.team_id) = $1
-                """,
-                scope_value,
-            )
-        else:
-            rows = await prisma.query_raw(
-                f"SELECT token FROM deltallm_verificationtoken WHERE {scope_column} = $1",
-                scope_value,
-            )
-        cache_keys: list[str] = []
-        for row in rows or []:
-            token_hash = row.get("token")
-            if token_hash:
-                cache_keys.append(self._cache_key(token_hash))
+        token_hashes = await read_key_tokens_for_scope(
+            prisma, scope=scope_column, identity=scope_value
+        )
+        cache_keys = [self._cache_key(token_hash) for token_hash in token_hashes]
+        legacy_keys = [key.replace("key:v5:", "key:v4:", 1) for key in cache_keys]
+        await self._delete_cache_keys(legacy_keys)
         return await self._delete_cache_keys(cache_keys)
 
     async def _delete_cache_keys(self, cache_keys: list[str]) -> int:
@@ -180,7 +158,7 @@ class KeyService:
     def _cache_key(token_hash: str) -> str:
         # Version the serialized auth contract so entries without lifecycle
         # state cannot silently authenticate an inactive organization.
-        return f"key:v4:{token_hash}"
+        return f"key:v5:{token_hash}"
 
     def _auth_from_record(self, record: Any) -> UserAPIKeyAuth:
         auth = UserAPIKeyAuth(
@@ -196,12 +174,16 @@ class KeyService:
             tpm_limit=record.tpm_limit,
             rpm_limit=record.rpm_limit,
             key_tpm_limit=record.tpm_limit,
+            key_output_tpm_limit=record.output_tpm_limit,
             key_rpm_limit=record.rpm_limit,
             user_tpm_limit=record.user_tpm_limit,
+            user_output_tpm_limit=record.user_output_tpm_limit,
             user_rpm_limit=record.user_rpm_limit,
             team_tpm_limit=record.team_tpm_limit,
+            team_output_tpm_limit=record.team_output_tpm_limit,
             team_rpm_limit=record.team_rpm_limit,
             org_tpm_limit=record.org_tpm_limit,
+            org_output_tpm_limit=record.org_output_tpm_limit,
             org_rpm_limit=record.org_rpm_limit,
             team_model_rpm_limit=record.team_model_rpm_limit,
             team_model_tpm_limit=record.team_model_tpm_limit,

@@ -13,6 +13,7 @@ from src.models.errors import InvalidRequestError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
 from src.rate_limit_policy import estimate_tokens
+from src.services.output_admission import prepare_output_policy
 from src.middleware.rate_limit import (
     _release_rate_limits,
     acquire_parallel_limits_for_payload,
@@ -106,9 +107,7 @@ async def run_text_preflight(
                 client_ip=request_client_ip(request),
                 user_agent=request.headers.get("user-agent"),
                 scope_context=getattr(request.state, "runtime_scope_context", None),
-                creator_prompt_access_snapshot=(
-                    routing_runtime.creator_prompt_access_snapshot
-                ),
+                creator_prompt_access_snapshot=(routing_runtime.creator_prompt_access_snapshot),
             )
         except ValueError as exc:
             _observe_preflight_phase(
@@ -220,6 +219,8 @@ async def run_text_preflight(
         response_kind=_response_kind(transformed_payload),
     )
 
+    output = prepare_output_policy(auth)
+
     from src.routers.utils import enforce_budget_if_configured
 
     parallel_started = perf_counter()
@@ -272,6 +273,7 @@ async def run_text_preflight(
             model=transformed_payload.model,
             payload=transformed_data,
             token_estimate=token_estimate,
+            **({"output": output} if output is not None else {}),
         )
     except Exception:
         _observe_preflight_phase(

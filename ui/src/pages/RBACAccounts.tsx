@@ -1,3 +1,5 @@
+import RuntimeOutputTpmEditor from '../components/admin/RuntimeOutputTpmEditor';
+import { reconcileRuntimeOutputTpm } from '../lib/outputTpm';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { invitations, organizations, rbac, teams, users, type Invitation, type Principal, type PrincipalSummary, type ScopedAssetAccess } from '../lib/api';
@@ -81,7 +83,7 @@ function LimitStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function RuntimeAccessSummary({ account }: { account: Principal }) {
+function RuntimeAccessSummary({ account, onOutputSaved }: { account: Principal; onOutputSaved: (limit: number | null) => void }) {
   const runtime = account.runtime_user;
   if (!runtime) return null;
 
@@ -111,10 +113,13 @@ function RuntimeAccessSummary({ account }: { account: Principal }) {
         <LimitStat label="Spend" value={formatOptionalBudget(runtime.spend)} />
         <LimitStat label="RPM" value={formatOptionalLimit(runtime.rpm_limit)} />
         <LimitStat label="TPM" value={formatOptionalLimit(runtime.tpm_limit)} />
+        <LimitStat label="Output TPM" value={formatOptionalLimit(runtime.output_tpm_limit)} />
         <LimitStat label="RPH" value={formatOptionalLimit(runtime.rph_limit)} />
         <LimitStat label="RPD" value={formatOptionalLimit(runtime.rpd_limit)} />
         <LimitStat label="TPD" value={formatOptionalLimit(runtime.tpd_limit)} />
       </div>
+
+      <RuntimeOutputTpmEditor key={runtime.user_id} user={runtime} onSaved={onOutputSaved} />
 
       {policy ? (
         <div className="mt-4 rounded-lg border border-gray-200 bg-white px-3 py-3">
@@ -918,7 +923,7 @@ export default function RBACAccounts() {
               </div>
             </div>
 
-            <RuntimeAccessSummary account={selectedAccount} />
+            <RuntimeAccessSummary account={selectedAccount} onOutputSaved={(limit) => setSelectedAccount((current) => reconcileRuntimeOutputTpm(current, selectedAccount.account_id, selectedAccount.runtime_user!.user_id, limit))} />
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <div>

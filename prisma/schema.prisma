@@ -98,6 +98,7 @@ model DeltaLLM_VerificationToken {
   budget_reset_at       DateTime?
   rpm_limit             Int?
   tpm_limit             Int?
+  output_tpm_limit Int?
   rph_limit             Int?
   rpd_limit             Int?
   tpd_limit             Int?
@@ -135,6 +136,7 @@ model DeltaLLM_UserTable {
   models          String[]
   blocked         Boolean  @default(false)
   tpm_limit       Int?
+  output_tpm_limit Int?
   rpm_limit       Int?
   rph_limit       Int?
   rpd_limit       Int?
@@ -166,6 +168,7 @@ model DeltaLLM_TeamTable {
   model_rpm_limit  Json?
   model_tpm_limit  Json?
   tpm_limit        Int?
+  output_tpm_limit Int?
   rpm_limit        Int?
   rph_limit        Int?
   rpd_limit        Int?
@@ -221,6 +224,7 @@ model DeltaLLM_OrganizationTable {
   soft_budget       Float?
   rpm_limit         Int?
   tpm_limit         Int?
+  output_tpm_limit Int?
   rph_limit         Int?
   rpd_limit         Int?
   tpd_limit         Int?

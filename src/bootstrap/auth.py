@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from asyncio import CancelledError, Task, create_task
+from asyncio import CancelledError, Task, create_task, timeout
 from dataclasses import dataclass
 import logging
 import os
@@ -30,6 +30,10 @@ from src.services.email_token_service import EmailTokenService
 from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
+from src.services.output_policy_configuration import validate_output_policy_configuration
+from src.services.output_limit_lua import OUTPUT_ACCOUNTING_LUA
+from src.services.rate_limit_admission_lua import RATE_LIMIT_OUTPUT_LUA
+from src.services.tier_fair_share_admission_lua import RATE_AND_FAIR_SHARE_OUTPUT_LUA
 from src.services.master_session_service import MasterSessionService
 from src.bootstrap.organization_deletion import (
     initialize_organization_deletion_runtime,
@@ -219,10 +223,30 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     )
     app.state.limit_counter = LimitCounter(
         redis_client=app.state.redis,
+        environment=app.state.settings.app_env,
         degraded_mode=str(
             cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
         ),
     )
+    await validate_output_policy_configuration(
+        app.state.prisma_manager.client,
+        cfg,
+        redis_available=app.state.redis is not None,
+        degraded_mode=str(
+            cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
+        ),
+    )
+    if app.state.redis is not None:
+        try:
+            async with timeout(1.0):
+                for script in (
+                    RATE_LIMIT_OUTPUT_LUA,
+                    RATE_AND_FAIR_SHARE_OUTPUT_LUA,
+                    OUTPUT_ACCOUNTING_LUA,
+                ):
+                    await script.load(app.state.redis)
+        except Exception:
+            logger.warning("output_tpm_script_preload_unavailable")
     app.state.email_token_service = EmailTokenService(
         repository=getattr(
             app.state,

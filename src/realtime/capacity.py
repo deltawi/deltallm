@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.models.responses import UserAPIKeyAuth
+from src.services.output_limit_types import output_scopes
 from src.rate_limit_policy import (
     RateLimitLease,
     acquire_parallel_limit_controls,
@@ -54,7 +55,8 @@ class RealtimeCapacity:
         checks = build_rate_limit_checks(**policy)
         checks.extend(item.rate_check for item in controls.capacity_rate_checks)
         if (
-            any(check.scope.endswith(("_tpm", "_tpm_limit", "_tpd")) for check in checks)
+            bool(output_scopes(auth))
+            or any(check.scope.endswith(("_tpm", "_tpm_limit", "_tpd")) for check in checks)
             or any(check.tpm_capacity for check in controls.fair_share_checks)
             or any(counter != "rpm" for counter, _ in usage_limits_for_deployment(route.deployment))
             or any(
