@@ -808,7 +808,7 @@ original workloads, and original contexts were restored.
 - [x] Obtain coordination approval and clear concurrent task services.
 - [x] Record exclusive environment checks and the bounded 500 RPS trace.
 - [x] Preserve the failed result and restore the other VM and its workloads.
-- [ ] Test a temporary 6-CPU, 8-GiB VM to leave more host memory headroom.
+- [x] Test a temporary 6-CPU, 8-GiB VM to leave more host memory headroom.
   Keep the image, pod limits, workload, safety, and latency gates unchanged.
   Record this distinct environment and restore its original 12-GiB setting.
 - [ ] If host pressure falls, use that comparison to select the next controlled
@@ -832,4 +832,40 @@ unchanged at `5b271273`; this is a host-side test-loader change only.
 
 - [x] Preserve both setup failures without calling them failed RPS stages.
 - [x] Verify immutable cached fixtures and test hit, miss, and invalid-proof paths.
-- [ ] Resume the fresh 8-GiB comparison with the verified fixture cache.
+- [x] Resume the fresh 8-GiB comparison with the verified fixture cache.
+
+### Completed 8-GiB comparison
+
+The third attempt verified all three cached fixture digests and completed a
+fresh uninstrumented 30-second 500 RPS stage on image `5b271273`. It started
+all 15,000 requests, completed all successfully, and dropped none. Throughput,
+dependency diagnostics, and exact accounting passed. Charges totaled
+0.105007, including one warmup, in the facts and all four budget scopes.
+The 12.09-second accounting drain closed every grant and provisional operation
+and emptied all terminal and reporting queues. Core Redis work was
+6.000067 round trips per request. No application CPU throttle was recorded.
+
+This is still a failed qualification stage. p95 was 187.79 ms, above the
+150 ms limit. p99 was 299.23 ms, below its 300 ms limit. The middle-window
+in-flight slope was +0.9213 requests per second, above its +0.01 limit.
+The driver stopped; no 200 RPS, lower tier, or ten-minute stage ran.
+
+Host paging across setup, arrivals, and drain fell to 12,570 swap-in pages
+and no swap-out pages: about 0.206 GB read at 16 KiB per page. Peak sampled
+pod memory was 3,045,490,688 bytes and CPU was 4.75 cores. These are sampled
+values, not proof that no short resource stall occurred. Per five-second
+windows, p95 rose from 130.16 ms initially to 197.94 ms at the end, with a
+313.91 ms spike in the 10-to-15-second window. Existing phase metrics do not
+separately cover the full accounting RPC path. Do not infer a runtime fix
+from this environment comparison alone.
+
+Evidence is in `artifacts/qualification/native-5b271273-500-8g-exclusive-20261006-3`.
+The original failed and interrupted folders remain unchanged. Both VMs were
+restored to their original settings, all eight original running workloads
+were restarted, and both original contexts were restored.
+
+- [ ] Confirm 500 RPS once on the same image and 8-GiB environment. Preserve
+  both results; do not repeat lower tiers or relax any gate.
+- [ ] If 500 RPS passes, run selected 200 RPS, then one full fixed-image series.
+- [ ] If latency still fails, measure the unreported request-path delay before
+  changing accounting, pooling, or safety behavior.

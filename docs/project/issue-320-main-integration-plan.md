@@ -159,8 +159,20 @@ DNS failed. Both interrupted attempts and restoration logs are preserved.
 The host-side test loader now reuses cached fixtures only after exact pinned
 digest verification; missing images still require a digest-pinned pull.
 All 70 focused tool checks and the real three-image cache proof passed.
-Gateway runtime source and image `5b271273` remain unchanged. Resume the
-memory comparison before another application change.
+Gateway runtime source and image `5b271273` remain unchanged.
+
+The third 8-GiB attempt completed the selected 30-second 500 RPS stage.
+All 15,000 requests succeeded with no drops or errors. Exact accounting and
+dependency checks passed; accounting drained in 12.09 seconds. The stage
+still failed p95 latency (187.79 ms against 150 ms) and queue slope (+0.9213
+against +0.01). p99 was 299.23 ms. Host paging fell to about 0.206 GB read
+and no writes across setup, load, and drain. No 200 RPS or lower stage ran.
+Both VM settings, all original workloads, and both contexts were restored.
+Keep this failed evidence in `native-5b271273-500-8g-exclusive-20261006-3`.
+Confirm this image and environment once without a runtime change. Preserve
+both results. If 500 passes, run selected 200, then the full fixed-image
+series. If it still fails, measure the missing request-path timing first.
+Full qualification remains open; no gate has been waived.
 
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
