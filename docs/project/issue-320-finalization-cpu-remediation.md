@@ -489,24 +489,49 @@ Only an all-pass short ladder starts the four ten-minute stages.
 - [x] Run the full affected lanes and preserve each failed result.
 - [x] Check the failed cases and affected modules without changing production bounds.
 - [x] Confirm source lint, format, and diff checks.
-- [ ] Seal the source and pass all five exact-image checks.
-- [ ] Run the fresh fixed-profile short ladder and retain every result.
+- [x] Seal the source and pass all five exact-image checks at `861947c8`.
+- [x] Run the fresh fixed-profile short ladder and retain every result.
 - [ ] Run all four ten-minute stages if the short ladder passes.
 
 ### Follow-up failure evidence
 
-This follow-up is not a prerequisite for the next load series. Finish the
-current regression confirmation, seal its image, and run qualification first.
-If that run leaves unsettled operations, add this capture before another rerun.
+The two sealed `861947c8` runs triggered this follow-up. The first passed short
+50 and 100 RPS, failed short 200 RPS, then stopped before 500 RPS because an
+offline Kubernetes read timed out. The second passed short 50 and 200 RPS.
+Its short 100 RPS failed only the queue slope gate (+0.0526/s). Short 500 RPS
+completed 2,075 of 15,000 offered requests. It dropped 710 arrivals and returned
+12,215 failed responses. The drain deadline left 69 unsettled operations and
+three open grants; terminal and reporting queues were empty. Budget state was
+safe. Neither run started a ten-minute stage. Both failed runs remain in
+`artifacts/qualification/native-861947c8-20261006` and its `-2` sibling.
 
-- [ ] Save each stage in the aggregate result before a failed drain stops the run.
+The second run logged Redis acquisition timeouts and router-state failures.
+The post-provider completion handler already preserves a successful provider
+response when cleanup fails. Do not treat that warning as a lost provider
+response or release uncertain money. Capture the operation state before the
+next diagnosis.
+
+- [x] Save each stage in the aggregate result before a failed drain stops the run.
   Keep the same stop conditions and all pass limits.
-- [ ] After a failed drain, capture at most 64 unsettled operations from the
+- [x] After a failed drain, capture at most 64 unsettled operations from the
   fixture database. Record scalar state, exact held amount, journal outcome,
   and a fixed uncertainty class. Do not copy tenant, prompt, credential, or
   full financial documents. Bound the query and mark unavailable data as unknown.
-- [ ] Prove the capture is read-only against PostgreSQL. Test result preservation,
+- [x] Prove the capture is read-only against PostgreSQL. Test result preservation,
   truncation, failed capture, and cancellation before using the new capture.
 
 These are offline evidence changes. They add no request or arrival-window work.
 They do not release uncertain money or turn a failed stage into a pass.
+
+The capture uses a read-only transaction, a two-second statement limit, a
+250 ms lock limit, and a five-second caller limit. It queries at most 65 rows
+and exports at most 64, with an explicit truncation flag. It copies no full
+payload. Missing data remains unknown, and cancellation propagates. All 47
+focused tool and PostgreSQL cases passed. PostgreSQL confirmed the read-only
+setting, unchanged exact money, fixed reason classes, and real truncation.
+Lint, format, and diff checks passed. No runtime source or qualification gate
+changed in this evidence slice.
+
+- [ ] Seal the evidence slice and pass its exact-image checks.
+- [ ] Use the captured failure state to identify and test the next runtime fix.
+- [ ] Pass the unchanged short ladder, then all four ten-minute stages.

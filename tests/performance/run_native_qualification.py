@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from contextlib import ExitStack
+from functools import partial
 import json
 import os
 import subprocess
@@ -45,6 +46,11 @@ from scripts.measure_gateway_load import summarize
 from tests.performance.native_qualification_resources import (
     capture_cpu_counters,
     cpu_counter_deltas,
+)
+from tests.performance.native_qualification_failures import (
+    QualificationStageStopped,
+    capture_unsettled_operations,
+    record_stage_result,
 )
 from tests.performance.qualification_image_archive import platform_manifest_digest
 
@@ -353,6 +359,7 @@ async def run_stage(
     cpu_after = await asyncio.to_thread(capture_cpu_counters, cluster)
     async with local_database() as db:
         drain = await wait_native_drain(db)
+        failure_evidence = None if drain["passed"] else await capture_unsettled_operations(db)
         economics = await reconcile_native(
             db,
             before=before,
@@ -371,6 +378,7 @@ async def run_stage(
         },
         request_path="four in-cluster per-pod services; one synchronized generator shard per API process",
         accounting_drain=drain,
+        accounting_failure_evidence=failure_evidence,
         accounting_reconciliation=economics,
         latency_and_queue=gates,
         throughput_passed=throughput_passed,
@@ -389,9 +397,11 @@ async def run_stage(
         passed=report["passed"],
     )
     if not economics["safe_budget_state"]:
-        raise RuntimeError("Qualification found unsafe economic state; remaining load stopped")
+        raise QualificationStageStopped(
+            "Qualification found unsafe economic state; remaining load stopped", report
+        )
     if not drain["passed"]:
-        raise RuntimeError("Accounting did not drain; remaining load stopped")
+        raise QualificationStageStopped("Accounting did not drain; remaining load stopped", report)
     return report
 
 
@@ -450,20 +460,22 @@ async def exercise(
         results = []
         for phase, duration in (("short", short_seconds), ("qualification", 600)):
             for rate in RATES:
-                result = await run_stage(
-                    cluster,
-                    image,
-                    endpoints,
-                    api_ports=api_ports,
-                    worker_ports=worker_ports,
-                    manifest=manifest,
-                    rate=rate,
-                    duration=duration,
-                    phase=phase,
-                )
-                results.append(result)
-                (cluster.output / "results.json").write_text(
-                    json.dumps({"generator_proof": proof, "runs": results}, indent=2) + "\n"
+                await record_stage_result(
+                    partial(
+                        run_stage,
+                        cluster,
+                        image,
+                        endpoints,
+                        api_ports=api_ports,
+                        worker_ports=worker_ports,
+                        manifest=manifest,
+                        rate=rate,
+                        duration=duration,
+                        phase=phase,
+                    ),
+                    output=cluster.output,
+                    proof=proof,
+                    results=results,
                 )
             if phase == "short" and any(not result["passed"] for result in results):
                 raise RuntimeError(

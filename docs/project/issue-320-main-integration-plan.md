@@ -69,9 +69,20 @@ check passed 79 cases and failed one existing statement-timeout assertion.
 That unchanged case passed alone. All failed logs remain preserved; the full
 PostgreSQL gate is not a clean pass, and the warmup timeout cause remains open.
 Keep simultaneous cold-pool coverage and all original bounds. Use targeted
-checks for this iteration, then run the exact image on fresh kind. New image
-checks and load results remain open; the previous 500 RPS failure is still the
-current release result.
+checks for this iteration. Commit `861947c8` passed all five image checks and
+two fresh generator proofs. Its first short ladder passed 50 and 100 RPS,
+failed 200 RPS, then stopped on an offline Kubernetes read before 500 RPS.
+Its second ladder passed 50 and 200 RPS, failed the 100 RPS queue slope, and
+failed 500 RPS with 2,075/15,000 successes and 69 unsettled operations.
+No ten-minute stage started. Keep both failed runs. The full PostgreSQL
+limitation also remains open.
+
+The next evidence slice now preserves stopped stages in the aggregate result
+and captures at most 64 unsettled operations in a bounded read-only transaction.
+All 47 focused tool/PostgreSQL checks passed, including unchanged exact money,
+real truncation, cancellation, privacy, and failed-result retention. This changes
+no runtime owner, resource, deadline, financial release, or pass limit. The CPU
+remediation plan tracks the next fixed-image run and runtime diagnosis.
 
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
