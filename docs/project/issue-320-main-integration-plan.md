@@ -24,7 +24,12 @@ limits unchanged. The canonical `6194a168` image passed all five offline checks,
 shipped-query bounds, and unchanged migration checksum checks. Selected one-minute
 500 completed all 30,000 requests, p95 66.37 ms, p99 96.11 ms, exact money and
 drain, but slope +0.07300 failed. No 200 or full series started. The unchanged-image
-600-second SQL-cost comparison is now running; it is a diagnostic, not qualification.
+600-second SQL-cost comparison passed latency and queue gates, but 306 late
+HTTP 503s in a three-second burst and nine protected provisional operations
+failed throughput and drain/money gates. Reporting costs stayed flat. Host/VM
+memory pressure is a hypothesis; an unchanged-image lower-VM-memory comparison
+is now running with all pod limits and pass gates unchanged. No final series
+has started, and this branch is still not ready to merge.
 
 The reporting correlation fix at `9c5fca15` passed its source
 and exact-image checks, but selected 500 still failed only the queue-slope gate:

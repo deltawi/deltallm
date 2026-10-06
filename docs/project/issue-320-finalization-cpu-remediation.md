@@ -1624,8 +1624,8 @@ stopped before 200 or the full series, then restored VMs and original workloads.
 Do not count the improved latency or complete responses as a capacity pass.
 
 - [x] Measure the corrected image at selected one-minute 500 and retain the failed gate.
-- [ ] Complete the unchanged-image 600-second 500 SQL-cost comparison.
-- [ ] Decide the next action from sustained queue behavior and individual SQL costs.
+- [x] Complete the unchanged-image 600-second 500 SQL-cost comparison.
+- [x] Decide the next action from sustained queue behavior and individual SQL costs.
 
 The comparison uses the previously verified bounded 78-field numeric host-side
 sampler and a read-only storage snapshot after arrivals. It changes no application
@@ -1635,3 +1635,43 @@ diagnose stability; it is explicitly not release qualification. A separate
 diagnostic declaration and the exact helper are archived. Keep
 `native-6194a168-500-8cpu-8g-600s-sql-costs-20261006`. No production change is
 chosen until its evidence identifies sustained growth or a startup-only effect.
+
+The sustained `6194a168` comparison failed after a brief late dependency burst.
+It returned 299,694/300,000 successes, zero generator drops, and 306 HTTP 503s:
+205 labeled `spend_persistence_unavailable`, 101 unclassified. All failures
+started in arrival seconds 557–559. p95 85.15 ms, p99 188.88 ms, and slope
++0.000479 passed. Reporting claims stayed about 0.34–0.36 ms through the run;
+their page work no longer grew with history. PostgreSQL CPU stayed roughly
+1.2–1.4 cores, with 2.75 cumulative throttled seconds rather than the earlier
+302 seconds. These CPU counters include transfer. No continuous-load capacity
+failure is established by the burst, but it is still a failed qualification gate.
+
+Drain failed at 180 seconds. Nine completed uncertain journal receipts remain
+provisional with uncertainty class `unknown`; retain their protected allowance.
+No unsafe balance, open grant, terminal backlog, or reporting backlog remained.
+Committed totals in all four scopes match 299,695 facts (successful responses
+plus precheck) and charge 2.097865; provisional 0.221238 remains in each scope.
+Never force-release these operations or treat the economic gate as passed.
+The original stage exception prevented the planned post-stage storage snapshot.
+Keep the failure evidence and helpers in the sustained SQL-cost directory.
+
+Redis and accounting fail together during the burst; Redis records 125
+acquisition deadlines and 154 cancellations. The available container-memory
+sample around it shows PostgreSQL briefly near its 1-GiB limit, but no restart
+metadata was retained before automatic cluster cleanup. Do not assert OOM or
+rule it out. Host compressed-memory occupancy grew by about 3.1 GiB, and free
+host memory fell sharply. Available power logs show no matching sleep event.
+Host/VM pressure is a hypothesis, not an established cause.
+
+- [ ] Compare unchanged 500/600 with VM memory reduced from 8 to 6 GiB.
+- [ ] Retain bounded post-stage restart, storage, and categorized PostgreSQL-error
+  metadata even when the canonical stage raises its drain failure.
+- [ ] Use the result to choose a proven fix or the final canonical series.
+
+The new comparison changes only the temporary VM memory allocation. Eight CPUs,
+all pod limits, image, workload, sampler, gates, money policy, and deadlines stay
+unchanged. It lowers the VM's possible host-memory footprint, not application
+capacity or a pass threshold. Restore the original six-CPU/12-GiB VMs and exact
+running workloads afterward. Keep
+`native-6194a168-500-8cpu-6g-600s-sql-costs-20261006`; it remains a selected
+diagnostic with release eligibility false. This is not a new application patch.
