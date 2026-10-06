@@ -1149,7 +1149,7 @@ Do not edit applied migration files or manually rewrite migration history.
 - [x] Verify fresh/upgrade migrations and rollback/forward reapplication.
   Fresh, v0.1.42, and shared-feature upgrade paths passed. Rollback reproduced
   the original contention, and forward reapplication restored all three checks.
-- [ ] Complete affected source gates and seal a new image.
+- [x] Complete affected source gates and seal a new image.
 - [ ] Pass selected upper tiers, then the full strict qualification series.
 
 Source verification completed: 30 worker checks, 54 affected PostgreSQL
@@ -1163,3 +1163,19 @@ Next, seal the changed migration in a fresh canonical image, verify it,
 and run selected 500 then 200 in the declared eight-CPU environment.
 Use the same supported 60-second short duration and strict pass gates.
 Only start the full series after both upper tiers pass.
+
+The canonical `deltallm-native:issue320-main-7b24cc12` image is sealed from
+runtime commit `7b24cc12e116dc048b60f9ad9b16ddeb04b157e6`. Its immutable
+index digest is `sha256:fea18e870466af92ffb16f686c5ac119f677f2fa022e6f65101c9db63035e6e2`;
+the arm64 platform manifest is
+`sha256:3fef4513ef2f5255fbe8f20ce20033c81a139c76b8b3286ea411b943b5f35261`.
+All five bounded offline non-root image checks passed. Independently of the
+Python source fingerprint, the packaged migration SHA-256 matches the source:
+`bfc908fcfeae5261b081e5c8aad38eceba77ce8570133270f680f5e58ec448fd`.
+
+Two builds failed because the VM could not resolve the npm registry. The same
+unchanged Dockerfile then built through a temporary loopback-only TLS relay,
+restricted to the package and engine endpoints, with normal TLS verification.
+No proxy environment is present in the image; the relay was stopped before
+qualification. Keep both failures and the successful build in
+`artifacts/qualification/native-image-7b24cc12-20261006`.

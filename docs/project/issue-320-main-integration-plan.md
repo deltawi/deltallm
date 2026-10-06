@@ -265,6 +265,17 @@ Client generation, lint, formatting, and diff checks passed. Next, seal
 the new SQL migration in a fresh canonical image and verify its exact
 artifact before selected upper-tier testing. All load gates remain open.
 
+The fresh canonical `7b24cc12` image passed all five offline non-root smoke
+checks. The new migration was checked inside the immutable image and matches
+the source SHA-256. Its index digest is
+`sha256:fea18e870466af92ffb16f686c5ac119f677f2fa022e6f65101c9db63035e6e2`.
+VM registry DNS blocked two builds; a temporary, allowlisted build-only TLS
+relay completed the unchanged Dockerfile and was removed before load testing.
+No proxy settings entered the runtime image. Next, run uninstrumented selected
+500 RPS for 60 seconds on the separate eight-CPU/eight-GiB environment, followed
+by selected 200 and then one full strict series only if preceding stages pass.
+This is not yet a throughput pass and does not prove six-CPU capacity.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
