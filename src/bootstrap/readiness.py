@@ -120,13 +120,7 @@ def collect_workers(inventory: tuple[WorkerCheck, ...]) -> tuple[Checks, Checks]
     return required, optional
 
 
-def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
-    general = cfg.general_settings
-    tier_mode = startup_setting(general, state.settings, "tier_policy_mode", "disabled")
-    tier_fail_closed = (
-        startup_setting(general, state.settings, "tier_policy_missing_service_mode", "fail_open")
-        == "fail_closed"
-    )
+def _service_inventory(state: State, general: GeneralSettings) -> tuple[WorkerCheck, ...]:
     services = (
         (
             "spend_ingestion_worker",
@@ -188,6 +182,16 @@ def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
         )
         for name, attr, required in services
     ]
+    return tuple(inventory)
+
+
+def _policy_inventory(state: State, general: GeneralSettings) -> tuple[WorkerCheck, ...]:
+    tier_mode = startup_setting(general, state.settings, "tier_policy_mode", "disabled")
+    tier_fail_closed = (
+        startup_setting(general, state.settings, "tier_policy_missing_service_mode", "fail_open")
+        == "fail_closed"
+    )
+    inventory: list[WorkerCheck] = []
     inventory.extend(
         (
             WorkerCheck(
@@ -224,6 +228,12 @@ def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
             ),
         )
     )
+    return tuple(inventory)
+
+
+def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
+    general = cfg.general_settings
+    inventory = [*_service_inventory(state, general), *_policy_inventory(state, general)]
     realtime = startup_setting(general, state.settings, "realtime", RealtimeSettings())
     if realtime.enabled:
         inventory.append(WorkerCheck("realtime", True, lambda: realtime_check(state)))

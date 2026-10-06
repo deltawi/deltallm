@@ -16,7 +16,7 @@ from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.asyncio.retry import Retry
 
-from src.concurrency import BoundedCapacityGate, CapacityGateFull
+from src.concurrency import BoundedCapacityGate, CapacityGateFull, CapacityGateTimedOut
 from src.metrics.prometheus import get_prometheus_registry
 
 Allocation = Literal["critical", "cache", "bulk"]
@@ -24,6 +24,12 @@ _registry = get_prometheus_registry()
 _occupied = Gauge(
     "deltallm_redis_allocation_occupied",
     "Checked out or acquiring Redis slots",
+    ["allocation"],
+    registry=_registry,
+)
+_waiters = Gauge(
+    "deltallm_redis_allocation_waiters",
+    "Callers waiting for a Redis allocation slot",
     ["allocation"],
     registry=_registry,
 )
@@ -41,21 +47,21 @@ _acquisition = Histogram(
 )
 _round_trips = Counter(
     "deltallm_redis_command_round_trips_total",
-    "Redis client network round trips by bounded command family",
-    ["allocation", "family", "outcome"],
+    "Redis client network round trips by bounded command family and logical owner",
+    ["allocation", "owner", "family", "outcome"],
     registry=_registry,
 )
 _round_trip_seconds = Histogram(
     "deltallm_redis_command_round_trip_seconds",
     "Redis client command duration including pool acquisition and network time",
-    ["allocation", "family", "outcome"],
+    ["allocation", "owner", "family", "outcome"],
     buckets=[0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1],
     registry=_registry,
 )
 _pipeline_commands = Histogram(
     "deltallm_redis_pipeline_commands",
     "Commands carried by one Redis pipeline network round trip",
-    ["allocation"],
+    ["allocation", "owner"],
     buckets=[1, 2, 4, 8, 16, 32, 64, 128, 256],
     registry=_registry,
 )
@@ -64,12 +70,17 @@ _READ_COMMANDS = frozenset({"GET", "MGET", "HGET", "HMGET", "EXISTS", "TTL", "PT
 _WRITE_COMMANDS = frozenset(
     {"SET", "SETEX", "PSETEX", "DEL", "UNLINK", "INCR", "INCRBY", "EXPIRE", "HSET", "ZADD"}
 )
+_CLEANUP_COMMANDS = frozenset({"DEL", "UNLINK", "HDEL", "ZREM", "ZREMRANGEBYSCORE"})
+_MULTI_KEY_COMMANDS = frozenset({"DEL", "EXISTS", "MGET", "TOUCH", "UNLINK"})
+_SYSTEM_COMMANDS = frozenset({"CLIENT", "COMMAND", "INFO", "PING", "PUBLISH", "SCRIPT", "TIME"})
 
 
 def _command_family(command: object) -> str:
     name = str(command).split(" ", 1)[0].upper()
     if name in {"EVAL", "EVALSHA", "SCRIPT"}:
         return "lua"
+    if name in _CLEANUP_COMMANDS:
+        return "cleanup"
     if name in _READ_COMMANDS:
         return "read"
     if name in _WRITE_COMMANDS:
@@ -77,9 +88,78 @@ def _command_family(command: object) -> str:
     return "other"
 
 
-def _observe_round_trip(*, allocation: str, family: str, outcome: str, started: float) -> None:
-    _round_trips.labels(allocation, family, outcome).inc()
-    _round_trip_seconds.labels(allocation, family, outcome).observe(perf_counter() - started)
+def _command_keys(args: tuple[object, ...]) -> tuple[str, ...]:
+    if not args:
+        return ()
+    name = str(args[0]).split(" ", 1)[0].upper()
+    if name in {"EVAL", "EVALSHA"} and len(args) >= 3:
+        try:
+            key_count = max(0, min(256, int(args[2])))
+        except (TypeError, ValueError):
+            return ()
+        return tuple(str(value) for value in args[3 : 3 + key_count])
+    if name in _SYSTEM_COMMANDS or len(args) < 2:
+        return ()
+    if name in _MULTI_KEY_COMMANDS:
+        return tuple(str(value) for value in args[1:257])
+    if name in {"MSET", "MSETNX"}:
+        return tuple(str(value) for value in args[1:257:2])
+    return (str(args[1]),)
+
+
+def _key_owner(key: str) -> str:
+    normalized = key.lower()
+    if normalized.startswith("key:v4:"):
+        return "authentication"
+    if normalized.startswith(("parallel:", "parallel_lease:")):
+        return "concurrency"
+    if normalized.startswith(("ratelimit:", "tier_fair_share:")):
+        return "rate_limit"
+    if any(
+        marker in normalized
+        for marker in (
+            ":router-active-requests:",
+            ":router-attempt-owners:",
+            ":router-cooldown:",
+            ":router-health:",
+            ":router-health-failures:",
+            ":router-health-probe:",
+            ":router-health-recovery:",
+            ":router-latency:",
+            ":router-usage:",
+        )
+    ):
+        return "routing"
+    if (
+        normalized.startswith(
+            (
+                "cache:",
+                "deltallm:prompt:",
+                "deltallm:promptbinding:",
+                "deltallm:promptgroupdefault:",
+            )
+        )
+        or ":route-group-runtime:" in normalized
+    ):
+        return "cache"
+    return "unknown"
+
+
+def _command_owner(args: tuple[object, ...]) -> str:
+    owners = {_key_owner(key) for key in _command_keys(args)}
+    owners.discard("unknown")
+    if len(owners) == 1:
+        return owners.pop()
+    if len(owners) > 1:
+        return "mixed"
+    return "system" if not _command_keys(args) else "unknown"
+
+
+def _observe_round_trip(
+    *, allocation: str, owner: str, family: str, outcome: str, started: float
+) -> None:
+    _round_trips.labels(allocation, owner, family, outcome).inc()
+    _round_trip_seconds.labels(allocation, owner, family, outcome).observe(perf_counter() - started)
 
 
 def startup_setting(general: object, settings: object, field: str, default: object):
@@ -94,6 +174,9 @@ class RedisLimits:
     critical_max_connections: int = 64
     cache_max_connections: int = 16
     bulk_max_connections: int = 16
+    critical_max_waiters: int = 64
+    cache_max_waiters: int = 0
+    bulk_max_waiters: int = 0
     acquisition_timeout_seconds: float = 0.2
     socket_timeout_seconds: float = 1.0
     connect_timeout_seconds: float = 1.0
@@ -112,28 +195,63 @@ class RedisLimits:
 
 
 class AllocatedRedisPool(ConnectionPool):
-    def __init__(self, *, allocation: Allocation, acquisition_timeout: float, **kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        allocation: Allocation,
+        acquisition_timeout: float,
+        max_waiters: int = 0,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self.allocation = allocation
         self.acquisition_timeout = acquisition_timeout
-        self.gate = BoundedCapacityGate(concurrency=self.max_connections, max_waiters=0)
+        self.gate = BoundedCapacityGate(
+            concurrency=self.max_connections,
+            max_waiters=max_waiters,
+        )
         self._leases: set[object] = set()
         self.closed = False
 
     async def get_connection(self, command_name=None, *keys, **options):
         if self.closed:
             raise RedisConnectionError("Redis allocation is closed")
-        try:
-            await self.gate.acquire(timeout_seconds=self.acquisition_timeout)
-        except CapacityGateFull:
-            _events.labels(self.allocation, "full").inc()
-            raise RedisConnectionError("Redis allocation is full") from None
-        _occupied.labels(self.allocation).inc()
         started = perf_counter()
+        deadline = asyncio.get_running_loop().time() + self.acquisition_timeout
         outcome = "unavailable"
+        owns_slot = False
+        waiting = self.gate.active >= self.max_connections
+        if waiting:
+            _waiters.labels(self.allocation).inc()
         try:
-            async with asyncio.timeout(self.acquisition_timeout):
-                connection = await super().get_connection()
+            try:
+                await self.gate.acquire(timeout_seconds=self.acquisition_timeout)
+            except CapacityGateFull:
+                outcome = "full"
+                raise RedisConnectionError("Redis allocation is full") from None
+            except CapacityGateTimedOut:
+                outcome = "deadline"
+                raise RedisConnectionError("Redis acquisition deadline exceeded") from None
+            finally:
+                if waiting:
+                    _waiters.labels(self.allocation).dec()
+
+            owns_slot = True
+            _occupied.labels(self.allocation).inc()
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError
+            async with asyncio.timeout(remaining):
+                # The gate bounds callers before this driver lock. Reserve the
+                # connection under the lock. Check its socket outside the lock
+                # so one slow connection cannot block all admitted callers.
+                async with self._lock:
+                    connection = self.get_available_connection()
+                try:
+                    await self.ensure_connection(connection)
+                except BaseException:
+                    await super().release(connection)
+                    raise
             if self.closed:
                 await super().release(connection)
                 raise RedisConnectionError("Redis allocation is closed")
@@ -147,7 +265,7 @@ class AllocatedRedisPool(ConnectionPool):
             outcome = "cancelled"
             raise
         finally:
-            if outcome != "acquired":
+            if owns_slot and outcome != "acquired":
                 await self.gate.release()
                 _occupied.labels(self.allocation).dec()
             _events.labels(self.allocation, outcome).inc()
@@ -186,6 +304,11 @@ class ObservedPipeline(Pipeline):
     async def execute(self, raise_on_error: bool = True):
         allocation = getattr(self.connection_pool, "allocation", "unknown")
         command_count = len(self.command_stack)
+        owners = {
+            _command_owner(tuple(command)) for command, _options in self.command_stack if command
+        }
+        owners.discard("system")
+        owner = owners.pop() if len(owners) == 1 else "mixed" if owners else "system"
         started = perf_counter()
         outcome = "error"
         try:
@@ -196,9 +319,10 @@ class ObservedPipeline(Pipeline):
             outcome = "cancelled"
             raise
         finally:
-            _pipeline_commands.labels(allocation).observe(command_count)
+            _pipeline_commands.labels(allocation, owner).observe(command_count)
             _observe_round_trip(
                 allocation=allocation,
+                owner=owner,
                 family="pipeline",
                 outcome=outcome,
                 started=started,
@@ -209,6 +333,7 @@ class AllocatedRedis(Redis):
     async def execute_command(self, *args, **options):
         allocation = getattr(self.connection_pool, "allocation", "unknown")
         family = _command_family(args[0] if args else "unknown")
+        owner = _command_owner(tuple(args))
         started = perf_counter()
         outcome = "error"
         try:
@@ -221,6 +346,7 @@ class AllocatedRedis(Redis):
         finally:
             _observe_round_trip(
                 allocation=allocation,
+                owner=owner,
                 family=family,
                 outcome=outcome,
                 started=started,
@@ -272,6 +398,7 @@ def build_redis_client(
     pool = AllocatedRedisPool(
         allocation=allocation,
         acquisition_timeout=limits.acquisition_timeout_seconds,
+        max_waiters=getattr(limits, allocation + "_max_waiters"),
         **options,
     )
     return AllocatedRedis.from_pool(pool)

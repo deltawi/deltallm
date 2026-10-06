@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import FastAPI
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import JSONResponse, Response
 
 from src.accounting_settings import AccountingProtocolSettings
@@ -22,7 +21,12 @@ from src.config import DatabaseConnectionSettings
 from src.db.accounting_pool import AccountingPostgresManager
 from src.db.migration_status import verify_migration_status
 from src.ingress import IngressLimits, IngressRuntime
-from src.metrics.prometheus import get_prometheus_registry
+from src.bootstrap.metrics import (
+    freeze_startup_heap,
+    metrics_snapshot_response,
+    start_prometheus_snapshots,
+    start_runtime_metrics,
+)
 from src.middleware.ingress import IngressMiddleware
 from src.process_lifecycle import ProcessLifecycle
 from src.shutdown import BoundedExitStack, ShutdownOwner, cleanup_deadline, shutdown_owner
@@ -59,6 +63,9 @@ class AccountingRoleAppOwner:
             raise ValueError("accounting request role needs a bounded signing secret")
         if type(startup_seconds) not in (int, float) or not 0 < startup_seconds <= 30:
             raise ValueError("accounting role startup budget is invalid")
+        if role == "projection" and config.accounting_execution_mode == "local_journal":
+            if pool_size != config.accounting_hot_path_db_pool_size:
+                raise ValueError("Native projection pool must match its declared allocation")
         self.state = AccountingRoleAppState()
         self.lifecycle = lifecycle
         self.shutdown = ShutdownOwner(lifecycle)
@@ -83,6 +90,11 @@ class AccountingRoleAppOwner:
                 deadline = asyncio.get_running_loop().time() + self._startup
                 async with asyncio.timeout_at(deadline):
                     await self._start(app, workers, deadline)
+                    freeze_startup_heap()
+                    sampler = start_runtime_metrics()
+                    workers.callback(sampler.close)
+                    snapshots = await start_prometheus_snapshots(app)
+                    workers.push_async_callback(snapshots.close)
                     self.lifecycle.mark_serving()
                 yield
         finally:
@@ -163,6 +175,7 @@ def create_accounting_worker_app(
     app = FastAPI(lifespan=owner.scope, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.process_lifecycle = lifecycle
     app.state.shutdown_owner = owner.shutdown
+    app.state.prometheus_snapshot_service = None
     app.state.accounting_role_state = owner.state
     app.state.ingress_runtime = IngressRuntime(
         IngressLimits(
@@ -202,4 +215,4 @@ def _health_routes(
 
     @app.get("/metrics")
     async def metrics() -> Response:
-        return Response(generate_latest(get_prometheus_registry()), media_type=CONTENT_TYPE_LATEST)
+        return metrics_snapshot_response(app.state.prometheus_snapshot_service)

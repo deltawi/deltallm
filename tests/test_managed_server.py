@@ -155,10 +155,11 @@ def test_signal_during_startup_migration_kills_owned_cli_and_never_serves(tmp_pa
         from types import SimpleNamespace
         import sys
         from src import server
+        from src.config import AppConfig, Settings
         from src.lifecycle_settings import LifecycleSettings
         from src.migration_process import run_migration_process
         server.StartupConfig.load = lambda: SimpleNamespace(
-            lifecycle=LifecycleSettings(), app_config=None, settings=None)
+            lifecycle=LifecycleSettings(), app_config=AppConfig(), settings=Settings())
         server.resolve_database_settings = lambda *_: SimpleNamespace(url='fixture')
         def migration(**kwargs):
             run_migration_process([sys.executable, '-c',

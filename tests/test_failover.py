@@ -41,6 +41,7 @@ from src.router import (
     HealthEndpointHandler,
     RedisStateBackend,
     ProviderAttemptResult,
+    ProviderAttemptSuccess,
     RequestDeadline,
     ROUTING_MODE_CONTEXT_KEY,
     RouteGroupPolicy,
@@ -461,8 +462,10 @@ async def test_failover_records_mixed_result_health_once_without_replaying_attem
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("combined", [False, True])
 async def test_failover_does_not_replay_provider_success_when_state_reporting_fails(
     monkeypatch: pytest.MonkeyPatch,
+    combined: bool,
 ):
     state = RedisStateBackend(redis=None)
     primary = _deployment("dep-a")
@@ -481,10 +484,13 @@ async def test_failover_does_not_replay_provider_success_when_state_reporting_fa
     async def run(_deployment: Deployment) -> str:
         nonlocal attempts
         attempts += 1
-        return "provider-result"
+        return (
+            ProviderAttemptSuccess("provider-result", {"rpm": 1}) if combined else "provider-result"
+        )
 
     monkeypatch.setattr(state, "record_latency", fail_state_update)
     monkeypatch.setattr(cooldown, "record_success", fail_state_update)
+    monkeypatch.setattr(state, "complete_attempt_success", fail_state_update)
 
     result = await manager.execute_with_failover(primary, "group-a", run)
 

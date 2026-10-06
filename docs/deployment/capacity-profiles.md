@@ -22,7 +22,7 @@ No credentials or live dependency limits are verified by this table.
 
 ## Peak dependency budgets
 
-The totals include API, batch, accounting roles, rollout overlap, migration, and reserved connections. Native roles each own two PostgreSQL connections and no Redis or provider connections.
+The totals include API, batch, accounting roles, rollout overlap, migration, and reserved connections. The native request role owns two PostgreSQL connections. The native projection role owns eight connections. Both native roles have no Redis or provider connections.
 
 | Profile | Peak API/request/projection processes | PostgreSQL used/maximum | Redis used/maximum |
 | --- | --- | --- | --- |
@@ -30,8 +30,8 @@ The totals include API, batch, accounting roles, rollout overlap, migration, and
 | Evaluation | 3/0/0 | 100/100 | 352/2000 |
 | Production | 37/0/0 | 1508/2000 | 3680/5000 |
 | Experiment | 7/0/0 | 368/2000 | 800/5000 |
-| Native evaluation | 3/3/3 | 142/160 | 352/2000 |
-| Native production | 37/4/4 | 1524/2000 | 3680/5000 |
+| Native evaluation | 3/3/3 | 160/160 | 352/2000 |
+| Native production | 37/4/4 | 1548/2000 | 3680/5000 |
 
 Production and experiment mount the typed `report.json` capacity contract and reject a mismatch at startup. These allocation, ingress, preflight and transport settings require a restart; a durable configuration update cannot silently change them. The base and evaluation profiles do not enable the production contract.
 

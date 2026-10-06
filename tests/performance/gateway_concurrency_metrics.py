@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from functools import partial
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 import json
@@ -18,6 +20,8 @@ from src.metrics.request_phases import OUTCOMES, PHASES, RESPONSE_KINDS, ROUTES
 from src.metrics.telemetry_acceptance import AcceptancePhase
 
 MAX_METRICS_BYTES = 2 * 1024 * 1024
+PROCESS_METRICS_PARSE_MIN_BYTES = 64 * 1024
+PROCESS_METRICS_ENCODE_MIN_SAMPLES = 256
 MAX_SAMPLES_PER_SCRAPE = 10000
 MAX_SNAPSHOTS = 3602
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
@@ -31,6 +35,11 @@ HISTOGRAMS = (
     "deltallm_ingress_queue_seconds",
     "deltallm_auth_fallback_seconds",
     "deltallm_database_allocation_seconds",
+    "deltallm_redis_allocation_acquisition_seconds",
+    "deltallm_redis_command_round_trip_seconds",
+    "deltallm_redis_pipeline_commands",
+    "deltallm_metrics_snapshot_generation_seconds",
+    "deltallm_python_gc_pause_seconds",
     "deltallm_accounting_batch_size",
     "deltallm_accounting_batch_seconds",
     "deltallm_accounting_queue_wait_seconds",
@@ -42,6 +51,16 @@ HISTOGRAMS = (
     "deltallm_shutdown_cleanup_seconds",
 )
 ALLOWED_NAMES = {
+    "deltallm_request_phase_in_flight",
+    "deltallm_metrics_snapshot_generations_total",
+    "deltallm_metrics_snapshot_timestamp_seconds",
+    "deltallm_metrics_snapshot_bytes",
+    "deltallm_redis_allocation_occupied",
+    "deltallm_redis_allocation_waiters",
+    "deltallm_redis_allocation_events_total",
+    "deltallm_redis_command_round_trips_total",
+    "deltallm_optional_request_diagnostics_total",
+    "deltallm_prompt_cache_lookups_total",
     "deltallm_readiness_probes_total",
     "deltallm_process_state",
     "deltallm_shutdown_cleanup_total",
@@ -100,6 +119,20 @@ ALLOWED_NAMES = {
     "deltallm_accounting_native_work_observed_timestamp_seconds",
 } | {name + suffix for name in HISTOGRAMS for suffix in ("_bucket", "_count", "_sum")}
 LABEL_VALUES = {
+    "owner": {
+        "authentication",
+        "rate_limit",
+        "concurrency",
+        "routing",
+        "cache",
+        "mixed",
+        "system",
+        "unknown",
+    },
+    "family": {"read", "write", "cleanup", "lua", "pipeline", "other"},
+    "entity": {"binding", "prompt", "group_default"},
+    "tier": {"l1", "l2", "negative_l1", "negative_l2", "db", "db_miss", "write_error"},
+    "generation": {"0", "1", "2"},
     "stage": {
         "operation_admission",
         "operation_receipt",
@@ -174,6 +207,9 @@ LABEL_VALUES = {
         "timeout",
         "hook_failed",
         "stale",
+        "acquired",
+        "failure",
+        "skipped",
         "error",
     },
     "transaction_scope": {"owned", "external"},
@@ -196,8 +232,14 @@ LABEL_VALUES = {
         "queue_closed",
         "incomplete_result",
         "invalid_result",
+        "client_rejection",
+        "dependency_unavailable",
+        "internal_error",
     },
     "allocation": {
+        "critical",
+        "cache",
+        "bulk",
         "inference",
         "control",
         "health",
@@ -296,6 +338,59 @@ class MetricSource:
             raise ValueError("metrics source process must be between zero and fifteen")
 
 
+@dataclass(frozen=True)
+class EncodedMetricRecord:
+    line: str
+    metric_names: frozenset[str]
+    values: dict[MetricIdentity, float] | None
+
+
+def _encode_metric_records(
+    results: list[list[MetricValue] | None],
+    sources: list[MetricSource],
+    offset: float,
+) -> tuple[EncodedMetricRecord, ...]:
+    records: list[EncodedMetricRecord] = []
+    for index, result in enumerate(results):
+        source = sources[index]
+        if not result:
+            record = {
+                "offset_seconds": offset,
+                "source": index,
+                "source_role": source.role,
+                "source_process": source.process,
+                "error": "scrape_failed",
+            }
+            names = frozenset[str]()
+            values = None
+        else:
+            record = {
+                "offset_seconds": offset,
+                "source": index,
+                "source_role": source.role,
+                "source_process": source.process,
+                "samples": [asdict(item) for item in result],
+            }
+            names = frozenset(item.name for item in result)
+            values = {
+                (sample.name, tuple(sorted(sample.labels.items()))): sample.value
+                for sample in result
+            }
+        records.append(
+            EncodedMetricRecord(
+                line=json.dumps(record, sort_keys=True) + "\n",
+                metric_names=names,
+                values=values,
+            )
+        )
+    return tuple(records)
+
+
+def _write_snapshot(file: TextIO, text: str) -> None:
+    file.write(text)
+    file.flush()
+
+
 def select_metrics(text: str, *, buckets: bool = True) -> list[MetricValue]:
     selected: list[MetricValue] = []
     for family in text_string_to_metric_families(text):
@@ -358,6 +453,8 @@ class MetricsRecorder:
         self._bytes_written = 0
         self._file: TextIO | None = None
         self._client: httpx.AsyncClient | None = None
+        self._cpu_executor: ProcessPoolExecutor | None = None
+        self._io_executor: ThreadPoolExecutor | None = None
         self._task: asyncio.Task[None] | None = None
         self._workload: asyncio.Task[object] | None = None
         self._stop = asyncio.Event()
@@ -366,6 +463,10 @@ class MetricsRecorder:
         self.output.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.output.open("x", encoding="utf-8")
         try:
+            self._cpu_executor = ProcessPoolExecutor(max_workers=1)
+            self._io_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="concurrency-metrics-io"
+            )
             self._client = httpx.AsyncClient(
                 timeout=1.0,
                 limits=httpx.Limits(max_connections=16, max_keepalive_connections=0),
@@ -416,52 +517,55 @@ class MetricsRecorder:
                     if len(body) + len(chunk) > MAX_METRICS_BYTES:
                         raise ValueError("metrics byte budget exceeded")
                     body.extend(chunk)
-        return await asyncio.to_thread(select_metrics, body.decode("utf-8"), buckets=buckets)
+        assert self._cpu_executor is not None and self._io_executor is not None
+        executor = (
+            self._cpu_executor
+            if len(body) >= PROCESS_METRICS_PARSE_MIN_BYTES
+            else self._io_executor
+        )
+        return await asyncio.get_running_loop().run_in_executor(
+            executor, partial(select_metrics, body.decode("utf-8"), buckets=buckets)
+        )
 
     async def snapshot(self, *, buckets: bool = False) -> None:
         assert self._file is not None
+        assert self._cpu_executor is not None and self._io_executor is not None
         if self.snapshots >= MAX_SNAPSHOTS:
             raise ValueError("metrics snapshot budget exceeded")
         results = await asyncio.gather(
             *(self._read(source.url, buckets=buckets) for source in self.sources),
             return_exceptions=True,
         )
-        offset = perf_counter() - self.started
-        for index, result in enumerate(results):
-            source = self.sources[index]
-            if isinstance(result, BaseException) or not result:
+        safe_results = [None if isinstance(result, BaseException) else result for result in results]
+        sample_count = sum(len(result) for result in safe_results if result is not None)
+        executor = (
+            self._cpu_executor
+            if sample_count >= PROCESS_METRICS_ENCODE_MIN_SAMPLES
+            else self._io_executor
+        )
+        encoded = await asyncio.get_running_loop().run_in_executor(
+            executor,
+            _encode_metric_records,
+            safe_results,
+            self.sources,
+            perf_counter() - self.started,
+        )
+        lines: list[str] = []
+        for index, record in enumerate(encoded):
+            if record.values is None:
                 self.errors += 1
                 self.failed_scrapes[index] += 1
-                record = {
-                    "offset_seconds": offset,
-                    "source": index,
-                    "source_role": source.role,
-                    "source_process": source.process,
-                    "error": "scrape_failed",
-                }
             else:
                 self.successful_scrapes[index] += 1
-                self.metric_names[index].update(item.name for item in result)
-                self._capture_values(
-                    index,
-                    {
-                        (item.name, tuple(sorted(item.labels.items()))): item.value
-                        for item in result
-                    },
-                )
-                record = {
-                    "offset_seconds": offset,
-                    "source": index,
-                    "source_role": source.role,
-                    "source_process": source.process,
-                    "samples": [asdict(item) for item in result],
-                }
-            line = json.dumps(record, sort_keys=True) + "\n"
-            self._bytes_written += len(line.encode("utf-8"))
+                self.metric_names[index].update(record.metric_names)
+                self._capture_values(index, record.values)
+            self._bytes_written += len(record.line.encode("utf-8"))
             if self._bytes_written > MAX_EXPORT_BYTES:
                 raise ValueError("metrics export byte budget exceeded")
-            self._file.write(line)
-        self._file.flush()
+            lines.append(record.line)
+        await asyncio.get_running_loop().run_in_executor(
+            self._io_executor, _write_snapshot, self._file, "".join(lines)
+        )
         self.snapshots += 1
 
     def evidence(self) -> list[dict[str, object]]:
@@ -501,8 +605,16 @@ class MetricsRecorder:
                 async with asyncio.timeout(2):
                     await self._client.aclose()
         finally:
-            if self._file is not None:
-                self._file.close()
+            try:
+                if self._cpu_executor is not None:
+                    self._cpu_executor.shutdown(wait=True, cancel_futures=True)
+            finally:
+                try:
+                    if self._io_executor is not None:
+                        self._io_executor.shutdown(wait=True, cancel_futures=True)
+                finally:
+                    if self._file is not None:
+                        self._file.close()
 
     def _capture_values(self, source: int, values: dict[MetricIdentity, float]) -> None:
         if not self._baseline_captured[source]:

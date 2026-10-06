@@ -122,7 +122,9 @@ config:
     telemetry_db_pool_size: 5
     telemetry_db_pool_timeout_seconds: 2
     redis_critical_max_connections: 64
+    redis_critical_max_waiters: 64
     redis_bulk_max_connections: 16
+    redis_bulk_max_waiters: 0
     redis_acquisition_timeout_seconds: 0.2
     redis_socket_timeout_seconds: 1
     redis_connect_timeout_seconds: 1
@@ -175,6 +177,7 @@ config:
     db_background_lock_timeout_seconds: 1.0
     db_background_transaction_timeout_seconds: 10.0
     redis_cache_max_connections: 16
+    redis_cache_max_waiters: 0
     model_deployment_source: db_only
     model_deployment_bootstrap_from_config: false
     organization_lifecycle_auth_max_staleness_seconds: 3

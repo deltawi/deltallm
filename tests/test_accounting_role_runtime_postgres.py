@@ -69,12 +69,15 @@ def lifecycle():
     return ProcessLifecycle(LifecycleSettings())
 
 
-async def graph(clients, generation):
+async def graph(clients, generation, *, native_lanes=False):
     config = AccountingProtocolSettings(
         accounting_protocol_enabled=True,
         accounting_protocol_generation=generation,
         accounting_grant_target_operations=4,
         accounting_microbatch_dwell_ms=0,
+        accounting_execution_mode="local_journal" if native_lanes else "assigned",
+        accounting_hot_path_db_pool_size=8 if native_lanes else 2,
+        accounting_projection_batch_size=256 if native_lanes else 64,
     )
     projected = ProcessingClient(clients[0])
     projection = build_accounting_projection_runtime(
@@ -104,12 +107,16 @@ async def graph(clients, generation):
 
 
 @pytest.mark.parametrize("lose_projection", [False, True])
+@pytest.mark.parametrize("native_lanes", [False, True])
 async def test_role_graph_has_real_startup_health_zero_call_warm_issue_and_exact_drain(
     accounting_db,
     lose_projection,
+    native_lanes,
 ):
     clients, generation = accounting_db
-    projection, request, api, transport, wire, projected = await graph(clients, generation)
+    projection, request, api, transport, wire, projected = await graph(
+        clients, generation, native_lanes=native_lanes
+    )
     window = str(uuid4())
     await _create_window(clients[0], generation, window)
     try:
@@ -147,7 +154,7 @@ async def test_role_graph_has_real_startup_health_zero_call_warm_issue_and_exact
         )
         assert sum("/allocate/" in path for path in wire.calls) == 1
         assert sum("/return/" in path for path in wire.calls) == 1
-        assert len(projection._lifecycle.producers) == 3
+        assert len(projection._lifecycle.producers) == (7 if native_lanes else 3)
         request._lifecycle.begin_drain()
         assert request.worker_health.state is WorkerState.STOPPING
         projection._lifecycle.begin_drain()

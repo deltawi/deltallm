@@ -26,5 +26,6 @@ def test_redis_allocations_render_in_all_profiles(values):
 
 
 @pytest.mark.parametrize("field", ["redis_" + f.name for f in fields(RedisLimits())])
-def test_unbounded_or_zero_redis_values_fail_helm(field):
-    assert field in _render_error("--set-json", f"config.general_settings.{field}=0")
+def test_invalid_redis_values_fail_helm(field):
+    invalid = -1 if field.endswith("_max_waiters") else 0
+    assert field in _render_error("--set-json", f"config.general_settings.{field}={invalid}")

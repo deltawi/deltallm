@@ -14,10 +14,38 @@ Slices 1 through 8 are complete. The runtime code for slices 9 through 14 is now
 connected, including native reporting and shared Realtime, batch, and selector
 accounting. The generated-client repair checkpoint passed all 8,573 Python cases.
 UI checks, migration paths, and chart checks also passed. Full UI lint retains
-unchanged baseline findings. Exact-image and gateway qualification checks remain
-open. The experimental branch's
+unchanged baseline findings. The exact image passed all five smoke checks. Its
+short ladder failed, and the retained-measure audit found missing Redis, routing,
+failure-telemetry, observation, and worker-lane work. Those measures are now
+restored. Their full regression confirmation passed all 8,653 Python cases. Fresh
+exact-image checks and gateway qualification remain open. The experimental branch's
 500 RPS result is not evidence for this clean replay. This branch is not ready to
 merge.
+
+### Restored-measure regression checkpoint
+
+The retained-measure audit maps all 26 accepted source measures to their clean
+implementation owners. Native processing now has two terminal lanes, four
+reporting lanes, one progress owner, and the declared eight-connection pool.
+Reporting startup recovery uses its original deadline. Metrics encoding stays
+off the event loop and observes immediate and late worker exceptions.
+
+- [x] Full PostgreSQL: 850 passed in 748.20 seconds.
+- [x] Full Redis: 112 passed in 16.44 seconds.
+- [x] Full component and Helm: 6,042 passed in 92.50 seconds.
+- [x] Full application: 1,649 passed in 522.49 seconds.
+- [x] Exhaustive, non-overlapping collection: 8,653 cases.
+- [x] Source lint, formatting, generated references, frozen lock, and container parity.
+- [x] All six deployment-profile lint and render checks.
+- [x] Preserve failed and interrupted runs with their confirmations.
+- [ ] Commit the restored source and pass all five new exact-image checks.
+- [ ] Pass a fresh generator proof and short 50/100/200/500 RPS ladder.
+- [ ] Run all four ten-minute stages with the same image and fixed profile.
+- [ ] Save current raw evidence, exact charges, storage state, and final results.
+
+The earlier UI, migration, and generated-client gates remain valid. No SQL or UI
+source changed in this checkpoint. These regression results are not throughput
+results. Keep the plan active until new qualification is complete.
 
 The migration-131 checkpoint passed all 7,829 tests and all three migration paths.
 The first PostgreSQL run failed two compatibility cases. Their unchanged modules
@@ -105,8 +133,9 @@ checks, not a gateway throughput result.
 - [x] Complete final hermetic, application, PostgreSQL, Redis, and Helm lanes.
 - [x] Complete UI unit/build/lint comparison, frozen locks, references, collection,
   and style. Full UI lint retains the unchanged 119 baseline findings.
-- [ ] Commit the tested source; build and smoke-test the exact non-root image.
-- [ ] Run the direct provider generator proof and short 50/100/200/500 RPS ladder.
+- [x] Commit the tested source; build and smoke-test the exact non-root image.
+- [x] Run the direct provider generator proof and short 50/100/200/500 RPS ladder.
+- [ ] Restore the missing retained measures and pass a fresh short ladder.
 - [ ] Run all four ten-minute stages on that same image and fixed topology.
 - [ ] Save final raw evidence, exact reconciliation, storage state, and results.
 - [ ] Update the final plan and handoff. Do not push, open a PR, or merge without
@@ -180,7 +209,7 @@ Repair plan:
 - [x] Compile the generated client during the canonical image build.
 - [x] Add a 1 GiB offline image gate for actual API and minimal-role imports.
 - [x] Regenerate the client and repeat affected tests and container contracts.
-- [ ] Build and smoke-test a new exact image. Start fresh kind evidence.
+- [x] Build and smoke-test a new exact image. Start fresh kind evidence.
 
 The generator mode is documented in the [Prisma configuration reference](https://prisma-client-py.readthedocs.io/en/stable/reference/config/#recursive-type-depth).
 It changes generated Python type definitions, not database DDL. The repository
@@ -224,6 +253,70 @@ The UI files, migration SQL, chart values, and runtime settings did not change i
 this repair. Their earlier complete gates remain applicable. Keep the failed
 database repeat and its funding diagnostics with the passing confirmation in
 `artifacts/qualification/verification-20261006`.
+
+### Clean short-ladder failure and retained-measure audit
+
+Commit `22f62c8c` passed all five exact-image checks. All seven application roles
+became ready within their original 1 GiB limits. The generator proof completed
+all 10,000 requests at 1,000 RPS with no drops. The fresh short ladder produced:
+
+| Target | Successful / scheduled | p95 | p99 | Result |
+| --- | --- | --- | --- | --- |
+| 50 RPS | 1,500 / 1,500 | 48.68 ms | 238.87 ms | Client trend check failed |
+| 100 RPS | 3,000 / 3,000 | 113.14 ms | 288.62 ms | Passed |
+| 200 RPS | 5,928 / 6,000 | 951.08 ms | 1,462.85 ms | 64 HTTP 503 and 8 HTTP 429 |
+| 500 RPS | 1,749 / 15,000 | 10,001.27 ms | 10,002.51 ms | Overload; generator drops; drain failed |
+
+These are 30-second diagnostics, not ten-minute qualification results. At 50 RPS,
+one brief late client-in-flight spike failed the least-squares trend check. The
+requests completed and exact charges drained. At 200 RPS, organization preflight
+limits and router Redis allocation exhaustion caused rejection. Redis used only
+3.45 MiB of its 128 MiB limit, with no server error replies or evictions. The
+application allocation, not Redis server memory, was full.
+
+The 500 RPS stage started 12,135 requests and dropped 2,865 scheduled arrivals.
+It returned 9,543 HTTP 503, 42 HTTP 429, 38 HTTP 500, and 763 client errors.
+One operation remained provisional after the unchanged 180-second drain limit.
+No budget window exceeded its limit. The runner stopped and removed its owned
+cluster. It did not start the ten-minute series. Keep all evidence in
+`artifacts/qualification/native-22f62c8c-20261006`.
+
+Comparison with the accepted source found omitted measures from the original
+integration scope. The clean replay still uses the old serialized Redis
+connection acquisition, separate routing completion calls, and synchronous
+failure telemetry. Its fixture also retains the old 100/50 preflight and
+100-slot ingress limits. Thus the accounting implementation alone does not
+reproduce the accepted candidate's request path.
+
+Completion plan:
+
+- [x] Preserve the failed image, complete short-stage evidence, and failure details.
+- [x] Audit every retained measure against the extraction record and current main.
+- [x] Restore combined routing prerequisites and fenced success acknowledgement.
+  Preserve current-main failover, batch, streaming, and Realtime behavior.
+- [x] Restore bounded Redis waiters and concurrent socket readiness outside the
+  driver bookkeeping lock. Keep pool ceilings and one acquisition deadline.
+- [x] Restore bounded request logging and optional failure-telemetry shedding.
+  Required economic and audit persistence must remain fail closed.
+- [x] Restore the measured qualification profile, negative prompt caching, and
+  volatile Redis fixture. Record any profile change; do not relabel earlier runs.
+- [ ] Add regression checks for all retained measures and complete affected gates.
+- [x] Restore bounded per-process metrics snapshots, GC observation, startup
+  heap freeze, and bounded off-process harness parsing/export.
+- [x] Restore two native terminal lanes and four native reporting lanes. Keep
+  one progress observer and two reserved connections in the eight-connection pool.
+  Native production now uses 1,548 of 2,000 declared PostgreSQL connections.
+  Native evaluation uses 160 of 160, including its reserved capacity.
+  Redis connection limits and pod resource limits do not change.
+- [x] Record the complete measure map and focused verification in
+  [the retained-measure audit](issue-320-retained-measure-audit.md).
+- [x] Confirm the full application lane after the combined simulation snapshot
+  and bounded readiness inventory changes: 1,649 passed. Keep the stale-read-count
+  failure and its 24-case focused confirmation with the final gate evidence.
+- [ ] Freeze a new clean image, run the generator proof and short ladder, then
+  run all four ten-minute stages only after the short ladder passes.
+- [ ] Save final results and update the handoff. Do not claim 500 RPS from the
+  experimental branch or this failed diagnostic.
 
 ## Integration rules
 

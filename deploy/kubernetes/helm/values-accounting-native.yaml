@@ -26,6 +26,8 @@ accountingWorker:
       metricName: deltallm_accounting_native_oldest_work_age_seconds
   config:
     general_settings:
+      accounting_hot_path_db_pool_size: 8
+      accounting_projection_batch_size: 256
       accounting_projection_poll_interval_ms: 20
       accounting_projection_maintenance_interval_ms: 1000
 

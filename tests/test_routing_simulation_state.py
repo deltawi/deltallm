@@ -5,12 +5,20 @@ from collections import Counter
 import pytest
 
 from src.router.candidates import AttemptCapacity, AttemptRejectionReason
+from src.router.health_state import HealthRefInput, coerce_health_ref
 from src.router.simulation_state import RoutingSimulationState, RoutingStateSnapshotMiss
 
 
 class _SnapshotSource:
     def __init__(self) -> None:
         self.calls: Counter[str] = Counter()
+
+    async def get_health_and_cooldown_batch(
+        self, refs: list[HealthRefInput]
+    ) -> tuple[dict[str, dict[str, object]], dict[str, bool]]:
+        self.calls["combined"] += 1
+        ids = [coerce_health_ref(ref).deployment_id for ref in refs]
+        return ({name: {"healthy": "true"} for name in ids}, dict.fromkeys(ids, False))
 
     async def get_health_batch(self, health_refs):  # noqa: ANN001, ANN201
         self.calls["health"] += 1
@@ -31,6 +39,19 @@ class _SnapshotSource:
     async def get_latency_windows_batch(self, deployment_ids, window_ms):  # noqa: ANN001, ANN201
         self.calls["latency"] += 1
         return {deployment_id: [(window_ms, 12.5)] for deployment_id in deployment_ids}
+
+
+@pytest.mark.asyncio
+async def test_combined_simulation_read_is_cached_and_frozen_without_live_mutation() -> None:
+    source = _SnapshotSource()
+    state = RoutingSimulationState(source)
+    expected = ({"dep-a": {"healthy": "true"}}, {"dep-a": False})
+    assert await state.get_health_and_cooldown_batch(["dep-a"]) == expected
+    state.freeze()
+    assert await state.get_health_and_cooldown_batch(["dep-a"]) == expected
+    assert source.calls == Counter({"combined": 1})
+    with pytest.raises(RoutingStateSnapshotMiss, match="dep-b"):
+        await state.get_health_and_cooldown_batch(["dep-b"])
 
 
 @pytest.mark.asyncio

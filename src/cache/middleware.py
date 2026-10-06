@@ -153,17 +153,15 @@ class CacheMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=exc.status_code, content={"detail": exc.detail}, headers=headers
             )
+        except ProxyError as exc:
+            return await self._handle_proxy_error(request, exc)
         try:
             prepared_data = await self._prepare_request(request, request_data)
         except ValidationError:
             # Let FastAPI preserve its endpoint-specific 422 response contract.
             return await call_next(request)
         except ProxyError as exc:
-            try:
-                await maybe_log_proxy_error(request, exc)
-            except SpendPersistenceUnavailable as persistence_error:
-                return proxy_error_response(persistence_error)
-            return proxy_error_response(exc)
+            return await self._handle_proxy_error(request, exc)
 
         if prepared_data is None:
             return await call_next(request)
@@ -291,6 +289,14 @@ class CacheMiddleware(BaseHTTPMiddleware):
         finally:
             if not bool(getattr(request.state, "_rate_limit_lifecycle_managed", False)):
                 await _release_rate_limits(request)
+
+    @staticmethod
+    async def _handle_proxy_error(request: Request, exc: ProxyError) -> JSONResponse:
+        try:
+            await maybe_log_proxy_error(request, exc)
+        except SpendPersistenceUnavailable as persistence_error:
+            return proxy_error_response(persistence_error)
+        return proxy_error_response(exc)
 
     async def _prepare_request(
         self,

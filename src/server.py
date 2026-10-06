@@ -16,6 +16,11 @@ from src.startup_config import StartupConfig
 from src.config import resolve_database_settings
 from src.prisma_bootstrap import run_prisma_bootstrap
 from src.bootstrap.server_application import create_server_application
+from src.runtime_logging import (
+    access_log_enabled,
+    apply_runtime_log_level,
+    effective_startup_log_level,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     for handled in (signal.SIGTERM, signal.SIGINT):
         signal.signal(handled, lambda sig, _: sys.exit(128 + sig))
     startup = StartupConfig.load()
+    log_level = apply_runtime_log_level(effective_startup_log_level(startup))
     lifecycle = ProcessLifecycle(startup.lifecycle)
     watchdog = ShutdownWatchdog()
     lifecycle.on_drain = watchdog.arm
@@ -52,7 +58,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     app = create_server_application(startup=startup, lifecycle=lifecycle)
     server = ManagedServer(
-        uvicorn.Config(app, host=args.host, port=args.port, workers=1, lifespan="on"), lifecycle
+        uvicorn.Config(
+            app,
+            host=args.host,
+            port=args.port,
+            workers=1,
+            lifespan="on",
+            log_level=log_level.lower(),
+            access_log=access_log_enabled(log_level),
+        ),
+        lifecycle,
     )
     server.run()
     owner = getattr(app.state, "shutdown_owner", None)

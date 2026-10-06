@@ -1,12 +1,13 @@
 """Native reporting owns fixed keys, rejects partial replies, and retains retries."""
 
 import asyncio
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
 from src.billing.accounting_read_model_claims import ReadModelClaim, ReadModelWorkerConfig
-from src.billing.accounting_read_model_health import ReadModelProgress
+from src.billing.accounting_read_model_health import ReadModelHealth, ReadModelProgress
 from src.billing.accounting_read_model_runtime import ReadModelProcessingWorker
 from src.concurrency import CapacityGateFull
 from src.db.accounting_calls import AccountingProtocolUnavailable
@@ -233,6 +234,74 @@ async def test_start_waits_for_real_initialization_and_one_claim_then_stops_owne
     assert owner.task.done() and owner.worker_health.state is WorkerState.DISABLED
     with pytest.raises(RuntimeError):
         await owner.start(expires_at=deadline())
+
+
+@pytest.mark.parametrize("operation", ["claim", "progress"])
+async def test_start_uses_existing_recovery_loop_within_its_original_deadline(operation):
+    db = Persistence()
+    value = None if operation == "claim" else await db.progress()
+    transient = AsyncMock(side_effect=[TimeoutError(), value])
+    if operation == "claim":
+        db.claim = transient
+    else:
+        db.progress = transient
+    owner = worker(db)
+    expires = deadline()
+    try:
+        await owner.start(expires_at=expires)
+        assert transient.await_count == 2
+        assert owner.worker_health.state is WorkerState.READY
+        assert all(call.kwargs["expires_at"] <= expires for call in transient.await_args_list)
+    finally:
+        assert await owner.close(expires_at=deadline())
+
+
+async def test_persistent_startup_failure_cannot_report_ready_or_extend_the_deadline():
+    db = Persistence()
+    db.claim = AsyncMock(side_effect=TimeoutError())
+    owner = worker(db)
+    with pytest.raises(TimeoutError, match="startup deadline"):
+        await owner.start(expires_at=deadline(0.1))
+    assert not owner._started.is_set()
+    assert owner.task.done()
+    assert owner.worker_health.state is WorkerState.FAILED
+    assert not await owner.close(expires_at=deadline())
+
+
+async def test_secondary_failure_does_not_replace_the_progress_owners_observation():
+    db = Persistence()
+    health = ReadModelHealth(7)
+    health.observe(await db.progress(), observed_at=health._clock())
+    entered = asyncio.Event()
+
+    async def claim_once(**kwargs):
+        if not entered.is_set():
+            entered.set()
+            raise TimeoutError()
+        return None
+
+    db.claim = claim_once
+    owner = ReadModelProcessingWorker(
+        db,
+        ReadModelWorkerConfig(generation=7, worker_id="secondary"),
+        progress_health=health,
+        observe_progress=False,
+    )
+    starting = asyncio.create_task(owner.start(expires_at=deadline()))
+    try:
+        await entered.wait()
+        assert not owner._started.is_set()
+        assert owner.worker_health.state is WorkerState.DEGRADED
+        assert health.worker_health.state is WorkerState.READY
+        owner._wake.set()
+        await starting
+        assert owner.worker_health.state is WorkerState.READY
+        assert not any(call[0] == "progress" for call in db.calls[1:])
+    finally:
+        assert await owner.close(expires_at=deadline())
+        if not starting.done():
+            starting.cancel()
+        await asyncio.gather(starting, return_exceptions=True)
 
 
 async def test_transient_commit_error_retains_the_same_small_handle_for_idempotent_retry():

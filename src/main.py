@@ -16,7 +16,11 @@ from src.bootstrap.infrastructure import (
 )
 from src.bootstrap.runtime_services import init_runtime_services, shutdown_runtime_services
 from src.bootstrap.routing import init_routing_runtime, shutdown_routing_runtime
-from src.bootstrap.metrics import start_runtime_metrics
+from src.bootstrap.metrics import (
+    freeze_startup_heap,
+    start_prometheus_snapshots,
+    start_runtime_metrics,
+)
 from src.bootstrap.realtime import init_realtime_runtime
 from src.bootstrap.lifecycle import process_scope, mark_process_serving, shutdown_readiness
 from src.shutdown import BoundedExitStack
@@ -38,7 +42,6 @@ from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
 from src.ui.routes import mount_ui_bundle
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -89,8 +92,11 @@ async def lifespan(app: FastAPI):
         batch_runtime = await init_batch_runtime(app, cfg, app.state.batch_repository)
         exit_stack.push_async_callback(shutdown_batch_runtime, batch_runtime)
 
+        freeze_startup_heap()
         runtime_metrics = start_runtime_metrics()
         exit_stack.callback(runtime_metrics.close)
+        prometheus_snapshots = await start_prometheus_snapshots(app)
+        exit_stack.push_async_callback(prometheus_snapshots.close)
 
         startup_statuses = _collect_startup_statuses(
             infrastructure_runtime.statuses,

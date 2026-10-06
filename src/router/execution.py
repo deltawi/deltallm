@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Awaitable, Callable, Generic, Mapping, TypeVar
 
 from src.request_deadline import RequestDeadline as RequestDeadline
 
@@ -76,6 +76,14 @@ class ProviderAttemptResult(Generic[T]):
 
     value: T
     health_error: Exception
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptSuccess(Generic[T]):
+    """A provider result with fixed routing-usage counters."""
+
+    value: T
+    usage_counters: Mapping[str, int]
 
 
 @dataclass(slots=True)

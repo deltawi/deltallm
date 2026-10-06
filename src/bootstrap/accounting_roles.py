@@ -6,6 +6,7 @@ import asyncio
 
 from src.billing.accounting_admission_monitor import AccountingAdmissionMonitor
 from src.billing.accounting_journal_runtime import JournalProcessingWorker
+from src.billing.accounting_lane_group import AccountingLaneGroup
 from src.billing.accounting_presence import ProjectionPresencePublisher
 from src.billing.accounting_read_model_runtime import ReadModelProcessingWorker
 from src.billing.accounting_recovery import AccountingRecoveryWorker
@@ -84,8 +85,8 @@ class AccountingRequestRuntime:
 class AccountingProjectionRuntime:
     def __init__(
         self,
-        processing: JournalProcessingWorker,
-        read_models: ReadModelProcessingWorker,
+        processing: JournalProcessingWorker | AccountingLaneGroup,
+        read_models: ReadModelProcessingWorker | AccountingLaneGroup,
         recovery: AccountingRecoveryWorker,
         presence: ProjectionPresencePublisher,
         lifecycle: ProcessLifecycle,
@@ -109,15 +110,17 @@ class AccountingProjectionRuntime:
         if self._closed:
             raise RuntimeError("accounting projection runtime cannot restart after close")
         await self.processing.start(expires_at=expires_at)
-        task = self.processing.task
-        if task is None:
+        tasks = self.processing.tasks
+        if not tasks:
             raise RuntimeError("accounting journal task is missing")
-        self._lifecycle.register_producer(self.processing.stop_claims, task)
+        for task in tasks:
+            self._lifecycle.register_producer(self.processing.stop_claims, task)
         await self.read_models.start(expires_at=expires_at)
-        task = self.read_models.task
-        if task is None:
+        tasks = self.read_models.tasks
+        if not tasks:
             raise RuntimeError("accounting read-model task is missing")
-        self._lifecycle.register_producer(self.read_models.stop_claims, task)
+        for task in tasks:
+            self._lifecycle.register_producer(self.read_models.stop_claims, task)
         await self.presence.start(expires_at=expires_at)
         await self.recovery.start(expires_at=expires_at)
         task = self.recovery.task

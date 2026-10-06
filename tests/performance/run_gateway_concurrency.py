@@ -36,6 +36,10 @@ from tests.performance.gateway_concurrency_diagnostics import (
 )
 from tests.performance.gateway_concurrency_dependencies import local_dependencies, require_local_url
 from tests.performance.gateway_concurrency_metrics import MetricSource, MetricsRecorder
+from tests.performance.gateway_concurrency_redis import (
+    redis_client_breakdown,
+    redis_round_trip_budget,
+)
 from tests.performance.gateway_concurrency_manifest import read_manifest
 
 ERROR_CODES = {
@@ -259,6 +263,7 @@ async def measure(
         for sample in run.samples
     )
     source_evidence = recorder.evidence()
+    redis_budget = redis_round_trip_budget(recorder)
     report.update(
         {
             "label": args.label,
@@ -274,6 +279,8 @@ async def measure(
             "metrics_arrival_start_offset_seconds": arrival_start,
             "metrics_scrape_errors": recorder.errors,
             "metrics_sources": source_evidence,
+            "redis_round_trip_budget": redis_budget,
+            "redis_client_breakdown": redis_client_breakdown(recorder),
             "dependency_diagnostics_file": (
                 diagnostics_path.name if dependency_recorder is not None else None
             ),
@@ -328,6 +335,10 @@ async def measure(
             diagnostic_failures.append("dependency_diagnostics_errors")
         if recorder.errors:
             diagnostic_failures.append("metrics_scrape_errors")
+        if redis_budget["observed_requests"] <= 0:
+            diagnostic_failures.append("redis_round_trip_budget_evidence_missing")
+        elif not redis_budget["passed"]:
+            diagnostic_failures.append("redis_round_trip_budget_exceeded")
         if resource_recorder is None:
             diagnostic_failures.append("resource_diagnostics_missing")
         else:

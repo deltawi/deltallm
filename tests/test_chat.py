@@ -1620,7 +1620,9 @@ async def test_chat_completion_streaming_success_ignores_router_usage_write_fail
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_health_update_failure_does_not_skip_billing_or_cleanup(client, test_app):
+async def test_chat_stream_health_update_failure_does_not_skip_billing_or_cleanup(
+    client, test_app, metrics_snapshot_service
+):
     recorder = _SpendRecorder()
     test_app.state.spend_tracking_service = recorder
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
@@ -1664,6 +1666,7 @@ async def test_chat_stream_health_update_failure_does_not_skip_billing_or_cleanu
     assert (
         await test_app.state.router_state_backend.get_active_requests(deployment.deployment_id) == 0
     )
+    await metrics_snapshot_service.refresh()
     metrics = await client.get("/metrics")
     assert "deltallm_router_health_update_failures_total" in metrics.text
 

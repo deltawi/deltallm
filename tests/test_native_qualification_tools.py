@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import pytest
 import yaml
+from src.config import GeneralSettings
 
 from scripts import measure_gateway_load_sharded as shards
 from scripts.measure_gateway_load import RequestResult, run_constant_arrival
@@ -18,6 +19,23 @@ from tests.performance import native_qualification_economics as economics
 from tests.performance.cluster_load_generator import cluster_generator_job
 from tests.performance.gateway_concurrency_diagnostics import POSTGRESQL_FIELDS, POSTGRESQL_SNAPSHOT
 from tests.performance.native_qualification_resources import parse_cpu_stat, cpu_counter_deltas
+
+
+def test_retained_runtime_metrics_use_only_fixed_diagnostic_labels():
+    selected = metrics.select_metrics("""
+deltallm_redis_command_round_trips_total{allocation="critical",owner="routing",family="lua",outcome="success"} 6
+deltallm_redis_allocation_waiters{allocation="critical"} 2
+deltallm_metrics_snapshot_timestamp_seconds 123
+deltallm_metrics_snapshot_generations_total{outcome="success"} 1
+deltallm_python_gc_pause_seconds_count{generation="2"} 1
+deltallm_request_phase_in_flight{route="chat_completions",phase="upstream_http"} 4
+deltallm_optional_request_diagnostics_total{route="chat_completions",reason="dependency_unavailable"} 1
+deltallm_prompt_cache_lookups_total{entity="binding",tier="negative_l1"} 3
+deltallm_redis_command_round_trips_total{allocation="critical",owner="private",family="lua",outcome="success"} 99
+deltallm_python_gc_pause_seconds_count{generation="private"} 99
+""")
+    assert len(selected) == 8
+    assert "private" not in repr(selected)
 
 
 def test_cpu_counters_are_complete_and_deltas_do_not_hide_missing_data():
@@ -237,6 +255,23 @@ def test_qualification_profile_and_generator_keep_fixed_bounded_topology(tmp_pat
     assert values["resources"]["limits"] == {"cpu": "2", "memory": "1Gi"}
     assert values["batchWorker"] == {"enabled": False}
     assert values["config"]["general_settings"]["accounting_execution_mode"] == "local_journal"
+    settings = values["config"]["general_settings"]
+    assert not set(settings) - GeneralSettings.model_fields.keys()
+    assert settings["gateway_ingress_max_active"] == 256
+    assert settings["gateway_preflight_global_max_parallel"] == 150
+    assert settings["gateway_preflight_org_max_parallel"] == 150
+    assert settings["prompt_negative_cache_enabled"]
+    assert settings["prompt_negative_l1_ttl_seconds"] == 30
+    assert (
+        values["accountingWorker"]["config"]["general_settings"]["accounting_hot_path_db_pool_size"]
+        == 8
+    )
+    assert (
+        values["accountingWorker"]["config"]["general_settings"]["accounting_projection_batch_size"]
+        == 256
+    )
+    assert settings["redis_critical_max_waiters"] == 64
+    assert settings["redis_cache_max_waiters"] == settings["redis_bulk_max_waiters"] == 0
     for rate in (50, 100, 200, 500):
         job = cluster_generator_job("gateway:unit", ["http://one"] * 4, rate=rate, duration=600)
         container = job["spec"]["template"]["spec"]["containers"][0]

@@ -21,6 +21,7 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="src.main")
     calls: list[str] = []
 
     async def _init_infrastructure(app):  # noqa: ANN001, ANN202

@@ -105,13 +105,21 @@ def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
     )
     values["accountingWorker"].update(resources=role_resources)
     values["config"]["general_settings"].update(
-        accounting_projection_batch_size=128,
+        accounting_projection_batch_size=256,
         accounting_projection_max_concurrent_partitions=4,
         accounting_statement_timeout_ms=250,
         accounting_grant_target_operations=32,
         accounting_grant_ttl_seconds=30,
         accounting_max_provider_attempts=3,
         spend_operation_intents_enabled=False,
+        prompt_negative_cache_enabled=True,
+        prompt_negative_l1_ttl_seconds=30,
+        gateway_ingress_max_active=256,
+        gateway_preflight_global_max_parallel=150,
+        gateway_preflight_org_max_parallel=150,
+        redis_critical_max_waiters=64,
+        redis_cache_max_waiters=0,
+        redis_bulk_max_waiters=0,
     )
     values["networkPolicy"].update(
         ingress=[{"from": [{"podSelector": {}}], "ports": [{"port": 4000, "protocol": "TCP"}]}],

@@ -57,7 +57,9 @@ async def test_health_is_unready_before_start_and_no_provider_or_admin_routes_ar
         assert (await client.get("/health/liveliness")).status_code == 200
         for path in ("/openapi.json", "/docs", "/admin", "/v1/chat/completions"):
             assert (await client.get(path)).status_code == 404
-        assert (await client.get("/metrics")).status_code == 200
+        response = await client.get("/metrics")
+        assert response.status_code == 503
+        assert response.text == "metrics snapshot service unavailable\n"
     assert app.state.accounting_role_state.runtime is None
 
 

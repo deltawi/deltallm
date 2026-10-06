@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.bootstrap.metrics import PrometheusSnapshotService
 from src.cache import CacheKeyBuilder, InMemoryBackend, PrometheusCacheMetrics
 from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.db.callable_targets import CallableTargetBindingRecord
@@ -88,6 +89,11 @@ class _ShadowMetricsPolicyRepository:
         ], 1
 
 
+async def scrape_metrics(client, service: PrometheusSnapshotService):  # noqa: ANN001, ANN201
+    await service.refresh()
+    return await client.get("/metrics")
+
+
 def test_prometheus_cache_metrics_reuses_registered_collectors():
     first = PrometheusCacheMetrics(cache_type="memory")
     second = PrometheusCacheMetrics(cache_type="redis")
@@ -96,14 +102,37 @@ def test_prometheus_cache_metrics_reuses_registered_collectors():
     second.error(operation="read")
 
 
-async def test_metrics_endpoint_exposes_request_and_usage_metrics(client, test_app):
+async def test_metrics_endpoint_requires_lifecycle_snapshot_service(client):
+    response = await client.get("/metrics")
+
+    assert response.status_code == 503
+    assert response.text == "metrics snapshot service unavailable\n"
+
+
+async def test_metrics_endpoint_only_serves_completed_snapshot(client, metrics_snapshot_service):
+    expected = metrics_snapshot_service.snapshot.content
+
+    def fail_if_encoded(*args):  # noqa: ANN002, ANN202
+        raise AssertionError("a scrape must not encode the registry")
+
+    metrics_snapshot_service._encoder = fail_if_encoded
+    first = await client.get("/metrics")
+    second = await client.get("/metrics")
+
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content == expected
+
+
+async def test_metrics_endpoint_exposes_request_and_usage_metrics(
+    client, test_app, metrics_snapshot_service
+):
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
     assert metrics.status_code == 200
     text = metrics.text
     assert "deltallm_requests_total" in text
@@ -117,7 +146,9 @@ async def test_metrics_endpoint_exposes_request_and_usage_metrics(client, test_a
     assert 'response_kind="nonstream"' in text
 
 
-async def test_metrics_endpoint_exposes_cache_hit_and_miss(client, test_app):
+async def test_metrics_endpoint_exposes_cache_hit_and_miss(
+    client, test_app, metrics_snapshot_service
+):
     test_app.state.cache_backend = InMemoryBackend(max_size=32)
     test_app.state.cache_key_builder = CacheKeyBuilder(custom_salt="test-salt")
     test_app.state.cache_metrics = PrometheusCacheMetrics(cache_type="memory")
@@ -131,42 +162,46 @@ async def test_metrics_endpoint_exposes_cache_hit_and_miss(client, test_app):
     assert r2.status_code == 200
     assert r2.headers.get("x-deltallm-cache-hit") == "true"
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
     text = metrics.text
     assert "deltallm_cache_hit_total" in text
     assert "deltallm_cache_miss_total" in text
 
 
-async def test_metrics_endpoint_exposes_deployment_gauges(client):
+async def test_metrics_endpoint_exposes_deployment_gauges(client, metrics_snapshot_service):
     health = await client.get("/health/deployments")
     assert health.status_code == 200
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
     text = metrics.text
     assert "deltallm_deployment_state" in text
     assert "deltallm_deployment_active_requests" in text
     assert "deltallm_deployment_cooldown" in text
 
 
-async def test_metrics_endpoint_exposes_router_health_transitions(client, test_app):
+async def test_metrics_endpoint_exposes_router_health_transitions(
+    client, test_app, metrics_snapshot_service
+):
     await test_app.state.cooldown_manager.manual_cooldown(
         "metrics-health-transition",
         1,
         "metrics test",
     )
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
     text = metrics.text
     assert "deltallm_router_health_transitions_total" in text
     assert 'transition="manual_cooldown"' in text
 
 
-async def test_metrics_endpoint_exposes_bounded_provider_stream_validation_failures(client):
+async def test_metrics_endpoint_exposes_bounded_provider_stream_validation_failures(
+    client, metrics_snapshot_service
+):
     increment_provider_stream_validation_failure(
         reason=ProviderStreamValidationFailureReason.PRECOMMIT_UNKNOWN_OUTPUT_LIMIT
     )
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
 
     assert metrics.status_code == 200
     assert "deltallm_provider_stream_validation_failures_total" in metrics.text
@@ -178,16 +213,18 @@ async def test_metrics_endpoint_exposes_bounded_provider_stream_validation_failu
         increment_provider_stream_validation_failure(reason="provider-owned-value")
 
 
-async def test_metrics_endpoint_exposes_context_routing_decisions(client):
+async def test_metrics_endpoint_exposes_context_routing_decisions(client, metrics_snapshot_service):
     increment_router_context_decision(outcome="selected")
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
 
     assert "deltallm_router_context_decisions_total" in metrics.text
     assert 'outcome="selected"' in metrics.text
 
 
-async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app):
+async def test_metrics_endpoint_exposes_prompt_registry_metrics(
+    client, test_app, metrics_snapshot_service
+):
     test_app.state.prompt_registry_service = PromptRegistryService(
         repository=_PromptMetricsRepository()
     )
@@ -208,7 +245,7 @@ async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
     assert metrics.status_code == 200
     text = metrics.text
     assert "deltallm_prompt_cache_lookups_total" in text
@@ -218,7 +255,9 @@ async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app
     assert "deltallm_prompt_singleflight_outcomes_total" in text
 
 
-async def test_metrics_endpoint_exposes_callable_target_policy_shadow_metrics(client, test_app):
+async def test_metrics_endpoint_exposes_callable_target_policy_shadow_metrics(
+    client, test_app, metrics_snapshot_service
+):
     record = next(iter(test_app.state._test_repo.records.values()))
     record.organization_id = "org-1"
     record.team_id = "team-1"
@@ -238,7 +277,7 @@ async def test_metrics_endpoint_exposes_callable_target_policy_shadow_metrics(cl
 
     assert response.status_code == 200
 
-    metrics = await client.get("/metrics")
+    metrics = await scrape_metrics(client, metrics_snapshot_service)
     text = metrics.text
     assert "deltallm_callable_target_policy_shadow_mismatches_total" in text
     assert 'difference_type="removed_only"' in text

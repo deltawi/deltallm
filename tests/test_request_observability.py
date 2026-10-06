@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import gc
+import threading
 from typing import cast
 
 import pytest
 from starlette.types import Message, Receive, Scope, Send
 
-from src.bootstrap.metrics import RuntimeMetricSampler
+from prometheus_client import CollectorRegistry
+
+from src.bootstrap.metrics import (
+    freeze_startup_heap,
+    MetricsSnapshotGenerationTimedOut,
+    MetricsSnapshotTooLarge,
+    PrometheusSnapshotService,
+    RuntimeMetricSampler,
+)
 from src.metrics.prometheus import get_prometheus_registry
-from src.metrics.request_phases import observe_request_phase, request_route
+from src.metrics.request_phases import measure_request_phase, observe_request_phase, request_route
 from src.middleware.request_timing import RequestTimingMiddleware
 
 
@@ -146,6 +156,22 @@ def test_untrusted_phase_values_collapse_to_fixed_labels() -> None:
             assert all("private-" not in str(sample.labels) for sample in metric.samples)
 
 
+def test_request_phase_in_flight_is_bounded_and_released_on_error() -> None:
+    labels = {"route": "chat_completions", "phase": "upstream_http"}
+    before = value("deltallm_request_phase_in_flight", **labels)
+
+    with pytest.raises(RuntimeError, match="synthetic"):
+        with measure_request_phase(
+            route="chat_completions",
+            phase="upstream_http",
+            response_kind="nonstream",
+        ):
+            assert value("deltallm_request_phase_in_flight", **labels) == before + 1
+            raise RuntimeError("synthetic")
+
+    assert value("deltallm_request_phase_in_flight", **labels) == before
+
+
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
@@ -194,6 +220,10 @@ def test_sampler_measures_delay_and_cannot_rearm_after_shutdown() -> None:
     sampler.start()
     assert len(clock.timers) == 1
     assert value("deltallm_event_loop_samplers") == before + 1
+    before_gc = value("deltallm_python_gc_pause_seconds_count", generation="2")
+    sampler._observe_gc("start", {"generation": 2})
+    sampler._observe_gc("stop", {"generation": 2})
+    assert value("deltallm_python_gc_pause_seconds_count", generation="2") == before_gc + 1
     clock.now = 101.25
     clock.timers[0].callback()
     assert value("deltallm_event_loop_last_lag_seconds") == 0.25
@@ -204,6 +234,204 @@ def test_sampler_measures_delay_and_cannot_rearm_after_shutdown() -> None:
     clock.timers[-1].callback()
     assert len(clock.timers) == 2
     assert value("deltallm_event_loop_samplers") == before
+
+
+def test_startup_heap_is_collected_before_it_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "src.bootstrap.metrics.gc.collect", lambda generation: calls.append(generation)
+    )
+    monkeypatch.setattr("src.bootstrap.metrics.gc.freeze", lambda: calls.append("freeze"))
+    monkeypatch.setattr("src.bootstrap.metrics.gc.get_freeze_count", lambda: 321)
+
+    assert freeze_startup_heap() == 321
+    assert calls == [2, "freeze"]
+
+
+@pytest.mark.asyncio
+async def test_prometheus_snapshot_encoding_runs_outside_event_loop() -> None:
+    event_loop_thread = threading.get_ident()
+    encoder_threads: list[int] = []
+    second_started = threading.Event()
+    release_second = threading.Event()
+
+    def encode(registry: CollectorRegistry) -> bytes:
+        del registry
+        encoder_threads.append(threading.get_ident())
+        if len(encoder_threads) == 1:
+            return b"initial"
+        second_started.set()
+        assert release_second.wait(timeout=1)
+        return b"refreshed"
+
+    service = PrometheusSnapshotService(
+        registry=CollectorRegistry(),
+        encoder=encode,
+        interval_seconds=3600,
+    )
+    await service.start(periodic=False)
+    refresh = asyncio.create_task(service.refresh())
+    try:
+        for _ in range(100):
+            if second_started.is_set():
+                break
+            await asyncio.sleep(0)
+        assert second_started.is_set()
+        assert service.snapshot.content == b"initial"
+        assert encoder_threads == [encoder_threads[0], encoder_threads[0]]
+        assert encoder_threads[0] != event_loop_thread
+        event_loop_progressed = asyncio.Event()
+        asyncio.get_running_loop().call_soon(event_loop_progressed.set)
+        await asyncio.wait_for(event_loop_progressed.wait(), timeout=0.1)
+        release_second.set()
+        assert (await refresh).content == b"refreshed"
+    finally:
+        release_second.set()
+        await asyncio.gather(refresh, return_exceptions=True)
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_prometheus_snapshot_failure_preserves_last_completed_content() -> None:
+    calls = 0
+
+    def encode(registry: CollectorRegistry) -> bytes:
+        nonlocal calls
+        del registry
+        calls += 1
+        if calls == 1:
+            return b"last-good"
+        raise RuntimeError("broken collector")
+
+    service = PrometheusSnapshotService(
+        registry=CollectorRegistry(),
+        encoder=encode,
+        interval_seconds=3600,
+    )
+    await service.start(periodic=False)
+    try:
+        with pytest.raises(RuntimeError, match="broken collector"):
+            await service.refresh()
+        assert service.snapshot.content == b"last-good"
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("late", [False, True])
+async def test_failed_snapshot_wrapper_has_no_unobserved_exception(late: bool) -> None:
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    observed: list[str] = []
+    release = threading.Event()
+    finished = asyncio.Event()
+    calls = 0
+
+    def encode(registry: CollectorRegistry) -> bytes:
+        nonlocal calls
+        del registry
+        calls += 1
+        if calls == 1:
+            return b"last-good"
+        try:
+            if late:
+                assert release.wait(timeout=1)
+            raise RuntimeError("Synthetic encoder failure")
+        finally:
+            loop.call_soon_threadsafe(finished.set)
+
+    service = PrometheusSnapshotService(
+        registry=CollectorRegistry(),
+        encoder=encode,
+        execution_timeout_seconds=0.01 if late else 1,
+    )
+    await service.start(periodic=False)
+    loop.set_exception_handler(lambda _loop, context: observed.append(str(context["message"])))
+    try:
+        expected = MetricsSnapshotGenerationTimedOut if late else RuntimeError
+        with pytest.raises(expected):
+            await service.refresh()
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=0.5)
+        await service.close()
+        gc.collect()
+        await asyncio.sleep(0)
+        assert service.snapshot.content == b"last-good"
+        assert observed == []
+    finally:
+        release.set()
+        await service.close()
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+async def test_prometheus_snapshot_rejects_oversized_content_and_preserves_last_good() -> None:
+    payloads = iter((b"ok", b"too-large"))
+    service = PrometheusSnapshotService(
+        registry=CollectorRegistry(),
+        encoder=lambda registry: next(payloads),
+        interval_seconds=3600,
+        max_snapshot_bytes=2,
+    )
+    await service.start(periodic=False)
+    try:
+        with pytest.raises(MetricsSnapshotTooLarge, match="retained byte budget"):
+            await service.refresh()
+        assert service.snapshot.content == b"ok"
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_prometheus_snapshot_timeout_cannot_queue_more_encoder_work() -> None:
+    calls = 0
+    second_started = threading.Event()
+    second_finished = threading.Event()
+    release_second = threading.Event()
+
+    def encode(registry: CollectorRegistry) -> bytes:
+        nonlocal calls
+        del registry
+        calls += 1
+        if calls == 1:
+            return b"initial"
+        if calls == 2:
+            second_started.set()
+            release_second.wait(timeout=1)
+            second_finished.set()
+            return b"discarded-late-result"
+        return b"fresh"
+
+    service = PrometheusSnapshotService(
+        registry=CollectorRegistry(),
+        encoder=encode,
+        interval_seconds=3600,
+        execution_timeout_seconds=0.01,
+    )
+    await service.start(periodic=False)
+    try:
+        with pytest.raises(MetricsSnapshotGenerationTimedOut, match="deadline exceeded"):
+            await service.refresh()
+        assert second_started.is_set()
+        assert service.snapshot.content == b"initial"
+
+        # A timed-out thread retains the only encoder slot. Further refreshes
+        # serve the last good snapshot instead of queuing executor work.
+        assert (await service.refresh()).content == b"initial"
+        assert calls == 2
+
+        release_second.set()
+        for _ in range(100):
+            if second_finished.is_set() and service._generation.done():
+                break
+            await asyncio.sleep(0)
+        assert second_finished.is_set()
+        assert service._generation.done()
+        assert (await service.refresh()).content == b"fresh"
+        assert calls == 3
+    finally:
+        release_second.set()
+        await service.close()
 
 
 @pytest.mark.asyncio

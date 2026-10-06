@@ -28,6 +28,208 @@ from src.router.router import Deployment
 pytestmark = pytest.mark.redis
 
 
+async def test_routing_prerequisites_and_success_use_three_attributed_round_trips() -> None:
+    from src.config import GeneralSettings, Settings
+    from src.metrics.prometheus import get_prometheus_registry
+    from src.redis_runtime import build_redis_client
+
+    redis = build_redis_client(
+        Settings(redis_url=os.environ["DELTALLM_TEST_REDIS_URL"]),
+        GeneralSettings(),
+        allocation="critical",
+    )
+    unique = uuid4().hex
+    deployment_id = f"routing-call-budget-{unique}"
+    state = RedisStateBackend(redis, degraded_mode="fail_closed")
+    deployment = Deployment(
+        deployment_id=deployment_id,
+        model_name="group",
+        deltallm_params={"provider": "openai", "model": "openai/fixture"},
+        model_info={"mode": "chat"},
+    )
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state,
+        config=RouterConfig(enable_pre_call_checks=False),
+        deployment_registry={"group": [deployment]},
+    )
+
+    def calls(family: str) -> float:
+        return (
+            get_prometheus_registry().get_sample_value(
+                "deltallm_redis_command_round_trips_total",
+                {
+                    "allocation": "critical",
+                    "owner": "routing",
+                    "family": family,
+                    "outcome": "success",
+                },
+            )
+            or 0
+        )
+
+    try:
+        before = {family: calls(family) for family in ("pipeline", "lua")}
+        planned = await router.plan_deployments(["group"], {})
+        assert planned["group"].candidate_count == 1
+        permit = await state.acquire_attempt(deployment_id, AttemptCapacity())
+        await state.complete_attempt_success(permit, latency_ms=2, usage_counters={"rpm": 1})
+        assert calls("pipeline") - before["pipeline"] == 1
+        assert calls("lua") - before["lua"] == 2
+        assert await state.get_usage(deployment_id) == {"rpm": 1, "tpm": 0}
+        assert await state.get_active_requests(deployment_id) == 0
+    finally:
+        keys = [key async for key in redis.scan_iter(match=f"*{unique}*")]
+        if keys:
+            await redis.delete(*keys)
+        await redis.aclose()
+
+
+@pytest.mark.skipif(
+    not os.getenv("DELTALLM_TEST_REDIS_URL"),
+    reason="DELTALLM_TEST_REDIS_URL is required for the Redis integration test",
+)
+async def test_success_completion_is_atomic_and_owner_fenced_in_real_redis() -> None:
+    redis = Redis.from_url(
+        os.environ["DELTALLM_TEST_REDIS_URL"],
+        decode_responses=True,
+    )
+    unique = uuid4().hex
+    deployment_id = f"router-completion-{unique}"
+    state = RedisStateBackend(redis, degraded_mode="fail_closed")
+
+    try:
+        permit = await state.acquire_attempt(deployment_id, AttemptCapacity())
+        assert permit.acquired is True
+
+        transition = await state.complete_attempt_success(
+            permit,
+            latency_ms=12.5,
+            usage_counters={"rpm": 1, "tpm": 7},
+        )
+
+        assert transition.applied is True
+        assert await state.get_active_requests(deployment_id) == 0
+        assert await state.get_usage(deployment_id) == {"rpm": 1, "tpm": 7}
+        latency = await state.get_latency_window(deployment_id, 300_000)
+        assert len(latency) == 1
+        assert latency[0][1] == 12.5
+        assert (await state.get_health(deployment_id))["healthy"] == "true"
+
+        replay = await state.complete_attempt_success(
+            permit,
+            latency_ms=99.0,
+            usage_counters={"rpm": 1, "tpm": 100},
+        )
+
+        assert replay.applied is False
+        assert await state.get_usage(deployment_id) == {"rpm": 1, "tpm": 7}
+        latency = await state.get_latency_window(deployment_id, 300_000)
+        assert len(latency) == 1
+        assert latency[0][1] == 12.5
+
+        recovery_id = f"router-completion-recovery-{unique}"
+        await redis.hset(
+            state.keyspace.health(recovery_id),
+            mapping={"healthy": "false", "recovery_required": "true"},
+        )
+        recovery_permit = await state.acquire_attempt(recovery_id, AttemptCapacity())
+        assert recovery_permit.recovery is True
+        recovery = await state.complete_attempt_success(
+            recovery_permit,
+            latency_ms=8.0,
+            usage_counters={"rpm": 1, "tpm": 3},
+        )
+        assert recovery.applied is True
+        assert recovery.recovered is True
+        assert (await state.get_health(recovery_id))["healthy"] == "true"
+
+        manual_id = f"router-completion-manual-{unique}"
+        manual_permit = await state.acquire_attempt(manual_id, AttemptCapacity())
+        await CooldownManager(state).manual_cooldown(manual_id, 30, "operator")
+        manual = await state.complete_attempt_success(
+            manual_permit,
+            latency_ms=8.0,
+            usage_counters={"rpm": 1, "tpm": 3},
+        )
+        assert manual.applied is False
+        assert await state.is_cooled_down(manual_id) is True
+        assert await state.get_active_requests(manual_id) == 0
+    finally:
+        keys = [key async for key in redis.scan_iter(match=f"*{unique}*")]
+        if keys:
+            await redis.delete(*keys)
+        await redis.aclose()
+
+
+@pytest.mark.parametrize("fence", ["expired", "replacement", "manual"])
+async def test_combined_success_cannot_clear_a_stale_recovery_fence(fence: str) -> None:
+    redis = Redis.from_url(os.environ["DELTALLM_TEST_REDIS_URL"], decode_responses=True)
+    unique = uuid4().hex
+    deployment = f"router-success-fence-{unique}"
+    state = RedisStateBackend(redis, degraded_mode="fail_closed")
+    try:
+        await redis.hset(
+            state.keyspace.health(deployment),
+            mapping={"healthy": "false", "recovery_required": "true"},
+        )
+        permit = await state.acquire_attempt(deployment, AttemptCapacity())
+        assert permit.recovery and permit.owner_token
+        if fence == "expired":
+            await redis.zadd(state._attempt_owners_key(deployment), {permit.owner_token: 1})
+        elif fence == "replacement":
+            await redis.set(state._recovery_key(permit.health_ref), "replacement", ex=60)
+        else:
+            await CooldownManager(state).manual_cooldown(deployment, 30, "operator")
+        result = await state.complete_attempt_success(
+            permit, latency_ms=3, usage_counters={"rpm": 1, "tpm": 2}
+        )
+        assert not result.applied and not result.recovered
+        assert (await state.get_health(deployment))["healthy"] == "false"
+        assert await state.get_active_requests(deployment) == 0
+        if fence == "replacement":
+            assert await redis.get(state._recovery_key(permit.health_ref)) == "replacement"
+        if fence == "manual":
+            assert await state.is_cooled_down(deployment)
+        assert await state.get_usage(deployment) == {"rpm": 1, "tpm": 2}
+    finally:
+        keys = [key async for key in redis.scan_iter(match=f"*{unique}*")]
+        if keys:
+            await redis.delete(*keys)
+        await redis.aclose()
+
+
+async def test_combined_success_retries_lost_response_without_duplicate_usage() -> None:
+    class LostResponseRedis(Redis):
+        lost = False
+
+        async def eval(self, script: str, numkeys: int, *arguments: str | int | float) -> object:
+            result = await super().eval(script, numkeys, *arguments)
+            if "router_attempt_success_completion_v2" in script and not self.lost:
+                self.lost = True
+                raise TimeoutError("Synthetic lost response after commit")
+            return result
+
+    redis = LostResponseRedis.from_url(os.environ["DELTALLM_TEST_REDIS_URL"], decode_responses=True)
+    unique = uuid4().hex
+    deployment = f"router-success-lost-{unique}"
+    state = RedisStateBackend(redis, degraded_mode="fail_closed")
+    try:
+        permit = await state.acquire_attempt(deployment, AttemptCapacity())
+        await state.complete_attempt_success(
+            permit, latency_ms=3, usage_counters={"rpm": 1, "tpm": 2}
+        )
+        assert redis.lost
+        assert await state.get_usage(deployment) == {"rpm": 1, "tpm": 2}
+        assert len(await state.get_latency_window(deployment, 300_000)) == 1
+        assert await state.get_active_requests(deployment) == 0
+    finally:
+        keys = [key async for key in redis.scan_iter(match=f"*{unique}*")]
+        if keys:
+            await redis.delete(*keys)
+        await redis.aclose()
+
+
 @pytest.mark.skipif(
     not os.getenv("DELTALLM_TEST_REDIS_URL"),
     reason="DELTALLM_TEST_REDIS_URL is required for the Redis integration test",

@@ -271,6 +271,10 @@ general_settings:
 {{- if or (not $.Values.accountingRequest.enabled) (ne $accountingGeneral.accounting_execution_mode "local_journal") (not $accountingGeneral.accounting_projection_worker_enabled) -}}
 {{- fail "Native accounting requires its separate request and projection roles" -}}
 {{- end -}}
+{{- $reportLanes := int64 $accountingGeneral.accounting_projection_max_concurrent_partitions -}}
+{{- if or (gt $reportLanes 4) (lt (int64 $accountingGeneral.accounting_hot_path_db_pool_size) (add $reportLanes 4)) -}}
+{{- fail "Native projection requires at most four reporting lanes and two reserved database connections" -}}
+{{- end -}}
 {{- $requestGeneral := (include "deltallm.accountingRequestConfigYaml" . | fromYaml).general_settings -}}
 {{- if or (ne $requestGeneral.accounting_execution_mode "local_journal") (ne (int64 $requestGeneral.accounting_protocol_generation) (int64 $apiGeneral.accounting_protocol_generation)) -}}
 {{- fail "API and accounting request must use the same native mode and generation" -}}

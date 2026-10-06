@@ -85,3 +85,37 @@ async def test_idle_pubsub_survives_multiple_socket_deadlines_and_receives_updat
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             await stream.aclose()
+
+
+async def test_real_critical_recovery_burst_drains_bounded_waiters(redis_settings):
+    import asyncio
+
+    settings = redis_settings
+    general = GeneralSettings(
+        redis_critical_max_connections=1,
+        redis_critical_max_waiters=2,
+        redis_acquisition_timeout_seconds=1,
+    )
+    async with AsyncExitStack() as stack:
+        critical = build_redis_client(settings, general, allocation="critical")
+        stack.push_async_callback(critical.aclose)
+        pool = critical.connection_pool
+        held = await pool.get_connection()
+        queued = [asyncio.create_task(critical.ping()) for _ in range(2)]
+        try:
+            async with asyncio.timeout(1):
+                while pool.gate.waiters != 2:
+                    await asyncio.sleep(0)
+            with pytest.raises(RedisConnectionError, match="full"):
+                await critical.ping()
+            await pool.release(held)
+            held = None
+            assert await asyncio.gather(*queued) == [True, True]
+            assert pool.gate.active == 0
+            assert pool.gate.waiters == 0
+        finally:
+            if held is not None:
+                await pool.release(held)
+            for task in queued:
+                task.cancel()
+            await asyncio.gather(*queued, return_exceptions=True)

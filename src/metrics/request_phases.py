@@ -99,6 +99,12 @@ request_in_flight = Gauge(
     ["route"],
     registry=get_prometheus_registry(),
 )
+request_phase_in_flight = Gauge(
+    "deltallm_request_phase_in_flight",
+    "Requests currently executing a bounded request phase",
+    ["route", "phase"],
+    registry=get_prometheus_registry(),
+)
 request_bytes = Counter(
     "deltallm_http_request_body_bytes_total",
     "HTTP request body bytes received; not a retained-memory measurement",
@@ -154,21 +160,35 @@ def request_route(path: str) -> str:
 
 
 @contextmanager
+def track_request_phase(*, route: str, phase: str) -> Iterator[None]:
+    active = request_phase_in_flight.labels(
+        route=route if route in ROUTES else "other",
+        phase=phase if phase in PHASES else "other",
+    )
+    active.inc()
+    try:
+        yield
+    finally:
+        active.dec()
+
+
+@contextmanager
 def measure_request_phase(
     *, route: str, phase: str, response_kind: str = "unknown"
 ) -> Iterator[None]:
     started = perf_counter()
     outcome = "success"
-    try:
-        yield
-    except BaseException as exc:
-        outcome = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
-        raise
-    finally:
-        observe_request_phase(
-            route=route,
-            phase=phase,
-            outcome=outcome,
-            response_kind=response_kind,
-            latency_seconds=perf_counter() - started,
-        )
+    with track_request_phase(route=route, phase=phase):
+        try:
+            yield
+        except BaseException as exc:
+            outcome = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+            raise
+        finally:
+            observe_request_phase(
+                route=route,
+                phase=phase,
+                outcome=outcome,
+                response_kind=response_kind,
+                latency_seconds=perf_counter() - started,
+            )

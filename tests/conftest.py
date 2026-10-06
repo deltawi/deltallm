@@ -283,6 +283,100 @@ class FakeRedis:
             raise RuntimeError("NOSCRIPT No matching script. Please use EVAL.")
         return await self.eval(script, numkeys, *args)
 
+    def _router_attempt_release(self, keys: list[str], argv: list[str]):
+        active_key, owners_key, recovery_key = keys
+        owner_token = argv[0]
+        owners = self.zset_store.get(owners_key, [])
+        removed = any(member == owner_token for _score, member in owners)
+        if removed:
+            self.zset_store[owners_key] = [
+                (score, member) for score, member in owners if member != owner_token
+            ]
+            if not self.zset_store[owners_key]:
+                self.zset_store.pop(owners_key, None)
+                self.ttl_store.pop(owners_key, None)
+        current = int(self.store.get(active_key, 0) or 0)
+        if removed:
+            current = max(0, current - 1)
+        current = max(current, len(self.zset_store.get(owners_key, [])))
+        if current <= 0:
+            self.store.pop(active_key, None)
+            self.ttl_store.pop(active_key, None)
+        else:
+            self.store[active_key] = current
+        if self.store.get(recovery_key) == owner_token:
+            self.store.pop(recovery_key, None)
+            self.ttl_store.pop(recovery_key, None)
+        return current
+
+    def _router_health_success(self, keys: list[str], argv: list[str]):
+        failures_key, health_key, cooldown_key, recovery_key = keys
+        recovery_token = argv[1]
+        health = self.hash_store.setdefault(health_key, {})
+        if cooldown_key in self.store and health.get("cooldown_kind") == "manual":
+            return [0, 0, 0, "cooldown"]
+        unhealthy = health.get("healthy") == "false" or health.get("recovery_required") == "true"
+        if not recovery_token and (
+            unhealthy or cooldown_key in self.store or recovery_key in self.store
+        ):
+            state = "cooldown" if cooldown_key in self.store else "recoverable"
+            return [0, 0, 0, state]
+        if recovery_token and self.store.get(recovery_key) != recovery_token:
+            return [0, 0, 0, "recoverable"]
+        recovered = int(
+            cooldown_key in self.store
+            or self.hash_store.get(health_key, {}).get("healthy") == "false"
+        )
+        self.store.pop(failures_key, None)
+        self.ttl_store.pop(failures_key, None)
+        self.store.pop(cooldown_key, None)
+        self.ttl_store.pop(cooldown_key, None)
+        self.store.pop(recovery_key, None)
+        self.ttl_store.pop(recovery_key, None)
+        health.update(
+            {
+                "healthy": "true",
+                "recovery_required": "false",
+                "consecutive_failures": "0",
+                "last_success_at": argv[0],
+            }
+        )
+        health.pop("last_error", None)
+        health.pop("last_error_at", None)
+        health.pop("cooldown_kind", None)
+        self.ttl_store[health_key] = int(argv[2])
+        return [1, 0, recovered, "healthy"]
+
+    async def _router_success_completion(self, keys: list[str], argv: list[str]):
+        owned_expiry = next(
+            (score for score, member in self.zset_store.get(keys[5], []) if member == argv[0]),
+            None,
+        )
+        transition = [0, 0, 0, "recoverable"]
+        if owned_expiry is None:
+            return transition
+        now_ms = int(time.time() * 1000)
+        if owned_expiry > now_ms:
+            transition = self._router_health_success(
+                keys[:4], [str(now_ms // 1000), argv[1], argv[2]]
+            )
+        timestamp_ms, cutoff, member = int(argv[3]), int(argv[4]), argv[5]
+        samples = [
+            (score, value)
+            for score, value in self.zset_store.get(keys[6], [])
+            if score > cutoff and value != member
+        ]
+        samples.append((timestamp_ms, member))
+        self.zset_store[keys[6]] = samples
+        self.ttl_store[keys[6]] = max(1, int(argv[6]) // 1000)
+        for index in range(int(argv[7])):
+            value = int(argv[8 + index])
+            if value > 0:
+                self.store[keys[7 + index]] = int(self.store.get(keys[7 + index], 0)) + value
+                self.ttl_store[keys[7 + index]] = 120
+        self._router_attempt_release([keys[4], keys[5], keys[3]], [argv[0]])
+        return transition
+
     async def eval(self, script: str, numkeys: int, *args):
         if "redis.call('SETEX', KEYS[2]" in script:
             lock_key = str(args[0])
@@ -316,31 +410,23 @@ class FakeRedis:
         argv = [str(item) for item in args[numkeys:]]
         n = len(keys)
 
+        if "router_attempt_success_completion_v2" in script:
+            return await self._router_success_completion(keys, argv)
+        if "router_recovery_completion_v1" in script:
+            now_ms = int(time.time() * 1000)
+            owned_expiry = next(
+                (score for score, member in self.zset_store.get(keys[5], []) if member == argv[0]),
+                0,
+            )
+            transition = [0, 0, 0, "recoverable"]
+            if owned_expiry > now_ms:
+                transition = self._router_health_success(
+                    keys[:4], [str(now_ms // 1000), argv[0], argv[1]]
+                )
+            self._router_attempt_release([keys[4], keys[5], keys[3]], [argv[0]])
+            return transition
         if "router_attempt_release_v2" in script:
-            active_key, owners_key, recovery_key = keys
-            owner_token = argv[0]
-            owners = self.zset_store.get(owners_key, [])
-            removed = any(member == owner_token for _score, member in owners)
-            if removed:
-                self.zset_store[owners_key] = [
-                    (score, member) for score, member in owners if member != owner_token
-                ]
-                if not self.zset_store[owners_key]:
-                    self.zset_store.pop(owners_key, None)
-                    self.ttl_store.pop(owners_key, None)
-            current = int(self.store.get(active_key, 0) or 0)
-            if removed:
-                current = max(0, current - 1)
-            current = max(current, len(self.zset_store.get(owners_key, [])))
-            if current <= 0:
-                self.store.pop(active_key, None)
-                self.ttl_store.pop(active_key, None)
-            else:
-                self.store[active_key] = current
-            if self.store.get(recovery_key) == owner_token:
-                self.store.pop(recovery_key, None)
-                self.ttl_store.pop(recovery_key, None)
-            return current
+            return self._router_attempt_release(keys, argv)
 
         if "router_attempt_admission_v2" in script:
             active_key, owners_key, cooldown_key, health_key, recovery_key = keys[:5]
@@ -491,44 +577,7 @@ class FakeRedis:
             return [1, failure_count, entered_cooldown, state]
 
         if "router_health_success_v1" in script:
-            failures_key, health_key, cooldown_key, recovery_key = keys
-            recovery_token = argv[1]
-            health = self.hash_store.setdefault(health_key, {})
-            if cooldown_key in self.store and health.get("cooldown_kind") == "manual":
-                return [0, 0, 0, "cooldown"]
-            unhealthy = (
-                health.get("healthy") == "false" or health.get("recovery_required") == "true"
-            )
-            if not recovery_token and (
-                unhealthy or cooldown_key in self.store or recovery_key in self.store
-            ):
-                state = "cooldown" if cooldown_key in self.store else "recoverable"
-                return [0, 0, 0, state]
-            if recovery_token and self.store.get(recovery_key) != recovery_token:
-                return [0, 0, 0, "recoverable"]
-            recovered = int(
-                cooldown_key in self.store
-                or self.hash_store.get(health_key, {}).get("healthy") == "false"
-            )
-            self.store.pop(failures_key, None)
-            self.ttl_store.pop(failures_key, None)
-            self.store.pop(cooldown_key, None)
-            self.ttl_store.pop(cooldown_key, None)
-            self.store.pop(recovery_key, None)
-            self.ttl_store.pop(recovery_key, None)
-            health.update(
-                {
-                    "healthy": "true",
-                    "recovery_required": "false",
-                    "consecutive_failures": "0",
-                    "last_success_at": argv[0],
-                }
-            )
-            health.pop("last_error", None)
-            health.pop("last_error_at", None)
-            health.pop("cooldown_kind", None)
-            self.ttl_store[health_key] = int(argv[2])
-            return [1, 0, recovered, "healthy"]
+            return self._router_health_success(keys, argv)
 
         if "router_health_manual_cooldown_v1" in script:
             cooldown_key, health_key, recovery_key = keys
@@ -1556,3 +1605,17 @@ async def client(test_app: FastAPI):
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture
+async def metrics_snapshot_service(test_app: FastAPI):
+    from src.bootstrap.metrics import PrometheusSnapshotService
+
+    service = PrometheusSnapshotService(interval_seconds=3600)
+    await service.start(periodic=False)
+    test_app.state.prometheus_snapshot_service = service
+    try:
+        yield service
+    finally:
+        await service.close()
+        del test_app.state.prometheus_snapshot_service

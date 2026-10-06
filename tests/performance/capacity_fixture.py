@@ -24,7 +24,7 @@ def install_capacity_dependencies(cluster: LifecycleCluster, image: str) -> None
         "deployment/redis",
         "--type=strategic",
         "-p",
-        '{"spec":{"template":{"spec":{"containers":[{"name":"redis","args":["--maxclients","5000","--maxmemory","128mb","--maxmemory-policy","noeviction"]}]}}}}',
+        '{"spec":{"template":{"spec":{"containers":[{"name":"redis","args":["--maxclients","5000","--maxmemory","128mb","--maxmemory-policy","noeviction","--save","","--appendonly","no"]}]}}}}',
     )
     for name in ("postgres", "redis"):
         cluster.kubectl("rollout", "status", "deployment/" + name, "--timeout=180s")

@@ -15,6 +15,9 @@ def native(**changes):
             "accounting_request_url": "https://accounting.internal",
             "accounting_rpc_signing_secret": "s" * 32,
             "accounting_rpc_allowed_private_cidrs": ("10.96.0.0/12",),
+            "accounting_hot_path_db_pool_size": 8
+            if changes.get("accounting_projection_worker_enabled")
+            else 2,
             **changes,
         }
     )
@@ -43,6 +46,17 @@ def test_projection_role_does_not_require_the_rpc_signing_secret():
         ("api", {"accounting_projection_worker_enabled": True}),
         ("accountingRequest", {"accounting_rpc_signing_secret": None}),
         ("accountingWorker", {"accounting_projection_worker_enabled": False}),
+        (
+            "accountingWorker",
+            {"accounting_projection_worker_enabled": True, "accounting_hot_path_db_pool_size": 7},
+        ),
+        (
+            "accountingWorker",
+            {
+                "accounting_projection_worker_enabled": True,
+                "accounting_projection_max_concurrent_partitions": 5,
+            },
+        ),
     ],
 )
 def test_incomplete_or_ambiguous_native_role_fails_before_opening_clients(role, changes):

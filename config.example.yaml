@@ -138,7 +138,9 @@ general_settings:
   # Finite Redis allocations (restart required). Separate bulk endpoint isolates server memory.
   redis_bulk_url: null
   redis_critical_max_connections: 64
+  redis_critical_max_waiters: 64
   redis_bulk_max_connections: 16
+  redis_bulk_max_waiters: 0
   redis_acquisition_timeout_seconds: 0.2
   redis_socket_timeout_seconds: 1.0
   redis_connect_timeout_seconds: 1.0
@@ -153,6 +155,7 @@ general_settings:
   db_background_lock_timeout_seconds: 1.0
   db_background_transaction_timeout_seconds: 10.0
   redis_cache_max_connections: 16
+  redis_cache_max_waiters: 0
   db_pool_timeout: 30
   # Reject overload before prompt, guardrail, and budget work. Enable after sizing
   # these limits below the measured safe database/upstream concurrency envelope.

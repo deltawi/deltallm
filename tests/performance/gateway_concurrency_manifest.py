@@ -22,6 +22,7 @@ from src.ingress import IngressLimits
 from src.services.auth_fallback import AuthFallbackLimits
 from tests.performance.gateway_source_identity import source_sha256
 from src.request_work_settings import RequestWorkSettings, resolve_request_work_settings
+from src.redis_runtime import RedisLimits
 
 
 class ServerManifest(BaseModel):
@@ -49,6 +50,7 @@ class ServerManifest(BaseModel):
     ingress: IngressLimits | None = None
     auth_fallback: AuthFallbackLimits | None = None
     request_work: RequestWorkSettings | None = None
+    redis_allocations: RedisLimits | None = None
     image_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     cpu_limit_cores: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     memory_limit_mib: int | None = Field(default=None, gt=0)
@@ -82,6 +84,7 @@ async def local_manifest(
         set(DatabaseAllocationSettings.model_fields)
         | set(RequestWorkSettings.model_fields)
         | set(SpendOperationSettings.model_fields)
+        | {"redis_" + field.name for field in fields(RedisLimits)}
         | {"spend_ingestion_mode", "spend_ingestion_worker_enabled", "telemetry_db_pool_size"}
     ) | {
         prefix + field.name
@@ -134,6 +137,7 @@ async def local_manifest(
             )
         ),
         request_work=resolve_request_work_settings(general, environment),
+        redis_allocations=RedisLimits.from_settings(general, environment),
     )
 
 

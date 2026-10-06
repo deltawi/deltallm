@@ -39,6 +39,7 @@ from src.router.health_state import (
 )
 from src.router.redis_keys import RouterHealthProbeScope, RouterRedisKeyspace
 from src.router.recovery_completion import RECOVERY_COMPLETION_SCRIPT
+from src.router.success_completion import SUCCESS_COMPLETION_SCRIPT
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,14 @@ class DeploymentStateBackend(Protocol):
     async def release_attempt(self, permit: AttemptPermit) -> int | None: ...
 
     async def complete_recovery_attempt(self, permit: AttemptPermit) -> HealthTransitionResult: ...
+
+    async def complete_attempt_success(
+        self, permit: AttemptPermit, *, latency_ms: float, usage_counters: Mapping[str, int]
+    ) -> HealthTransitionResult: ...
+
+    async def get_health_and_cooldown_batch(
+        self, health_refs: list[HealthRefInput]
+    ) -> tuple[dict[str, dict[str, object]], dict[str, bool]]: ...
 
     async def get_active_requests(self, deployment_id: str) -> int: ...
 
@@ -468,6 +477,85 @@ class RedisStateBackend:
             self._handle_backend_failure(exc)
             # Shared ownership must never be replaced by a local transition.
             raise ServiceUnavailableError(message="Routing recovery is unavailable") from exc
+
+    async def complete_attempt_success(
+        self,
+        permit: AttemptPermit,
+        *,
+        latency_ms: float,
+        usage_counters: Mapping[str, int],
+    ) -> HealthTransitionResult:
+        """Record health, latency and usage, then release one owned attempt."""
+        if not permit.acquired or not permit.owner_token or permit.backend is None:
+            return HealthTransitionResult(applied=False, state=DeploymentHealthState.HEALTHY)
+        if permit.backend == "local":
+            return await self._complete_local_success(permit, latency_ms, usage_counters)
+        keys, args = self._success_completion_command(permit, latency_ms, usage_counters)
+        last_error: Exception | None = None
+        for _attempt in range(2):
+            try:
+                raw = await self._redis_call(
+                    "eval", SUCCESS_COMPLETION_SCRIPT, len(keys), *keys, *args
+                )
+                if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+                    raise RuntimeError("Invalid router attempt completion response")
+                return HealthTransitionResult(
+                    applied=int(raw[0]) == 1,
+                    state=DeploymentHealthState(self._decode_redis_text(raw[3])),
+                    recovered=int(raw[2]) == 1,
+                )
+            except Exception as exc:
+                last_error = exc
+        assert last_error is not None
+        # Retry the same owner token. Do not repeat separate usage writes.
+        self._handle_backend_failure(last_error)
+        return HealthTransitionResult(applied=False, state=DeploymentHealthState.HEALTHY)
+
+    def _success_completion_command(
+        self, permit: AttemptPermit, latency_ms: float, counters: Mapping[str, int]
+    ) -> tuple[list[str], list[str | int | float]]:
+        usage = [
+            (name, value)
+            for name, value in self._normalize_usage_counters(counters).items()
+            if value > 0
+        ]
+        timestamp_ms = int(time.time() * 1000)
+        minute = self._minute_window()
+        keys = [
+            *self._health_transition_keys(permit.health_ref),
+            self.keyspace.active_requests(permit.deployment_id),
+            self._attempt_owners_key(permit.deployment_id),
+            self.keyspace.latency(permit.deployment_id),
+            *(self._usage_key(permit.deployment_id, name, minute) for name, _value in usage),
+        ]
+        args: list[str | int | float] = [
+            permit.owner_token,
+            permit.owner_token if permit.recovery else "",
+            health_state_ttl_seconds(),
+            timestamp_ms,
+            timestamp_ms - self.latency_window_ms,
+            f"{timestamp_ms}:{float(latency_ms)}",
+            self.latency_window_ms,
+            len(usage),
+            *(value for _name, value in usage),
+        ]
+        return keys, args
+
+    async def _complete_local_success(
+        self, permit: AttemptPermit, latency_ms: float, counters: Mapping[str, int]
+    ) -> HealthTransitionResult:
+        expiry = self._active_permits.get(permit.deployment_id, {}).get(permit.owner_token)
+        if expiry is None:
+            return HealthTransitionResult(applied=False, state=DeploymentHealthState.HEALTHY)
+        await self.increment_usage_counters(permit.deployment_id, counters)
+        await self.record_latency(permit.deployment_id, latency_ms)
+        transition = HealthTransitionResult(applied=False, state=DeploymentHealthState.RECOVERABLE)
+        if expiry > time.time():
+            transition = await self.apply_health_success(
+                permit.health_ref, recovery_token=permit.owner_token if permit.recovery else None
+            )
+        self._release_local_attempt(permit)
+        return transition
 
     def _acquire_local_attempt(
         self,
@@ -885,6 +973,50 @@ class RedisStateBackend:
                 self._touch_local_health(item, now=now)
                 statuses[item.deployment_id] = True
             return statuses
+
+    async def get_health_and_cooldown_batch(
+        self, health_refs: list[HealthRefInput]
+    ) -> tuple[dict[str, dict[str, object]], dict[str, bool]]:
+        """Read independent routing prerequisites in one Redis exchange."""
+
+        if not health_refs:
+            return {}, {}
+        # Local test backends can override either public reader.
+        if self.redis is None:
+            health = await self.get_health_batch(health_refs)
+            cooldowns = await self.get_cooldown_batch(health_refs)
+            return health, cooldowns
+        resolved_refs = [coerce_health_ref(item) for item in health_refs]
+        try:
+            pipe = self.redis.pipeline()
+            for item in resolved_refs:
+                pipe.hgetall(self.keyspace.health(item.deployment_id, item.generation))
+                pipe.get(self.keyspace.cooldown(item.deployment_id, item.generation))
+            results = await pipe.execute()
+            self._mark_backend_healthy()
+            health: dict[str, dict[str, object]] = {}
+            cooldowns: dict[str, bool] = {}
+            for index, item in enumerate(resolved_refs):
+                health[item.deployment_id] = dict(results[index * 2] or {})
+                cooldowns[item.deployment_id] = results[index * 2 + 1] not in (None, "", b"")
+            return health, cooldowns
+        except Exception as exc:
+            self._handle_backend_failure(exc)
+            self._prune_local_state()
+            now = time.time()
+            health = {}
+            cooldowns = {}
+            for item in resolved_refs:
+                health[item.deployment_id] = dict(self._health.get(item, {}))
+                until = self._cooldown_until.get(item, 0.0)
+                if until and until <= now:
+                    self._cooldown_until.pop(item, None)
+                    self._drop_local_health_state_if_unused(item)
+                    until = 0.0
+                cooldowns[item.deployment_id] = until > now
+                if health[item.deployment_id] or cooldowns[item.deployment_id]:
+                    self._touch_local_health(item, now=now)
+            return health, cooldowns
 
     async def apply_health_success(
         self,

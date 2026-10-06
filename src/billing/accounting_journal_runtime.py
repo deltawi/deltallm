@@ -86,6 +86,10 @@ class JournalProcessingWorker:
         return self._task
 
     @property
+    def tasks(self) -> tuple[asyncio.Task[None], ...]:
+        return () if self._task is None else (self._task,)
+
+    @property
     def retained_claim(self) -> JournalClaim | None:
         return self._claim
 

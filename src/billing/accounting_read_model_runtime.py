@@ -45,24 +45,39 @@ class ReadModelPersistence(Protocol):
 
 
 class ReadModelProcessingWorker:
-    def __init__(self, persistence: ReadModelPersistence, config: ReadModelWorkerConfig) -> None:
+    def __init__(
+        self,
+        persistence: ReadModelPersistence,
+        config: ReadModelWorkerConfig,
+        *,
+        progress_health: ReadModelHealth | None = None,
+        observe_progress: bool = True,
+    ) -> None:
         self._persistence = persistence
         self._config = ReadModelWorkerConfig.model_validate(config.model_dump())
         self._gate = BoundedCapacityGate(concurrency=1, max_waiters=0)
         self._task: asyncio.Task[None] | None = None
         self._claim: ReadModelClaim | None = None
         self._started = asyncio.Event()
+        self._startup_deadline: float | None = None
         self._wake = asyncio.Event()
         self._state = WorkerState.STARTING
         self._closing = False
         self._stop_failed = False
         self._failures = 0
-        self._progress_health = ReadModelHealth(self._config.generation)
+        self._progress_health = progress_health or ReadModelHealth(self._config.generation)
+        if self._progress_health.generation != self._config.generation:
+            raise ValueError("Reporting lanes must share one protocol generation")
+        self._observe_progress = observe_progress
         self._next_progress_at = 0.0
 
     @property
     def task(self) -> asyncio.Task[None] | None:
         return self._task
+
+    @property
+    def tasks(self) -> tuple[asyncio.Task[None], ...]:
+        return () if self._task is None else (self._task,)
 
     @property
     def retained_claim(self) -> ReadModelClaim | None:
@@ -111,6 +126,7 @@ class ReadModelProcessingWorker:
                     generation=self._config.generation, expires_at=expires_at
                 )
             if self._task is None:
+                self._startup_deadline = expires_at
                 self._task = asyncio.create_task(self._run(), name="accounting-read-model")
             await wait_for_startup(
                 started=self._started,
@@ -190,6 +206,8 @@ class ReadModelProcessingWorker:
     async def _run(self) -> None:
         while not self._closing:
             end = asyncio.get_running_loop().time() + self._config.call_budget_seconds
+            if self._startup_deadline is not None:
+                end = min(end, self._startup_deadline)
             try:
                 count = await self.run_once(expires_at=end)
                 await self._refresh_progress(expires_at=end)
@@ -197,11 +215,16 @@ class ReadModelProcessingWorker:
                 self._failures = 0
             except (AccountingProtocolUnavailable, TimeoutError):
                 increment_accounting_projection("read_model_run", "unavailable")
-                self._progress_health.unavailable()
+                if self._observe_progress:
+                    self._progress_health.unavailable()
+                    self._next_progress_at = 0.0
                 self._state = WorkerState.STOPPING if self._closing else WorkerState.DEGRADED
                 self._failures = min(8, self._failures + 1)
                 count = 0
-            self._started.set()
+            health = self.worker_health
+            if health.state is WorkerState.READY or health.detail == "read_model_age_limit":
+                self._started.set()
+                self._startup_deadline = None
             if count:
                 await asyncio.sleep(0)
                 continue
@@ -221,6 +244,8 @@ class ReadModelProcessingWorker:
                 pass
 
     async def _refresh_progress(self, *, expires_at: float) -> None:
+        if not self._observe_progress:
+            return
         observed = monotonic()
         if observed < self._next_progress_at:
             return

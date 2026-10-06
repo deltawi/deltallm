@@ -58,9 +58,10 @@ def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_pat
         config = AppConfig.model_validate(raw)
         contract = DeploymentCapacityContract.load(config, Settings())
         assert contract is not None
-        contract.validate_minimal(config, Settings(), database=2)
+        expected_pool = 8 if role == "accountingWorker" else 2
+        contract.validate_minimal(config, Settings(), database=expected_pool)
         allocation = report.roles[role]
-        assert allocation.pools.postgresql == 2
+        assert allocation.pools.postgresql == expected_pool
         assert allocation.file_descriptors.engine_processes == 0
         assert allocation.pools.redis_critical == allocation.pools.redis_cache == 0
         assert allocation.pools.upstream_http == allocation.pools.control_http == 0
@@ -74,6 +75,16 @@ def test_native_roles_use_one_minimal_deployment_and_real_pool_inventory(tmp_pat
     service = _by_kind_and_name(documents, "Service", "deltallm-accounting-request")
     assert service["spec"]["type"] == "ClusterIP"
     assert service["spec"]["selector"]["app.kubernetes.io/component"] == "accounting-request"
+
+
+@pytest.mark.parametrize(
+    "override",
+    ["accounting_hot_path_db_pool_size=7", "accounting_projection_max_concurrent_partitions=5"],
+)
+def test_native_worker_rejects_lanes_without_control_connection_reserve(override):
+    assert "two reserved database connections" in _render_error(
+        *arguments("--set", "accountingWorker.config.general_settings." + override)
+    )
 
 
 def test_full_native_production_counts_every_peak_role_without_larger_limits():

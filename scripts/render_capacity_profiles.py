@@ -155,7 +155,7 @@ def table(helm: str) -> str:
         "",
         "## Peak dependency budgets",
         "",
-        "The totals include API, batch, accounting roles, rollout overlap, migration, and reserved connections. Native roles each own two PostgreSQL connections and no Redis or provider connections.",
+        "The totals include API, batch, accounting roles, rollout overlap, migration, and reserved connections. The native request role owns two PostgreSQL connections. The native projection role owns eight connections. Both native roles have no Redis or provider connections.",
         "",
         "| Profile | Peak API/request/projection processes | PostgreSQL used/maximum | Redis used/maximum |",
         "| --- | --- | --- | --- |",

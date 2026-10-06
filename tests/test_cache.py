@@ -20,6 +20,7 @@ from src.cache.backends.base import CacheBackend, CacheEntry
 from src.callbacks import CallbackManager, CustomLogger
 from src.db.repositories import KeyRecord
 from src.router import build_deployment_registry
+from src.models.errors import AuthenticationUnavailableError
 
 
 class _SpendRecorder:
@@ -201,6 +202,31 @@ async def test_chat_cache_hit(client, test_app):
     assert r1.headers["x-deltallm-cache-hit"] == "false"
     assert r2.headers["x-deltallm-cache-hit"] == "true"
     assert test_app.state.http_client.post_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_auth_capacity_failure_returns_bounded_service_unavailable(
+    client, test_app, monkeypatch
+):
+    _enable_cache(test_app)
+
+    async def unavailable(_request):
+        raise AuthenticationUnavailableError()
+
+    monkeypatch.setattr("src.cache.middleware.authenticate_request", unavailable)
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.json()["error"]["code"] == "auth_fallback_unavailable"
+    assert test_app.state.http_client.post_calls == 0
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,11 @@ def validate_accounting_role(config: AccountingProtocolSettings, role: Role) -> 
     if role == "accountingWorker":
         if not config.accounting_projection_worker_enabled:
             raise ValueError("native projection role requires its projection worker")
+        lanes = config.accounting_projection_max_concurrent_partitions
+        if lanes > 4 or config.accounting_hot_path_db_pool_size < lanes + 4:
+            raise ValueError(
+                "Native projection needs at most four reporting lanes and two reserved connections"
+            )
         return
     if config.accounting_projection_worker_enabled:
         raise ValueError("native projection must run in its dedicated role")

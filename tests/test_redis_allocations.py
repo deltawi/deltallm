@@ -15,6 +15,7 @@ from src.redis_runtime import (
     ObservedPipeline,
     RedisLimits,
     _command_family,
+    _command_owner,
     build_redis_client,
 )
 
@@ -26,6 +27,18 @@ async def test_redis_command_metrics_use_bounded_families():
     assert _command_family("GET") == "read"
     assert _command_family("SET") == "write"
     assert _command_family("attacker-controlled-command") == "other"
+
+
+async def test_redis_command_owners_use_only_fixed_labels():
+    assert _command_owner(("GET", "key:v4:private-tenant-key")) == "authentication"
+    assert (
+        _command_owner(("EVALSHA", "hash", 2, "parallel:private", "parallel_lease:private"))
+        == "concurrency"
+    )
+    assert _command_owner(("HGET", "primary:router-health:private", "state")) == "routing"
+    assert _command_owner(("MGET", "cache:private", "key:v4:private")) == "mixed"
+    assert _command_owner(("PING",)) == "system"
+    assert _command_owner(("GET", "unclassified-private-key")) == "unknown"
 
 
 class FakeConnection:
@@ -79,6 +92,113 @@ async def test_connection_lock_cannot_accumulate_unbounded_callers():
         assert pool.gate.active == 0
     finally:
         barrier.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await pool.aclose()
+
+
+async def test_critical_recovery_burst_uses_bounded_waiters():
+    pool = AllocatedRedisPool(
+        allocation="critical",
+        acquisition_timeout=1,
+        max_connections=1,
+        max_waiters=2,
+        connection_class=FakeConnection,
+    )
+    held = await pool.get_connection()
+    queued = [asyncio.create_task(pool.get_connection()) for _ in range(2)]
+    try:
+        async with asyncio.timeout(1):
+            while pool.gate.waiters != 2:
+                await asyncio.sleep(0)
+        with pytest.raises(RedisConnectionError, match="full"):
+            await pool.get_connection()
+
+        await pool.release(held)
+        held = None
+        pending = set(queued)
+        while pending:
+            done, pending = await asyncio.wait(
+                pending,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            assert len(done) == 1
+            connection = done.pop().result()
+            await pool.release(connection)
+        assert pool.gate.active == 0
+        assert pool.gate.waiters == 0
+    finally:
+        if held is not None and held in pool._leases:
+            await pool.release(held)
+        for task in queued:
+            task.cancel()
+        await asyncio.gather(*queued, return_exceptions=True)
+        await pool.aclose()
+
+
+async def test_queued_acquisition_deadline_and_cancellation_reclaim_waiters():
+    pool = AllocatedRedisPool(
+        allocation="critical",
+        acquisition_timeout=0.01,
+        max_connections=1,
+        max_waiters=1,
+        connection_class=FakeConnection,
+    )
+    held = await pool.get_connection()
+    try:
+        with pytest.raises(RedisConnectionError, match="deadline"):
+            await pool.get_connection()
+        assert pool.gate.active == 1
+        assert pool.gate.waiters == 0
+
+        pool.acquisition_timeout = 1
+        cancelled = asyncio.create_task(pool.get_connection())
+        async with asyncio.timeout(1):
+            while pool.gate.waiters != 1:
+                await asyncio.sleep(0)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        assert pool.gate.active == 1
+        assert pool.gate.waiters == 0
+    finally:
+        await pool.release(held)
+        await pool.aclose()
+
+
+async def test_connection_readiness_checks_run_concurrently_outside_pool_lock():
+    release = asyncio.Event()
+    all_started = asyncio.Event()
+
+    class SlowConnection(FakeConnection):
+        started = 0
+
+        async def connect(self):
+            type(self).started += 1
+            if type(self).started == 4:
+                all_started.set()
+            await release.wait()
+
+    pool = AllocatedRedisPool(
+        allocation="critical",
+        acquisition_timeout=1,
+        max_connections=4,
+        connection_class=SlowConnection,
+    )
+    tasks = [asyncio.create_task(pool.get_connection()) for _ in range(4)]
+    try:
+        async with asyncio.timeout(0.5):
+            await all_started.wait()
+        assert pool.gate.active == 4
+        assert len(pool._in_use_connections) == 4
+        release.set()
+        connections = await asyncio.gather(*tasks)
+        for connection in connections:
+            await pool.release(connection)
+        assert pool.gate.active == 0
+    finally:
+        release.set()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -159,8 +279,9 @@ async def test_limits_config_defaults_environment_and_restart(name, monkeypatch)
     default = getattr(defaults, name)
     for model in (GeneralSettings, Settings):
         assert getattr(model(), field) == default
+        invalid = -1 if name.endswith("_max_waiters") else 0
         with pytest.raises(ValueError):
-            model.model_validate({field: 0})
+            model.model_validate({field: invalid})
     for path, keys in (
         ("config.example.yaml", ["general_settings"]),
         ("deploy/kubernetes/helm/values.yaml", ["config", "general_settings"]),
@@ -169,8 +290,9 @@ async def test_limits_config_defaults_environment_and_restart(name, monkeypatch)
         for key in keys:
             data = data[key]
         assert data[field] == default
-    monkeypatch.setenv("DELTALLM_" + field.upper(), str(default * 2))
-    assert getattr(RedisLimits.from_settings(GeneralSettings(), Settings()), name) == default * 2
+    override = default * 2 if default else 1
+    monkeypatch.setenv("DELTALLM_" + field.upper(), str(override))
+    assert getattr(RedisLimits.from_settings(GeneralSettings(), Settings()), name) == override
     assert (
         RedisLimits.from_settings(GeneralSettings.model_validate({field: default}), Settings())
         == defaults

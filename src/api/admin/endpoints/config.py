@@ -689,7 +689,9 @@ async def update_settings(
     if "log_level" in general_updates:
         level = str(general_updates["log_level"]).upper()
         if level in ("DEBUG", "INFO", "WARNING", "ERROR"):
-            logging.getLogger().setLevel(getattr(logging, level))
+            from src.runtime_logging import apply_runtime_log_level
+
+            apply_runtime_log_level(level)
 
     response = await get_settings(request, authorization=authorization, x_master_key=x_master_key)
     await emit_admin_mutation_audit(
