@@ -1506,5 +1506,34 @@ Keep the four existing lanes, global observer, limits, and money proofs. No
 timing hooks, new worker, or resource increase. If the comparison helps,
 production adoption must use explicit validated lane scope, not worker-ID parsing.
 
-- [ ] Complete the corrected-image private 500 disjoint-discovery comparison.
-- [ ] Adopt only if measured useful, with explicit scope and normal-image proof.
+- [x] Complete the corrected-image private 500 disjoint-discovery comparison.
+- [x] Decide whether to adopt; reject the comparison below.
+
+The corrected-image discovery comparison completed all 30,000 requests, zero
+errors/drops, p95 83.45 ms, p99 137.42 ms, exact money and 12.21-second drain.
+Slope +0.14020 still failed. PostgreSQL used 83.17 CPU seconds over the whole
+capture, while the four API processes used 203.87 seconds. Generator baseline
+is unavailable, not zero. The prototype is not adopted. Preserve
+`native-d93237b6-500-8cpu-8g-60s-report-discovery-20261006` and its 39 checks
+in `/private/tmp/issue320-d932-report-scope.R1sbAo`. All resources restored.
+
+The API source is unchanged since the retained `5b271273` CPU diagnostic;
+only the reporting query changed under `src/`. Its three-second profile shows
+JSON encoding, validation, metrics, copying, and asynchronous machinery, not a
+single dominant function. The instrumented run greatly perturbed latency, so
+its timings are not a clean capacity baseline. Reuse its evidence to guide
+bounded checks before another intrusive full load profile.
+
+Next use the unchanged sealed image in a clearly labeled fixed 600-second,
+500 RPS diagnostic. Keep all measurement gates, resources, workload, and money
+proofs unchanged. This deliberately examines stability despite the failed
+one-minute diagnostic prerequisite; it is never a release certificate or a
+replacement for the failed short evidence. No application override or timing
+hook. Its separate diagnostic declaration and exact host-side schedule override
+remain archived even when the canonical runner rewrites its partial manifest.
+The purpose is to distinguish startup/vacuum transients from sustained growth,
+not to count a different interval as a short-tier pass. A final canonical series
+still requires all of its own short and ten-minute gates.
+
+- [ ] Complete the selected 600-second 500 stability diagnostic and exact money proof.
+- [ ] Use sustained behavior to decide the next evidence-backed action.
