@@ -1466,3 +1466,23 @@ matches source, as do unchanged migrations 144/145. The first build was cancelle
 after the recurring VM DNS stall; its log is preserved. A restricted build-only
 TLS tunnel completed the canonical Dockerfile build, then stopped. No proxy
 runtime environment remains. Load checks are still open; this is not a capacity pass.
+
+The selected `d93237b6` 500 run completed all 30,000 requests with zero errors
+or drops. p95 94.35 ms, p99 173.26 ms, exact accounting, diagnostics, and
+12.18-second drain passed. Slope +0.20023 still failed. Aggregate accounting
+database latency averaged 3.77 ms versus 4.58 ms in the preceding query-fix
+run, but this is not a controlled attribution or a gateway capacity pass.
+Preserve `native-d93237b6-500-8cpu-8g-60s-exclusive-20261006`; no 200 or full
+series started. Both VMs, original workloads, and contexts restored.
+
+A connection-local comparison copied every production event-table index,
+including its different primary key. The original reporting query still read
+all 40,000 events; the corrected query stayed at one event per seek and cost
+3.81/3.10 ms in generic/custom modes. This confirms the query boundary with
+the full index layout; it does not explain the remaining load failure. Keep
+`/private/tmp/issue320-real-index-plans.H979ZO`.
+
+- [ ] Capture an unchanged-image eight-CPU 500 SQL-cost diagnostic, extending
+  only the already-verified 78-field numeric host sampler.
+- [ ] Identify the remaining growing operation before another runtime change.
+- [ ] Reproduce it independently, then fix and verify through its existing owner.
