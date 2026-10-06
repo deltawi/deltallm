@@ -776,3 +776,40 @@ Next, reserve the qualification VM from concurrent test tasks. Capture the
 first provider failure with bounded diagnostics on the same image. Verify its
 connection and uncertainty paths with controlled tests before a runtime fix.
 Do not repeat lower tiers during this work.
+
+### Coordinated exclusive diagnostic
+
+The user approved coordination with the output-TPM and issue-344 chats. Both
+chats cleared their services. The next `5b271273` diagnostic recorded only its
+two owned kind nodes before arrivals and after drain. The generator proof
+passed all 10,000 requests. No other test container overlapped this run.
+
+The 500 RPS stage failed: 2,118/15,000 successful requests, 7,038 dropped
+arrivals, 1,118 billing HTTP 503 responses, 870 auth-fallback rejections,
+2,884 other HTTP errors, and 972 client connection failures. p95 was
+10,001.35 ms and p99 was 10,002.47 ms. The failed 180.56-second drain retained
+30 safe provisional operations and four open grants. All terminal and
+reporting queues were empty. No provider transport error or cooldown was
+captured. Bounded traces instead recorded statement deadlines and pool waits
+across terminal and reporting work, plus Redis and accounting readiness
+failures. Startup restarts ended before arrivals; no application or provider
+restart occurred during load. These observations do not prove the earlier
+provider read-error cause.
+
+Host snapshots across setup, load, and drain recorded 168,177 swap-in pages
+and 112,196 swap-out pages: about 2.76 GB read and 1.84 GB written at 16 KiB
+per page. Peak sampled pod memory was 3,082,850,304 bytes. Peak sampled pod
+CPU was about 2.25 cores; samples can miss short CPU peaks. Database samples
+showed no lock or I/O waiter, but they can miss short waits. Preserve
+`artifacts/qualification/native-5b271273-500-exclusive-cause-20261006` as a
+failed, instrumented result, not release qualification. Both VM settings,
+original workloads, and original contexts were restored.
+
+- [x] Obtain coordination approval and clear concurrent task services.
+- [x] Record exclusive environment checks and the bounded 500 RPS trace.
+- [x] Preserve the failed result and restore the other VM and its workloads.
+- [ ] Test a temporary 6-CPU, 8-GiB VM to leave more host memory headroom.
+  Keep the image, pod limits, workload, safety, and latency gates unchanged.
+  Record this distinct environment and restore its original 12-GiB setting.
+- [ ] If host pressure falls, use that comparison to select the next controlled
+  software test. Do not infer a software repair from a noisy failed run.

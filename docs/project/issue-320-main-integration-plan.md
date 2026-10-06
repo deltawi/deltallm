@@ -144,6 +144,16 @@ reserve that VM from concurrent tests and trace the first provider failure.
 Do not relax safety, resources, deadlines, or pass limits. Keep 50 and 100 RPS
 out of iteration runs. Final qualification remains open.
 
+The user approved coordination with both other test chats. They cleared their
+services, and the new diagnostic confirmed an exclusive qualification VM.
+It still failed at 500 RPS with 2,118/15,000 successes and 7,038 dropped
+arrivals. The trace recorded accounting and Redis deadline failures, not a
+provider transport error. Host paging remained high: about 2.76 GB read and
+1.84 GB written across setup, load, and drain. All original workloads and
+contexts were restored. Next, compare a temporary 8-GiB test VM with the same
+six CPUs, image, pod limits, and strict gates. This is an environment check,
+not a code repair or release certificate.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
