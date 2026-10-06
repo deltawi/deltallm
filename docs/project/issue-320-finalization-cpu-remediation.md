@@ -1055,6 +1055,26 @@ Only if selected 500 and 200 RPS pass in this environment, run one full
 50/100/200/500 fixed-image series there. A complete passing result would
 establish capacity on eight CPUs, not on six.
 
-- [ ] Run the unchanged-image eight-CPU selected 500 RPS stage.
+- [x] Run the unchanged-image eight-CPU selected 500 RPS stage.
 - [ ] If it passes, run selected 200 RPS without repeating lower tiers.
 - [ ] If both pass, run one full fixed-image series and state its resource needs.
+
+The eight-CPU 30-second stage completed 15,000/15,000 requests, with no
+drops or errors. p95 was 109.00 ms and p99 was 141.39 ms: both passed.
+Exact accounting passed and drained in 12.12 seconds. The stage still
+failed because the in-flight slope was +1.1104. In-flight count was mostly
+18–26 during the first fifteen seconds, then 23–58 later. Preserve
+`native-5b271273-500-8cpu-8g-exclusive-20261006`. This comparison supports
+CPU contention as a latency contributor, not a complete qualification pass.
+Both VMs and all original running workloads and contexts were restored.
+
+Next, use the driver's existing supported 60-second short duration on the
+same image and eight-CPU environment. This doubles offered work and keeps
+the exact same latency, slope, diagnostics, drain, and money gates. It
+checks whether the observed growth continues beyond thirty seconds;
+do not discard failed samples or add an arrival pause. No software code
+change or pass limit change is involved. Only proceed to selected 200,
+then one full series with this declared 60-second short duration, if each
+preceding stage passes.
+
+- [ ] Check selected 500 RPS for 60 seconds with the original strict gates.

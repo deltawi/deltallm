@@ -232,6 +232,13 @@ explicitly separate eight-CPU/eight-GiB VM, retaining the same pod limits,
 topology, deadlines, and all pass gates. If selected 500 and 200 pass,
 run the full series there once. Do not present this as a six-CPU pass.
 
+The eight-CPU comparison passed throughput, p95 (109.00 ms), p99
+(141.39 ms), diagnostics, exact accounting, and drain. It still failed
+the short-window in-flight slope (+1.1104). Preserve this failure; the
+full series did not start. Next, use the driver's supported 60-second
+short duration with the same original image and environment to check
+whether growth persists. No pass gate changes or arrival pauses.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
