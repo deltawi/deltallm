@@ -2,6 +2,7 @@
 
 import os
 
+import asyncpg
 import pytest
 
 from src.db.accounting_calls import AccountingProtocolUnavailable
@@ -117,6 +118,71 @@ async def test_actual_native_read_model_plans_do_not_scan_retained_history(
                     "query_sha256": entry.safe_report()["query_sha256"],
                 }
                 assert node.get("Rows Removed by Index Recheck", 0) == 0, entry.safe_report()
+    assert relations <= observed
+
+
+async def checkpoint_update_counts(connection):
+    await connection.execute("SELECT pg_stat_force_next_flush()")
+    await connection.execute("SELECT pg_stat_clear_snapshot()")
+    return await connection.fetchrow(
+        "SELECT n_tup_upd,n_tup_hot_upd FROM pg_stat_user_tables "
+        "WHERE relname='deltallm_accounting_projection_checkpoints'"
+    )
+
+
+@pytest.mark.parametrize("planner", ["auto", "generic", "custom", "alternate_join"])
+async def test_native_checkpoint_lease_churn_reuses_heap_without_history_work(
+    accounting_db, planner
+):
+    clients, generation = accounting_db
+    db = clients[0]
+    await retained(db, generation)
+    await source(db, generation)
+    connection = await asyncpg.connect(os.environ["DATABASE_URL"], timeout=5, command_timeout=5)
+    try:
+        before = await checkpoint_update_counts(connection)
+        for turn in range(512):
+            await connection.execute(
+                "UPDATE deltallm_accounting_projection_checkpoints SET "
+                "lease_owner=CASE WHEN $2 THEN 'churn' ELSE NULL END,"
+                "lease_token=CASE WHEN $2 THEN 'churn-token' ELSE NULL END,"
+                "lease_expires_at=CASE WHEN $2 THEN clock_timestamp()+INTERVAL '30 seconds' "
+                "ELSE NULL END,updated_at=clock_timestamp() "
+                "WHERE projection_name='accounting-read-model-v2' AND protocol_name='primary' "
+                "AND generation=$1",
+                generation,
+                turn % 2 == 0,
+            )
+        after = await checkpoint_update_counts(connection)
+        updates = after["n_tup_upd"] - before["n_tup_upd"]
+        reused = after["n_tup_hot_upd"] - before["n_tup_hot_upd"]
+        assert updates == 2048
+        assert reused >= updates * 0.95, {"updates": updates, "reused": reused}
+    finally:
+        await connection.close(timeout=5)
+    async with capture_accounting_plans(os.environ["DATABASE_URL"], planner=planner) as captured:
+        repo = repository(captured)
+        for _ in range(6):
+            progress = await repo.progress(generation=generation, expires_at=deadline())
+            assert progress.pending_partitions == 1
+        page = await next_page(repo, generation)
+        assert len(page.sequences) == 4
+        assert await repo.materialize(page, expires_at=deadline()) == 4
+        assert await next_page(repo, generation) is None
+    assert captured.errors == []
+    relations = {"deltallm_accounting_events", "deltallm_accounting_projection_checkpoints"}
+    observed = set()
+    for entry in captured.plans:
+        assert entry.jit_functions == 0, entry.safe_report()
+        for node in nodes(entry.node):
+            if node.get("Relation Name") not in relations or not node["Actual Loops"]:
+                continue
+            observed.add(node["Relation Name"])
+            assert node["Node Type"] not in {"Seq Scan", "Bitmap Heap Scan"}, entry.safe_report()
+            assert node["Actual Rows"] <= 4, entry.safe_report()
+            assert node["Actual Loops"] <= 64, entry.safe_report()
+            assert node.get("Rows Removed by Filter", 0) <= 1, entry.safe_report()
+            assert node.get("Rows Removed by Index Recheck", 0) == 0, entry.safe_report()
     assert relations <= observed
 
 

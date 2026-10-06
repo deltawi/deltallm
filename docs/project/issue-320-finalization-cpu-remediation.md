@@ -1197,3 +1197,47 @@ Make one unchanged 60-second confirmation before another runtime edit.
 Keep the first failure. Advance to selected 200 and the full strict series
 only if preceding stages pass. Both original VM settings, eight running
 workloads, and global contexts were restored after the first run.
+
+### Avoid indexed checkpoint lease churn
+
+The unchanged confirmation also completed 30,000/30,000 requests, with no
+errors/drops, p95 81.52 ms, p99 162.40 ms, exact accounting, and a 10.12-second
+safe drain. It failed only strict queue slope (+0.32403). Keep
+`native-7b24cc12-500-8cpu-8g-60s-exclusive-20261006-2`; do not repeat lower
+tiers or describe either run as qualified. All original resources were restored.
+
+Existing metrics show reporting-claim means increasing from about 1.5 ms
+to 5.1 ms during the first run. The lease-expiry index changes on every claim
+and completion, although readers scope checkpoint keys by projection and
+generation. A controlled owned PostgreSQL fixture compared 8,000 updates:
+the index prevented all heap-only updates, created 8,000 dead tuple versions,
+and grew the heap from 8 KiB to 224 KiB. Without it, all 8,000 updates were
+heap-only, only 48 dead versions remained, and heap size did not increase.
+The diagnostic restored the original index. Keep its actual plan/stat logs in
+`artifacts/qualification/verification-checkpoint-churn-20261006`.
+
+This proves avoidable write churn, not yet the full cause of queue growth.
+Add an append-only guarded migration removing only that secondary index,
+retain the composite primary key, and provide an explicit recreation rollback.
+No query, lease, deadline, financial calculation, or runtime Python changes.
+Use the existing coordinated migration job. Confirm legacy readers and native
+readers retain bounded key plans, fence/replay correctness, and exact money.
+
+- [x] Compare real checkpoint churn and restore the original fixture index.
+- [x] Preserve a failing retained-history heap-reuse regression before migration.
+- [x] Apply the guarded index-only migration and verify native/legacy behavior.
+- [x] Verify fresh/upgrade paths and rollback/forward reapplication.
+- [ ] Seal the new image, then run selected 500, 200, and the full strict series.
+
+The original regression failed with 0/2,048 heap-only updates. All nine reporting
+plan checks then passed with the guarded index-only migration, including all
+four planner modes for retained-history checkpoint churn. All 90 affected
+PostgreSQL reporting, race, parity, protocol compatibility, and worker tests
+passed. Fresh, v0.1.42, and shared-feature upgrade paths passed. Rollback
+recreated the original index and reproduced the expected zero-reuse failure;
+forward reapplication restored all four regressions. Touched-test lint, format,
+and diff checks passed. The schema/client and all runtime Python are unchanged.
+Previous application-route verification still covers the unchanged Python;
+do not present this index-only check as a new full application-lane rerun.
+Rollback is `scripts/migration_fixtures/accounting_checkpoint_hot_update_rollback.sql`.
+Next, seal `20261006130000_accounting_checkpoint_hot_updates` in a fresh image.

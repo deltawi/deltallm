@@ -284,6 +284,22 @@ did not run. All original VM settings, workloads, and contexts were restored.
 Next, make one unchanged confirmation, not another unproven code edit.
 Keep the upper-tier and full qualification checkboxes open.
 
+The unchanged 500 confirmation again completed every request and passed
+latency, diagnostics, exact accounting, and drain, but failed queue slope.
+No 200 or lower-tier rerun occurred. A controlled PostgreSQL probe proved an
+unused checkpoint lease-expiry index prevented all heap-only updates and
+created avoidable dead versions. All readers already scope by projection and
+generation; the composite primary key remains. A guarded append-only migration
+now removes only that secondary index, with an explicit recreation rollback.
+
+The original churn regression failed, then all nine reporting-plan checks and
+90 affected PostgreSQL behavior/race/parity/compatibility checks passed.
+Fresh, supported-release, shared-feature, rollback, and forward reapplication
+checks passed. Runtime Python, Prisma schema/client, leases, money calculations,
+queries, deadlines, and load gates are unchanged. Seal a new canonical image
+before upper-tier testing. This is verified write-churn reduction, not yet
+proof that 500 RPS qualifies. Preserve both `7b24cc12` failed load results.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
