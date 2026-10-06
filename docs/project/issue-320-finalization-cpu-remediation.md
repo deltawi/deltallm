@@ -1077,4 +1077,28 @@ change or pass limit change is involved. Only proceed to selected 200,
 then one full series with this declared 60-second short duration, if each
 preceding stage passes.
 
-- [ ] Check selected 500 RPS for 60 seconds with the original strict gates.
+- [x] Check selected 500 RPS for 60 seconds with the original strict gates.
+
+The 60-second confirmation completed 30,000/30,000 requests, with exact
+accounting and a 12.15-second safe drain. p95 passed at 129.86 ms; p99
+failed at 533.29 ms, and queue slope failed at +0.09954. In-flight count
+mostly stayed near 20–30, with short spikes to 291 and 150. Thus longer
+measurement did not pass and cannot replace the failed 30-second result.
+Keep `native-5b271273-500-8cpu-8g-60s-exclusive-20261006`. All original
+resources were restored; neither selected 200 nor full qualification ran.
+
+No long API or native event-loop pause was recorded. API loop-lag sums
+were 0.021–0.047 seconds per process across the whole captured window;
+API GC sums were 1.95–2.00 seconds across many short collections. Host
+paging across setup, arrivals, and drain read only 118 pages (about
+1.93 MB), with no swap writes. These measures do not support host paging
+as the explanation for this run's tail spikes. Server response time
+tracks client wait; provider and database call p99 upper bounds were
+100 ms and 25 ms. They do not separately cover the full terminal RPC wait.
+
+Next, apply the existing bounded wait-path timing diagnostic to this
+eight-CPU 60-second environment without the rejected private prototypes.
+Use it to locate the long wait before another runtime edit. Keep all
+financial checks and strict limits. This trace is not qualification.
+
+- [ ] Locate the tail wait with bounded timing on the unchanged image.

@@ -239,6 +239,14 @@ full series did not start. Next, use the driver's supported 60-second
 short duration with the same original image and environment to check
 whether growth persists. No pass gate changes or arrival pauses.
 
+The 60-second check also failed: all 30,000 requests succeeded with safe
+exact accounting, but p99 was 533.29 ms and queue slope +0.09954.
+p95 passed at 129.86 ms. In-flight count mostly settled with two brief
+spikes. Existing records do not show long event-loop pauses or substantial
+host paging. Next, use the existing bounded terminal/RPC timing trace
+on this unchanged eight-CPU image to locate the remaining wait.
+Full qualification remains open.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
