@@ -535,3 +535,51 @@ changed in this evidence slice.
 - [ ] Seal the evidence slice and pass its exact-image checks.
 - [ ] Use the captured failure state to identify and test the next runtime fix.
 - [ ] Pass the unchanged short ladder, then all four ten-minute stages.
+
+### Selected upper-tier iteration
+
+The user requested that the next iterations skip 50 and 100 RPS. The runner
+now accepts `--diagnostic-rates 200 500` or `--diagnostic-rates 500`. It uses
+the same image, topology, resource limits, arrival schedule, and pass checks.
+It runs only the selected short stages. A passing selected series is never
+release-eligible and cannot replace the complete four-tier qualification.
+Run the full series once after the upper tiers pass.
+
+The sealed `d3ec62bc` run passed all five image checks and the 1,000 RPS
+generator proof. It preserved all four failed short stages in `results.json`:
+
+| Rate | Successful/offered | p95 | p99 | Result |
+| --- | ---: | ---: | ---: | --- |
+| 50 RPS | 1,479/1,500 | 64.16 ms | 553.73 ms | Fail: availability, p99, economics |
+| 100 RPS | 3,000/3,000 | 37.00 ms | 82.50 ms | Fail: queue slope +0.0148/s |
+| 200 RPS | 6,000/6,000 | 214.24 ms | 319.11 ms | Fail: latency and queue |
+| 500 RPS | 5,163/15,000 | 6,888.77 ms | 10,002.75 ms | Fail: rate, latency, diagnostics, drain |
+
+At 500 RPS, 4,439 arrivals were dropped. Failed requests included 499 client
+connection timeouts, 26 client connection errors, 1,715 accounting-availability
+responses, six authentication-availability responses, and 3,152 other HTTP
+errors. After 181.66 seconds, all recorded operations had settled. Seven grants
+remained open; all processing queues were empty. Budget state was safe. The new
+operation capture was available and correctly empty. No ten-minute stage ran.
+Keep `artifacts/qualification/native-d3ec62bc-20261006` as a failed run.
+
+Post-arrival Kubernetes evidence records API and native-role readiness failures
+during the 500 RPS stage. This supports a readiness/connection diagnosis, but
+does not identify each failure's cause. The host also had unrelated active
+tests and substantial swap usage. Do not call this an isolated host result.
+
+The remote funding exchange has no response-loss recovery, whereas its database
+adapter has fenced recovery. A lost funding response is a possible source of
+an open grant without a recorded operation. It is not yet the proven cause of
+the seven retained grants. The next failed-drain capture therefore also reads
+at most 64 open local grants: exact scalar balances, used/returned counts,
+dispatch expiry, and remaining recovery time. It copies no owner, subject,
+fence secret, or full document, and preserves the exact opaque grant ID.
+
+- [x] Add selected short-tier runs without changing full qualification or pass limits.
+- [x] Prove that even an all-pass selected series is not release-eligible.
+- [x] Add bounded read-only open-grant evidence for failed drains.
+- [x] Pass 61 focused tool/PostgreSQL cases; preserve the two initial assertion failures.
+- [ ] Identify the upper-tier cause with selected diagnostics and controlled fault injection.
+- [ ] Implement and verify the confirmed runtime fix.
+- [ ] Pass selected 200 and 500 RPS, then the complete fixed-image qualification.

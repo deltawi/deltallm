@@ -16,8 +16,10 @@ from tests.performance.native_qualification_failures import (
 )
 
 
-def capture_database(rows):
-    tx = SimpleNamespace(execute_raw=AsyncMock(), query_raw=AsyncMock(return_value=rows))
+def capture_database(rows, grants=None):
+    tx = SimpleNamespace(
+        execute_raw=AsyncMock(), query_raw=AsyncMock(side_effect=[rows, grants or []])
+    )
 
     @asynccontextmanager
     async def transaction(**options):
@@ -52,7 +54,7 @@ async def test_capture_is_read_only_and_marks_truncation(count):
         "SET LOCAL statement_timeout = '2000ms'",
         "SET LOCAL lock_timeout = '250ms'",
     ]
-    sql, generation = tx.query_raw.call_args.args
+    sql, generation = tx.query_raw.call_args_list[0].args
     assert "LIMIT 65" in sql and generation == 1
 
 
@@ -67,6 +69,7 @@ async def test_capture_rejects_private_or_untyped_rows(change):
         "available": False,
         "error": "unsettled_capture_unavailable",
         "operations": None,
+        "open_local_grants": None,
     }
     assert "secret" not in repr(result) and "private-key" not in repr(result)
 
@@ -87,6 +90,31 @@ async def test_capture_cancellation_propagates():
 async def test_capture_overflow_remains_unknown():
     db, _ = capture_database([unsettled_row() for _ in range(66)])
     assert not (await capture_unsettled_operations(db))["available"]
+
+
+@pytest.mark.parametrize("count", [0, 1, 64, 65, 66])
+async def test_open_grant_capture_has_its_own_bound(count):
+    grant = {
+        "grant_id": str(uuid4()),
+        "state": "active",
+        "operation_limit": 32,
+        "consumed_operations": 0,
+        "returned_operations": 0,
+        "allocated_exact": "32",
+        "consumed_exact": "0",
+        "returned_exact": "0",
+        "unknown_provisional_exact": "0",
+        "dispatch_expired": True,
+        "recovery_seconds_remaining": 600.0,
+    }
+    db, _ = capture_database([], [grant] * count)
+    result = await capture_unsettled_operations(db)
+    if count == 66:
+        assert not result["available"] and result["open_local_grants"] is None
+    else:
+        assert result["available"]
+        assert len(result["open_local_grants"]) == min(count, 64)
+        assert result["grants_truncated"] is (count == 65)
 
 
 @pytest.mark.parametrize("stopped", [False, True])

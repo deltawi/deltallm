@@ -84,6 +84,19 @@ real truncation, cancellation, privacy, and failed-result retention. This change
 no runtime owner, resource, deadline, financial release, or pass limit. The CPU
 remediation plan tracks the next fixed-image run and runtime diagnosis.
 
+The sealed `d3ec62bc` image passed all five smoke checks and generator proof.
+Its four short stages all failed at least one gate. The 500 RPS stage completed
+5,163/15,000 requests and left seven open grants, but no unsettled operation
+or queued processing work. The failed aggregate now retains the 500 RPS result.
+Readiness failures and client connection timeouts were also observed. No
+ten-minute stage started. The host was not free of unrelated load.
+
+Per the user's request, new iterations will run selected 200/500 RPS short
+diagnostics, without repeating lower tiers. Selected runs cannot claim release
+eligibility. Bounded open-grant evidence and that distinction passed 61 focused
+tool/PostgreSQL cases. Next, confirm the funding-acknowledgement and readiness
+failure paths, fix their proven cause, then run complete qualification once.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

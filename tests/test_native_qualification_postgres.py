@@ -17,6 +17,7 @@ from tests.test_accounting_protocol_postgres import (
     _reservation,
 )
 from src.billing.accounting_protocol import AccountingOutcome
+from tests.test_accounting_local_leases_postgres import funded
 from tests.performance.native_qualification_failures import (
     _UNSETTLED_SQL,
     capture_unsettled_operations,
@@ -114,3 +115,31 @@ async def test_real_unsettled_capture_does_not_export_more_than_64_rows(accounti
     assert {row["operation_id"] for row in result["operations"]} <= {
         str(item.operation_id) for item in items
     }
+
+
+async def test_open_local_grants_are_captured_when_no_operation_exists(accounting_db):
+    clients, generation = accounting_db
+    db = clients[0]
+    _, _, grant = await funded(db, generation)
+    before = await db.query_raw(
+        "SELECT allocated_exact::text,consumed_exact::text,returned_exact::text "
+        "FROM deltallm_accounting_grants WHERE grant_id=$1",
+        grant.grant_id,
+    )
+    result = await capture_unsettled_operations(db, generation=generation)
+    assert result["available"] and result["operations"] == []
+    assert not result["grants_truncated"] and len(result["open_local_grants"]) == 1
+    captured = result["open_local_grants"][0]
+    assert captured["grant_id"] == grant.grant_id
+    assert captured["allocated_exact"] == "4.000000000000000000"
+    assert captured["consumed_operations"] == captured["returned_operations"] == 0
+    assert captured["state"] == "active"
+    assert captured["recovery_seconds_remaining"] > 0
+    assert (
+        await db.query_raw(
+            "SELECT allocated_exact::text,consumed_exact::text,returned_exact::text "
+            "FROM deltallm_accounting_grants WHERE grant_id=$1",
+            grant.grant_id,
+        )
+        == before
+    )

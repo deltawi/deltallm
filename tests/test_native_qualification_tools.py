@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+from contextlib import contextmanager
+import json
 import sys
 from decimal import Decimal
 from types import SimpleNamespace
@@ -14,11 +16,82 @@ from scripts import measure_gateway_load_sharded as shards
 from scripts.measure_gateway_load import RequestResult, run_constant_arrival
 from tests.performance import gateway_concurrency_metrics as metrics
 from tests.performance.run_gateway_concurrency import generator_evidence_failures
-from tests.performance.run_native_qualification import latency_and_queue_gates, qualification_values
+from tests.performance.run_native_qualification import (
+    latency_and_queue_gates,
+    qualification_schedule,
+    qualification_values,
+)
 from tests.performance import native_qualification_economics as economics
+from tests.performance import run_native_qualification as qualification
 from tests.performance.cluster_load_generator import cluster_generator_job
 from tests.performance.gateway_concurrency_diagnostics import POSTGRESQL_FIELDS, POSTGRESQL_SNAPSHOT
 from tests.performance.native_qualification_resources import parse_cpu_stat, cpu_counter_deltas
+
+
+def test_full_qualification_keeps_both_four_tier_series():
+    phases, rates = qualification_schedule(30, None)
+    assert phases == (("short", 30), ("qualification", 600))
+    assert rates == (50, 100, 200, 500)
+
+
+def test_upper_tier_diagnostic_never_repeats_lower_tiers_or_runs_long_stages():
+    phases, rates = qualification_schedule(30, (200, 500))
+    assert phases == (("short", 30),)
+    assert rates == (200, 500)
+
+
+@pytest.mark.parametrize("rates", [(), (500, 200), (200, 200), (1000,)])
+def test_selected_tiers_reject_missing_duplicate_unsorted_or_unsupported_rates(rates):
+    with pytest.raises(ValueError):
+        qualification_schedule(30, rates)
+
+
+@pytest.mark.parametrize("rates", [(200, 500), (50, 100, 200, 500)])
+def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkeypatch, rates):
+    output = tmp_path / "diagnostic"
+
+    class Cluster:
+        def __init__(self, path, **options):
+            self.output = path
+            path.mkdir()
+
+        @contextmanager
+        def owned(self, image):
+            yield self
+
+    monkeypatch.setattr(qualification, "LifecycleCluster", Cluster)
+    monkeypatch.setattr(qualification, "candidate_manifest", lambda *args, **options: {})
+    monkeypatch.setattr(
+        qualification.subprocess,
+        "check_output",
+        lambda command, **options: (
+            "" if command[1] == "ps" else '{"cpu_count":6,"memory_bytes":12000000000}'
+        ),
+    )
+    for name in ("install_capacity_dependencies", "install_resource_metrics", "prime_database"):
+        monkeypatch.setattr(qualification, name, lambda *args: None)
+    monkeypatch.setattr(qualification, "preload_images", lambda *args: "metrics:fixture")
+    monkeypatch.setattr(qualification, "qualification_values", lambda *args: tmp_path / "values")
+    exercise = AsyncMock(return_value=[{"passed": True} for _ in rates])
+    monkeypatch.setattr(qualification, "exercise", exercise)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "qualification",
+            "--image",
+            "fixture:sealed",
+            "--output",
+            str(output),
+            "--diagnostic-rates",
+            *(str(rate) for rate in rates),
+        ],
+    )
+    qualification.main()
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["diagnostic_passed"]
+    assert not manifest["qualification_passed"] and not manifest["release_eligible"]
+    assert exercise.call_args.kwargs["diagnostic_rates"] == rates
 
 
 def test_retained_runtime_metrics_use_only_fixed_diagnostic_labels():

@@ -70,6 +70,23 @@ FIXTURE_IMAGES = (
 )
 
 
+def qualification_schedule(
+    short_seconds: int, diagnostic_rates: tuple[int, ...] | None
+) -> tuple[tuple[tuple[str, int], ...], tuple[int, ...]]:
+    if diagnostic_rates is not None and (
+        not diagnostic_rates
+        or diagnostic_rates != tuple(sorted(set(diagnostic_rates)))
+        or any(rate not in RATES for rate in diagnostic_rates)
+    ):
+        raise ValueError("Diagnostic rates must be distinct supported tiers in increasing order")
+    phases = (
+        (("short", short_seconds),)
+        if diagnostic_rates is not None
+        else (("short", short_seconds), ("qualification", 600))
+    )
+    return phases, RATES if diagnostic_rates is None else diagnostic_rates
+
+
 def merge_values(base: dict, overlay: dict) -> dict:
     for key, value in overlay.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
@@ -406,7 +423,12 @@ async def run_stage(
 
 
 async def exercise(
-    cluster: LifecycleCluster, values: Path, image: str, *, short_seconds: int
+    cluster: LifecycleCluster,
+    values: Path,
+    image: str,
+    *,
+    short_seconds: int,
+    diagnostic_rates: tuple[int, ...] | None = None,
 ) -> list[dict[str, object]]:
     with ExitStack() as forwards:
         postgres = forwards.enter_context(cluster.forward("service/postgres", 5432))
@@ -458,8 +480,9 @@ async def exercise(
         if not initial_drain["passed"]:
             raise RuntimeError("Accounting startup did not reach an empty baseline")
         results = []
-        for phase, duration in (("short", short_seconds), ("qualification", 600)):
-            for rate in RATES:
+        phases, rates = qualification_schedule(short_seconds, diagnostic_rates)
+        for phase, duration in phases:
+            for rate in rates:
                 await record_stage_result(
                     partial(
                         run_stage,
@@ -481,6 +504,8 @@ async def exercise(
                 raise RuntimeError(
                     "Short qualification ladder failed; ten-minute series was not started"
                 )
+        if diagnostic_rates is not None:
+            return results
         async with local_database() as db:
             storage_before = await native_storage_snapshot(db)
         await asyncio.to_thread(
@@ -527,9 +552,21 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--kind", default="kind")
     parser.add_argument("--short-seconds", type=int, default=30)
+    parser.add_argument(
+        "--diagnostic-rates",
+        type=int,
+        nargs="+",
+        choices=RATES,
+        help="Run only these short tiers; never mark this partial series release-eligible",
+    )
     args = parser.parse_args()
     if args.output.exists() or not 10 <= args.short_seconds <= 60:
         parser.error("Use a fresh evidence directory and a short duration from 10 to 60 seconds")
+    diagnostic_rates = None if args.diagnostic_rates is None else tuple(args.diagnostic_rates)
+    try:
+        qualification_schedule(args.short_seconds, diagnostic_rates)
+    except ValueError as error:
+        parser.error(str(error))
     manifest = candidate_manifest(args.image, allow_dirty=False)
     active_containers = subprocess.check_output(
         ["docker", "ps", "-q"], text=True, timeout=30
@@ -551,7 +588,12 @@ def main() -> None:
         )
     )
     manifest.update(
-        purpose="native accounting fixed-image 50/100/200/500 RPS qualification",
+        purpose=(
+            "native accounting selected-tier diagnostic; not release qualification"
+            if diagnostic_rates is not None
+            else "native accounting fixed-image 50/100/200/500 RPS qualification"
+        ),
+        diagnostic_rates=diagnostic_rates,
         release_eligible=False,
         docker_environment=environment,
     )
@@ -564,9 +606,19 @@ def main() -> None:
         values = qualification_values(cluster, args.image)
         prime_database(cluster, values)
         results = asyncio.run(
-            exercise(cluster, values, args.image, short_seconds=args.short_seconds)
+            exercise(
+                cluster,
+                values,
+                args.image,
+                short_seconds=args.short_seconds,
+                diagnostic_rates=diagnostic_rates,
+            )
         )
-    manifest["qualification_passed"] = all(result["passed"] for result in results)
+    manifest["qualification_passed"] = diagnostic_rates is None and all(
+        result["passed"] for result in results
+    )
+    if diagnostic_rates is not None:
+        manifest["diagnostic_passed"] = all(result["passed"] for result in results)
     manifest["release_eligible"] = manifest["qualification_passed"]
     (cluster.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     if any(not result["passed"] for result in results):

@@ -47,6 +47,15 @@ LEFT JOIN deltallm_accounting_terminal_payloads payload ON payload.journal_seque
 LEFT JOIN deltallm_accounting_events event ON event.sequence=op.final_event_sequence
 ORDER BY op.accounting_state,op.operation_id
 """
+_OPEN_GRANTS_SQL = """
+SELECT grant_id,state,operation_limit,consumed_operations,returned_operations,
+ allocated_exact::text,consumed_exact::text,returned_exact::text,unknown_provisional_exact::text,
+ dispatch_expires_at<=CURRENT_TIMESTAMP AS dispatch_expired,
+ extract(epoch FROM expires_at-CURRENT_TIMESTAMP)::double precision AS recovery_seconds_remaining
+FROM deltallm_accounting_grants
+WHERE protocol_name='primary' AND generation=$1 AND local_dispatch AND state<>'closed'
+ORDER BY state,expires_at,grant_id LIMIT 65
+"""
 
 
 class UnsettledOperation(BaseModel):
@@ -69,6 +78,25 @@ class UnsettledOperation(BaseModel):
     ]
 
 
+class OpenLocalGrant(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_max_length=57)
+
+    grant_id: str = Field(
+        strict=True,
+        pattern=r"^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+    )
+    state: Literal["active", "draining"]
+    operation_limit: int = Field(strict=True, ge=1, le=1024)
+    consumed_operations: int = Field(strict=True, ge=0, le=1024)
+    returned_operations: int = Field(strict=True, ge=0, le=1024)
+    allocated_exact: str = Field(pattern=r"^[0-9]{1,38}(\.[0-9]{1,18})?$")
+    consumed_exact: str = Field(pattern=r"^[0-9]{1,38}(\.[0-9]{1,18})?$")
+    returned_exact: str = Field(pattern=r"^[0-9]{1,38}(\.[0-9]{1,18})?$")
+    unknown_provisional_exact: str = Field(pattern=r"^[0-9]{1,38}(\.[0-9]{1,18})?$")
+    dispatch_expired: bool = Field(strict=True)
+    recovery_seconds_remaining: float
+
+
 async def capture_unsettled_operations(db: Prisma, *, generation: int = 1) -> dict[str, object]:
     """Capture at most 64 scalar rows after arrivals; never change money."""
     try:
@@ -78,15 +106,24 @@ async def capture_unsettled_operations(db: Prisma, *, generation: int = 1) -> di
                 await tx.execute_raw("SET LOCAL statement_timeout = '2000ms'")
                 await tx.execute_raw("SET LOCAL lock_timeout = '250ms'")
                 rows = await tx.query_raw(_UNSETTLED_SQL, generation)
-        if len(rows) > 65:
+                grants = await tx.query_raw(_OPEN_GRANTS_SQL, generation)
+        if len(rows) > 65 or len(grants) > 65:
             raise ValueError("Unsettled capture exceeded its row bound")
         operations = [UnsettledOperation.model_validate(row) for row in rows]
+        open_grants = [OpenLocalGrant.model_validate(row) for row in grants]
     except Exception:
-        return {"available": False, "error": "unsettled_capture_unavailable", "operations": None}
+        return {
+            "available": False,
+            "error": "unsettled_capture_unavailable",
+            "operations": None,
+            "open_local_grants": None,
+        }
     return {
         "available": True,
         "truncated": len(operations) > 64,
         "operations": [operation.model_dump(mode="json") for operation in operations[:64]],
+        "grants_truncated": len(open_grants) > 64,
+        "open_local_grants": [grant.model_dump(mode="json") for grant in open_grants[:64]],
         "window": "after the drain deadline; read-only; not arrival-window work",
     }
 
