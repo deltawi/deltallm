@@ -1,6 +1,13 @@
 DO $health_verify$
 DECLARE signature TEXT;
 BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_proc p
+        WHERE p.oid=to_regprocedure('deltallm_accounting_claim_terminal_journal(bigint,text,uuid,integer,integer)')
+          AND p.proconfig @> ARRAY['plan_cache_mode=force_custom_plan']
+    ) THEN
+        RAISE EXCEPTION 'accounting terminal cold-claim policy is missing';
+    END IF;
     FOREACH signature IN ARRAY ARRAY[
         'deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)',
         'deltallm_accounting_backlog_snapshot(bigint)',

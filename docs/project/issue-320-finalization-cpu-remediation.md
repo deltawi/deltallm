@@ -1411,4 +1411,46 @@ arm64 platform digest
 `sha256:63b71031f32db8c8f0c827d59518b6623802b52b88b886cced1ff2f5502c490c`.
 All five offline/non-root runtime checks passed. Both existing migration hashes
 match their previously verified source. Cached build stages required no relay
-or network workaround. Load checks remain open; no 500 RPS pass is claimed yet.
+or network workaround. Its 60-second 500 run completed all 30,000 requests,
+zero errors/drops, p95 93.51 ms and p99 135.29 ms. Exact accounting, diagnostics,
+and 12.16-second drain passed; only slope +0.31920 failed. Preserve
+`native-9c5fca15-500-8cpu-8g-60s-exclusive-20261006`. Both VMs and exact
+original workloads restored. No 200 or full series started on this image.
+
+### Bound cold terminal claims, including the empty-work path
+
+An actual nested function probe with cold cached plans and 40,000 completed
+receipts found another history scan. Even an empty claim scans all retained rows
+in array-key statements. With one pending receipt, the same cached generic plan
+still scans all history. Custom plans use exact key probes. Twelve of sixteen
+new actual-repository cases failed before the fix (all auto/generic/alternate
+join cases); four custom-plan cases passed. No ANALYZE/VACUUM or caller settings
+were changed. Temporary fixture tables vanish on connection close.
+
+Remove empty work first: return after no candidates, and after all selected
+candidates have exhausted attempts. Apply a function-local custom-plan policy
+only to terminal claiming, using the actual bounded key arrays. Check that its
+primary key is present and valid. Keep the narrowed capacity lock, failure
+charges, byte/entry limits, leases, fences, and exact money effects. Do not
+change reporting or global/pool planner settings; reporting needed a query
+boundary, while this separate terminal failure is reproduced cached-key work.
+
+- [x] Reproduce idle, pending, expired, and exhausted cold claims in four modes.
+- [x] Add the guarded forward migration and data-preserving rollback.
+- [x] Pass cold and existing worker/concurrency/exhaustion/money checks.
+- [x] Verify caller settings after success/error and missing-key fail-closed.
+- [x] Verify fresh, supported-release, and shared-feature migration paths.
+- [ ] Seal the normal image and pass its five offline checks.
+- [ ] Recheck 500, then 200, then the final four-tier qualification on passes.
+
+Migration 146 changes only this claim function. The 77-case affected PostgreSQL
+run passed, including all sixteen cold-plan cases. Two later-added success/error
+and missing-key cases passed in the eighteen-case rollback-forward confirmation.
+Rollback reproduced the original twelve failures (four custom-mode passes), then
+forward reapplication passed all eighteen cases. All three migration paths passed
+through 146. Generated-client compatibility and 86 focused component/tool checks
+passed; one existing malformed-reply serializer warning remains. Final touched
+lint/format and diff checks passed; preserve the initial formatting failure too.
+No schema, client fields, money formula, caller/database/pool settings, resource,
+entry/byte bound, or deadline changed. Keep evidence in
+`artifacts/qualification/verification-terminal-cold-claims-20261006`.

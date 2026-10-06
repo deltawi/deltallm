@@ -24,6 +24,10 @@ accounting_db = _accounting_db
 
 FUNCTION_POLICIES = (
     (
+        "deltallm_accounting_claim_terminal_journal(bigint,text,uuid,integer,integer)",
+        {"plan_cache_mode=force_custom_plan"},
+    ),
+    (
         "deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)",
         {"jit=off"},
     ),

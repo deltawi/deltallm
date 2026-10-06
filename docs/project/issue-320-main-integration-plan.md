@@ -11,15 +11,18 @@ Accepted performance code: `cc3113bd`
 ## Current status
 
 Latest checkpoint: the clean integration is connected, but final qualification
-is still open. The latest diagnosis found reporting candidate discovery joining
-all finalized history instead of seeking beyond each checkpoint. A one-line
-correlation boundary at `9c5fca15` fixes the reproduced 40,000-event cold-plan
-failure in all four planner modes. All 103 affected PostgreSQL checks and 120
-component checks passed. Its normal image passed all five offline checks. The
-next load comparison uses the original eight-CPU/8-GiB test envelope; earlier
-cold/warm failures and unsuccessful private prototypes remain preserved in the
-CPU remediation plan. Do not describe the source checks as a 500 RPS pass or a
-completed four-tier qualification.
+is still open. The reporting correlation fix at `9c5fca15` passed its source
+and exact-image checks, but selected 500 still failed only the queue-slope gate:
+30,000/30,000 successes, zero errors/drops, p95 93.51 ms, p99 135.29 ms,
+exact accounting and drain passed. A separate actual cold terminal-claim probe
+then found completed-history scans in cached array-key statements, including
+empty work. Migration 146 adds empty-work returns and a claim-function-local
+custom-plan policy; it leaves reporting and caller/pool/database settings alone.
+The 77 affected PostgreSQL checks, eighteen-case rollback-forward confirmation,
+86 component/tool checks, and all three migration paths passed. Seal the normal
+image next and recheck 500 before 200 or the full series. Earlier failures and
+unsuccessful private prototypes remain in the CPU remediation plan. Do not
+describe source checks as a capacity pass or completed four-tier qualification.
 
 Slices 1 through 8 are complete. The runtime code for slices 9 through 14 is now
 connected, including native reporting and shared Realtime, batch, and selector
