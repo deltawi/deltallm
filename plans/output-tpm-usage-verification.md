@@ -175,6 +175,34 @@ Commands were `.venv/bin/pytest -q -m hermetic --durations=10 -rs`, `.venv/bin/p
 
 Logs use the `/private/tmp/deltallm-output-tpm-pr-` prefix. Main does not change the feature's application, Redis, UI, configuration, or deployment files; the earlier full gates for those surfaces remain recorded above. The two PR-check containers and their temporary volumes were removed after verification.
 
+### CI repair
+
+The first PR run found three gaps. Its Python 3.11 hermetic lane had two stream-cleanup failures, the Redis lane had four related failures, and the application lane had one RPM assertion failure. The documentation job stopped because the generated public OpenAPI file was stale. PostgreSQL, migration paths, Helm, UI build, and Python lint passed in that run.
+
+All six stream failures reproduced with the frozen dependencies in an isolated Python 3.11 environment. In that Python version, `asyncio.wait_for` starts a separate task. AnyIO disconnect cancellation could stop the waiting response task before the stream's shielded finalizer finished. Outer cleanup then tried to close a running generator or interrupted accounting and caused an idempotent retry. `RequestDeadline.wait_for` now uses `asyncio.timeout` and awaits work in the calling task. This preserves one cleanup owner and the existing timeout error. Exhausted per-attempt limits still reject work before it starts; two regression cases check this boundary.
+
+The audio RPM assertion reproduced when a controlled clock moved between the two requests. Both calls are valid when they fall in different fixed minutes. The test now controls only the limit counter's clock, retains the same-minute denial assertions, and also checks admission and denial after the next-minute reset. Production counter behavior is unchanged.
+
+The public OpenAPI artifact was regenerated with the existing exporter. It now includes the new generation-cap and output-policy fields. The previous PR statement that no checked-in OpenAPI artifact needed regeneration was incorrect.
+
+| Repair gate | Result |
+| --- | --- |
+| Full Python 3.11 hermetic lane | 4,091 passed; no skips. |
+| Full Python 3.11 Redis lane | 177 passed; two existing deprecation warnings remain. |
+| Python 3.11 cleanup, accounting, deadline, and RPM focus | 52 passed, including the six reproduced CI failures. |
+| Python 3.11 streaming billing, MCP, and rate-limit focus | 47 passed; two existing deprecation warnings remain. |
+| Python 3.12 cleanup, deadline, and accounting focus | 46 passed. |
+| Generated OpenAPI, config, and provider references | All current; OpenAPI has 234 paths and 303 operations. |
+| Documentation health and tests | Health check passed; nine tests passed. |
+| Strict documentation build and public containment | Both passed. |
+| Changed-path Ruff and whitespace | Check, format check, and `git diff --check` passed. |
+
+The isolated Python 3.11 interpreter is `/private/tmp/deltallm-output-tpm-ci311/bin/python`. Its matching `pytest` ran `-q -m hermetic --durations=25 --durations-min=0.5 -rs` and `-q -m redis -rs --durations=25 --durations-min=0.5`. Both Redis URL variables pointed to the task-owned service. Focus commands selected `tests/test_stream_response.py`, `tests/test_request_deadline.py`, `tests/test_output_tpm_contracts.py`, the audio RPM case, and the two failing Redis test functions. The application focus selected `tests/test_stream_accounting_commit.py tests/mcp/test_chat_execution.py tests/test_rate_limit.py`. The Python 3.12 focus used `.venv/bin/pytest -q tests/test_stream_response.py tests/test_request_deadline.py tests/test_output_tpm_contracts.py`.
+
+Documentation checks followed every command in `.github/workflows/docs.yml`, using the isolated interpreter and a temporary site directory. Generation used `.venv/bin/python scripts/docs/export_openapi.py`; all three reference exporters then passed `--check`. Ruff checked and format-checked `src/router/execution.py tests/test_rate_limit.py tests/test_request_deadline.py`.
+
+Logs use the `/private/tmp/deltallm-output-tpm-ci` prefix. The task-owned Redis container and its volume were removed. The PR workflow supplies the full application, PostgreSQL, and Helm gates for this repair. The repairs add no SQL, Redis, or network call, queue, pool, or background task. The existing output accounting command bounds remain.
+
 ## Local performance evidence
 
 The existing [output profile](../tests/performance/output_tpm_profile.py) and [constant-arrival generator](../scripts/measure_gateway_load.py) were reused. The primary comparison below used a fresh export of the main baseline and the implementation before review fixes, the same fixed provider fixtures, real standalone Redis with no eviction, and 100 offered requests/second for eight seconds per case. Each case started and completed 800 requests with zero generator drops. That comparison ran after the broad test lanes to avoid their load.

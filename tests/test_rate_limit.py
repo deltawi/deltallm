@@ -130,7 +130,12 @@ async def test_rate_limit_user_tpm_enforced(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_audio_transcription_team_model_rpm_enforced_for_multipart_requests(client, test_app):
+async def test_audio_transcription_team_model_rpm_enforced_for_multipart_requests(
+    client, test_app, monkeypatch
+):
+    clock = SimpleNamespace(now=1_700_000_010.0)
+    monkeypatch.setattr("src.services.limit_counter.time", SimpleNamespace(time=lambda: clock.now))
+
     class RecordingLimitCounter(LimitCounter):
         def __init__(self) -> None:
             super().__init__(redis_client=None)
@@ -182,6 +187,15 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
     payload = blocked.json()
     assert payload["error"]["code"] == "team_model_rpm_exceeded"
     assert payload["error"]["param"] == "team_model_rpm"
+
+    clock.now += 60
+    reset = await client.post("/v1/audio/transcriptions", headers=headers, files=files, data=data)
+    blocked_again = await client.post(
+        "/v1/audio/transcriptions", headers=headers, files=files, data=data
+    )
+    assert reset.status_code == 200
+    assert blocked_again.status_code == 429
+    assert blocked_again.json()["error"]["code"] == "team_model_rpm_exceeded"
 
 
 @pytest.mark.asyncio

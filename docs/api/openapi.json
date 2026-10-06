@@ -314,6 +314,19 @@
             "default": 0,
             "title": "Frequency Penalty"
           },
+          "max_completion_tokens": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Completion Tokens"
+          },
           "max_tokens": {
             "anyOf": [
               {
@@ -2888,6 +2901,19 @@
             ],
             "title": "Organization Name"
           },
+          "output_tpm_limit": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tpm Limit"
+          },
           "rpd_limit": {
             "anyOf": [
               {
@@ -3221,6 +3247,19 @@
               }
             ],
             "title": "Organization Name"
+          },
+          "output_tpm_limit": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tpm Limit"
           },
           "rpd_limit": {
             "anyOf": [
