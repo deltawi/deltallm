@@ -813,3 +813,23 @@ original workloads, and original contexts were restored.
   Record this distinct environment and restore its original 12-GiB setting.
 - [ ] If host pressure falls, use that comparison to select the next controlled
   software test. Do not infer a software repair from a noisy failed run.
+
+The first two 8-GiB attempts stopped during dependency setup. No gateway
+arrivals ran, so neither attempt is an RPS result. Docker could not resolve
+the pinned PostgreSQL registry through the VM's DNS relay. A direct public
+DNS probe answered successfully, but temporary Colima DNS flags did not
+change the resolver used by Docker. Keep both interrupted folders and their
+restoration logs: `native-5b271273-500-8g-exclusive-20261006` and its `-2`
+folder under `artifacts/qualification`.
+
+The canonical test loader now checks a cached image by its exact pinned
+registry reference and verifies its repository digest before reuse. It never
+accepts a tag as proof. A missing image is pulled by digest, then verified.
+Wrong, missing, malformed, or oversized proof fails closed. All 70 focused
+tool checks passed. A real Docker check verified all three cached fixture
+digests without registry access. The gateway image and runtime source remain
+unchanged at `5b271273`; this is a host-side test-loader change only.
+
+- [x] Preserve both setup failures without calling them failed RPS stages.
+- [x] Verify immutable cached fixtures and test hit, miss, and invalid-proof paths.
+- [ ] Resume the fresh 8-GiB comparison with the verified fixture cache.

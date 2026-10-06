@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from functools import partial
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 import yaml
@@ -175,13 +176,38 @@ def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
     return path
 
 
+def ensure_fixture_image(cluster: LifecycleCluster, source: str) -> None:
+    if re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", source) is None:
+        raise ValueError("Fixture images require a pinned digest")
+    reference, digest = source.split("@")
+    prefix, separator, name = reference.rpartition("/")
+    expected = f"{prefix}{separator}{name.split(':', 1)[0]}@{digest}"
+    command = ("docker", "image", "inspect", source, "--format", "{{json .RepoDigests}}")
+    cached = cluster.run(*command, timeout=30, check=False)
+    cache_hit = cached.returncode == 0
+    if not cache_hit:
+        cluster.run("docker", "pull", source, timeout=300)
+        cached = cluster.run(*command, timeout=30)
+    if len(cached.stdout) > 16_384:
+        raise ValueError("Fixture image digest metadata is too large")
+    digests = json.loads(cached.stdout)
+    if (
+        not isinstance(digests, list)
+        or not 1 <= len(digests) <= 32
+        or any(not isinstance(value, str) for value in digests)
+        or expected not in digests
+    ):
+        raise ValueError("Fixture image does not prove its pinned digest")
+    cluster.event("fixture_image_verified", pinned_source=source, cache_hit=cache_hit)
+
+
 def preload_images(cluster: LifecycleCluster) -> str:
     monitoring = MonitoringDependencies.read()
     metrics_image = None
     for index, (target, source) in enumerate(
         (*FIXTURE_IMAGES, (monitoring.metrics_server_image, monitoring.metrics_server_image))
     ):
-        cluster.run("docker", "pull", source, timeout=300)
+        ensure_fixture_image(cluster, source)
         alias = target.partition("@")[0]
         if alias != source:
             cluster.run("docker", "tag", source, alias, timeout=30)

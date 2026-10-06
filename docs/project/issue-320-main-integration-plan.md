@@ -154,6 +154,14 @@ contexts were restored. Next, compare a temporary 8-GiB test VM with the same
 six CPUs, image, pod limits, and strict gates. This is an environment check,
 not a code repair or release certificate.
 
+Two temporary 8-GiB attempts stopped before arrivals because Docker's registry
+DNS failed. Both interrupted attempts and restoration logs are preserved.
+The host-side test loader now reuses cached fixtures only after exact pinned
+digest verification; missing images still require a digest-pinned pull.
+All 70 focused tool checks and the real three-image cache proof passed.
+Gateway runtime source and image `5b271273` remain unchanged. Resume the
+memory comparison before another application change.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
