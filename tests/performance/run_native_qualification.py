@@ -46,6 +46,7 @@ from tests.performance.native_qualification_resources import (
     capture_cpu_counters,
     cpu_counter_deltas,
 )
+from tests.performance.qualification_image_archive import platform_manifest_digest
 
 RATES = (50, 100, 200, 500)
 REQUEST_SELECTOR = (
@@ -142,14 +143,16 @@ def qualification_values(cluster: LifecycleCluster, image: str) -> Path:
     return path
 
 
-def preload_images(cluster: LifecycleCluster) -> None:
+def preload_images(cluster: LifecycleCluster) -> str:
     monitoring = MonitoringDependencies.read()
+    metrics_image = None
     for index, (target, source) in enumerate(
         (*FIXTURE_IMAGES, (monitoring.metrics_server_image, monitoring.metrics_server_image))
     ):
         cluster.run("docker", "pull", source, timeout=300)
-        if target != source:
-            cluster.run("docker", "tag", source, target, timeout=30)
+        alias = target.partition("@")[0]
+        if alias != source:
+            cluster.run("docker", "tag", source, alias, timeout=30)
         archive = Path(cluster.directory.name) / f"dependency-{index}.tar"
         platform = cluster.run(
             "docker",
@@ -157,7 +160,7 @@ def preload_images(cluster: LifecycleCluster) -> None:
             "inspect",
             "--format",
             "{{.Os}}/{{.Architecture}}",
-            target,
+            alias,
             timeout=30,
         ).stdout.strip()
         if platform not in {"linux/arm64", "linux/amd64"}:
@@ -170,12 +173,38 @@ def preload_images(cluster: LifecycleCluster) -> None:
             platform,
             "-o",
             str(archive),
-            target,
+            alias,
             timeout=300,
         )
         cluster.run(
             cluster.kind, "load", "image-archive", str(archive), "--name", cluster.name, timeout=300
         )
+        if target == monitoring.metrics_server_image:
+            digest = platform_manifest_digest(archive)
+            metrics_image = alias.rsplit(":", 1)[0] + "@" + digest
+            for node in sorted(cluster.node_names):
+                cluster.run(
+                    "docker",
+                    "exec",
+                    node,
+                    "ctr",
+                    "-n",
+                    "k8s.io",
+                    "images",
+                    "tag",
+                    alias,
+                    metrics_image,
+                    timeout=30,
+                )
+            cluster.event(
+                "metrics_image_imported",
+                pinned_source=source,
+                platform=platform,
+                platform_image=metrics_image,
+            )
+    if metrics_image is None:
+        raise RuntimeError("Pinned resource metrics image was not imported")
+    return metrics_image
 
 
 def pin_api_services(cluster: LifecycleCluster, pods: list[str]) -> list[str]:
@@ -508,9 +537,9 @@ def main() -> None:
     cluster = LifecycleCluster(args.output, kind=args.kind, purpose="native-qualification", nodes=2)
     (cluster.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     with cluster.owned(args.image):
-        preload_images(cluster)
+        metrics_image = preload_images(cluster)
         install_capacity_dependencies(cluster, args.image)
-        install_resource_metrics(cluster, MonitoringDependencies.read().metrics_server_image)
+        install_resource_metrics(cluster, metrics_image)
         values = qualification_values(cluster, args.image)
         prime_database(cluster, values)
         results = asyncio.run(

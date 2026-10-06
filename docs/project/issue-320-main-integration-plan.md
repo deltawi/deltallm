@@ -12,7 +12,7 @@ Accepted performance code: `cc3113bd`
 
 Slices 1 through 8 are complete. The runtime code for slices 9 through 14 is now
 connected, including native reporting and shared Realtime, batch, and selector
-accounting. All 8,562 Python tests, UI checks, migration paths, and chart checks
+accounting. All 8,566 Python tests, UI checks, migration paths, and chart checks
 passed their required gates. Full UI lint retains unchanged baseline findings.
 Container and gateway qualification checks remain open. The experimental branch's
 500 RPS result is not evidence for this clean replay. This branch is not ready to
@@ -116,15 +116,15 @@ checks, not a gateway throughput result.
 - Application: 1,646 passed in 544.10 seconds.
 - PostgreSQL confirmation: 848 passed in 748.70 seconds, without required skips.
 - Redis: 105 passed in 16.72 seconds, without required skips.
-- Hermetic and Helm confirmation: 5,963 passed in 116.27 seconds.
-  Together the five completed lanes contain all 8,562 collected cases.
+- Hermetic and Helm confirmation after the image-archive fix: 5,967 passed in
+  182.71 seconds. Together the five completed lanes contain all 8,566 cases.
 - UI unit tests: 274 passed. Node 22.16.0 was used.
 - UI build: passed. Initial JavaScript is 378.43 kB gzip, identical to the isolated
   `origin/main` build. The existing large-chunk warning remains.
 - UI lint: both touched files have zero findings. Full lint has 116 errors and
   three warnings, identical to `origin/main`; the structured comparison has zero
   new findings. Full lint is not a clean pass.
-- Collection: 8,562 cases, each in one lane: 5,704 hermetic, 1,646 application,
+- Collection: 8,566 cases, each in one lane: 5,708 hermetic, 1,646 application,
   848 PostgreSQL, 105 Redis, and 259 Helm.
 - All five base/evaluation/production/native Helm lint and template checks passed.
 - Frozen lock, generated settings reference, capacity reference, container contract,
@@ -142,6 +142,23 @@ failed confirmation in `issue320-final-postgres-confirmation.log`.
 Exact-image checks and gateway load evidence remain pending. These regression
 results do not establish an RPS result. Final logs are retained in the ignored
 `artifacts/qualification/verification-20261006` directory.
+
+### Initial qualification setup check
+
+The source was committed at `fd1709d9`. Its exact non-root image passed startup,
+native migration CLI, read-only filesystem, bounded callback, and cancellation
+checks. The first kind qualification then stopped before gateway load. The
+platform-only metrics-server archive had no repository tag. Containerd imported
+a synthetic name that Kubernetes could not resolve. No gateway RPS result was
+produced. Keep `artifacts/qualification/native-fd1709d9-20261006` as failed setup
+evidence.
+
+The archive now retains its repository tag. The runner checks the platform
+manifest digest and uses that immutable image reference on each owned node.
+The original registry digest remains recorded. Application code, resource limits,
+prices, test durations, and success limits did not change. All 88 focused load
+and cluster tests passed. The broader component and chart confirmation passed
+all 5,967 cases. A new commit, exact image, and fresh cluster remain required.
 
 ## Integration rules
 

@@ -159,6 +159,10 @@ checkout, a reused output directory, or an image whose source hash differs from
 the checkout. Use kind v0.31.0. The cluster owner pins Kubernetes v1.34.3 by digest
 and creates a separate kubeconfig. It does not use the current cluster or Rancher.
 
+Fixture imports retain their repository tags. For metrics-server, the runner
+checks the selected platform manifest and uses its immutable digest reference
+on every owned node. The evidence also records the original registry digest.
+
 ```bash
 export DOCKER_CONTEXT=your-isolated-test-runtime
 docker build -t deltallm-native:qualification .
