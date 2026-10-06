@@ -1714,7 +1714,7 @@ Five-second mean latency is 38–54 ms, rather than a monotonic rise. This
 does not turn the failed slope into a pass or establish its cause.
 
 - [x] Preserve the failed canonical ladder and its prerequisite stop.
-- [ ] Compare three unchanged 500/60-second stages on one instance, retaining
+- [x] Compare three unchanged 500/60-second stages on one instance, retaining
   every result, to distinguish repeatable short-window growth from variability.
 - [ ] Use measured evidence for the next correction or unchanged final series;
   do not change the queue threshold or skip canonical prerequisites.
@@ -1723,3 +1723,68 @@ Keep `native-6194a168-500-8cpu-6g-60s-queue-repeat-20261006`.
 Its private host schedule repeats only the upper tier; application source,
 image, VM/pod limits, workload, deadlines, financial safety, and gates remain
 unchanged. It is not release qualification. Lower tiers are not repeated.
+
+### Cold terminal commit plans after retained history
+
+The three repeats returned 30,000/30,000, 29,999/30,000, and 30,000/30,000.
+The first passed every gate (p95 75.65 ms, p99 140.22 ms, slope -0.088906).
+The second passed queue/latency but had one client ReadError and therefore
+failed strict economic qualification. Its scopes still match durable facts
+and it drained safely. Do not infer a charged failed request or lost server
+reply: the successful precheck is included in its fact delta. The third
+failed p99 (330.97 ms) and slope (+0.053409). All three kept safe accounting
+and drained. Preserve every result, rather than selecting only the pass.
+
+The third repeat's PostgreSQL page-access rate rose sharply. A second
+three-stage selected diagnostic used the existing bounded 78-field numeric
+host sampler without altering application source. Its stages returned
+30,000, 30,000, and 28,905 successes of 30,000 each. The second passed;
+the third had 1,095 spend-persistence HTTP 503s and failed queue/throughput/
+economic gates. It still drained and kept safe matching scopes. No load-time
+restart, OOM, server termination, or statement-timeout log was captured.
+Keep `native-6194a168-500-8cpu-6g-60s-queue-costs-20261006`.
+
+The sampler identifies terminal commit: its per-call index/heap hits rose
+from about 1,000 to 43,659 and execution time to 18.22 ms in the slow interval.
+Reporting claims stayed fast. This is a concrete growing operation, not a
+reason to increase resources or relax gates. The first run's query costs
+alone did not prove a bad plan; the independent reproduction does.
+
+- [x] Retain all repeats and locate the expensive operation using numeric costs.
+- [x] Reproduce actual commit-function scans after preparing on empty tables,
+  at 40,000 and 300,000 records, cold/analyzed and in four planner modes.
+- [x] Prove a function-local custom-plan policy fixes the bounded key probes
+  without changing caller settings, effects, or the application image.
+- [x] Add append-only migration 147 and a data-preserving rollback script.
+- [x] Pass affected PostgreSQL financial/replay/RPC/runtime and cold-plan checks.
+- [x] Prove rollback-forward behavior and all three migration paths.
+- [ ] Seal the normal image, pass all five exact-image checks, then recheck
+  upper tiers before another strict canonical four-tier series.
+
+The initial regression was too strict about bounded bitmap probes (eight
+failures/eight passes); keep it but do not count all its failures as runtime
+proof. The corrected runtime-only bound allows legitimate bitmap key probes,
+rejects sequential history scans, and bounds rows, loops, filters, and pages.
+It failed six cases and passed ten on the original function in 33.25 seconds.
+The controlled fixture-only custom-plan policy passed all sixteen cases in
+41.29 seconds and was reset automatically afterward. No global/pool/caller
+planner policy was changed.
+
+Migration `20261007100000_accounting_terminal_commit_cold_keys` preserves the
+installed function and replaces only its opening index guard, then sets its
+own custom-plan policy. It retains the existing array limit, financial
+validation, replay, leases, fences, lock order, and atomic effects. A missing
+required journal primary index fails closed. The rollback restores just that
+opening and removes just this policy; it deletes no retained data and may
+restore the performance failure. Upgrade fixtures check both policy and guard.
+The new tests also verify error unwind and missing-index denial. Verification
+passed: 130 affected PostgreSQL cases in 162.13 seconds, 194 focused component/
+tool cases in 2.04 seconds, and all three migration paths through migration 147.
+Rollback reproduced six scan failures/ten passes (two error cases deselected);
+forward reapplication passed all eighteen cases in 41.02 seconds. Final lint,
+format, and diff checks passed; preserve the initial format failure and repair.
+All earlier regression failures, controlled helpers, and reset/stop logs remain
+in `artifacts/qualification/verification-terminal-commit-cold-20261007`.
+The owned fixture is stopped before building or load. This targeted result
+does not close the earlier full-PostgreSQL limitation. No new image or capacity
+pass is claimed yet.

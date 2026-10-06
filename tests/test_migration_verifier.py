@@ -78,6 +78,9 @@ def test_migration_verifier_checks_the_partial_oldest_terminal_index_and_counter
         "deltallm_accounting_backlog_snapshot(bigint)",
         "deltallm_accounting_project_read_models(bigint,text,uuid,integer,bigint,bigint[])",
         "p.proconfig @> ARRAY['jit=off']",
+        "deltallm_accounting_materialize_terminal_journal(bigint,text,uuid,bigint[])",
+        "p.proconfig @> ARRAY['plan_cache_mode=force_custom_plan']",
+        "accounting_terminal_commit_key_index",
     ):
         assert contract in sql
 

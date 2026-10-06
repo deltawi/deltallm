@@ -35,10 +35,19 @@ cause. The normal canonical one-minute ladder and ten-minute 50/100/200/500
 series then passed short 50/100/200 but stopped at short 500: all 30,000
 responses succeeded, p95 77.45 ms and p99 124.37 ms passed, accounting drained
 exactly, but slope +0.116533 failed. No ten-minute qualification started.
-Three unchanged-image 500/60-second same-instance stages now check whether
-that short-window trend is repeatable. Retain every result; do not loosen
-gates or call selected diagnostics release evidence. This branch is not ready
-to merge until the canonical series and remaining verification are complete.
+Three unchanged-image 500/60-second same-instance stages produced one pass,
+one client read error, and one p99/queue failure. The bounded SQL-cost repeat
+located history-dependent terminal commit work, reaching 43,659 page hits
+per call during its third-stage slowdown. A corrected real nested-function
+regression failed six original cold-plan cases; a controlled function-local
+custom-plan policy passed all sixteen. Append-only migration 147, rollback,
+missing-index denial, caller-unwind tests, and upgrade policy checks are now
+implemented. All 130 affected PostgreSQL and 194 focused component/tool cases
+passed, as did rollback-forward and all three migration paths. Final style
+checks passed. This does not close the earlier full-PostgreSQL limitation.
+Retain every result; do not loosen gates or call selected diagnostics release
+evidence. This branch is not ready to merge until a new exact image, canonical
+series, and remaining verification are complete.
 
 The reporting correlation fix at `9c5fca15` passed its source
 and exact-image checks, but selected 500 still failed only the queue-slope gate:

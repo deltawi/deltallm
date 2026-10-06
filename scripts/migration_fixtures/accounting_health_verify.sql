@@ -8,6 +8,14 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'accounting terminal cold-claim policy is missing';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_proc p
+        WHERE p.oid=to_regprocedure('deltallm_accounting_materialize_terminal_journal(bigint,text,uuid,bigint[])')
+          AND p.proconfig @> ARRAY['plan_cache_mode=force_custom_plan']
+          AND pg_get_functiondef(p.oid) LIKE '%accounting_terminal_commit_key_index%'
+    ) THEN
+        RAISE EXCEPTION 'accounting terminal cold-commit policy is missing';
+    END IF;
     FOREACH signature IN ARRAY ARRAY[
         'deltallm_accounting_allocate_local_permit_grants_batch(bigint,text,integer,jsonb)',
         'deltallm_accounting_backlog_snapshot(bigint)',
