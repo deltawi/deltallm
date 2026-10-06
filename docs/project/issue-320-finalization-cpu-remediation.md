@@ -1029,5 +1029,32 @@ percentage saving. Treat this probe as diagnostic, not release qualification.
 - [x] Reject the unsupported retained-snapshot prototype and preserve evidence.
 - [x] Verify header parity, streaming, cancellation, disconnect, and non-HTTP paths.
   All 29 existing and private checks passed; both injected hooks compiled.
-- [ ] Run the same bounded 500 RPS header-only diagnostic.
+- [x] Run the same bounded 500 RPS header-only diagnostic.
 - [ ] Ship only a supported change, then qualify a fresh immutable image.
+
+The header-only diagnostic completed all 15,000 requests with no drops or
+errors. Exact accounting passed and drained in 12.11 seconds. It still
+failed p95 (173.11 ms) and queue slope (+0.9548); p99 passed at 240.86 ms.
+Keep `native-5b271273-500-8g-pure-header-probe-20261006`. This result does
+not qualify release or prove that this wrapper is the remaining fix.
+All original resources were restored. Runtime source remains unchanged.
+
+### Separate eight-CPU capacity check
+
+Repeated six-CPU checks have shown guest CPU pressure even with low host
+paging. The declared pod CPU ceilings also share those six VM CPUs with
+the generator and Kubernetes. Next, test the original unchanged image
+without private hooks on eight VM CPUs and eight GiB. Keep the exact pod
+limits, topology, deadlines, money proofs, and strict pass gates.
+
+This is a new environment comparison, not a repair or a passing result for
+the six-CPU profile. Record its actual VM CPU count in the normal manifest
+and preserve the six-CPU failures. Stop the other approved VM only during
+the run and restore its original running workloads and both contexts.
+Only if selected 500 and 200 RPS pass in this environment, run one full
+50/100/200/500 fixed-image series there. A complete passing result would
+establish capacity on eight CPUs, not on six.
+
+- [ ] Run the unchanged-image eight-CPU selected 500 RPS stage.
+- [ ] If it passes, run selected 200 RPS without repeating lower tiers.
+- [ ] If both pass, run one full fixed-image series and state its resource needs.

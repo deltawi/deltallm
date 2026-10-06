@@ -224,6 +224,14 @@ Next, verify a smaller private header-only ASGI wrapper and test it at
 acknowledgements, deadlines, resource limits, and all qualification gates.
 Do not rerun lower tiers during this iteration.
 
+The header-only probe also missed the strict gates despite all 15,000
+requests succeeding with exact accounting: p95 173.11 ms, p99 240.86 ms,
+and queue slope +0.9548. No runtime change is being shipped from these
+experiments. Next, compare the original image without hooks on an
+explicitly separate eight-CPU/eight-GiB VM, retaining the same pod limits,
+topology, deadlines, and all pass gates. If selected 500 and 200 pass,
+run the full series there once. Do not present this as a six-CPU pass.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
