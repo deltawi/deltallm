@@ -1579,7 +1579,7 @@ probe and corrected per-claim rollback comparison.
   page query, retaining the composite frontier, prefix equalities, correlation barriers, lease
   checks, fencing, byte limits, and exact effects.
 - [x] Pass affected PostgreSQL, component, and query checks.
-- [ ] Seal the normal image and pass its five offline checks.
+- [x] Seal the normal image and pass its five offline checks.
 - [ ] Recheck selected 500/200, then the canonical four-tier qualification on passes.
 
 The initial regression mistakenly included fixture inserts in its block bound;
@@ -1601,3 +1601,16 @@ owned-claim recovery. It asserts index blocks as well as returned/filtered rows;
 a row-count-only assertion missed this failure. No schema migration or planner
 setting is needed for this query correction. The earlier correlation and cold
 terminal fixes remain unchanged.
+
+The canonical image is sealed from `6194a1684707aa97acb561aaf8627899830e63a0`,
+tag `deltallm-native:issue320-main-6194a168`, index digest
+`sha256:1dd07272bdf9da5ed0e33397ac4760f79f6333386e951737b4a46bd720231279`,
+arm64 platform digest
+`sha256:19674e96a9880e29741a95ca06eb0c9ee2cf7339b65ea897d1b9610412d37f99`.
+All five offline/non-root checks passed. The shipped queries contain the new
+bounds and existing correlation barrier; unchanged migrations 144–146 match
+source checksums. No runtime proxy environment remains. Keep
+`native-image-6194a168-20261006`. The isolated wrapper tests selected 500, then
+200, then the complete canonical short/ten-minute series only if both pass.
+No lower tier is repeated during these upper-tier iterations. Load results
+remain open; source and image checks are not an RPS certificate.

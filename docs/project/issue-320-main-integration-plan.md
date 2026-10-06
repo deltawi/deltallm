@@ -20,7 +20,9 @@ in the composite frontier. Keeping that frontier and adding an exact sequence
 bound passed 51 affected PostgreSQL and 148 component/tool checks; the corrected
 new regression failed all eight cold/analyzed planner cases with the original
 query. Keep resource and gate
-limits unchanged. Selected upper tiers and final qualification are still open.
+limits unchanged. The canonical `6194a168` image passed all five offline checks,
+shipped-query bounds, and unchanged migration checksum checks. Selected upper
+tiers and final qualification are now running but are still open.
 
 The reporting correlation fix at `9c5fca15` passed its source
 and exact-image checks, but selected 500 still failed only the queue-slope gate:
