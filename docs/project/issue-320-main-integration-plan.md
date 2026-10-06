@@ -12,9 +12,10 @@ Accepted performance code: `cc3113bd`
 
 Slices 1 through 8 are complete. The runtime code for slices 9 through 14 is now
 connected, including native reporting and shared Realtime, batch, and selector
-accounting. All 8,566 Python tests, UI checks, migration paths, and chart checks
-passed their required gates. Full UI lint retains unchanged baseline findings.
-Container and gateway qualification checks remain open. The experimental branch's
+accounting. The generated-client repair checkpoint passed all 8,573 Python cases.
+UI checks, migration paths, and chart checks also passed. Full UI lint retains
+unchanged baseline findings. Exact-image and gateway qualification checks remain
+open. The experimental branch's
 500 RPS result is not evidence for this clean replay. This branch is not ready to
 merge.
 
@@ -111,7 +112,7 @@ checks, not a gateway throughput result.
 - [ ] Update the final plan and handoff. Do not push, open a PR, or merge without
   a separate user request.
 
-### Final regression evidence
+### Pre-repair regression evidence
 
 - Application: 1,646 passed in 544.10 seconds.
 - PostgreSQL confirmation: 848 passed in 748.70 seconds, without required skips.
@@ -159,6 +160,70 @@ The original registry digest remains recorded. Application code, resource limits
 prices, test durations, and success limits did not change. All 88 focused load
 and cluster tests passed. The broader component and chart confirmation passed
 all 5,967 cases. A new commit, exact image, and fresh cluster remain required.
+
+### Generated-client startup memory repair
+
+The `5cb093c5` cluster passed resource-metrics setup. All seven application roles
+then exceeded their unchanged 1 GiB memory limits during import. No provider
+proof or gateway load started. The owned cluster was stopped and removed. Its
+pod exit states are retained in `native-5cb093c5-20261006/startup-pods.json`.
+
+The generated database types module contains 887,685 lines. Its uncached import
+used 1,505,420 KiB peak RSS. Precompiled code reduced the same import to
+723,364 KiB. Those measurements are startup imports, not request memory or RPS.
+
+Repair plan:
+
+- [x] Identify the import memory peak in the exact image. Keep all failed evidence.
+- [x] Use Prisma's supported recursive types instead of five levels of repeated
+  type expansion. Keep models, database structure, query methods, and money unchanged.
+- [x] Compile the generated client during the canonical image build.
+- [x] Add a 1 GiB offline image gate for actual API and minimal-role imports.
+- [x] Regenerate the client and repeat affected tests and container contracts.
+- [ ] Build and smoke-test a new exact image. Start fresh kind evidence.
+
+The generator mode is documented in the [Prisma configuration reference](https://prisma-client-py.readthedocs.io/en/stable/reference/config/#recursive-type-depth).
+It changes generated Python type definitions, not database DDL. The repository
+does not configure Mypy. Recursive types require a compatible static checker if
+one is added later. No memory limit or startup timeout is increased.
+
+The smaller client passed 5,969 component/chart cases and 1,646 application cases.
+The database repeat passed 846 cases and failed two native Realtime admissions.
+Debugging reproduced a timeout during permit funding and recovery. Each database
+call reached its unchanged 250 ms limit. Later focused runs passed all four cases
+with the original connection settings and about 20 ms funding calls. The cause
+of the earlier delay is not established. These confirmations are not a production
+fix. Keep the failed run in `issue320-final-recursive-postgres.log`. The complete
+database confirmation then passed all 848 cases in 773.26 seconds with the
+original connection settings, deadlines, and assertions.
+
+The image identity now has one owner for Python sources, the frozen lock, the
+dependency manifest, and the Prisma schema. The image cannot match a checkout
+whose generated-client inputs differ. A parity test checks the local and in-image
+hash programs.
+
+The development image passed the new 1 GiB import gate. The actual API and native
+role modules used 339,668 KiB peak RSS and imported in 5.04 seconds. This is an
+import check, not a request benchmark. The generated types module now has
+216,511 lines instead of 887,685. Native CLI, non-root, read-only, callback, and
+cancellation checks also passed. All 42 focused image and qualification-tool
+cases passed. The final clean image and gateway qualification are still required.
+
+Final repair confirmation:
+
+- Application: 1,646 passed in 522.09 seconds.
+- PostgreSQL: 848 passed in 773.26 seconds, without required skips.
+- Redis: 105 passed in 15.55 seconds, without required skips.
+- Hermetic and Helm: 5,974 passed in 106.80 seconds.
+- Collection: 8,573 cases, each in one lane: 5,715 hermetic, 1,646 application,
+  848 PostgreSQL, 105 Redis, and 259 Helm.
+- Source lint, touched-file formatting, canonical container parity, and whitespace
+  checks passed.
+
+The UI files, migration SQL, chart values, and runtime settings did not change in
+this repair. Their earlier complete gates remain applicable. Keep the failed
+database repeat and its funding diagnostics with the passing confirmation in
+`artifacts/qualification/verification-20261006`.
 
 ## Integration rules
 

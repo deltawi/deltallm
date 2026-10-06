@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 from contextlib import ExitStack
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -36,6 +35,7 @@ from tests.performance.capacity_samples import api_pods
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.gateway_concurrency_diagnostics import KubernetesResourceRecorder
 from tests.performance.gateway_concurrency_manifest import local_manifest
+from tests.performance.gateway_source_identity import image_identity_program, source_sha256
 from tests.performance.lifecycle_cluster import LifecycleCluster, LOAD_KEY, MASTER_KEY, SALT_KEY
 from tests.performance.run_capacity_acceptance import prime_database, wait_edge
 from tests.performance.run_gateway_concurrency import measure, valid_completion
@@ -45,21 +45,8 @@ ACCOUNTING_SELECTOR = (
 )
 
 
-def source_sha256(root: Path = Path(".")) -> str:
-    digest = hashlib.sha256()
-    for path in sorted((root / "src").rglob("*.py")) + [root / "uv.lock"]:
-        digest.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes())
-    return digest.hexdigest()
-
-
 def image_source_sha256(cluster: LifecycleCluster, pod: str) -> str:
-    program = (
-        "import hashlib,pathlib;"
-        "r=pathlib.Path('/app');d=hashlib.sha256();"
-        "p=sorted((r/'src').rglob('*.py'))+[r/'uv.lock'];"
-        "[(d.update(str(x.relative_to(r)).encode()+b'\\0'+x.read_bytes())) for x in p];"
-        "print(d.hexdigest())"
-    )
+    program = image_identity_program()
     value = cluster.kubectl("exec", pod, "--", "python", "-c", program).stdout.strip()
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError("Application pod returned an invalid source fingerprint")

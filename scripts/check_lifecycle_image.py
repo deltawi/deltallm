@@ -1,6 +1,7 @@
 """Smoke-test the shipped non-root environment and its blocked-callback exit bound."""
 
 import argparse
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import subprocess
@@ -30,6 +31,38 @@ assert shutil.which("prisma") == "/opt/prisma/binaries/node_modules/.bin/prisma"
 subprocess.run(["prisma", "-v"], check=True, timeout=30)
 """
 
+DATABASE_IMPORT_CHECK = """
+import json, os, resource, time
+assert os.getuid() == 10001
+started = time.monotonic()
+from prisma import Prisma
+from src.bootstrap.accounting_worker_app import create_accounting_worker_app
+from src.main import app
+assert app is not None and callable(create_accounting_worker_app)
+print(json.dumps({"import_seconds": time.monotonic() - started,
+                  "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}))
+"""
+
+
+@dataclass(frozen=True)
+class ImageSmokeCheck:
+    label: str
+    command: list[str]
+    expected: int
+    memory: str
+
+
+def image_smoke_checks(presidio: bool) -> tuple[ImageSmokeCheck, ...]:
+    return (
+        ImageSmokeCheck("runtime", ["python", "-c", CHECK, str(presidio).lower()], 0, "2g"),
+        ImageSmokeCheck("database-import", ["python", "-c", DATABASE_IMPORT_CHECK], 0, "1g"),
+        ImageSmokeCheck("migration-cli", ["python", "-c", MIGRATION_CHECK], 0, "1g"),
+        ImageSmokeCheck("callback", ["python", "/fixture/blocked.py"], 70, "2g"),
+        ImageSmokeCheck(
+            "cancelled-cleanup", ["python", "/fixture/blocked.py", "--cancel-cleanup"], 70, "2g"
+        ),
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -53,12 +86,7 @@ def main() -> None:
     )
     assert metadata["Config"]["Cmd"] == ["python", "-m", "src.server"]
     fixture = Path("tests/performance/lifecycle_blocked_callback.py").resolve()
-    for label, command, expected, memory in (
-        ("runtime", ["python", "-c", CHECK, str(args.presidio).lower()], 0, "2g"),
-        ("migration-cli", ["python", "-c", MIGRATION_CHECK], 0, "1g"),
-        ("callback", ["python", "/fixture/blocked.py"], 70, "2g"),
-        ("cancelled-cleanup", ["python", "/fixture/blocked.py", "--cancel-cleanup"], 70, "2g"),
-    ):
+    for check in image_smoke_checks(args.presidio):
         name = "deltallm-pr8-smoke-" + uuid4().hex[:8]
         try:
             result = subprocess.run(
@@ -74,7 +102,7 @@ def main() -> None:
                     "--tmpfs",
                     "/tmp:rw,size=128m",
                     "--memory",
-                    memory,
+                    check.memory,
                     "--cpus",
                     "2",
                     "--cap-drop",
@@ -86,16 +114,20 @@ def main() -> None:
                     "--mount",
                     f"type=bind,source={fixture},target=/fixture/blocked.py,readonly",
                     args.image,
-                    *command,
+                    *check.command,
                 ],
                 capture_output=True,
                 text=True,
                 timeout=90,
             )
-            (args.output / (label + ".log")).write_text(result.stdout + result.stderr)
-            assert result.returncode == expected, (label, result.returncode, result.stderr[-2000:])
+            (args.output / (check.label + ".log")).write_text(result.stdout + result.stderr)
+            assert result.returncode == check.expected, (
+                check.label,
+                result.returncode,
+                result.stderr[-2000:],
+            )
             assert "AssertionError" not in result.stderr
-            if expected == 70:
+            if check.expected == 70:
                 assert "forced exit" in result.stderr
         finally:
             subprocess.run(["docker", "rm", "--force", name], capture_output=True, timeout=15)

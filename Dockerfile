@@ -50,6 +50,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     esac
 COPY prisma ./prisma
 RUN prisma generate --schema=./prisma/schema.prisma && prisma py fetch
+# Compile the generated client at build time, not during bounded startup.
+RUN python -m compileall -q /opt/venv/lib/python3.11/site-packages/prisma
 COPY src ./src
 
 FROM base
@@ -58,8 +60,7 @@ COPY --from=builder /opt/prisma /opt/prisma
 COPY --from=builder /app /app
 COPY --from=frontend /app/ui/dist ./ui/dist
 COPY config.example.yaml ./config.example.yaml
-# Use the bundled native CLI for migrations. The Python wrapper imports all
-# generated database models and exceeds the migration Job's memory allocation.
+# Use the bundled native CLI so migration Jobs do not import the Python client.
 ENV PATH=/opt/prisma/binaries/node_modules/.bin:$PATH
 USER 10001:10001
 EXPOSE 4000

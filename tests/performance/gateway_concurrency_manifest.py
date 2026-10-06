@@ -20,6 +20,7 @@ from src.database_settings import DatabaseAllocationSettings
 from src.spend_operation_settings import SpendOperationAllocation, SpendOperationSettings
 from src.ingress import IngressLimits
 from src.services.auth_fallback import AuthFallbackLimits
+from tests.performance.gateway_source_identity import source_sha256
 from src.request_work_settings import RequestWorkSettings, resolve_request_work_settings
 
 
@@ -104,12 +105,9 @@ async def local_manifest(
         if match is None:
             raise ValueError("Cannot identify PostgreSQL version")
         postgres_version = match.group()
-    digest = hashlib.sha256()
-    for path in sorted(Path("src").rglob("*.py")) + [Path("uv.lock")]:
-        digest.update(str(path).encode() + b"\0" + path.read_bytes())
     return ServerManifest(
         server_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        server_source_sha256=digest.hexdigest(),
+        server_source_sha256=source_sha256(),
         server_python=sys.version.split()[0],
         api_processes=api_processes,
         accounting_worker_processes=accounting_worker_processes,

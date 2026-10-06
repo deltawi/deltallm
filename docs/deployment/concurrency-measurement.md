@@ -162,6 +162,12 @@ and creates a separate kubeconfig. It does not use the current cluster or Ranche
 Fixture imports retain their repository tags. For metrics-server, the runner
 checks the selected platform manifest and uses its immutable digest reference
 on every owned node. The evidence also records the original registry digest.
+The application source hash includes Python sources, the frozen lock, the
+dependency manifest, and the Prisma schema. Generated-client inputs cannot
+change without changing this identity.
+The canonical build uses recursive client types and precompiles that client.
+The image smoke imports the actual API and native-role modules at a 1 GiB memory
+limit. This checks startup memory before the full cluster run.
 
 ```bash
 export DOCKER_CONTEXT=your-isolated-test-runtime

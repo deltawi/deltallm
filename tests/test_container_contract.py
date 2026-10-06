@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from scripts.check_container_contract import railway_dockerfile
-from scripts.check_lifecycle_image import MIGRATION_CHECK
+from scripts.check_lifecycle_image import DATABASE_IMPORT_CHECK, MIGRATION_CHECK, image_smoke_checks
 
 
 def test_runtime_selects_bundled_native_migration_cli_without_changing_build_client():
@@ -14,3 +14,24 @@ def test_runtime_selects_bundled_native_migration_cli_without_changing_build_cli
 
 def test_railway_container_retains_the_same_native_migration_cli():
     assert Path("deploy/railway/Dockerfile").read_text() == railway_dockerfile()
+
+
+def test_generated_client_uses_recursive_types_and_build_time_bytecode():
+    schema = Path("prisma/schema.prisma").read_text()
+    assert "recursive_type_depth        = -1" in schema.split("datasource db", 1)[0]
+    source = Path("Dockerfile").read_text()
+    generate = source.index("RUN prisma generate")
+    compile_client = source.index(
+        "RUN python -m compileall -q /opt/venv/lib/python3.11/site-packages/prisma"
+    )
+    assert generate < compile_client < source.index("FROM base\n")
+
+
+def test_actual_api_and_native_role_imports_have_a_one_gib_image_gate():
+    checks = {check.label: check for check in image_smoke_checks(False)}
+    check = checks["database-import"]
+    assert check.memory == "1g" and check.expected == 0
+    assert check.command == ["python", "-c", DATABASE_IMPORT_CHECK]
+    assert "from prisma import Prisma" in DATABASE_IMPORT_CHECK
+    assert "from src.main import app" in DATABASE_IMPORT_CHECK
+    assert "from src.bootstrap.accounting_worker_app" in DATABASE_IMPORT_CHECK
