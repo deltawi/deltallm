@@ -81,6 +81,8 @@ LEFT JOIN LATERAL (
 
 # Lock the current checkpoint before the second work check. A concurrent commit
 # can advance its frontier after the first candidate snapshot.
+# The first EXISTS must retain its correlation: LIMIT alone can be flattened
+# into a semi-join that reads every finalized event before testing the frontier.
 CLAIM = (
     """
 WITH protocol AS MATERIALIZED (
@@ -99,7 +101,7 @@ WITH protocol AS MATERIALIZED (
      AND e.accounting_partition=n
      AND (e.protocol_name,e.generation,e.accounting_partition,e.sequence)>
       ('primary',p.generation,n,c.last_sequence)
-     AND e.event_type IN ('finalized','reconciled') LIMIT 1) OFFSET 0
+     AND e.event_type IN ('finalized','reconciled') LIMIT 1 OFFSET 0) OFFSET 0
  ) c
 ), candidate AS MATERIALIZED (
  SELECT c.accounting_partition FROM candidates

@@ -1361,6 +1361,45 @@ changes. Collect statement execution/call/block counters and estimated table
 update/dead-row statistics to distinguish physical churn from shared scheduling.
 This is not release qualification; preserve both earlier cold and warm failures.
 
-- [ ] Verify the added read-only numeric query against the owned fixture schema.
-- [ ] Capture the selected 500 SQL-cost diagnostic with the sealed image.
-- [ ] Identify the growing cost before another runtime change.
+- [x] Verify the added read-only numeric query against the owned fixture schema.
+- [x] Capture the selected 500 SQL-cost diagnostic with the sealed image.
+- [x] Identify the growing cost before another runtime change.
+
+The numeric query prepared all 78 fields; the lightweight fixture does not
+preload statement statistics, while kind does. The diagnostic executed without
+snapshot errors. All 30,000 requests succeeded; latency, exact money, and drain
+passed, but slope +0.23904 failed. Keep
+`native-1aaf2bda-500-10cpu-8g-60s-sql-costs-20261006`. Reporting claims grew
+from about 1 to 16 ms; terminal claims from under 1 to 26 ms. After automatic
+cleanup, both dropped sharply. Checkpoint updates were already over 99% heap-only;
+the index-removal fix is working. All original resources restored.
+
+### Keep candidate discovery correlated to each frontier
+
+A controlled exact claim with 64 cells and 40,000 finalized source events found
+the remaining history join: the first EXISTS is flattened, reading 625 old
+events per partition (all 40,000), even when only sequence 40,000 is new.
+Generic/custom plans cost 23.20/17.75 ms. Adding OFFSET 0 inside that EXISTS
+keeps its LIMIT 1 frontier seek correlated: 3.70/2.90 ms and at most one event
+per seek, with unchanged leases and key page. This is query-shape evidence,
+not yet an RPS pass. Replanning alone does not fix the history join; do not
+change pool/global planner settings. Previous history fixtures mostly supplied
+nonterminal events and refreshed statistics, missing this case.
+
+- [x] Preserve a failing actual-repository regression on 40,000 finalized events,
+  cold cached plans, no statistics refresh, and all four planner modes.
+- [x] Add the single correlated-seek boundary to candidate discovery.
+- [x] Pass cold and existing retained-history/race/parity/fence checks.
+- [ ] Seal the query fix in a normal image and verify exact-image checks.
+- [ ] Recheck upper tiers, then run the full four-tier qualification on passes.
+
+All four original regression cases failed with 625 historical event rows per
+partition seek. With OFFSET 0 inside the first EXISTS, all 103 PostgreSQL cold,
+retained, race, reporting, protocol, and journal-worker checks passed; all 120
+affected component checks passed. Touched-source/test lint, formatting, and diff
+checks passed. Preserve all logs in
+`artifacts/qualification/verification-correlated-reporting-claim-20261006`.
+This is a runtime query-only fix: no migration, client generation, caller planner
+settings, deadlines, queues, or financial calculation changed. Seal a fresh
+normal image; first compare selected 500 in the existing eight-CPU/8-GiB envelope,
+then selected 200 and the canonical full series only on preceding passes.
