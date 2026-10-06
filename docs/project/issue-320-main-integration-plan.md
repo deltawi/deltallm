@@ -131,10 +131,18 @@ generator proof passed. Selected 500 RPS still failed: 9,092/15,000 successes,
 and 2.65 GB of swap writes across setup, load, and post-arrival capture. A
 bounded follow-up recorded database deadlines and pool waits across several
 owners, then provider read errors and cooldown. It did not record the repaired
-invalid-result claim failure. Both failed results are preserved. Next, seek
-approval to stop the other Colima VM for an isolated upper-tier check and
-restart it afterward. Do not relax safety, resources, deadlines, or pass limits.
-Keep 50 and 100 RPS out of iteration runs. Final qualification remains open.
+invalid-result claim failure. Both failed results are preserved. The user then
+approved stopping the other Colima VM. The unchanged image started all 15,000
+arrivals but completed only 11,462 successfully. It returned 3,508 no-healthy-
+deployment errors and 30 other HTTP 503 responses. p95 was 441.00 ms and p99
+was 1,040.59 ms. Drain failed with one uncertain provider operation; all grants
+and queues were empty and all budget windows were safe. The VM and its eight
+original running containers were restored, as were the original contexts.
+Another test task started Redis in the qualification VM before gateway
+arrivals, so this failed comparison cannot count as fully isolated. Next,
+reserve that VM from concurrent tests and trace the first provider failure.
+Do not relax safety, resources, deadlines, or pass limits. Keep 50 and 100 RPS
+out of iteration runs. Final qualification remains open.
 
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four

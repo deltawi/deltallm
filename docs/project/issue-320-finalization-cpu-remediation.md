@@ -719,9 +719,60 @@ instrumentation means it is not release qualification.
 
 - [x] Preserve both failed upper-tier results and bounded cause evidence.
 - [x] Distinguish the repaired claim race from the new deadline and connection failures.
-- [ ] With user approval, stop the other Colima VM for one isolated fixed-image
-  500 RPS check, then restart it. Do not stop shared workloads without approval.
+- [x] Use the user's approval to stop the other Colima VM for a fixed-image
+  500 RPS check, then restore it and its original workloads.
+- [ ] Keep the qualification VM exclusive for the complete test window.
 - [ ] If failures remain, verify the funding-acknowledgement and connection
   failure paths with controlled tests before another runtime change.
 - [ ] Pass selected 200 and 500 RPS without lower-tier iteration reruns.
 - [ ] Run the complete fixed-image qualification once after upper tiers pass.
+
+### Approved VM shutdown: fixed-image comparison
+
+The user approved the temporary shutdown of `issue320-kind`. It was stopped
+before setup and restored after the failed stage. All eight containers that
+were running before shutdown were restored. The original Docker context and
+Kubernetes context were also restored. No data or unrelated container was
+deleted. Rancher remained off, as it was before this check.
+
+The unchanged `5b271273` image ran a fresh selected 30-second 500 RPS stage.
+The generator proof passed all 10,000 requests at 1,000 RPS. The gateway
+started all 15,000 arrivals and dropped none. It completed 11,462 requests
+successfully, for 76.41 percent success. It returned 3,508 `no_healthy_deployments`
+responses and 30 other HTTP 503 responses. p95 was 441.00 ms, p99 was
+1,040.59 ms, and the queue slope was +3.369 requests per second. These gates
+failed. No selected 200 RPS stage, lower tier, or ten-minute stage ran.
+
+Accounting drain failed at 181.08 seconds. All grants and processing queues
+were closed or empty. One provider operation remained provisional with a
+completed `uncertain` journal result and `service_unavailable` classification.
+Each applicable budget scope retained 0.024582 exact provisional capacity.
+All windows were safe. Recorded successful charges, including one warmup,
+totaled 0.080241 exactly in the facts and all four budget scopes. Do not release
+the uncertain operation merely to pass the drain gate.
+
+Memory snapshots across setup, load, and drain recorded 59,967 swap-in pages
+and no swap-out pages. At 16 KiB per page, that is about 0.98 GB read from
+disk. Native database calls averaged 13.85 ms; their p95 histogram bound was
+50 ms and their p99 bound was 100 ms. The request and latency failures remain
+despite less paging. This does not establish the cause of the provider failure.
+
+The qualification VM was empty before setup. Another task created
+`deltallm-output-tpm-ci-fix-redis` in that VM at 14:39:54 UTC. Gateway arrivals
+started at 14:40:30 UTC. The container has no Docker CPU or memory limit;
+its Redis server has a 128 MB data limit. Preserve this as a failed comparison,
+not a fully isolated result. Do not assume that this container caused the
+failure. Do not stop another task's service without authority.
+
+Evidence is in
+`artifacts/qualification/native-5b271273-500-isolated-20261006`. The folder
+contains raw arrivals, metrics, accounting results, the failed runner log,
+host snapshots, VM shutdown and restart logs, and the original workload list.
+The later attempt to collect pod logs ran after cluster cleanup and failed;
+it supplies no provider-cause evidence. No application code, resource limit,
+deadline, safety check, or qualification limit changed for this comparison.
+
+Next, reserve the qualification VM from concurrent test tasks. Capture the
+first provider failure with bounded diagnostics on the same image. Verify its
+connection and uncertainty paths with controlled tests before a runtime fix.
+Do not repeat lower tiers during this work.
