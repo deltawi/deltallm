@@ -184,6 +184,17 @@ the `-4` evidence and the first comparison. All original resources were
 restored. Next, run one bounded 8-GiB RPC timing diagnostic on the unchanged
 image before a runtime change. Keep lower tiers out of the iteration loop.
 
+The bounded timing check completed all 15,000 requests with safe exact
+accounting, but missed latency and queue gates. Local finalization averaged
+62.94 ms per request out of 114.35 ms total client latency. Its 3,373 signed
+RPC batches averaged 30.43 ms; native journal SQL averaged 11.72 ms over
+2,381 batches. These are nested measures, not additive stages. No transport
+or native database error was captured. Next, test a private two-batch API
+terminal pipeline with the original shared byte and pending queue limits,
+and unchanged combined selected-entry capacity. Five bounded ownership,
+cancellation, and shutdown self-check groups passed. No runtime source or
+production image has changed. The probe cannot count as release qualification.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.

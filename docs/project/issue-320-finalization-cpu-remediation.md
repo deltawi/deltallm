@@ -867,7 +867,7 @@ were restarted, and both original contexts were restored.
 - [x] Confirm 500 RPS once on the same image and 8-GiB environment. Preserve
   both results; do not repeat lower tiers or relax any gate.
 - [ ] If 500 RPS passes, run selected 200 RPS, then one full fixed-image series.
-- [ ] If latency still fails, measure the unreported request-path delay before
+- [x] If latency still fails, measure the unreported request-path delay before
   changing accounting, pooling, or safety behavior.
 
 ### Unchanged 8-GiB confirmation
@@ -897,3 +897,43 @@ local issue, terminal ownership, signed RPC, DNS, and native journal append.
 Include fixed-label native RPC queue metrics and guest resource-pressure
 totals. Keep all return values, deadlines, safety proofs, and pod limits.
 This instrumented cause check is not release qualification.
+
+### Bounded RPC timing result
+
+The exclusive 8-GiB timing diagnostic completed all 15,000 requests without
+errors or drops. Exact accounting passed and drained in 12.14 seconds.
+It still failed p95 (231.47 ms), p99 (353.21 ms), and queue slope (+1.5822).
+Evidence is in `native-5b271273-500-8g-timing-20261006`. Its hooks and all
+raw logs are retained with the original unchanged image identity. This is
+instrumented evidence, not release qualification.
+
+The complete per-request local finalization path averaged 62.94 ms, versus
+114.35 ms total client latency. Across 3,373 API finalization batches,
+terminal ownership averaged 31.93 ms, signed RPC 30.43 ms, and native RPC
+service time 20.90 ms. The 2,381 native journal batches averaged 11.72 ms
+at the database. DNS averaged 3.43 ms over 4,134 accounting calls. These
+measures overlap and have different batch counts. They locate a material
+finalization delay; do not add them or call DNS the main cause. No provider
+transport error, cooldown, or native database deadline was captured.
+
+The guest CPU pressure total increased by 17.97 seconds across the whole
+stage, including setup, transfer, and drain. Its CPU pressure avg60 reached
+14.56 percent. Guest memory and I/O pressure stayed low. Host paging read
+about 0.658 GB and wrote 0.476 GB across setup, load, and drain. Resource
+contention remains a contributing possibility. Both original VMs and all
+workloads and contexts were restored.
+
+- [x] Capture bounded timing across local finalization, RPC, DNS, and native SQL.
+- [x] Verify exclusive ownership and capture guest pressure before and after.
+- [x] Check a private two-batch pipeline for shared retained bytes, unchanged
+  selected-entry capacity, cancellation, result mapping, and owned shutdown.
+  Its first fixtures omitted the existing 4-KiB entry charge and assumed a
+  selected-cancellation error type; corrected fixtures use the real charge
+  and compare shutdown directly with the original batcher. All five
+  self-check groups passed. No production implementation has changed.
+- [ ] Probe two concurrent API terminal batches in this same environment.
+  Share the original queue and byte owner, and split the original selected
+  entry budget across both lanes. Keep durable ACKs, deadlines, and all
+  monetary proofs. Treat the probe as diagnostic, not qualification.
+- [ ] Implement a runtime change only if the controlled probe supports it,
+  then test its failure paths and qualify a fresh immutable image.
