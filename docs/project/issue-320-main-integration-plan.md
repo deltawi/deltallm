@@ -21,8 +21,10 @@ bound passed 51 affected PostgreSQL and 148 component/tool checks; the corrected
 new regression failed all eight cold/analyzed planner cases with the original
 query. Keep resource and gate
 limits unchanged. The canonical `6194a168` image passed all five offline checks,
-shipped-query bounds, and unchanged migration checksum checks. Selected upper
-tiers and final qualification are now running but are still open.
+shipped-query bounds, and unchanged migration checksum checks. Selected one-minute
+500 completed all 30,000 requests, p95 66.37 ms, p99 96.11 ms, exact money and
+drain, but slope +0.07300 failed. No 200 or full series started. The unchanged-image
+600-second SQL-cost comparison is now running; it is a diagnostic, not qualification.
 
 The reporting correlation fix at `9c5fca15` passed its source
 and exact-image checks, but selected 500 still failed only the queue-slope gate:

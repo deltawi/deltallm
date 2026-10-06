@@ -1614,3 +1614,24 @@ source checksums. No runtime proxy environment remains. Keep
 200, then the complete canonical short/ten-minute series only if both pass.
 No lower tier is repeated during these upper-tier iterations. Load results
 remain open; source and image checks are not an RPS certificate.
+
+The selected `6194a168` one-minute 500 check returned all 30,000 responses,
+zero errors/drops, p95 66.37 ms, p99 96.11 ms, exact accounting, no diagnostic
+failure, and 12.18-second drain. The sole failed gate is slope +0.07300.
+Aggregate accounting database latency averaged 2.70 ms. Preserve
+`native-6194a168-500-8cpu-8g-60s-exclusive-20261006`. The wrapper correctly
+stopped before 200 or the full series, then restored VMs and original workloads.
+Do not count the improved latency or complete responses as a capacity pass.
+
+- [x] Measure the corrected image at selected one-minute 500 and retain the failed gate.
+- [ ] Complete the unchanged-image 600-second 500 SQL-cost comparison.
+- [ ] Decide the next action from sustained queue behavior and individual SQL costs.
+
+The comparison uses the previously verified bounded 78-field numeric host-side
+sampler and a read-only storage snapshot after arrivals. It changes no application
+code, resource, deadline, workload, money check, or pass threshold. Its fixed
+600-second selected schedule bypasses the failed short prerequisite only to
+diagnose stability; it is explicitly not release qualification. A separate
+diagnostic declaration and the exact helper are archived. Keep
+`native-6194a168-500-8cpu-8g-600s-sql-costs-20261006`. No production change is
+chosen until its evidence identifies sustained growth or a startup-only effect.
