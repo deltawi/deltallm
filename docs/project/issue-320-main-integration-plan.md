@@ -32,9 +32,13 @@ all 300,000 requests without errors/drops: p95 78.55 ms, p99 119.14 ms,
 slope +0.006128, exact accounting, and 0.29-second drain. It is a selected
 diagnostic, not a release certificate, and does not prove the earlier burst's
 cause. The normal canonical one-minute ladder and ten-minute 50/100/200/500
-series are now starting in the isolated 8-CPU/6-GiB VM, with every pod limit,
-gate, deadline, and source/image unchanged. This branch is not ready to merge
-until that series and remaining verification are complete.
+series then passed short 50/100/200 but stopped at short 500: all 30,000
+responses succeeded, p95 77.45 ms and p99 124.37 ms passed, accounting drained
+exactly, but slope +0.116533 failed. No ten-minute qualification started.
+Three unchanged-image 500/60-second same-instance stages now check whether
+that short-window trend is repeatable. Retain every result; do not loosen
+gates or call selected diagnostics release evidence. This branch is not ready
+to merge until the canonical series and remaining verification are complete.
 
 The reporting correlation fix at `9c5fca15` passed its source
 and exact-image checks, but selected 500 still failed only the queue-slope gate:

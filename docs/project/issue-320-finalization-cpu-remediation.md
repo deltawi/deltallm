@@ -1698,3 +1698,28 @@ The standard runner now starts one fresh full series; no private schedule,
 SQL-cost sampler, application override, reduced gate, or skipped prerequisite
 is used. Keep `native-6194a168-all-four-8cpu-6g-60s-exclusive-20261006`.
 All prior failures remain retained. No final qualification pass is claimed yet.
+
+The canonical short ladder passed 50, 100, and 200 RPS, then failed only
+the 500 queue gate. All 51,000 offered requests succeeded across the ladder,
+without errors or drops. At 500, p95 was 77.45 ms, p99 124.37 ms, slope
++0.116533, and drain 12.25 seconds; all money and diagnostic gates passed.
+The runner correctly stopped before any ten-minute qualification stage.
+Both VMs, original primary workloads, and user contexts were restored.
+The manifest captured clean documentation commit `9a80d2ed`; runtime/image
+source is still `6194a168`, fingerprint
+`b616d199611105f533ad3f50b4a5baf3eb2dd522914d8e3ddec0154288ce475a`.
+
+The raw one-second queue is mostly 20–25 requests, with transient spikes.
+Five-second mean latency is 38–54 ms, rather than a monotonic rise. This
+does not turn the failed slope into a pass or establish its cause.
+
+- [x] Preserve the failed canonical ladder and its prerequisite stop.
+- [ ] Compare three unchanged 500/60-second stages on one instance, retaining
+  every result, to distinguish repeatable short-window growth from variability.
+- [ ] Use measured evidence for the next correction or unchanged final series;
+  do not change the queue threshold or skip canonical prerequisites.
+
+Keep `native-6194a168-500-8cpu-6g-60s-queue-repeat-20261006`.
+Its private host schedule repeats only the upper tier; application source,
+image, VM/pod limits, workload, deadlines, financial safety, and gates remain
+unchanged. It is not release qualification. Lower tiers are not repeated.
