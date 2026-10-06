@@ -11,7 +11,18 @@ Accepted performance code: `cc3113bd`
 ## Current status
 
 Latest checkpoint: the clean integration is connected, but final qualification
-is still open. The reporting correlation fix at `9c5fca15` passed its source
+is still open. The sustained unchanged `d93237b6` 500 diagnostic failed latency,
+queue growth, and the economic gate after seven HTTP 503s. Budget scopes match
+durable facts, including the successful precheck; no unsafe balance or unsettled
+work remained. PostgreSQL saturated, and reporting claims grew from about 3 ms
+to 46 ms. A real-index retained-history probe reproduced growing index-page work
+in the composite frontier. Keeping that frontier and adding an exact sequence
+bound passed 51 affected PostgreSQL and 148 component/tool checks; the corrected
+new regression failed all eight cold/analyzed planner cases with the original
+query. Keep resource and gate
+limits unchanged. Selected upper tiers and final qualification are still open.
+
+The reporting correlation fix at `9c5fca15` passed its source
 and exact-image checks, but selected 500 still failed only the queue-slope gate:
 30,000/30,000 successes, zero errors/drops, p95 93.51 ms, p99 135.29 ms,
 exact accounting and drain passed. A separate actual cold terminal-claim probe

@@ -1535,5 +1535,69 @@ The purpose is to distinguish startup/vacuum transients from sustained growth,
 not to count a different interval as a short-tier pass. A final canonical series
 still requires all of its own short and ten-minute gates.
 
-- [ ] Complete the selected 600-second 500 stability diagnostic and exact money proof.
-- [ ] Use sustained behavior to decide the next evidence-backed action.
+- [x] Complete the selected 600-second 500 stability diagnostic; retain its failed money gate.
+- [x] Use sustained behavior to decide the next evidence-backed action.
+
+The unchanged-image sustained diagnostic failed. It returned 299,993 successful
+responses and seven HTTP 503s from 300,000 offered requests, with no generator
+drops. p95 187.55 ms, p99 331.58 ms, and slope +0.09657 failed. All four budget
+scopes match 299,994 durable facts and exact charge 2.099958, including the
+benchmark's successful precheck. This is not an unexplained extra charge. The
+successful-charge checks remain null when errors occur, so the economic gate
+correctly remains failed; do not weaken it. Drain passed in 0.56 seconds. The
+seven errors cluster around arrival seconds 359–360. Redis acquisition recorded
+14 deadlines and 35 cancellations; this does not individually explain each 503.
+Both VMs and original workloads restored. Preserve
+`native-d93237b6-500-8cpu-8g-600s-sustained-diagnostic-20261006`.
+
+PostgreSQL reached its two-CPU limit for most of the sustained run: 4,656 of
+6,420 captured CPU periods were throttled, with about 302 cumulative throttled
+seconds. These counters include artifact transfer, not just arrivals. Existing
+per-operation metrics show reporting claims growing from about 3 ms in the
+first minute to 46 ms in minute nine. Other database operations slow under that
+saturation. API memory remains stable. No new instrumentation was needed to
+identify the leading growing operation.
+
+### Bound reporting index-page work, not only returned rows
+
+A connection-owned fixture copied every production event/checkpoint index and
+prepared the actual queries while empty. At 40,000 and 300,000 terminal records,
+the existing composite frontier returned zero rows but touched 540 and 3,337
+event index blocks, respectively. ANALYZE and custom plans did not fix it.
+The prefix is already fixed by protocol, generation, and partition equality;
+add an exact `sequence` range. The isolated sequence range touched 192 blocks at
+both sizes. At 300,000 records it reduced claim time from roughly 24 ms to
+under 0.5 ms, and progress from roughly 24 ms to under 0.9 ms. These isolated
+timings are not RPS evidence. Preserve
+`/private/tmp/issue320-sustained-claim-probe.PIKD9h`, including its initial
+probe and corrected per-claim rollback comparison.
+
+- [x] Reproduce the index-page growth independently without financial writes.
+- [x] Add a production-index regression at both history sizes, cold/analyzed,
+  in four planner modes. It fails in all eight cases before the fix.
+- [x] Add exact sequence bounds in discovery, progress, and the shared
+  page query, retaining the composite frontier, prefix equalities, correlation barriers, lease
+  checks, fencing, byte limits, and exact effects.
+- [x] Pass affected PostgreSQL, component, and query checks.
+- [ ] Seal the normal image and pass its five offline checks.
+- [ ] Recheck selected 500/200, then the canonical four-tier qualification on passes.
+
+The initial regression mistakenly included fixture inserts in its block bound;
+its eight failures are retained, but are not runtime-failure proof. The corrected
+runtime-only regression reproduced 3,337 blocks and failed all eight cases with
+the original query. Its private harness changes only imported test query constants,
+not the application image. One private pytest import-rewrite warning remains.
+The sequence-only runtime attempt then passed 35 checks but failed sixteen,
+including eight existing retained-history cases that chose the wrong index.
+Keep those failures too. The final correction retains the composite frontier
+and adds the equivalent sequence bound. All 51 affected PostgreSQL cases passed
+in 68.04 seconds; 148 focused component/tool cases passed in 1.20 seconds.
+Final touched lint/format and diff checks passed. The initial missing-test-file
+collection error remains preserved. Evidence is in
+`artifacts/qualification/verification-report-frontier-20261006`.
+
+The regression also exercises pending work, unexpired-lease exclusion, and
+owned-claim recovery. It asserts index blocks as well as returned/filtered rows;
+a row-count-only assertion missed this failure. No schema migration or planner
+setting is needed for this query correction. The earlier correlation and cold
+terminal fixes remain unchanged.

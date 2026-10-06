@@ -52,6 +52,7 @@ LEFT JOIN LATERAL (
  SELECT e.sequence,e.created_at FROM deltallm_accounting_events e
  WHERE e.protocol_name='primary' AND e.generation=p.generation
   AND e.accounting_partition=c.accounting_partition
+  AND e.sequence>c.last_sequence
   AND (e.protocol_name,e.generation,e.accounting_partition,e.sequence)>
    ('primary',p.generation,c.accounting_partition,c.last_sequence)
   AND e.event_type IN ('finalized','reconciled')
@@ -70,6 +71,7 @@ LEFT JOIN LATERAL (
    FROM deltallm_accounting_events e
    WHERE e.protocol_name='primary' AND e.generation=p.generation
     AND e.accounting_partition=c.accounting_partition
+    AND e.sequence>c.last_sequence
     AND (e.protocol_name,e.generation,e.accounting_partition,e.sequence)>
      ('primary',p.generation,c.accounting_partition,c.last_sequence)
     AND e.event_type IN ('finalized','reconciled')
@@ -83,6 +85,8 @@ LEFT JOIN LATERAL (
 # can advance its frontier after the first candidate snapshot.
 # The first EXISTS must retain its correlation: LIMIT alone can be flattened
 # into a semi-join that reads every finalized event before testing the frontier.
+# Keep the composite frontier for index selection and add its exact sequence bound.
+# The composite inequality alone can visit retained pages despite zero returned rows.
 CLAIM = (
     """
 WITH protocol AS MATERIALIZED (
@@ -99,6 +103,7 @@ WITH protocol AS MATERIALIZED (
    AND EXISTS (SELECT 1 FROM deltallm_accounting_events e
     WHERE e.protocol_name='primary' AND e.generation=p.generation
      AND e.accounting_partition=n
+     AND e.sequence>c.last_sequence
      AND (e.protocol_name,e.generation,e.accounting_partition,e.sequence)>
       ('primary',p.generation,n,c.last_sequence)
      AND e.event_type IN ('finalized','reconciled') LIMIT 1 OFFSET 0) OFFSET 0
@@ -116,6 +121,7 @@ WITH protocol AS MATERIALIZED (
   SELECT 1 FROM deltallm_accounting_events e
   WHERE e.protocol_name='primary' AND e.generation=$2
    AND e.accounting_partition=c.accounting_partition
+   AND e.sequence>c.last_sequence
    AND (e.protocol_name,e.generation,e.accounting_partition,e.sequence)>
     ('primary',$2,c.accounting_partition,c.last_sequence)
    AND e.event_type IN ('finalized','reconciled')
