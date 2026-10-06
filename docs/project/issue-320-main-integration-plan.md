@@ -19,8 +19,9 @@ then found completed-history scans in cached array-key statements, including
 empty work. Migration 146 adds empty-work returns and a claim-function-local
 custom-plan policy; it leaves reporting and caller/pool/database settings alone.
 The 77 affected PostgreSQL checks, eighteen-case rollback-forward confirmation,
-86 component/tool checks, and all three migration paths passed. Seal the normal
-image next and recheck 500 before 200 or the full series. Earlier failures and
+86 component/tool checks, and all three migration paths passed. The normal
+`d93237b6` image also passed all five offline checks and packaged migration
+checksum checks. Recheck 500 before 200 or the full series. Earlier failures and
 unsuccessful private prototypes remain in the CPU remediation plan. Do not
 describe source checks as a capacity pass or completed four-tier qualification.
 

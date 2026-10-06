@@ -1440,7 +1440,7 @@ boundary, while this separate terminal failure is reproduced cached-key work.
 - [x] Pass cold and existing worker/concurrency/exhaustion/money checks.
 - [x] Verify caller settings after success/error and missing-key fail-closed.
 - [x] Verify fresh, supported-release, and shared-feature migration paths.
-- [ ] Seal the normal image and pass its five offline checks.
+- [x] Seal the normal image and pass its five offline checks.
 - [ ] Recheck 500, then 200, then the final four-tier qualification on passes.
 
 Migration 146 changes only this claim function. The 77-case affected PostgreSQL
@@ -1454,3 +1454,15 @@ lint/format and diff checks passed; preserve the initial formatting failure too.
 No schema, client fields, money formula, caller/database/pool settings, resource,
 entry/byte bound, or deadline changed. Keep evidence in
 `artifacts/qualification/verification-terminal-cold-claims-20261006`.
+
+The normal image is sealed from `d93237b6cc04ab7c6ad560be6c84a4da997b6ab1`,
+tag `deltallm-native:issue320-main-d93237b6`, index digest
+`sha256:b1ce915377c924036eab1d5a667e2a22005de4767719be2c3b3c64f333c5ede5`,
+arm64 platform digest
+`sha256:a261520f596207339f3d637d6b5060fd7540b0a21026dd64483398fb9aad34e3`.
+All five offline/non-root checks passed. Migration 146 packaged checksum
+`b9c15c96310bcb75980b7abf9f7de01db313ba7f5f4d5c8df012dc06c697bc19`
+matches source, as do unchanged migrations 144/145. The first build was cancelled
+after the recurring VM DNS stall; its log is preserved. A restricted build-only
+TLS tunnel completed the canonical Dockerfile build, then stopped. No proxy
+runtime environment remains. Load checks are still open; this is not a capacity pass.
