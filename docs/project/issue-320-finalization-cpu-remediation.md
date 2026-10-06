@@ -1341,7 +1341,26 @@ and stop only the already approved other VM. Record the allocation and restore
 the original six-CPU/12-GiB VM settings and exact workloads on exit. Run selected
 500 first, then selected 200, then the canonical full series only on passes.
 
-- [ ] Complete the unchanged-image ten-CPU selected 500 comparison.
+- [x] Complete the unchanged-image ten-CPU selected 500 comparison.
 - [ ] If it passes, verify selected 200 in that same declared capacity envelope.
 - [ ] If upper tiers pass, run all four short and 600-second qualification stages.
 - [ ] Record honest resource-specific results and verify full environment restoration.
+
+The ten-CPU unchanged-image comparison completed 30,000/30,000 requests,
+zero errors/drops, p95 69.02 ms, p99 109.13 ms, exact accounting, and a
+10.14-second safe drain. Only slope +0.14259 failed. Do not claim a ten-CPU
+qualification pass, and do not increase CPU again based on this result alone.
+Keep `native-1aaf2bda-500-10cpu-8g-60s-exclusive-20261006`. All resources restored.
+
+Next make an unchanged-image 500 RPS diagnostic in the same ten-CPU envelope,
+extending only the existing host-side database-counter query. Keep nine fixed
+SQL operation groups and seven fixed table groups: 78 additional numeric fields
+every five seconds, under the existing snapshot and export limits. No raw SQL
+text, request values, application timing wrappers, server settings, or workload
+changes. Collect statement execution/call/block counters and estimated table
+update/dead-row statistics to distinguish physical churn from shared scheduling.
+This is not release qualification; preserve both earlier cold and warm failures.
+
+- [ ] Verify the added read-only numeric query against the owned fixture schema.
+- [ ] Capture the selected 500 SQL-cost diagnostic with the sealed image.
+- [ ] Identify the growing cost before another runtime change.
