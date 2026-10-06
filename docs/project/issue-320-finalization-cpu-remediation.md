@@ -667,7 +667,7 @@ pool, resource, deadline, or qualification bound is relaxed.
 - [x] Reproduce the invalid empty claim against unchanged runtime SQL.
 - [x] Repair the post-lock work check and prove both full and partial advancement.
 - [x] Confirm strict decoding, exact reporting effects, and all retained-history plans.
-- [ ] Seal the repair and run 500 RPS without repeating lower tiers.
+- [x] Seal `5b271273` and run 500 RPS without repeating lower tiers.
 - [ ] Pass selected 200/500, then the complete fixed-image qualification once.
 
 Keep the initial query-plan failure: an outer existence check allowed a history
@@ -681,3 +681,47 @@ startup/cleanup case. That unchanged case passed alone in 1.64 seconds.
 Preserve all initial race, test-barrier, query-plan, and startup failures with
 their confirmations in `artifacts/qualification/verification-reporting-race-20261006`.
 This targeted result does not close the earlier full PostgreSQL limitation.
+
+### Reporting-race repair: upper-tier result
+
+The `5b271273` image passed all five smoke checks. Fresh generator proof also
+passed. The selected short 500 RPS stage completed 9,092/15,000 requests and
+dropped 1,235 arrivals. It returned 4,432 billing HTTP 503 responses, 82 other
+HTTP 503 responses, and 159 client connection errors. p95 was 3,158.82 ms and
+p99 was 10,000.96 ms. The 181.18-second drain failed with one open grant and
+no unsettled operation. All terminal and reporting queues were empty. All
+budget windows remained safe. No lower tier or ten-minute stage ran. Preserve
+`artifacts/qualification/native-5b271273-500-20261006` as a failed result.
+
+The open grant had 32 allocated permits, no consumed or returned permit, and
+0.786624 exact reserved capacity. Its dispatch deadline had passed, but its
+safe recovery deadline was still about 655 seconds away. This is consistent
+with an unreceived funding acknowledgement; it is not proof of that cause.
+Do not release unknown issued capacity early to satisfy the drain limit.
+
+Host snapshots recorded 148,963 swap-in pages and 161,504 swap-out pages across
+setup, load, and post-arrival capture. With 16 KiB pages, that is about 2.44 GB
+read from disk and 2.65 GB written. The host still had another active Colima VM
+and unrelated workloads. These facts make an isolated comparison necessary;
+they do not prove that host pressure caused every failed request.
+
+A new bounded 500 RPS diagnostic captured failures after database calls as
+well as inside them. It completed 4,997/15,000 requests and dropped 478
+arrivals. Database statements and pool acquisition failed across funding,
+terminal acceptance, journal claims, and reporting commits. No invalid-result
+claim failure was recorded. Two provider `ReadError` failures became service-
+unavailable errors and triggered cooldown on the single fixture deployment.
+The provider did not restart. This identifies the cooldown trigger, but not
+the cause of those connection failures. The failed 180.87-second drain retained
+two safe provisional operations and one open unused grant. Preserve
+`artifacts/qualification/native-5b271273-500-native-cause-20261006`; its
+instrumentation means it is not release qualification.
+
+- [x] Preserve both failed upper-tier results and bounded cause evidence.
+- [x] Distinguish the repaired claim race from the new deadline and connection failures.
+- [ ] With user approval, stop the other Colima VM for one isolated fixed-image
+  500 RPS check, then restart it. Do not stop shared workloads without approval.
+- [ ] If failures remain, verify the funding-acknowledgement and connection
+  failure paths with controlled tests before another runtime change.
+- [ ] Pass selected 200 and 500 RPS without lower-tier iteration reruns.
+- [ ] Run the complete fixed-image qualification once after upper tiers pass.

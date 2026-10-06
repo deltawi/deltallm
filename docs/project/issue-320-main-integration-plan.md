@@ -124,6 +124,18 @@ real PostgreSQL cases, including all four planner profiles. One existing role
 startup case failed, then passed unchanged alone. Both results are preserved.
 The earlier full PostgreSQL limitation remains open.
 
+The reporting-race repair is sealed at `5b271273`. All five image checks and
+generator proof passed. Selected 500 RPS still failed: 9,092/15,000 successes,
+1,235 dropped arrivals, p95 3,158.82 ms, and one unused open grant after the
+181.18-second failed drain. Host snapshots show about 2.44 GB of swap reads
+and 2.65 GB of swap writes across setup, load, and post-arrival capture. A
+bounded follow-up recorded database deadlines and pool waits across several
+owners, then provider read errors and cooldown. It did not record the repaired
+invalid-result claim failure. Both failed results are preserved. Next, seek
+approval to stop the other Colima VM for an isolated upper-tier check and
+restart it afterward. Do not relax safety, resources, deadlines, or pass limits.
+Keep 50 and 100 RPS out of iteration runs. Final qualification remains open.
+
 The retained-measure audit maps all 26 accepted source measures to their clean
 implementation owners. Native processing now has two terminal lanes, four
 reporting lanes, one progress owner, and the declared eight-connection pool.
