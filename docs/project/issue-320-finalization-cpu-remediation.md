@@ -1663,10 +1663,10 @@ rule it out. Host compressed-memory occupancy grew by about 3.1 GiB, and free
 host memory fell sharply. Available power logs show no matching sleep event.
 Host/VM pressure is a hypothesis, not an established cause.
 
-- [ ] Compare unchanged 500/600 with VM memory reduced from 8 to 6 GiB.
-- [ ] Retain bounded post-stage restart, storage, and categorized PostgreSQL-error
+- [x] Compare unchanged 500/600 with VM memory reduced from 8 to 6 GiB.
+- [x] Retain bounded post-stage restart, storage, and categorized PostgreSQL-error
   metadata even when the canonical stage raises its drain failure.
-- [ ] Use the result to choose a proven fix or the final canonical series.
+- [x] Use the result to choose a proven fix or the final canonical series.
 
 The new comparison changes only the temporary VM memory allocation. Eight CPUs,
 all pod limits, image, workload, sampler, gates, money policy, and deadlines stay
@@ -1675,3 +1675,26 @@ capacity or a pass threshold. Restore the original six-CPU/12-GiB VMs and exact
 running workloads afterward. Keep
 `native-6194a168-500-8cpu-6g-600s-sql-costs-20261006`; it remains a selected
 diagnostic with release eligibility false. This is not a new application patch.
+
+The 6-GiB comparison passed every stage gate: 300,000/300,000 successes,
+zero errors/drops, p95 78.55 ms, p99 119.14 ms, slope +0.006128, and
+0.29-second drain. All four scopes reconcile exactly, with 300,001 facts
+(including precheck), charge 2.100007, and no unsettled operations or grants.
+The bounded metadata shows no load-time restarts or categorized PostgreSQL
+errors. API/request startup restarts precede arrivals; do not call them load
+failures. The private metadata helper appended a literal backslash-n rather
+than a newline; retain the original and parse only that suffix away for
+inspection. This does not affect the valid qualification report or its gates.
+Normal auth-cache refresh occurred at five minutes in the earlier failed run;
+the late burst is not explained by cache expiry. One memory comparison does
+not establish the previous burst's cause.
+
+- [ ] Complete the canonical one-minute ladder and ten-minute 50/100/200/500
+  series with the unchanged sealed image in the isolated 8-CPU/6-GiB VM.
+- [ ] Verify exact-image/source identity, final accounting, and restoration,
+  then report the real four-tier results.
+
+The standard runner now starts one fresh full series; no private schedule,
+SQL-cost sampler, application override, reduced gate, or skipped prerequisite
+is used. Keep `native-6194a168-all-four-8cpu-6g-60s-exclusive-20261006`.
+All prior failures remain retained. No final qualification pass is claimed yet.

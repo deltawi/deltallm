@@ -27,9 +27,14 @@ drain, but slope +0.07300 failed. No 200 or full series started. The unchanged-i
 600-second SQL-cost comparison passed latency and queue gates, but 306 late
 HTTP 503s in a three-second burst and nine protected provisional operations
 failed throughput and drain/money gates. Reporting costs stayed flat. Host/VM
-memory pressure is a hypothesis; an unchanged-image lower-VM-memory comparison
-is now running with all pod limits and pass gates unchanged. No final series
-has started, and this branch is still not ready to merge.
+memory pressure is a hypothesis. The unchanged-image 6-GiB comparison passed
+all 300,000 requests without errors/drops: p95 78.55 ms, p99 119.14 ms,
+slope +0.006128, exact accounting, and 0.29-second drain. It is a selected
+diagnostic, not a release certificate, and does not prove the earlier burst's
+cause. The normal canonical one-minute ladder and ten-minute 50/100/200/500
+series are now starting in the isolated 8-CPU/6-GiB VM, with every pod limit,
+gate, deadline, and source/image unchanged. This branch is not ready to merge
+until that series and remaining verification are complete.
 
 The reporting correlation fix at `9c5fca15` passed its source
 and exact-image checks, but selected 500 still failed only the queue-slope gate:
