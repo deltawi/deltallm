@@ -1307,8 +1307,41 @@ coordinator, worker, or financial calculation. First use a clearly labeled
 private SQL-only comparison on the existing sealed image, without timing hooks.
 Native adoption requires explicit validated lane scope (not worker-ID parsing).
 
-- [ ] Verify full partition coverage and actual four-mode scoped claim plans.
-- [ ] Compare selected 500 RPS without rerunning lower tiers.
-- [ ] Adopt only if evidence supports it; cover fencing, recovery, and lifecycle.
+- [x] Verify full partition coverage and actual four-mode scoped claim plans.
+- [x] Compare selected 500 RPS without rerunning lower tiers.
+- [x] Decide whether to adopt; reject the private comparison below.
 - [ ] Seal any adopted runtime change and pass the strict upper tiers.
 - [ ] Run one full four-tier short and 600-second qualification after upper passes.
+
+The private discovery comparison passed 35 focused PostgreSQL checks, including
+64-cell discovery under all four planners. Initial private harness failures
+(using a closed capture connection and a stale imported query constant) remain
+saved alongside the corrected run. At 500 RPS all 30,000 requests succeeded;
+p95 99.62 ms, p99 140.43 ms, exact money and a 12.18-second drain passed.
+Slope +0.24235 failed; do not adopt the scope override. Preserve
+`native-1aaf2bda-500-8cpu-8g-60s-report-discovery-20261006` and the private
+checks in `/private/tmp/issue320-report-scope.Aj1C5S`. All resources restored.
+
+### Separate software work from test-machine capacity
+
+A clean isolated terminal experiment compared reconstructing the validated
+snapshot with retaining it across the existing queue: 5,000 operations cost
+0.76/0.80 seconds versus 0.41/0.40 seconds, with identical wire documents.
+This is not gateway throughput proof. The private queue implementation passed
+89 checks but failed two existing batching/byte-budget checks, so it is not
+adopted. Keep `/private/tmp/issue320-frozen-only.Q5UhBZ`, including harness
+errors and behavioral failures. No further load run on this incomplete prototype.
+
+Next use the unchanged sealed `1aaf2bda` image with ten virtual CPUs and 8 GiB
+for the whole disposable cluster, up from the previous eight virtual CPUs.
+Keep every pod count/limit, queue/deadline, financial proof, and strict gate
+unchanged. This is an explicitly different capacity envelope, not an eight-CPU
+pass or a software fix. The Mac has fourteen CPU cores. Leave native apps alone
+and stop only the already approved other VM. Record the allocation and restore
+the original six-CPU/12-GiB VM settings and exact workloads on exit. Run selected
+500 first, then selected 200, then the canonical full series only on passes.
+
+- [ ] Complete the unchanged-image ten-CPU selected 500 comparison.
+- [ ] If it passes, verify selected 200 in that same declared capacity envelope.
+- [ ] If upper tiers pass, run all four short and 600-second qualification stages.
+- [ ] Record honest resource-specific results and verify full environment restoration.
