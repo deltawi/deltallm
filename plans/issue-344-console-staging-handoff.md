@@ -6,6 +6,8 @@ This public handoff uses example deployment URLs and tenant IDs. Replace them wi
 
 The gateway implementation is in branch `codex/issue-344-external-customer-sign-in`. The example dev gateway URL is `https://gateway-staging.example.com`. The actual dev endpoint did not serve the external-auth interface at the last check. The Console connection is pending. The values below do not mean that an integration or binding is enabled.
 
+Gateway implementation PR: [#346](https://github.com/deltawi/deltallm/pull/346). Its check status is the source of truth for the current published revision. Dev deployment still requires operator access and the completed connection setup below.
+
 This document gives the Console agent the staging values and connection steps. The complete interface specification is [Console and gateway connection contract](../docs/guides/console-gateway-connection.md). The gateway operator steps are in [external customer sign-in](../docs/configuration/external-customer-auth.md).
 
 ## 1. Staging values

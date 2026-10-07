@@ -13,8 +13,8 @@
       "note": "Complete delivery run after the final cache-degradation repair."
     },
     "app": {
-      "passed": 1585,
-      "note": "Full lane; final HTTP/diagnostic checks passed separately after documentation-only endpoint declarations."
+      "passed": 1587,
+      "note": "Complete delivery rerun after the final cache-degradation correction, with permitted loopback HTTP/WebSocket test servers."
     },
     "postgres": {
       "passed": 409,
@@ -284,6 +284,8 @@
       "state": "supplied as reviewable patch, not active",
       "patch": "plans/issue-344-ci-image-build.patch",
       "reason": "GitHub publication token lacks workflow-write scope"
-    }
+    },
+    "pull_request": "https://github.com/deltawi/deltallm/pull/346",
+    "github_actions": "running; exact head status is available on the PR checks"
   }
 }
