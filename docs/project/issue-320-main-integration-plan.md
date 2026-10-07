@@ -10,6 +10,22 @@ Accepted performance code: `cc3113bd`
 
 ## Current status
 
+The final [RPS report](issue-320-rps-report.md) is the current result record.
+Future PR target: `feature/issue-320-concurrency`. Image `7d4fbe71` passed
+normal 60-second 50/100/200 stages. Short 500 served all 30,000 requests but
+failed active-request growth, so no normal ten-minute stage started. Two
+600-second 500 diagnostics each served all 300,000 requests with zero errors
+or drops, correct money, and safe drain. Both failed only growth (+0.012308
+and +0.012879 against +0.01). The storage variant did not remove that failure.
+The final full PostgreSQL run passed 920 tests with the required SDK environment;
+that closes the earlier full-database limitation, not load qualification.
+All 87 saved stages and all failed attempts are preserved with checksums.
+The report and [reproduction guide](issue-320-rps-reproduction.md) state the
+remaining qualification and feature-branch integration work. No release pass,
+remote base alignment, or merge readiness is claimed.
+
+## Earlier checkpoints
+
 Latest checkpoint: the clean integration is connected, but final qualification
 is still open. The sustained unchanged `d93237b6` 500 diagnostic failed latency,
 queue growth, and the economic gate after seven HTTP 503s. Budget scopes match

@@ -1834,11 +1834,34 @@ Error restarts precede arrivals. PostgreSQL error categories remained zero.
 Both VMs, original primary workloads, and contexts were restored. Keep
 `native-7d4fbe71-500-8cpu-6g-60s-queue-costs-20261007`; it is not qualification.
 
-- [ ] Run one normal unchanged-image canonical four-tier sequence; retain its
+- [x] Run one normal unchanged-image canonical four-tier sequence; retain its
   short gates and stop before ten-minute stages if any short tier fails.
-- [ ] Complete remaining full-database confirmation and report actual limitations.
+  Short 50/100/200 passed; short 500 failed growth. No long stage started.
+- [x] Complete remaining full-database confirmation and report actual limitations.
+  The final full PostgreSQL run passed 920 tests with the required SDK environment.
+- [ ] Pass all four normal ten-minute qualification stages on one unchanged image.
 
 The next canonical sequence adds no sampler, schedule override, skipped
 prerequisite, threshold change, or runtime source change. The short queue
 variation remains an open qualification result, not evidence of another
 history-dependent database scan by itself.
+
+### Final report and evidence archive, 7 October 2026
+
+The [RPS report](issue-320-rps-report.md) records all 87 saved stages and the
+latest nine fixed-image results. Both long 500 RPS diagnostics completed all
+300,000 requests with zero errors or dropped arrivals, exact accounting, and
+safe drain. They failed only growth (+0.012308 and +0.012879). Neither is a
+normal four-tier qualification pass. The explicit data-volume comparison did
+not fix the trend or prove an earlier overlay-filesystem cause.
+
+- [x] Save the full pass/failure index and the latest raw evidence.
+- [x] Save exact source history, image identities, and reproduction commands.
+- [x] Move all original diagnostics to a recoverable checksum-verified archive.
+- [x] Confirm the future PR target: `feature/issue-320-concurrency`.
+- [ ] Inspect the current remote feature base and prepare its integration diff.
+
+See the [reproduction guide](issue-320-rps-reproduction.md) for the archive
+location and commands. No product source, test gate, or pass limit changed
+for this report. Older paths under `artifacts/qualification/` now map to the
+same relative path in the full archive.
