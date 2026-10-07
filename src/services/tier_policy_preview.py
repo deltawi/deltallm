@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.services.output_policy_preview import output_limit_projection
+
 import math
 import re
 from collections.abc import Mapping
@@ -135,10 +137,7 @@ def build_tier_policy_preview(
         for (org_id, _), policy in sorted(snapshot.org_model_policy.items())
         if org_id == normalized_org_id
     ]
-    model_policies = [
-        _serialize_model_policy(policy)
-        for policy in effective_model_policies
-    ]
+    model_policies = [_serialize_model_policy(policy) for policy in effective_model_policies]
     pricing_policies = [
         _serialize_pricing_policy(policy)
         for (org_id, _, _), policy in sorted(snapshot.pricing_policies.items())
@@ -177,8 +176,7 @@ def build_tier_policy_preview(
         "rate_limits": rate_limits,
         "organization_hard_caps": _serialize_organization_limits(organization_limits),
         "organization_rate_limits": [
-            _serialize_rate_limit_descriptor(descriptor)
-            for descriptor in organization_rate_limits
+            _serialize_rate_limit_descriptor(descriptor) for descriptor in organization_rate_limits
         ],
         "capacity_pools": capacity_pools,
     }
@@ -217,9 +215,7 @@ def simulate_tier_policy_request(
     )
     normalized_billing_mode = _normalize_optional_billing_mode(billing_mode)
     deployments = tuple(configured_deployments)
-    usage_billing_mode = normalized_billing_mode or _sole_deployment_billing_mode(
-        deployments
-    )
+    usage_billing_mode = normalized_billing_mode or _sole_deployment_billing_mode(deployments)
     if usage_billing_mode in {"embedding", "rerank"} and completion_tokens > 0:
         raise TierPolicyPreviewError(
             f"completion_tokens is not supported for {usage_billing_mode} billing"
@@ -253,9 +249,7 @@ def simulate_tier_policy_request(
     aggregate_tokens = request_count * tokens_per_request
 
     explicit_policy = normalized_org_id in snapshot.org_has_explicit_tier_policy
-    model_policy = snapshot.org_model_policy.get(
-        (normalized_org_id, normalized_callable_key)
-    )
+    model_policy = snapshot.org_model_policy.get((normalized_org_id, normalized_callable_key))
     allowed_keys = snapshot.org_allowed_callable_keys.get(normalized_org_id, frozenset())
     allowed = not explicit_policy or normalized_callable_key in allowed_keys
     reason = _access_reason(
@@ -341,8 +335,7 @@ def simulate_tier_policy_request(
         "rate_limits": [_serialize_rate_limit_descriptor(item) for item in rate_limits],
         "organization_hard_caps": _serialize_organization_limits(organization_limits),
         "organization_rate_limits": [
-            _serialize_rate_limit_descriptor(item)
-            for item in organization_rate_limits
+            _serialize_rate_limit_descriptor(item) for item in organization_rate_limits
         ],
         "capacity_pool": (
             _serialize_capacity_pool(pool_policy) if pool_policy is not None else None
@@ -350,6 +343,14 @@ def simulate_tier_policy_request(
         "capacity_pool_rate_limits": [
             _serialize_rate_limit_descriptor(item) for item in pool_rate_limits
         ],
+        "output_limit_projection": output_limit_projection(
+            model_policy,
+            (organization_limits or {}).get("output_tpm_limit"),
+            request_count=request_count,
+            completion_tokens=completion_tokens,
+        )
+        if normalized_billing_mode in (None, "chat")
+        else [],
         "static_limit_checks": checks,
         "snapshot": _snapshot_info(service, snapshot),
     }
@@ -385,9 +386,7 @@ def _snapshot_info(service: Any, snapshot: TierPolicySnapshot) -> dict[str, Any]
             "mode": str(getattr(service, "mode", "disabled")),
             "snapshot_stale": bool(getattr(service, "snapshot_stale", False)),
             "last_reload_failed": bool(getattr(service, "last_reload_failed", False)),
-            "last_reload_error_at": _json_value(
-                getattr(service, "last_reload_error_at", None)
-            ),
+            "last_reload_error_at": _json_value(getattr(service, "last_reload_error_at", None)),
         }
     return _json_value(info)
 
@@ -429,6 +428,7 @@ def _serialize_rate_limit_descriptor(
 
 
 _ORGANIZATION_LIMIT_FIELDS = (
+    "output_tpm_limit",
     "rpm_limit",
     "tpm_limit",
     "rph_limit",
@@ -987,12 +987,8 @@ def _unavailable_price_quote(
         "usage_snapshot": usage_snapshot,
         "configured_candidate_count": configured_candidate_count,
         "priced_candidate_count": 0,
-        "unpriced_candidate_count": (
-            configured_candidate_count if pricing_evaluated else 0
-        ),
-        "unevaluated_candidate_count": (
-            0 if pricing_evaluated else configured_candidate_count
-        ),
+        "unpriced_candidate_count": (configured_candidate_count if pricing_evaluated else 0),
+        "unevaluated_candidate_count": (0 if pricing_evaluated else configured_candidate_count),
         "unpriced_reasons": list(unpriced_reasons or ()),
         "pricing_sources": [],
         "basis": "configured_routes",

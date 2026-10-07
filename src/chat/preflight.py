@@ -219,7 +219,13 @@ async def run_text_preflight(
         response_kind=_response_kind(transformed_payload),
     )
 
-    output = prepare_output_policy(auth)
+    output = prepare_output_policy(
+        auth,
+        model=transformed_payload.model,
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
+    )
 
     from src.routers.utils import enforce_budget_if_configured
 

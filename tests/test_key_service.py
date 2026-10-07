@@ -130,11 +130,10 @@ async def test_key_scope_invalidation_batches_redis_deletes() -> None:
     invalidated = await service.invalidate_keys_for_org("org-1")
 
     assert invalidated == 501
-    assert [len(call) for call in redis.delete_calls] == [500, 1, 500, 1]
-    assert redis.delete_calls[0][0] == "key:v4:token-0"
-    assert redis.delete_calls[1][0] == "key:v4:token-500"
-    assert redis.delete_calls[2][0] == "key:v5:token-0"
-    assert redis.delete_calls[3][0] == "key:v5:token-500"
+    assert [len(call) for call in redis.delete_calls] == [500, 500, 2, 500, 1]
+    assert set(key for call in redis.delete_calls for key in call) == {
+        f"key:v{version}:{token}" for version in (4, 5, 6) for token in tokens
+    }
 
 
 @pytest.mark.asyncio
@@ -154,7 +153,7 @@ async def test_key_cache_ttl_respects_configured_limit() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v5:{token_hash}"
+    cache_key = f"key:v6:{token_hash}"
     assert redis.ttls[cache_key] == 300
 
 
@@ -175,7 +174,7 @@ async def test_key_cache_ttl_capped_by_key_expiry() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v5:{token_hash}"
+    cache_key = f"key:v6:{token_hash}"
     assert 1 <= redis.ttls[cache_key] <= 20
 
 
@@ -249,7 +248,7 @@ async def test_validate_key_ignores_pre_owner_contract_cache_entries() -> None:
 
     assert auth.owner_account_id == "acct-current"
     assert repo.calls == 1
-    assert f"key:v5:{token_hash}" in redis.store
+    assert f"key:v6:{token_hash}" in redis.store
 
 
 @pytest.mark.asyncio

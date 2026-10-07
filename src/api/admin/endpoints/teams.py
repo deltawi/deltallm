@@ -167,7 +167,7 @@ async def _require_team_access(
         """
         SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
                t.rpm_limit, t.tpm_limit, t.output_tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
-               t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+               t.model_rpm_limit, t.model_tpm_limit, t.model_output_tpm_limit, t.blocked,
                t.self_service_keys_enabled, t.self_service_max_keys_per_user,
                t.self_service_budget_ceiling, t.self_service_require_expiry,
                t.self_service_max_expiry_days, o.lifecycle_state AS organization_lifecycle_state,
@@ -274,7 +274,7 @@ async def list_teams(
 
     select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.output_tpm_limit,
                    t.rph_limit, t.rpd_limit, t.tpd_limit,
-                   t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+                   t.model_rpm_limit, t.model_tpm_limit, t.model_output_tpm_limit, t.blocked,
                    t.self_service_keys_enabled, t.self_service_max_keys_per_user,
                    t.self_service_budget_ceiling, t.self_service_require_expiry, t.self_service_max_expiry_days,
                    o.lifecycle_state AS organization_lifecycle_state,
@@ -598,6 +598,7 @@ async def create_team(
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
         "output_tpm_limit": output_change.value,
+        "model_output_tpm_limit": output_change.model_value,
         "rph_limit": rph_limit,
         "rpd_limit": rpd_limit,
         "tpd_limit": tpd_limit,
@@ -733,7 +734,7 @@ async def update_team(
             """
             SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
                    t.rpm_limit, t.tpm_limit, t.output_tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
-                   t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+                   t.model_rpm_limit, t.model_tpm_limit, t.model_output_tpm_limit, t.blocked,
                    t.self_service_keys_enabled, t.self_service_max_keys_per_user,
                    t.self_service_budget_ceiling, t.self_service_require_expiry,
                    t.self_service_max_expiry_days,
@@ -757,7 +758,7 @@ async def update_team(
         capabilities=build_team_capabilities(scope, updated_team),
     )
     key_service = getattr(request.app.state, "key_service", None)
-    if output_change.present:
+    if output_change.changed:
         await invalidate_output_policy_now(request, scope="team", identity=team_id)
     elif key_service is not None:
         try:

@@ -16,6 +16,7 @@ class OutputScope:
     scope: str
     entity_id: str
     limit: int
+    model: str | None = None
 
 
 def output_scopes(auth: UserAPIKeyAuth) -> tuple[OutputScope, ...]:
@@ -44,14 +45,23 @@ class OutputPolicy:
     scopes: tuple[OutputScope, ...]
 
     def __post_init__(self) -> None:
-        if not 1 <= len(self.scopes) <= 4:
+        if not 1 <= len(self.scopes) <= 7:
             raise ValueError("Invalid output scope count")
         if len({s.scope for s in self.scopes}) != len(self.scopes):
             raise ValueError("Duplicate output scope")
         if any(
             s.scope
-            not in {"org_output_tpm", "team_output_tpm", "user_output_tpm", "key_output_tpm"}
+            not in {
+                "org_output_tpm",
+                "team_output_tpm",
+                "user_output_tpm",
+                "key_output_tpm",
+                "org_model_output_tpm",
+                "team_model_output_tpm",
+                "key_model_output_tpm",
+            }
             or not s.entity_id
+            or ("_model_" in s.scope) != bool(s.model)
             or type(s.limit) is not int
             or not 1 <= s.limit <= MAX_OUTPUT_TOKENS
             for s in self.scopes
@@ -59,10 +69,16 @@ class OutputPolicy:
             raise ValueError("Invalid output scope identity or limit")
 
     def keys(self, *, environment: str) -> tuple[str, ...]:
-        return tuple(
-            _key(environment, ("bucket", s.scope, sha256(s.entity_id.encode()).hexdigest()))
-            for s in self.scopes
-        )
+        return tuple(_key(environment, ("bucket", s.scope, _scope_hash(s))) for s in self.scopes)
+
+
+def _scope_hash(scope: OutputScope) -> str:
+    identity = (
+        json.dumps([scope.entity_id, scope.model], separators=(",", ":"))
+        if scope.model is not None
+        else scope.entity_id
+    )
+    return sha256(identity.encode()).hexdigest()
 
 
 def _key(environment: str, identifiers: tuple[str, ...]) -> str:
@@ -103,7 +119,15 @@ class OutputAccountingEvent:
 
     @property
     def fingerprint(self) -> str:
-        value = [self.actual, [(s.scope, s.entity_id, s.limit) for s in self.policy.scopes]]
+        value = [
+            self.actual,
+            [
+                (s.scope, s.entity_id, s.limit)
+                if s.model is None
+                else (s.scope, s.entity_id, s.limit, s.model)
+                for s in self.policy.scopes
+            ],
+        ]
         return sha256(json.dumps(value, separators=(",", ":")).encode()).hexdigest()
 
     def keys(self, *, environment: str) -> tuple[str, ...]:

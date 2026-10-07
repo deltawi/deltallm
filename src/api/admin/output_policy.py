@@ -10,8 +10,9 @@ from fastapi import HTTPException, Request
 
 from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.db.output_policy import OutputPolicyChange, OutputPolicyDatabase, OutputPolicyScope
+from src.db.output_policy import tier_version_has_output_policy
 from src.models.errors import InvalidRequestError
-from src.models.output_limits import validate_output_limit
+from src.models.output_limits import validate_model_output_limits, validate_output_limit
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ async def schedule_output_policy_invalidation(
     change: OutputPolicyChange,
 ) -> None:
     """Queue recovery in the policy transaction, including explicit clears."""
-    if not change.present:
+    if not change.changed:
         return
     service = getattr(request.app.state, "cache_invalidation_service", None)
     try:
@@ -80,13 +81,20 @@ async def invalidate_output_policy_now(
 def output_policy_change(
     request: Request, payload: dict[str, object], *, scope: OutputPolicyScope
 ) -> OutputPolicyChange:
-    if "output_tpm_limit" not in payload:
-        return OutputPolicyChange(False, None)
+    present = "output_tpm_limit" in payload
+    model_present = "model_output_tpm_limit" in payload
+    if model_present and scope not in {"key", "team"}:
+        raise HTTPException(400, detail="Model output limits require a key or team scope")
     try:
-        value = validate_output_limit(payload["output_tpm_limit"])
+        value = validate_output_limit(payload["output_tpm_limit"]) if present else None
+        model_value = (
+            validate_model_output_limits(payload["model_output_tpm_limit"])
+            if model_present
+            else None
+        )
     except InvalidRequestError as exc:
         raise HTTPException(400, detail=exc.message) from exc
-    if value is not None:
+    if value is not None or model_value:
         limiter = getattr(request.app.state, "limit_counter", None)
         if limiter is None or limiter.redis is None or limiter.degraded_mode != "fail_closed":
             raise HTTPException(400, detail="Output TPM requires Redis and fail_closed mode")
@@ -95,4 +103,25 @@ def output_policy_change(
             raise HTTPException(
                 400, detail="Shared output TPM requires stored API-key authentication"
             )
-    return OutputPolicyChange(True, value)
+    return OutputPolicyChange(present, value, model_present, model_value)
+
+
+def validate_tier_output_write(request: Request, payload: dict[str, object]) -> None:
+    if payload.get("output_tpm_limit") is None:
+        return
+    output_policy_change(request, payload, scope="organization")
+    settings = request.app.state.app_config.general_settings
+    if (
+        settings.tier_policy_mode == "enforce"
+        and settings.tier_policy_missing_service_mode != "fail_closed"
+    ):
+        raise HTTPException(
+            400, detail="Tier output TPM requires tier_policy_missing_service_mode=fail_closed"
+        )
+
+
+async def validate_tier_output_activation(request: Request, version_id: str) -> None:
+    manager = getattr(request.app.state, "prisma_manager", None)
+    db = getattr(manager, "client", None)
+    if db is not None and await tier_version_has_output_policy(db, version_id):
+        validate_tier_output_write(request, {"output_tpm_limit": 1})

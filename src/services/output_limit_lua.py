@@ -22,7 +22,7 @@ OUTPUT_ADMISSION_LUA = (
     + r"""
 -- output_admission_v2; output arguments and bucket keys follow normal admission.
 local output_n = tonumber(ARGV[#ARGV])
-if not output_n or output_n < 1 or output_n > 4 or output_n ~= math.floor(output_n) or
+if not output_n or output_n < 1 or output_n > 7 or output_n ~= math.floor(output_n) or
    #KEYS > 128 or #ARGV > 1024 or #KEYS < output_n then
   return {0, 'output_unavailable'}
 end
@@ -77,7 +77,7 @@ OUTPUT_ACCOUNTING_SCRIPT = (
 -- output_accounting_v2; one receipt per completed attempt, across all caller scopes.
 local n = #KEYS - 1
 local actual = tonumber(ARGV[2])
-if n < 1 or n > 4 or #ARGV ~= 2 or #ARGV[1] ~= 64 or
+if n < 1 or n > 7 or #ARGV ~= 2 or #ARGV[1] ~= 64 or
    not actual or actual < -1 or actual > 2147483647 or actual ~= math.floor(actual) then
   return {0}
 end

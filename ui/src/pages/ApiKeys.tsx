@@ -1,3 +1,6 @@
+import { useScopedMutation } from '../lib/useScopedMutation';
+import ModelOutputTpmEditor from '../components/admin/ModelOutputTpmEditor';
+import { modelOutputRows, modelOutputPayload, type ModelOutputRow } from '../lib/modelOutputTpm';
 import OutputTpmField from '../components/admin/OutputTpmField';
 import { parseOutputTpm } from '../lib/outputTpm';
 import { useState, useEffect, useMemo } from 'react';
@@ -28,7 +31,7 @@ type TeamOption = {
   team_alias?: string | null;
   self_service_keys_enabled?: boolean;
 };
-type KeyMutationPayload = Record<string, number | string | null | undefined>;
+type KeyMutationPayload = Record<string, number | string | Record<string, number> | null | undefined>;
 
 type KeyFormState = {
   key_name: string;
@@ -39,6 +42,7 @@ type KeyFormState = {
   rpm_limit: string;
   tpm_limit: string;
   output_tpm_limit: string;
+  model_output_tpm_limit: ModelOutputRow[];
   rph_limit: string;
   rpd_limit: string;
   tpd_limit: string;
@@ -59,7 +63,7 @@ function emptyForm(): KeyFormState {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
-    output_tpm_limit: '',
+    output_tpm_limit: '', model_output_tpm_limit: [] as ModelOutputRow[],
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -260,6 +264,7 @@ export default function ApiKeys() {
   }, [editItem, currentEditAssetAccess]);
 
   const closeEditor = () => {
+    outputMutation.cancel();
     setShowCreate(false);
     setEditItem(null);
     setError(null);
@@ -319,7 +324,11 @@ export default function ApiKeys() {
     }
   };
 
+  const outputMutation = useScopedMutation(`${showCreate}:${editItem?.token || ''}`);
+
   const handleCreate = async () => {
+    const pending = outputMutation.begin();
+    if (!pending) return;
     setError(null);
     setSaving(true);
     try {
@@ -371,6 +380,7 @@ export default function ApiKeys() {
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
         output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
+        model_output_tpm_limit: modelOutputPayload(form.model_output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
@@ -382,7 +392,8 @@ export default function ApiKeys() {
         payload.owner_account_id = form.owner_mode === 'self' ? currentUserId || undefined : undefined;
         payload.owner_service_account_id = form.owner_mode === 'service_account' ? form.owner_service_account_id || undefined : undefined;
       }
-      const result = await keys.create(payload);
+      const result = await keys.create(payload, pending.signal);
+      if (!pending.current()) return;
       let assetAccessError: string | null = null;
       if (!isSelfServiceCreate && form.asset_access_mode === 'restrict') {
         try {
@@ -390,8 +401,10 @@ export default function ApiKeys() {
             mode: 'restrict',
             selected_callable_keys: form.selected_callable_keys,
             selected_access_group_keys: form.selected_access_group_keys,
-          });
+          }, pending.signal);
+          if (!pending.current()) return;
         } catch (err: unknown) {
+          if (!pending.current()) return;
           assetAccessError = getErrorMessage(
             err,
             'API key created, but asset access could not be updated. Open the key again to finish access setup.',
@@ -403,14 +416,18 @@ export default function ApiKeys() {
       refetch();
       setPageError(assetAccessError);
     } catch (err: unknown) {
+      if (!pending.current()) return;
       setError(getErrorMessage(err, 'Failed to create key'));
     } finally {
-      setSaving(false);
+      if (pending.current()) setSaving(false);
+      pending.finish();
     }
   };
 
   const handleUpdate = async () => {
     if (!editItem) return;
+    const pending = outputMutation.begin();
+    if (!pending) return;
     setError(null);
     setSaving(true);
     try {
@@ -443,6 +460,7 @@ export default function ApiKeys() {
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
         output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
+        model_output_tpm_limit: modelOutputPayload(form.model_output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
@@ -450,22 +468,35 @@ export default function ApiKeys() {
       if (isSelfServiceCreate) {
         payload.expires = form.expires ? new Date(form.expires).toISOString() : null;
       }
-      await keys.update(editItem.token, payload);
-      await keys.updateAssetAccess(editItem.token, {
-        mode: form.asset_access_mode,
-        selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
-        selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
-      });
+      await keys.update(editItem.token, payload, pending.signal);
+      if (!pending.current()) return;
+      let assetAccessError: string | null = null;
+      try {
+        await keys.updateAssetAccess(editItem.token, {
+          mode: form.asset_access_mode,
+          selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
+          selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
+        }, pending.signal);
+      } catch (err: unknown) {
+        if (!pending.current()) return;
+        assetAccessError = `Key limits saved. Asset access could not be saved: ${getErrorMessage(err, 'Try again.')}`;
+      }
+      if (!pending.current()) return;
       closeEditor();
       refetch();
+      setPageError(assetAccessError);
     } catch (err: unknown) {
+      if (!pending.current()) return;
       setError(getErrorMessage(err, 'Failed to update key'));
     } finally {
-      setSaving(false);
+      if (pending.current()) setSaving(false);
+      pending.finish();
     }
   };
 
   const openEdit = (row: ApiKey) => {
+    outputMutation.cancel();
+    setSaving(false);
     setPageError(null);
     setForm({
       key_name: row.key_name || '',
@@ -476,6 +507,7 @@ export default function ApiKeys() {
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
       output_tpm_limit: row.output_tpm_limit != null ? String(row.output_tpm_limit) : '',
+      model_output_tpm_limit: modelOutputRows(row.model_output_tpm_limit),
       rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
       rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
       tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
@@ -865,6 +897,7 @@ export default function ApiKeys() {
               <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" />
             </div>
               <OutputTpmField value={form.output_tpm_limit} onChange={(value) => setForm({ ...form, output_tpm_limit: value })} />
+              <ModelOutputTpmEditor rows={form.model_output_tpm_limit} onChange={(rows) => setForm({ ...form, model_output_tpm_limit: rows })} disabled={saving} />
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
               <input type="number" value={form.rph_limit} onChange={(e) => setForm({ ...form, rph_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" placeholder="Requests per hour" />

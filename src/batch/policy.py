@@ -202,7 +202,17 @@ async def acquire_batch_policy_lease(
     if limiter is None:
         return None
     data = dump_request_for_preflight(payload)
-    output = prepare_output_policy(auth) if isinstance(payload, ChatCompletionRequest) else None
+    output = (
+        prepare_output_policy(
+            auth,
+            model=str(getattr(payload, "model", "") or ""),
+            tier_policy_service=getattr(app.state, "tier_policy_service", None),
+            tier_policy_mode=get_tier_policy_mode_from_app(app),
+            tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
+        )
+        if isinstance(payload, ChatCompletionRequest)
+        else None
+    )
     lease, _state = await acquire_rate_limit_controls(
         limiter=limiter,
         auth=auth,

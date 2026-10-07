@@ -63,6 +63,7 @@ Self-service users cannot see or manage keys owned by other users through the My
 - **Max budget**: hard spend ceiling for that key
 - **RPM / TPM**: request and token throttles per minute
 - **Output TPM**: actual provider output across text models per completion accounting minute. Leave it blank for no key limit. Admitted calls can exceed the limit; new calls then wait until reset. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
+- **Model Output TPM**: output allowance for each exact callable model. Add or remove rows in the key form. Clearing a key limit keeps its team, organization, and tier limits.
 - **RPH**: request throttle per hour
 - **RPD / TPD**: request and token throttles per day
 

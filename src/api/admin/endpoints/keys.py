@@ -907,7 +907,7 @@ async def list_keys(
             vt.spend,
             vt.max_budget,
             vt.rpm_limit,
-            vt.tpm_limit, vt.output_tpm_limit,
+            vt.tpm_limit, vt.output_tpm_limit, vt.model_output_tpm_limit,
             vt.rph_limit,
             vt.rpd_limit,
             vt.tpd_limit,
@@ -1120,6 +1120,7 @@ async def create_key(
             "rpm_limit": rpm_limit,
             "tpm_limit": tpm_limit,
             "output_tpm_limit": output_change.value,
+            "model_output_tpm_limit": output_change.model_value,
             "rph_limit": rph_limit,
             "rpd_limit": rpd_limit,
             "tpd_limit": tpd_limit,
@@ -1191,7 +1192,7 @@ async def update_key(
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     rows = await db.query_raw(
         """
-        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, output_tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
+        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, output_tpm_limit, model_output_tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
         FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
@@ -1317,7 +1318,7 @@ async def update_key(
                     vt.spend,
                     vt.max_budget,
                     vt.rpm_limit,
-                    vt.tpm_limit, vt.output_tpm_limit,
+                    vt.tpm_limit, vt.output_tpm_limit, vt.model_output_tpm_limit,
                     vt.rph_limit,
                     vt.rpd_limit,
                     vt.tpd_limit,
@@ -1342,7 +1343,7 @@ async def update_key(
             )
 
         key_service = getattr(request.app.state, "key_service", None)
-        if output_change.present:
+        if output_change.changed:
             await invalidate_output_policy_now(request, scope="key", identity=token_hash)
         elif key_service:
             await key_service.invalidate_key_cache_by_hash(token_hash)

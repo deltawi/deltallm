@@ -653,7 +653,7 @@ export default function TierDetail() {
       if (isCurrentTierRouteRequest(request)) setBusyAction(null);
     }
   };
-  const bulkUpdateLimits = async (limits: { rpm_limit?: number; tpm_limit?: number }) => {
+  const bulkUpdateLimits = async (limits: { rpm_limit?: number; tpm_limit?: number; output_tpm_limit?: number }) => {
     if (!selectedVersionId) throw new Error('Select a version before updating limits.');
     const versionId = selectedVersionId;
     const expectedRevision = mutationRevision();

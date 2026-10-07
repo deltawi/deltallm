@@ -11,7 +11,7 @@ the applicable organization or team update capability. See [Access requirements]
 ## What this page manages
 
 - Team identity and parent organization
-- Team-level budgets and rate limits (RPM, TPM, RPH, RPD, TPD)
+- Team-level budgets and rate limits (RPM, TPM, Output TPM, RPH, RPD, TPD)
 - Team memberships
 - Team runtime access mode: inherit the organization set or restrict to selected callable targets and access groups
 
@@ -29,12 +29,13 @@ the applicable organization or team update capability. See [Access requirements]
 | --- | --- |
 | RPM | Maximum requests per minute across all keys in the team |
 | TPM | Maximum tokens per minute across all keys in the team |
-| Output TPM | Provider output per admission minute across text models and keys; blank means no team output limit |
+| Output TPM | Provider output per completion accounting minute across text models and keys; blank means no team output limit |
+| Model Output TPM | Output allowance for each exact callable model, shared by team keys; remove a row to clear its team limit |
 | RPH | Maximum requests per hour across all keys in the team |
 | RPD | Maximum requests per day across all keys in the team |
 | TPD | Maximum tokens per day across all keys in the team |
 
-All limits are optional. Only configured limits are enforced. Team limits act as a shared cap — all keys within the team contribute to the same counters. All configured parent organization limits also apply. Output TPM requires explicit request caps and shared Redis coordination. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
+All limits are optional. Only configured limits are enforced. Team limits act as a shared cap — all keys within the team contribute to the same counters. All configured parent organization limits also apply. Output TPM requires shared Redis with fail-closed coordination. Team create/edit and detail settings include a model-limit row editor. Clearing a team limit keeps the organization and tier limits. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
 
 ## Self-Service Key Policy
 

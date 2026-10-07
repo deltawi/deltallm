@@ -99,6 +99,7 @@ model DeltaLLM_VerificationToken {
   rpm_limit             Int?
   tpm_limit             Int?
   output_tpm_limit Int?
+  model_output_tpm_limit Json?
   rph_limit             Int?
   rpd_limit             Int?
   tpd_limit             Int?
@@ -169,6 +170,7 @@ model DeltaLLM_TeamTable {
   model_tpm_limit  Json?
   tpm_limit        Int?
   output_tpm_limit Int?
+  model_output_tpm_limit Json?
   rpm_limit        Int?
   rph_limit        Int?
   rpd_limit        Int?
@@ -840,6 +842,7 @@ model DeltaLLM_TierModelPolicy {
   access_mode          String   @default("allow")
   rpm_limit            Int?
   tpm_limit            Int?
+  output_tpm_limit Int?
   rph_limit            Int?
   rpd_limit            Int?
   tpd_limit            Int?

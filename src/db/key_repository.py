@@ -67,12 +67,14 @@ class KeyRecord:
     spend: float = 0.0
     tpm_limit: int | None = None
     output_tpm_limit: int | None = None
+    model_output_tpm_limit: dict[str, int] | None = None
     rpm_limit: int | None = None
     user_tpm_limit: int | None = None
     user_output_tpm_limit: int | None = None
     user_rpm_limit: int | None = None
     team_tpm_limit: int | None = None
     team_output_tpm_limit: int | None = None
+    team_model_output_tpm_limit: dict[str, int] | None = None
     team_rpm_limit: int | None = None
     org_tpm_limit: int | None = None
     org_output_tpm_limit: int | None = None
@@ -139,12 +141,14 @@ class KeyRepository:
                 v.spend,
                 v.tpm_limit AS key_tpm_limit,
                 v.output_tpm_limit AS key_output_tpm_limit,
+                v.model_output_tpm_limit AS key_model_output_tpm_limit,
                 v.rpm_limit AS key_rpm_limit,
                 u.tpm_limit AS user_tpm_limit,
                 u.output_tpm_limit AS user_output_tpm_limit,
                 u.rpm_limit AS user_rpm_limit,
                 t.tpm_limit AS team_tpm_limit,
                 t.output_tpm_limit AS team_output_tpm_limit,
+                t.model_output_tpm_limit AS team_model_output_tpm_limit,
                 t.rpm_limit AS team_rpm_limit,
                 o.tpm_limit AS org_tpm_limit,
                 o.output_tpm_limit AS org_output_tpm_limit,
@@ -208,12 +212,14 @@ class KeyRepository:
             spend=float(row.get("spend") or 0.0),
             tpm_limit=row.get("key_tpm_limit"),
             output_tpm_limit=row.get("key_output_tpm_limit"),
+            model_output_tpm_limit=_parse_metadata(row.get("key_model_output_tpm_limit")),
             rpm_limit=row.get("key_rpm_limit"),
             user_tpm_limit=row.get("user_tpm_limit"),
             user_output_tpm_limit=row.get("user_output_tpm_limit"),
             user_rpm_limit=row.get("user_rpm_limit"),
             team_tpm_limit=row.get("team_tpm_limit"),
             team_output_tpm_limit=row.get("team_output_tpm_limit"),
+            team_model_output_tpm_limit=_parse_metadata(row.get("team_model_output_tpm_limit")),
             team_rpm_limit=row.get("team_rpm_limit"),
             org_tpm_limit=row.get("org_tpm_limit"),
             org_output_tpm_limit=row.get("org_output_tpm_limit"),

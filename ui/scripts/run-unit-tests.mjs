@@ -35,6 +35,7 @@ const testSources = [
   'tests/dashboardAnalytics.test.ts',
   'tests/format.test.ts',
   'tests/outputTpm.test.ts',
+  'tests/modelOutputTpm.test.tsx',
   'tests/outputTpmEditor.test.tsx',
   'tests/outputTpmRoute.test.tsx',
   'tests/fallbackEvents.test.ts',

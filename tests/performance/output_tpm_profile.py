@@ -34,6 +34,9 @@ from src.services.limit_counter import LimitCounter
 
 
 async def measure(args, case):
+    requested_case = case
+    model_scopes = case.startswith("seven-")
+    case = case.replace("seven-", "four-", 1)
     app = await app_fixture.__wrapped__()
     record = next(iter(app.state._test_repo.records.values()))
     record.rpm_limit, record.tpm_limit = 1_000_000, 1_000_000_000
@@ -67,6 +70,34 @@ async def measure(args, case):
             record.user_output_tpm_limit = record.team_output_tpm_limit = (
                 record.org_output_tpm_limit
             ) = 1_000_000_000
+    if model_scopes:
+        from types import SimpleNamespace
+        from src.db.tiers import TierModelPolicyRecord, TierPolicyLoadResult
+        from src.services.tier_policy_service import TierPolicyService
+        from tests.services.test_tier_policy_compiler import _assignment
+
+        record.model_output_tpm_limit = {"gpt-4o-mini": 1_000_000_000}
+        record.team_model_output_tpm_limit = {"gpt-4o-mini": 1_000_000_000}
+        inputs = TierPolicyLoadResult(
+            assignments=(_assignment("profile", organization_id=record.organization_id),),
+            model_policies=(
+                TierModelPolicyRecord(
+                    "profile", "version-1", "gpt-4o-mini", output_tpm_limit=1_000_000_000
+                ),
+            ),
+            capacity_pools=(),
+        )
+        service = TierPolicyService(
+            repository=SimpleNamespace(load_active_tier_policy_inputs=lambda **kwargs: load()),
+            mode="enforce",
+            missing_service_mode="fail_closed",
+        )
+
+        async def load():
+            return inputs
+
+        await service.reload()
+        app.state.tier_policy_service = service
     if case == "four-cache":
         _enable_cache(app)
     is_stream = case in {"four-stream", "four-unknown"}
@@ -144,7 +175,10 @@ async def measure(args, case):
         report = summarize(run, target_rate=args.rate)
         report.update(
             label=args.label,
-            case=case,
+            case=requested_case,
+            output_scope_count=7
+            if model_scopes
+            else (4 if governed and case != "one-json" else int(governed)),
             redis_calls=dict(counts),
             warmup_redis_calls=warmup_calls,
             redis_command_latency_seconds=_percentiles(redis_latency),
@@ -169,7 +203,7 @@ async def measure(args, case):
                 if values
             }
             await redis.delete(*keys)
-        write_results(run, report, args.output_dir / args.label / case)
+        write_results(run, report, args.output_dir / args.label / requested_case)
         print(json.dumps(report), flush=True)
         if case == "four-unknown":
             assert set(report["status_counts"]) <= {"200", "503"}

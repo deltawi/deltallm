@@ -259,8 +259,7 @@ class TierConfigurationRepositoryMixin:
         if search:
             params.append(f"%{search.strip()}%")
             clauses.append(
-                f"(p.pool_key ILIKE ${len(params)} "
-                f"OR p.callable_key ILIKE ${len(params)})"
+                f"(p.pool_key ILIKE ${len(params)} OR p.callable_key ILIKE ${len(params)})"
             )
         if callable_key:
             params.append(callable_key.strip())
@@ -423,13 +422,14 @@ class TierConfigurationRepositoryMixin:
                 capacity_pool_key,
                 priority,
                 metadata,
+                output_tpm_limit,
                 created_at,
                 updated_at
             )
             VALUES (
                 gen_random_uuid()::text,
                 $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                $10, $11, $12, $13::jsonb, $14, $15, $16::jsonb,
+                $10, $11, $12, $13::jsonb, $14, $15, $16::jsonb, $17,
                 NOW(), NOW()
             )
             RETURNING {_MODEL_POLICY_COLUMNS}
@@ -450,6 +450,7 @@ class TierConfigurationRepositoryMixin:
             policy.capacity_pool_key,
             policy.priority,
             json_param(policy.metadata),
+            policy.output_tpm_limit,
         )
         if not rows:
             raise RuntimeError("model policy insert did not return a row")
@@ -536,6 +537,7 @@ class TierConfigurationRepositoryMixin:
                 capacity_pool_key = $14,
                 priority = $15,
                 metadata = $16::jsonb,
+                output_tpm_limit = $17,
                 updated_at = NOW()
             WHERE tier_model_policy_id = $1
               AND tier_version_id = $2
@@ -557,6 +559,7 @@ class TierConfigurationRepositoryMixin:
             policy.capacity_pool_key,
             policy.priority,
             json_param(policy.metadata),
+            policy.output_tpm_limit,
         )
         if not rows:
             raise TierConfigurationChildNotFoundError("model policy not found")
@@ -632,6 +635,8 @@ class TierConfigurationRepositoryMixin:
         rpm_limit: int | None,
         update_tpm_limit: bool,
         tpm_limit: int | None,
+        update_output_tpm_limit: bool = False,
+        output_tpm_limit: int | None = None,
         tier_model_policy_ids: tuple[str, ...] | None = None,
         search: str | None = None,
         enabled: bool | None = None,
@@ -648,6 +653,8 @@ class TierConfigurationRepositoryMixin:
                 rpm_limit=rpm_limit,
                 update_tpm_limit=update_tpm_limit,
                 tpm_limit=tpm_limit,
+                update_output_tpm_limit=update_output_tpm_limit,
+                output_tpm_limit=output_tpm_limit,
                 tier_model_policy_ids=tier_model_policy_ids,
                 search=search,
                 enabled=enabled,
@@ -665,13 +672,15 @@ class TierConfigurationRepositoryMixin:
         rpm_limit: int | None,
         update_tpm_limit: bool,
         tpm_limit: int | None,
+        update_output_tpm_limit: bool = False,
+        output_tpm_limit: int | None = None,
         tier_model_policy_ids: tuple[str, ...] | None,
         search: str | None,
         enabled: bool | None,
         access_mode: str | None,
         capacity_pool_key: str | None,
     ) -> TierModelPolicyBulkMutationResult:
-        if not update_rpm_limit and not update_tpm_limit:
+        if not (update_rpm_limit or update_tpm_limit or update_output_tpm_limit):
             raise ValueError("at least one limit must be supplied")
         version = await self.lock_draft_version_for_configuration_mutation(
             tier_id=tier_id,
@@ -722,6 +731,9 @@ class TierConfigurationRepositoryMixin:
         if update_tpm_limit:
             params.append(tpm_limit)
             assignments.append(f"tpm_limit = ${len(params)}")
+        if update_output_tpm_limit:
+            params.append(output_tpm_limit)
+            assignments.append(f"output_tpm_limit = ${len(params)}")
         assignments.append("updated_at = NOW()")
         rows = await self.prisma.query_raw(
             f"""
@@ -873,9 +885,8 @@ class TierConfigurationRepositoryMixin:
         if not existing_rows:
             raise TierConfigurationChildNotFoundError("capacity pool not found")
         existing = existing_rows[0]
-        if (
-            pool.pool_key != str(existing.get("pool_key") or "")
-            or pool.callable_key != str(existing.get("callable_key") or "")
+        if pool.pool_key != str(existing.get("pool_key") or "") or pool.callable_key != str(
+            existing.get("callable_key") or ""
         ):
             raise TierConfigurationIdentityImmutableError(
                 "pool_key and callable_key cannot be changed"
@@ -978,9 +989,7 @@ class TierConfigurationRepositoryMixin:
             callable_key,
         )
         if reference_rows:
-            raise TierConfigurationPoolInUseError(
-                "capacity pool is referenced by a model policy"
-            )
+            raise TierConfigurationPoolInUseError("capacity pool is referenced by a model policy")
         rows = await self.prisma.query_raw(
             """
             DELETE FROM deltallm_tiercapacitypool
@@ -1091,9 +1100,7 @@ def _nonblank_ids(values: tuple[str, ...]) -> tuple[str, ...]:
 
 def _prefixed_columns(columns: str, alias: str) -> str:
     return ",\n".join(
-        f"{alias}.{column.strip()}"
-        for column in columns.split(",")
-        if column.strip()
+        f"{alias}.{column.strip()}" for column in columns.split(",") if column.strip()
     )
 
 
@@ -1105,6 +1112,7 @@ _MODEL_POLICY_COLUMNS = """
     access_mode,
     rpm_limit,
     tpm_limit,
+    output_tpm_limit,
     rph_limit,
     rpd_limit,
     tpd_limit,

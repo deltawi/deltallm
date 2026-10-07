@@ -111,7 +111,7 @@ class KeyService:
         if self.redis is None:
             return
         cache_key = self._cache_key(token_hash)
-        await self.redis.delete(cache_key, f"key:v4:{token_hash}")
+        await self.redis.delete(cache_key, f"key:v5:{token_hash}", f"key:v4:{token_hash}")
 
     async def invalidate_keys_for_team(self, team_id: str) -> int:
         return await self._invalidate_keys_by_scope("team_id", team_id)
@@ -140,7 +140,7 @@ class KeyService:
             prisma, scope=scope_column, identity=scope_value
         )
         cache_keys = [self._cache_key(token_hash) for token_hash in token_hashes]
-        legacy_keys = [key.replace("key:v5:", "key:v4:", 1) for key in cache_keys]
+        legacy_keys = [f"key:v{version}:{token}" for version in (4, 5) for token in token_hashes]
         await self._delete_cache_keys(legacy_keys)
         return await self._delete_cache_keys(cache_keys)
 
@@ -158,7 +158,7 @@ class KeyService:
     def _cache_key(token_hash: str) -> str:
         # Version the serialized auth contract so entries without lifecycle
         # state cannot silently authenticate an inactive organization.
-        return f"key:v5:{token_hash}"
+        return f"key:v6:{token_hash}"
 
     def _auth_from_record(self, record: Any) -> UserAPIKeyAuth:
         auth = UserAPIKeyAuth(
@@ -175,12 +175,14 @@ class KeyService:
             rpm_limit=record.rpm_limit,
             key_tpm_limit=record.tpm_limit,
             key_output_tpm_limit=record.output_tpm_limit,
+            key_model_output_tpm_limit=record.model_output_tpm_limit,
             key_rpm_limit=record.rpm_limit,
             user_tpm_limit=record.user_tpm_limit,
             user_output_tpm_limit=record.user_output_tpm_limit,
             user_rpm_limit=record.user_rpm_limit,
             team_tpm_limit=record.team_tpm_limit,
             team_output_tpm_limit=record.team_output_tpm_limit,
+            team_model_output_tpm_limit=record.team_model_output_tpm_limit,
             team_rpm_limit=record.team_rpm_limit,
             org_tpm_limit=record.org_tpm_limit,
             org_output_tpm_limit=record.org_output_tpm_limit,
