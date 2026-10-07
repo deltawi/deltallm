@@ -1,18 +1,49 @@
 from __future__ import annotations
 
-from src.config import AppConfig
+from src.config import AppConfig, Settings
 from src.db.output_policy import OutputPolicyDatabase, read_output_policy_presence
+from src.runtime_settings import resolve_general_setting
+
+
+def output_policy_configuration_changed(
+    current: AppConfig, candidate: AppConfig, runtime_settings: Settings | None
+) -> bool:
+    before, after = current.general_settings, candidate.general_settings
+    return (
+        any(
+            getattr(before, field) != getattr(after, field)
+            for field in ("enable_jwt_auth", "custom_auth", "redis_degraded_mode")
+        )
+        or any(
+            resolve_general_setting(before, runtime_settings, field, default)
+            != resolve_general_setting(after, runtime_settings, field, default)
+            for field, default in (
+                ("tier_policy_mode", "disabled"),
+                ("tier_policy_missing_service_mode", "fail_open"),
+            )
+        )
+        or current.router_settings.timeout != candidate.router_settings.timeout
+    )
 
 
 async def validate_output_policy_configuration(
-    db: OutputPolicyDatabase, config: AppConfig, *, redis_available: bool, degraded_mode: str
+    db: OutputPolicyDatabase,
+    config: AppConfig,
+    *,
+    redis_available: bool,
+    degraded_mode: str,
+    runtime_settings: Settings | None = None,
 ) -> None:
     presence = await read_output_policy_presence(db)
     key_enabled, shared_enabled = presence.key_enabled, presence.shared_enabled
     settings = config.general_settings
-    if presence.tier_enabled and settings.tier_policy_mode == "enforce":
+    tier_mode = resolve_general_setting(settings, runtime_settings, "tier_policy_mode", "disabled")
+    tier_missing_mode = resolve_general_setting(
+        settings, runtime_settings, "tier_policy_missing_service_mode", "fail_open"
+    )
+    if presence.tier_enabled and tier_mode == "enforce":
         shared_enabled = True
-        if settings.tier_policy_missing_service_mode != "fail_closed":
+        if tier_missing_mode != "fail_closed":
             raise ValueError(
                 "Tier output TPM requires tier_policy_missing_service_mode=fail_closed"
             )

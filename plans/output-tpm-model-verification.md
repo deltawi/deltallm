@@ -25,20 +25,20 @@ Anthropic, Gemini, and Bedrock adapters retain their endpoint capabilities.
 
 | Gate | Result |
 | --- | --- |
-| Full hermetic lane, with loopback sockets | 4,119 passed; no skips |
-| Full application lane | 1,599 passed; two later publication regression cases also passed in the focused admin run |
-| Full PostgreSQL lane, with Redis | 384 passed; the four official SDK cases passed separately with the pinned isolated SDK environment |
+| Full hermetic lane, with loopback sockets | 4,136 passed; no skips |
+| Full application lane | 1,609 passed; two final config-denial regression cases also passed in the focused admin run |
+| Full PostgreSQL lane, with Redis | 390 passed, including the pinned isolated SDK cases |
 | Full Redis lane | 185 passed |
 | Full Helm lane | 71 passed |
 | Final focused policy, tier API, accounting contract, and lane checks | 156 passed |
 | Final focused Redis accounting checks | 31 passed |
-| Final model admin checks | 5 passed, including fail-open activation and re-enable rejection |
+| Final model admin checks | 9 passed, including environment-based publication checks and config-denial responses |
 | Fresh, last-release, shared-feature, and model-identity recovery migrations | Passed |
 | Upgrade from the shared scalar output TPM head | Passed with the same migration verifier |
 | Prisma generation | Passed |
 | Ruff check for `src` and `tests`; changed Python format checks | Passed |
 | UI unit tests | 304 passed |
-| Collection and lane audit | 6,364 tests, each in one primary lane |
+| Collection and lane audit | 6,393 tests, each in one primary lane |
 | Generated OpenAPI/config/provider references | Passed; OpenAPI regenerated |
 | Documentation tests, health, strict build, and public containment | Passed |
 | Production UI build | Passed; initial JS gzip reduced from 370.39 kB to 328.55 kB |
@@ -50,6 +50,15 @@ used the repository's pinned requirements in a separate temporary environment.
 The migration verifier created and removed its own databases. No production
 service or data was used. The two task-owned containers and temporary UI
 fixture server were removed or stopped after verification.
+
+Review fixes make startup, admin writes, and inference use the same tier-setting
+resolver. Explicit config values take precedence over environment defaults.
+Tier mode changes validate output policies before config persistence or related
+mutations. Peer reload rejection preserves the last valid runtime state. The
+admin config API returns `400` for invalid updates. Tests check one policy read
+for a relevant update and no policy read for unrelated updates. Inference adds
+no SQL or Redis calls. The simulator uses the inferred deployment model type
+and omits output TPM projections for non-text requests.
 
 The real Redis tests cover all seven scopes, concurrent replica accounting,
 organization sharing, model separation, limit edits without counter reset,

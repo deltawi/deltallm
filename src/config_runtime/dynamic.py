@@ -8,7 +8,8 @@ from copy import deepcopy
 from typing import Any, Awaitable, Callable
 
 from src.batch.scheduling import resolve_scheduler_modes_from_settings, scheduler_rollback_events
-from src.config import AppConfig
+from src.config import AppConfig, Settings
+from src.db.output_policy import OutputPolicyDatabase
 from src.config_runtime.loader import build_app_config, deep_merge
 from src.config_runtime.secrets import SecretResolver
 from src.metrics import increment_batch_scheduler_rollback, increment_config_reload
@@ -91,8 +92,10 @@ class DynamicConfigManager:
         channel_name: str = "config_updates",
         poll_interval_seconds: float | None = 30.0,
         output_policy_degraded_mode: str = "fail_open",
+        runtime_settings: Settings | None = None,
     ) -> None:
         self.output_policy_degraded_mode = output_policy_degraded_mode
+        self.runtime_settings = runtime_settings
         self.db = db_client
         self.redis = redis_client
         self.file_config = deepcopy(file_config)
@@ -174,7 +177,9 @@ class DynamicConfigManager:
                 transaction_mutation=transaction_mutation,
             )
             try:
-                await self._apply_db_config(next_db_config, app_config=next_app_config)
+                await self._apply_db_config(
+                    next_db_config, app_config=next_app_config, output_policy_validated=True
+                )
             except Exception as exc:
                 if transaction_mutation is None:
                     await self._restore_db_config_if_current(
@@ -225,6 +230,7 @@ class DynamicConfigManager:
             next_app_config = self._build_app_config(next_db_config)
             if self._config_generation > 0:
                 self._reject_startup_only_changes(next_app_config)
+            await self._validate_output_policy_config(self.db, next_app_config)
             if transaction_mutation is not None:
                 await transaction_mutation(self.db)
             await self._store_db_config(next_db_config, updated_by=updated_by)
@@ -243,6 +249,7 @@ class DynamicConfigManager:
                 next_app_config = self._build_app_config(next_db_config)
                 if self._config_generation > 0:
                     self._reject_startup_only_changes(next_app_config)
+                await self._validate_output_policy_config(transaction, next_app_config)
                 if transaction_mutation is not None:
                     await transaction_mutation(transaction)
                 await self._store_db_config(
@@ -261,6 +268,32 @@ class DynamicConfigManager:
             raise DynamicConfigPersistenceError("failed to persist dynamic config") from exc
 
         return next_db_config, next_app_config
+
+    async def _validate_output_policy_config(
+        self, db: OutputPolicyDatabase | None, candidate: AppConfig
+    ) -> None:
+        from src.services.output_policy_configuration import (
+            output_policy_configuration_changed,
+            validate_output_policy_configuration,
+        )
+
+        if db is None or not output_policy_configuration_changed(
+            self._config, candidate, self.runtime_settings
+        ):
+            return
+        try:
+            await validate_output_policy_configuration(
+                db,
+                candidate,
+                redis_available=self.redis is not None,
+                degraded_mode=(
+                    candidate.general_settings.redis_degraded_mode
+                    or self.output_policy_degraded_mode
+                ),
+                runtime_settings=self.runtime_settings,
+            )
+        except ValueError as exc:
+            raise DynamicConfigValidationError(str(exc)) from exc
 
     async def _restore_db_config_if_current(
         self,
@@ -383,29 +416,13 @@ class DynamicConfigManager:
         *,
         forced_modified_keys: tuple[str, ...] = (),
         app_config: AppConfig | None = None,
+        output_policy_validated: bool = False,
     ) -> bool:
         candidate = app_config or self._build_app_config(db_config)
-        current_settings = self._config.general_settings
-        next_settings = candidate.general_settings
-        output_contract_changed = (
-            current_settings.enable_jwt_auth != next_settings.enable_jwt_auth
-            or current_settings.custom_auth != next_settings.custom_auth
-            or current_settings.redis_degraded_mode != next_settings.redis_degraded_mode
-            or self._config.router_settings.timeout != candidate.router_settings.timeout
-        )
-        if self.db is not None and output_contract_changed:
-            from src.services.output_policy_configuration import (
-                validate_output_policy_configuration,
-            )
-
-            await validate_output_policy_configuration(
-                self.db,
-                candidate,
-                redis_available=self.redis is not None,
-                degraded_mode=next_settings.redis_degraded_mode or self.output_policy_degraded_mode,
-            )
+        if not output_policy_validated:
+            await self._validate_output_policy_config(self.db, candidate)
         previous_app_config = self._config
-        new_app_config = app_config or self._build_app_config(db_config)
+        new_app_config = candidate
         if self._config_generation > 0:
             self._reject_startup_only_changes(new_app_config)
 

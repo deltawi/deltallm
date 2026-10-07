@@ -196,7 +196,9 @@ All configured scopes apply independently. A tier allowance of 100,000 for a mod
 
 The final caller-facing model after request hooks selects the counter. Provider retries and fallbacks charge that same callable model. A tier version change or limit edit keeps recorded usage because the counter identity contains the organization and model, without a version or limit value. Tier output limits enforce only in `tier_policy_mode: enforce`; team and key maps apply in all tier modes. The simulator shows completion usage projected from an empty minute separately from admission.
 
-Tier output limits require `tier_policy_missing_service_mode: fail_closed` in enforce mode. A missing or stale tier snapshot then closes admission. Shared capacity-pool output limits and deployment output limits are outside this feature.
+Tier output limits require `tier_policy_missing_service_mode: fail_closed` in enforce mode. A missing or stale tier snapshot then closes admission. The checks use explicit general settings first, then environment values for omitted fields. Config updates validate both tier modes before saving; rejected reloads keep the last valid runtime configuration. Shared capacity-pool output limits and deployment output limits are outside this feature.
+
+The simulator resolves the deployment's model type when `billing_mode` is omitted. Output TPM projections apply to text generation; image, audio, embedding, and rerank requests have no output TPM projection.
 
 ### Generation parameters and providers
 

@@ -38,6 +38,7 @@ from src.config import (
 from src.config_runtime.dynamic import (
     DynamicConfigPostCommitApplyError,
     DynamicConfigRestartRequiredError,
+    DynamicConfigValidationError,
 )
 from src.db.ui_branding_assets import BrandingAssetDatabase, UIBrandingAssetRepository
 from src.middleware.admin import require_admin_permission
@@ -576,6 +577,8 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "restart_required", "message": str(exc)},
             ) from exc
+        except DynamicConfigValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     response = await get_routing(request)
     await emit_admin_mutation_audit(
@@ -671,6 +674,8 @@ async def update_settings(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "restart_required", "message": str(exc)},
             ) from exc
+        except DynamicConfigValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     settings = getattr(request.app.state, "settings", None)
     if settings is not None and "master_key" in general_updates:

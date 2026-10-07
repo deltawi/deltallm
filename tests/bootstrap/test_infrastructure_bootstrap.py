@@ -36,11 +36,18 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
     class FakeDynamicConfigManager:
         def __init__(
-            self, *, db_client, redis_client, file_config, output_policy_degraded_mode
+            self,
+            *,
+            db_client,
+            redis_client,
+            file_config,
+            output_policy_degraded_mode,
+            runtime_settings,
         ) -> None:  # noqa: ANN001
             self.db_client = db_client
             self.redis_client = redis_client
             self.file_config = file_config
+            self.runtime_settings = runtime_settings
             self.closed = False
             self.subscribers = []
 
@@ -311,6 +318,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         "postgresql://env-user:env-pass@env-host:5432/env-db?connection_limit=25&pool_timeout=45"
     )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
+    assert runtime.dynamic_config_manager.runtime_settings is app.state.settings
     assert app.state.ui_branding_asset_service.db_client == "db-client"
     assert app.state.ui_branding_asset_service.initialized_with is app.state.app_config
     assert app.state.dynamic_config_manager.subscribers == [

@@ -107,7 +107,10 @@ async def test_tier_output_bulk_contract_and_clear(client, test_app):
 
 
 @pytest.mark.parametrize("operation", ["activation", "enable"])
-async def test_tier_output_publication_rejects_fail_open_snapshot_mode(client, test_app, operation):
+@pytest.mark.parametrize("source", ["config", "environment"])
+async def test_tier_output_publication_rejects_fail_open_snapshot_mode(
+    client, test_app, monkeypatch, operation, source
+):
     from src.config import AppConfig
 
     repository = _FakeTierRepository()
@@ -123,8 +126,14 @@ async def test_tier_output_publication_rejects_fail_open_snapshot_mode(client, t
         client=SimpleNamespace(query_raw=AsyncMock(return_value=[{"output_enabled": True}]))
     )
     settings = AppConfig().general_settings
-    settings.tier_policy_mode = "enforce"
-    settings.tier_policy_missing_service_mode = "fail_open"
+    if source == "config":
+        settings.tier_policy_mode = "enforce"
+        settings.tier_policy_missing_service_mode = "fail_open"
+    else:
+        monkeypatch.setattr(test_app.state.settings, "tier_policy_mode", "enforce", raising=False)
+        monkeypatch.setattr(
+            test_app.state.settings, "tier_policy_missing_service_mode", "fail_open", raising=False
+        )
     test_app.state.app_config.general_settings = settings
     test_app.state.limit_counter.degraded_mode = "fail_closed"
     if operation == "enable":
@@ -141,3 +150,47 @@ async def test_tier_output_publication_rejects_fail_open_snapshot_mode(client, t
     assert "tier_policy_missing_service_mode=fail_closed" in response.json()["detail"]
     assert not tier.enabled
     assert version.status == ("active" if operation == "enable" else "draft")
+
+
+@pytest.mark.parametrize("endpoint", ["settings", "routing"])
+async def test_output_config_denial_returns_client_error_without_persistence(
+    client, test_app, endpoint
+):
+    from copy import deepcopy
+
+    from src.config_runtime.dynamic import DynamicConfigManager
+    from tests.test_output_policy_configuration import OutputConfigDB, FakeRedis
+
+    db = OutputConfigDB(
+        {
+            "general_settings": {
+                "tier_policy_mode": "enforce",
+                "tier_policy_missing_service_mode": "fail_closed",
+                "redis_degraded_mode": "fail_closed",
+            }
+        }
+    )
+    before = deepcopy(db.config_value)
+    manager = DynamicConfigManager(
+        db, FakeRedis() if endpoint == "settings" else None, {}, poll_interval_seconds=0
+    )
+    await manager.initialize()
+    test_app.state.dynamic_config_manager = manager
+    test_app.state.app_config = manager.get_app_config()
+    payload = (
+        {"general_settings": {"tier_policy_missing_service_mode": "fail_open"}}
+        if endpoint == "settings"
+        else {"config": {"timeout": 61}}
+    )
+    try:
+        response = await client.put(f"/ui/api/{endpoint}", headers=_headers(test_app), json=payload)
+        assert response.status_code == 400, response.text
+        assert (
+            "tier_policy_missing_service_mode" if endpoint == "settings" else "Redis"
+        ) in response.json()["detail"]
+        assert db.config_value == before
+        assert db.updated_by is None
+        assert db.output_reads == 1
+        assert manager.get_config_generation() == 1
+    finally:
+        await manager.close()

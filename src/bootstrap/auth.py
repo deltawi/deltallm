@@ -235,6 +235,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         degraded_mode=str(
             cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
         ),
+        runtime_settings=app.state.settings,
     )
     if app.state.redis is not None:
         try:

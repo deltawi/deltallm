@@ -349,7 +349,7 @@ def simulate_tier_policy_request(
             request_count=request_count,
             completion_tokens=completion_tokens,
         )
-        if normalized_billing_mode in (None, "chat")
+        if usage_billing_mode in (None, "chat")
         else [],
         "static_limit_checks": checks,
         "snapshot": _snapshot_info(service, snapshot),

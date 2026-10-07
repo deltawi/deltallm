@@ -13,6 +13,10 @@ from src.db.output_policy import OutputPolicyChange, OutputPolicyDatabase, Outpu
 from src.db.output_policy import tier_version_has_output_policy
 from src.models.errors import InvalidRequestError
 from src.models.output_limits import validate_model_output_limits, validate_output_limit
+from src.services.model_visibility import (
+    get_tier_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +114,9 @@ def validate_tier_output_write(request: Request, payload: dict[str, object]) -> 
     if payload.get("output_tpm_limit") is None:
         return
     output_policy_change(request, payload, scope="organization")
-    settings = request.app.state.app_config.general_settings
     if (
-        settings.tier_policy_mode == "enforce"
-        and settings.tier_policy_missing_service_mode != "fail_closed"
+        get_tier_policy_mode_from_app(request.app) == "enforce"
+        and get_tier_policy_missing_service_mode_from_app(request.app) != "fail_closed"
     ):
         raise HTTPException(
             400, detail="Tier output TPM requires tier_policy_missing_service_mode=fail_closed"

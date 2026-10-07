@@ -85,6 +85,8 @@ def _auth_config(
 
 @pytest.mark.asyncio
 async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.bootstrap import auth
+
     created: dict[str, object] = {}
 
     class FakePlatformIdentityService:
@@ -139,6 +141,10 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
         app, _auth_config(enable_sso=True, enable_jwt=True, custom_auth="module.handler")
     )
 
+    assert (
+        auth.validate_output_policy_configuration.await_args.kwargs["runtime_settings"]
+        is app.state.settings
+    )
     assert app.state.key_service[0] == "key-service"
     assert created["platform_identity_service"].bootstrap_calls == [("admin@example.com", "secret")]
     assert created["platform_identity_service"].totp_issuer == "Acme AI"
