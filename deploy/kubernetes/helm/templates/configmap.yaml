@@ -84,6 +84,7 @@ general_settings:
 {{- $_ := set $workerGeneral "embeddings_batch_stale_lease_sweeper_enabled" true -}}
 {{- end -}}
 {{- $workerConfig = mergeOverwrite $workerConfig $workerOverrides -}}
+{{- $_ := set (get $workerConfig "general_settings") "external_auth" (dict "enabled" false) -}}
 {{ include "deltallm.configYaml" (dict "root" . "config" $workerConfig) }}
 {{- end -}}
 {{- define "deltallm.validateBatchConfig" -}}
@@ -187,6 +188,7 @@ general_settings:
 {{- if and $emailEnabled $emailWorkerEnabled (le $terminationGraceSeconds $emailDrainSeconds) -}}
 {{- fail "terminationGracePeriodSeconds must be greater than email_worker_shutdown_drain_timeout_seconds when the email worker is enabled" -}}
 {{- end -}}
+{{- include "deltallm.validateExternalAuth" (dict "root" . "general" $apiGeneral) -}}
 {{- include "deltallm.validateSchedulerConfig" (dict "role" "api" "general" $apiGeneral) -}}
 {{- if .Values.batchWorker.enabled -}}
 {{- $workerConfig := include "deltallm.batchWorkerConfigYaml" . | fromYaml -}}

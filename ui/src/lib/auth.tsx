@@ -1,31 +1,14 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { auth as authApi } from './api';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { auth as authApi } from './api/auth';
+import { resolveSession } from './authController';
+import { uiMount } from './uiMount';
+import { AuthContext, type AuthContextValue } from './authContext';
+import type { AuthMode, AuthStatus, SessionInfo } from './authTypes';
+export type { AuthStatus, SessionInfo } from './authTypes';
 import {
   classifySessionCheckError,
-  isValidSessionPayload,
   type SessionFailure,
 } from './authSession';
-import type { UIAccess } from './authorization';
-
-type AuthMode = 'session' | 'master_key';
-export type AuthStatus = 'loading' | 'authenticated' | 'anonymous' | 'retryable_error' | 'fatal_error';
-
-export interface SessionInfo {
-  authenticated: boolean;
-  auth_mode?: AuthMode | null;
-  account_id?: string | null;
-  email?: string | null;
-  role?: string | null;
-  effective_permissions?: string[];
-  ui_access?: Partial<UIAccess> | null;
-  organization_memberships?: Array<Record<string, unknown>>;
-  team_memberships?: Array<Record<string, unknown>>;
-  mfa_enabled?: boolean;
-  mfa_verified?: boolean;
-  mfa_prompt?: boolean;
-  force_password_change?: boolean;
-}
-
 type AuthErrorState = Exclude<SessionFailure, { kind: 'anonymous' }>;
 
 interface AuthState {
@@ -34,26 +17,6 @@ interface AuthState {
   session: SessionInfo | null;
   error: AuthErrorState | null;
 }
-
-interface AuthContextValue {
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  authStatus: AuthStatus;
-  authMode: AuthMode | null;
-  session: SessionInfo | null;
-  authError: AuthErrorState | null;
-  isLoggingOut: boolean;
-  logoutError: string | null;
-  mfaSkipped: boolean;
-  loginWithCredentials: (email: string, password: string, mfaCode?: string) => Promise<void>;
-  loginWithMasterKey: (masterKey: string) => Promise<void>;
-  logout: () => Promise<void>;
-  refreshSession: () => Promise<void>;
-  retrySession: () => Promise<void>;
-  skipMfa: () => void;
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null);
 
 const MASTER_KEY_STORAGE = 'deltallm_master_key';
 const MFA_SKIP_STORAGE = 'deltallm_mfa_skip';
@@ -129,79 +92,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logoutInFlightRef = useRef(false);
 
   const refreshSession = useCallback(async () => {
+    if (logoutInFlightRef.current) return;
     const attempt = ++sessionAttemptRef.current;
     const applyState = (nextState: AuthState) => {
       if (sessionAttemptRef.current === attempt) setState(nextState);
     };
     setState((current) => ({ ...current, status: 'loading', error: null }));
 
-    const handleFailure = (
-      error: unknown,
-      { clearLegacyOnAnonymous }: { clearLegacyOnAnonymous: boolean },
-    ) => {
+    const external = uiMount().external_console;
+    if (external) setStoredMasterKey(null);
+    try {
+      const me = await resolveSession(authApi, external ? null : getStoredMasterKey(), external);
+      setStoredMasterKey(null);
+      applyState(me.authenticated ? authenticatedState(me) : anonymousState());
+    } catch (error: unknown) {
       const failure = classifySessionCheckError(error);
-      if (failure.kind === 'anonymous' && clearLegacyOnAnonymous) {
-        setStoredMasterKey(null);
-      }
+      if (failure.kind === 'anonymous') setStoredMasterKey(null);
       applyState(failureState(failure));
-    };
-
-    let me: unknown;
-    try {
-      me = await authApi.me();
-    } catch (error: unknown) {
-      const failure = classifySessionCheckError(error);
-      if (failure.kind !== 'anonymous') {
-        applyState(failureState(failure));
-        return;
-      }
-      me = { authenticated: false };
     }
-
-    if (!isValidSessionPayload(me)) {
-      handleFailure(new Error('Invalid session verification response'), { clearLegacyOnAnonymous: false });
-      return;
-    }
-
-    if (me?.authenticated) {
-      setStoredMasterKey(null);
-      applyState(authenticatedState(me));
-      return;
-    }
-
-    const legacyMasterKey = getStoredMasterKey();
-    if (!legacyMasterKey) {
-      applyState(anonymousState());
-      return;
-    }
-
-    try {
-      await authApi.masterLogin(legacyMasterKey);
-    } catch (error: unknown) {
-      handleFailure(error, { clearLegacyOnAnonymous: true });
-      return;
-    }
-
-    try {
-      me = await authApi.me();
-    } catch (error: unknown) {
-      handleFailure(error, { clearLegacyOnAnonymous: true });
-      return;
-    }
-
-    if (!isValidSessionPayload(me)) {
-      handleFailure(new Error('Invalid session verification response'), { clearLegacyOnAnonymous: false });
-      return;
-    }
-
-    if (!me?.authenticated) {
-      setStoredMasterKey(null);
-      applyState(anonymousState());
-      return;
-    }
-
-    setStoredMasterKey(null);
-    applyState(authenticatedState(me));
   }, []);
 
   const retrySession = useCallback(async () => {
@@ -216,6 +124,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refreshSession]);
 
   const loginWithCredentials = useCallback(async (email: string, password: string, mfaCode?: string) => {
+    if (uiMount().external_console) throw new Error('Sign in through the Console');
     await authApi.internalLogin({ email, password, mfa_code: mfaCode });
     setStoredMfaSkip(false);
     setMfaSkipped(false);
@@ -223,6 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refreshSession]);
 
   const loginWithMasterKey = useCallback(async (key: string) => {
+    if (uiMount().external_console) throw new Error('Sign in through the Console');
     const value = key.trim();
     if (!value) throw new Error('Master key is required');
 
@@ -237,8 +147,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoggingOut(true);
     setLogoutError(null);
     try {
-      await authApi.internalLogout();
       sessionAttemptRef.current += 1;
+      await authApi.internalLogout();
       setStoredMasterKey(null);
       setStoredMfaSkip(false);
       setMfaSkipped(false);
@@ -297,8 +207,4 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
-}
+export { useAuth } from './authContext';

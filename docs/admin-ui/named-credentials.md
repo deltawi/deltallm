@@ -11,7 +11,7 @@ Use them when you want to:
 
 This is especially useful for providers such as OpenAI-compatible gateways, Groq, Anthropic, Gemini, Azure OpenAI, Bedrock, and ElevenLabs.
 
-**Access:** platform admin. Secret values are write-only and read responses are redacted. See
+**Access:** platform administrators manage shared credentials. Eligible creator accounts, including [external customer sessions](../configuration/external-customer-auth.md), can create and manage their own private credentials and permitted workspace grants. Secret values are write-only and read responses are redacted. See
 [Access requirements](access-requirements.md), the [named-credential API](../api/admin.md#named-credentials),
 and [production secret handling](../security/hardening.md#secret-lifecycle).
 

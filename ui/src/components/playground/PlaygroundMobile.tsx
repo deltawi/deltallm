@@ -1,3 +1,4 @@
+import { uiMount } from '../../lib/uiMount';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
   Activity,
@@ -922,6 +923,7 @@ export default function PlaygroundMobile({
         </button>
 
         <div className="flex items-center gap-2">
+          {!uiMount().external_console && (
           <div className="relative flex-1 min-w-0">
             <Key className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
             <input
@@ -940,6 +942,7 @@ export default function PlaygroundMobile({
               {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             </button>
           </div>
+          )}
           {mode === 'chat' && (
             <button
               ref={paramsBtnRef}

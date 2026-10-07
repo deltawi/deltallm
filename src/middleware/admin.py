@@ -6,6 +6,7 @@ from collections.abc import Callable
 from fastapi import Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
+from src.middleware.external_auth import require_unmixed_external_auth, external_session_unavailable
 from src.middleware.platform_auth import (
     get_configured_master_key,
     get_platform_auth_context,
@@ -39,12 +40,18 @@ async def require_authenticated(
 ) -> str:
     from src.middleware.platform_auth import get_platform_auth_context
 
+    require_unmixed_external_auth(request, authorization=authorization, x_master_key=x_master_key)
     context = get_platform_auth_context(request)
     if context is not None:
         if requires_mfa_verification(context):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required"
+            )
+        if context.external_workspace is not None and context.force_password_change:
+            raise HTTPException(status_code=403, detail="Password change required")
         return "platform_session"
 
+    require_unmixed_external_auth(request, authorization=authorization, x_master_key=x_master_key)
     configured = get_configured_master_key(request)
 
     provided = x_master_key or _extract_bearer_token(authorization)
@@ -52,7 +59,7 @@ async def require_authenticated(
         return configured
     if has_master_key_session(request):
         return "master_session"
-    if master_key_session_unavailable(request):
+    if master_key_session_unavailable(request) or external_session_unavailable(request):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service unavailable",
@@ -67,17 +74,21 @@ async def require_master_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> str:
+    require_unmixed_external_auth(request, authorization=authorization, x_master_key=x_master_key)
     if has_platform_admin_session(request):
         return "platform_session"
 
+    require_unmixed_external_auth(request, authorization=authorization, x_master_key=x_master_key)
     configured = get_configured_master_key(request)
 
     if not configured:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Master key not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Master key not configured"
+        )
 
     provided = x_master_key or _extract_bearer_token(authorization)
     if not provided or not _hmac.compare_digest(provided, configured):
-        if master_key_session_unavailable(request):
+        if master_key_session_unavailable(request) or external_session_unavailable(request):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Authentication service unavailable",
@@ -96,6 +107,9 @@ def require_admin_permission(permission: str) -> Callable:
         organization_id: str | None = None,
         team_id: str | None = None,
     ) -> str:
+        require_unmixed_external_auth(
+            request, authorization=authorization, x_master_key=x_master_key
+        )
         configured = get_configured_master_key(request)
 
         provided = x_master_key or _extract_bearer_token(authorization)
@@ -106,15 +120,19 @@ def require_admin_permission(permission: str) -> Callable:
 
         context = get_platform_auth_context(request)
         if context is None:
-            if master_key_session_unavailable(request):
+            if master_key_session_unavailable(request) or external_session_unavailable(request):
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Authentication service unavailable",
                     headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
                 )
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
         if requires_mfa_verification(context):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required"
+            )
 
         if permission == Permission.PLATFORM_ADMIN and has_platform_admin_session(request):
             return "platform_session"
@@ -127,7 +145,9 @@ def require_admin_permission(permission: str) -> Callable:
         ):
             return "platform_session"
 
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
 
     return _require
 
@@ -140,6 +160,9 @@ def require_any_admin_permission(permissions: tuple[str, ...]) -> Callable:
         authorization: str | None = Header(default=None, alias="Authorization"),
         x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
     ) -> str:
+        require_unmixed_external_auth(
+            request, authorization=authorization, x_master_key=x_master_key
+        )
         configured = get_configured_master_key(request)
 
         provided = x_master_key or _extract_bearer_token(authorization)
@@ -150,21 +173,30 @@ def require_any_admin_permission(permissions: tuple[str, ...]) -> Callable:
 
         context = get_platform_auth_context(request)
         if context is None:
-            if master_key_session_unavailable(request):
+            if master_key_session_unavailable(request) or external_session_unavailable(request):
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Authentication service unavailable",
                     headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
                 )
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
         if requires_mfa_verification(context):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required"
+            )
 
         if has_platform_admin_session(request):
             return "platform_session"
-        if any(has_scoped_permission(context=context, permission=permission) for permission in permissions):
+        if any(
+            has_scoped_permission(context=context, permission=permission)
+            for permission in permissions
+        ):
             return "platform_session"
 
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
 
     return _require

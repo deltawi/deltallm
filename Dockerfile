@@ -23,21 +23,21 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 ARG INSTALL_PRESIDIO=false
+ENV PATH=/opt/python/bin:$PATH \
+    PYTHONPATH=/opt/python/lib/python3.11/site-packages \
+    PRISMA_BINARY_CACHE_DIR=/opt/prisma \
+    PRISMA_NODEENV_CACHE_DIR=/opt/prisma-nodeenv
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libpq-dev curl libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/opt/python -r requirements.txt
 
 RUN if [ "$INSTALL_PRESIDIO" = "true" ]; then \
-      pip install --no-cache-dir --user presidio-analyzer presidio-anonymizer; \
+      pip install --no-cache-dir --prefix=/opt/python presidio-analyzer presidio-anonymizer; \
     fi
-
-# `pip install --user` drops console scripts (like `prisma`) into /root/.local/bin,
-# which is not on PATH by default during the build stage.
-ENV PATH=/root/.local/bin:$PATH
 
 COPY pyproject.toml ./
 COPY src ./src
@@ -53,17 +53,27 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 curl libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /root/.local /root/.local
-COPY --from=builder /root/.cache/prisma-python /root/.cache/prisma-python
+COPY --from=builder /opt/python /opt/python
+COPY --from=builder /opt/prisma /opt/prisma
+COPY --from=builder /opt/prisma-nodeenv /opt/prisma-nodeenv
 COPY --from=builder /app /app
 COPY --from=frontend /app/ui/dist ./ui/dist
 COPY config.example.yaml ./config.example.yaml
 
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH=/opt/python/bin:/opt/prisma-nodeenv/bin:$PATH
+ENV PYTHONPATH=/opt/python/lib/python3.11/site-packages
+ENV PRISMA_BINARY_CACHE_DIR=/opt/prisma
+ENV PRISMA_NODEENV_CACHE_DIR=/opt/prisma-nodeenv
 ENV PYTHONUNBUFFERED=1
 ENV DELTALLM_CONFIG_PATH=/app/config/config.yaml
 ENV HOST=0.0.0.0
 ENV PORT=4000
+
+RUN groupadd --gid 10001 deltallm \
+    && useradd --uid 10001 --gid deltallm --create-home deltallm \
+    && mkdir -p /app/config \
+    && chown -R deltallm:deltallm /app /opt/prisma /opt/prisma-nodeenv
+USER 10001:10001
 
 EXPOSE 4000
 

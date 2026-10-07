@@ -432,11 +432,19 @@ model DeltaLLM_PlatformSession {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   last_seen_at        DateTime @default(now())
+  external_mfa_secret_digest String?
+  external_parent_id String?
+  external_generation Int?
+  external_integration_epoch Int?
+  external_binding_epoch Int?
+  external_subject_epoch Int?
 
   account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
+  external_parent DeltaLLM_ExternalAuthParentSession? @relation(fields: [external_parent_id], references: [parent_id], onDelete: Restrict)
 
   @@index([account_id])
   @@index([expires_at])
+  @@index([external_parent_id, external_generation])
   @@map("deltallm_platformsession")
 }
 
@@ -468,6 +476,93 @@ model DeltaLLM_PlatformIdentity {
   @@unique([provider, subject])
   @@index([account_id])
   @@map("deltallm_platformidentity")
+}
+
+model DeltaLLM_ExternalAuthIntegration {
+  integration_id String @id
+  enabled Boolean @default(false)
+  epoch Int @default(0)
+  version Int @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  bindings DeltaLLM_ExternalAuthBinding[]
+  assertions DeltaLLM_ExternalAuthAssertionUse[]
+  @@map("deltallm_externalauthintegration")
+}
+
+model DeltaLLM_ExternalAuthBinding {
+  binding_id String @id @default(uuid())
+  integration_id String
+  external_customer_id String
+  organization_id String
+  team_id String
+  profile String @default("customer_v1")
+  state String @default("active")
+  epoch Int @default(0)
+  version Int @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  integration DeltaLLM_ExternalAuthIntegration @relation(fields: [integration_id], references: [integration_id], onDelete: Restrict)
+  subjects DeltaLLM_ExternalAuthSubject[]
+  @@unique([integration_id, external_customer_id])
+  @@unique([integration_id, binding_id])
+  @@index([organization_id])
+  @@index([team_id])
+  @@map("deltallm_externalauthbinding")
+}
+
+model DeltaLLM_ExternalAuthSubject {
+  subject_id String @id @default(uuid())
+  integration_id String
+  binding_id String
+  identity_issuer String
+  subject String
+  state String @default("pending")
+  epoch Int @default(0)
+  version Int @default(0)
+  account_id String? @unique
+  identity_id String? @unique
+  runtime_user_id String? @unique
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  binding DeltaLLM_ExternalAuthBinding @relation(fields: [integration_id, binding_id], references: [integration_id, binding_id], onDelete: Restrict)
+  parents DeltaLLM_ExternalAuthParentSession[]
+  @@unique([identity_issuer, subject])
+  @@unique([integration_id, subject_id])
+  @@index([binding_id])
+  @@map("deltallm_externalauthsubject")
+}
+
+model DeltaLLM_ExternalAuthParentSession {
+  parent_id String @id @default(uuid())
+  integration_id String
+  external_session_id_hash String
+  subject_id String
+  auth_time DateTime
+  expires_at DateTime
+  revoked_at DateTime?
+  generation Int @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  subject DeltaLLM_ExternalAuthSubject @relation(fields: [integration_id, subject_id], references: [integration_id, subject_id], onDelete: Restrict)
+  sessions DeltaLLM_PlatformSession[]
+  @@unique([integration_id, external_session_id_hash])
+  @@index([subject_id])
+  @@index([expires_at])
+  @@map("deltallm_externalauthparentsession")
+}
+
+model DeltaLLM_ExternalAuthAssertionUse {
+  integration_id String
+  jti_hash String
+  purpose String
+  received_at DateTime @default(now())
+  retain_until DateTime
+  outcome String @default("claimed")
+  integration DeltaLLM_ExternalAuthIntegration @relation(fields: [integration_id], references: [integration_id], onDelete: Restrict)
+  @@id([integration_id, jti_hash])
+  @@index([retain_until])
+  @@map("deltallm_externalauthassertionuse")
 }
 
 model DeltaLLM_OrganizationMembership {
@@ -1702,4 +1797,10 @@ model DeltaLLM_BatchWebhookOutbox {
   @@index([status, updated_at], map: "deltallm_batch_webhook_outbox_retention_idx")
   @@index([created_by_organization_id, status, created_at, event_id], map: "deltallm_batch_webhook_outbox_org_status_created_idx")
   @@map("deltallm_batch_webhook_outbox")
+}
+
+model DeltaLLM_ExternalAuthMaintenanceLease {
+  lease_id String @id
+  next_run_at DateTime @db.Timestamptz
+  @@map("deltallm_externalauthmaintenancelease")
 }

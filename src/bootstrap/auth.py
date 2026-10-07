@@ -9,6 +9,8 @@ from typing import Any
 from uuid import uuid4
 
 from src.bootstrap.status import BootstrapStatus
+from src.bootstrap.external_auth import init_external_auth_runtime, external_auth_status
+from src.services.external_auth_runtime import ExternalAuthRuntime
 from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
@@ -48,6 +50,7 @@ _AUTH_BOOT_ID = uuid4().hex[:12]
 @dataclass
 class AuthRuntime:
     initialized: bool = True
+    external_auth: ExternalAuthRuntime | None = None
     organization_lifecycle_task: Task[None] | None = None
     cache_invalidation_worker: CacheInvalidationWorker | None = None
     cache_invalidation_task: Task[None] | None = None
@@ -322,15 +325,25 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     else:
         statuses.append(BootstrapStatus("custom_auth", "disabled"))
 
+    runtime.external_auth = await init_external_auth_runtime(app, cfg)
+
     start_organization_deletion_tasks(app, runtime)
     if runtime.cache_invalidation_worker is not None:
         runtime.cache_invalidation_task = create_task(runtime.cache_invalidation_worker.run())
 
+    if runtime.external_auth is not None:
+        runtime.external_auth.cache_worker_ready = lambda: (
+            runtime.cache_invalidation_task is not None
+            and not runtime.cache_invalidation_task.done()
+        )
+    statuses.append(external_auth_status(runtime.external_auth))
     runtime.statuses = tuple(statuses)
     return runtime
 
 
 async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
+    if runtime.external_auth is not None:
+        await runtime.external_auth.close()
     lifecycle_task = getattr(runtime, "organization_lifecycle_task", None)
     if lifecycle_task is not None:
         lifecycle_task.cancel()

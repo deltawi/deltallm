@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import logging
 from contextlib import AsyncExitStack, asynccontextmanager
-from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from src.bootstrap import (
     BootstrapStatus,
@@ -30,6 +28,7 @@ from src.bootstrap.realtime import init_realtime_runtime
 from src.cache import (
     CacheMiddleware,
 )
+from src.ui.routes import install_ui_fallback
 from src.api.admin import admin_router
 from src.middleware.rate_limit_headers import RateLimitHeaderMiddleware
 from src.middleware.rate_limit_lifecycle import RateLimitLeaseLifecycleMiddleware
@@ -37,6 +36,10 @@ from src.middleware.request_timing import RequestTimingMiddleware
 from src.api.v1.router import v1_router
 from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
+from src.middleware.external_auth import (
+    require_unmixed_external_auth,
+    require_external_browser_request,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -107,8 +110,20 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def _platform_auth_context_middleware(request: Request, call_next):
+        if request.url.path not in {"/auth/internal/login", "/auth/master/login"}:
+            try:
+                require_unmixed_external_auth(request)
+                require_external_browser_request(request)
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers
+                )
         await attach_platform_auth_context(request)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.cookies.get("deltallm_session", "").startswith("psk_ext1_"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Vary"] = "Cookie"
+        return response
 
     # This must wrap cache and route middleware so streaming rate-limit leases
     # remain owned until the final response body frame or a disconnect.
@@ -118,19 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_router)
     app.include_router(admin_router)
 
-    ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
-    if ui_dist.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(ui_dist / "assets")), name="ui-assets")
-
-        @app.get("/{full_path:path}")
-        async def serve_spa(request: Request, full_path: str):
-            del request
-            if full_path.startswith(("ui/api/", "v1/", "auth/", "health/")):
-                return JSONResponse(status_code=404, content={"detail": "Not Found"})
-            file_path = ui_dist / full_path
-            if file_path.is_file():
-                return FileResponse(str(file_path))
-            return FileResponse(str(ui_dist / "index.html"))
+    install_ui_fallback(app)
 
     return app
 

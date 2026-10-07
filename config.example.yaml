@@ -106,6 +106,20 @@ router_settings:
   #         lane: quality
 
 general_settings:
+  # External customer sign-in is off until the coordinated Console rollout is ready.
+  # Configure the Console signing public keys here; keep its private keys in Console.
+  external_auth:
+    enabled: false
+    deployment_protocol: null
+    integrations: []
+    allowed_origins: []
+    trusted_proxy_cidrs: []
+    cleanup_batch_size: 1000
+    cleanup_interval_seconds: 5
+  # Set /gateway and true on the UI served through the Console proxy.
+  ui_mount:
+    mount_path: ""
+    external_console: false
   instance_name: DeltaLLM
   # Installation-wide UI branding. Logo and favicon BLOBs are managed from Settings > Theme.
   ui_branding:

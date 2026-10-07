@@ -1,0 +1,289 @@
+{
+  "date": "2026-10-06",
+  "base_commit": "b8a4ad6fde71b20e6db1d8cf25c980ff7b8ec8bd",
+  "branch": "codex/issue-344-external-customer-sign-in",
+  "feature_default": "disabled",
+  "protocol": "external_customer_v1",
+  "external_migration_count": 7,
+  "qualification_scope": "Local gateway verification; production deployment and Replit Console integration not certified.",
+  "test_lanes": {
+    "hermetic": {
+      "passed": 4072,
+      "skipped": 3,
+      "note": "Complete delivery run after the final cache-degradation repair."
+    },
+    "app": {
+      "passed": 1585,
+      "note": "Full lane; final HTTP/diagnostic checks passed separately after documentation-only endpoint declarations."
+    },
+    "postgres": {
+      "passed": 409,
+      "skipped": 23,
+      "note": "Final complete lane against PostgreSQL 15 with Redis unset. Redis-dependent skips are not passes."
+    },
+    "redis": {
+      "passed": 101,
+      "skipped": 1,
+      "note": "Complete lane against disposable Redis 7 before containers stopped."
+    },
+    "helm": {
+      "passed": 80
+    },
+    "combined_postgres_redis_external_runtime": {
+      "passed": 2,
+      "note": "Owned startup/readiness/replay/audit/shutdown and durable key-worker recovery passed before Redis stopped."
+    },
+    "representative_cardinality": {
+      "passed": 1,
+      "opt_in": true
+    },
+    "ui_unit": {
+      "passed": 280
+    },
+    "docs_unit": {
+      "passed": 9
+    },
+    "customer_inference_and_economics": {
+      "passed": 3,
+      "note": "Normal bearer path accepts an owned private model, denies another account before provider dispatch, permits team sharing, preserves runtime/org/team usage attribution, and denies zero budget after renewal; economic snapshots unchanged."
+    }
+  },
+  "checks": {
+    "frozen_dependency_sync": true,
+    "dependency_lock_current": true,
+    "prisma_generated_and_validated": true,
+    "touched_python_ruff": true,
+    "ui_typescript_and_build": true,
+    "ui_lint_baseline_errors": 116,
+    "ui_lint_current_errors": 116,
+    "ui_lint_new_normalized_findings": 0,
+    "full_python_ruff": true,
+    "touched_python_format": true,
+    "full_tree_format_baseline_findings": 231,
+    "full_tree_format_current_findings": 226,
+    "generated_documentation_current": true,
+    "strict_documentation_build": true,
+    "public_site_excludes_internal_pages": true,
+    "live_browser_smoke": "unverified: app could not verify admin-enforced browser security policy",
+    "new_source_modules_with_size_function_and_type_ratchets": 53,
+    "touched_python_files_formatted": 104
+  },
+  "ui_initial_bundle": {
+    "baseline_kb": 1463.87,
+    "baseline_gzip_kb": 377.54,
+    "current_kb": 1381.71,
+    "current_gzip_kb": 360.88
+  },
+  "migration_rehearsal": {
+    "fresh": true,
+    "last_supported_release": "v0.1.49",
+    "last_release_upgrade": true,
+    "shared_feature_upgrade": true,
+    "model_identity_failed_migration_recovery": true
+  },
+  "production_image": {
+    "manifest_digest": "sha256:20bf48eae40ff0bf9084b5b83ff4ab8431edfe7d1d186af6daa26cec20eeab2f",
+    "non_root_uid": 10001,
+    "fresh_image_migrations": true,
+    "readiness": true,
+    "exchange_ms": 43.37929200846702,
+    "replay_status": 409,
+    "stable_account": true,
+    "renewal_generation": 2,
+    "no_cookie": true,
+    "uncached_session_response": true,
+    "note": "Image rehearsal covered the implementation before the final cache-degradation repair. The canonical production-image CI addition is supplied as a patch pending workflow-write permission. Current CI does not certify the final production image; connected deployment qualification remains separate."
+  },
+  "cardinality_profile": {
+    "session_rows": 30000,
+    "assertion_rows": 30000,
+    "validation_queries": 2,
+    "validation_median_ms": 4.153978981776163,
+    "validation_p95_ms": 4.88441699417308,
+    "validation_p99_ms": 13.129000028129667,
+    "cleanup_rows": {
+      "assertions": 1000,
+      "children": 1000,
+      "parents": 0
+    },
+    "cleanup_ms": 25.21337498910725,
+    "validation_indexes": [
+      "deltallm_externalauthparentsession_subject_id_idx",
+      "deltallm_platformsession_session_token_hash_key"
+    ]
+  },
+  "rollback_rehearsal": {
+    "preview": {
+      "applied": false,
+      "before": {
+        "enabled_integrations": 2,
+        "live_children": 1,
+        "live_parents": 1,
+        "retained_revocations": 1
+      },
+      "reconciled_revocations": 0,
+      "remaining": {
+        "enabled_integrations": 2,
+        "live_children": 1,
+        "live_parents": 1,
+        "retained_revocations": 1
+      },
+      "sample_limit": 1001
+    },
+    "apply": {
+      "applied": true,
+      "before": {
+        "enabled_integrations": 2,
+        "live_children": 1,
+        "live_parents": 1,
+        "retained_revocations": 1
+      },
+      "reconciled_revocations": 1,
+      "remaining": {
+        "enabled_integrations": 0,
+        "live_children": 0,
+        "live_parents": 0,
+        "retained_revocations": 1
+      },
+      "sample_limit": 1001
+    },
+    "old_binary_child_denied": true,
+    "current_child_denied": true,
+    "exact_v4_removed": true,
+    "v5_denial_marker": true
+  },
+  "canonical_inference_smoke": {
+    "runs": {
+      "baseline": {
+        "target_rate_rps": 50.0,
+        "arrival_window_seconds": 10.0,
+        "target_count": 500,
+        "client_started_count": 500,
+        "completion_count": 500,
+        "success_count": 500,
+        "generator_dropped_count": 0,
+        "max_in_flight_observed": 3,
+        "status_counts": {
+          "200": 500
+        },
+        "latency_ms": {
+          "max": 59.617,
+          "mean": 25.587,
+          "p50": 24.689,
+          "p95": 36.732,
+          "p99": 47.238
+        }
+      },
+      "enabled": {
+        "target_rate_rps": 50.0,
+        "arrival_window_seconds": 10.0,
+        "target_count": 500,
+        "client_started_count": 500,
+        "completion_count": 500,
+        "success_count": 500,
+        "generator_dropped_count": 0,
+        "max_in_flight_observed": 3,
+        "status_counts": {
+          "200": 500
+        },
+        "latency_ms": {
+          "max": 52.306,
+          "mean": 22.852,
+          "p50": 22.294,
+          "p95": 28.665,
+          "p99": 35.535
+        }
+      }
+    },
+    "limitations": [
+      "One replica per mode, ten seconds each; not a sustained or production capacity certificate.",
+      "Baseline image startup overlapped the short baseline window; do not infer a performance improvement.",
+      "No concurrent sign-in load or peak replicas plus surge were qualified.",
+      "Per-request SQL/network call counts were not independently instrumented by this run."
+    ]
+  },
+  "remaining_release_gates": [
+    {
+      "owner": "Replit Console agent",
+      "gate": "Implement and test assertion signer, existing-tenant registration, encrypted shared vault, reference cookie, cross-replica renewal CAS, safe proxy, Playground key selection, verified Clerk revocation and durable logout delivery."
+    },
+    {
+      "owner": "Console and gateway deployment teams",
+      "gate": "Complete the deployed two-customer browser/asset/key/inference/MFA/logout/failure journey with billing snapshots and secret-redaction inspection."
+    },
+    {
+      "owner": "Deployment operator",
+      "gate": "Qualify concurrent sign-in and inference with multiple API replicas, peak API/worker counts plus rolling surge, sustained cleanup/audit capacity, PostgreSQL headroom, interruption and all-replica canary/rollback."
+    }
+  ],
+  "test_collection": {
+    "hermetic": 4075,
+    "app": 1587,
+    "postgres": 433,
+    "redis": 102,
+    "helm": 80,
+    "total": 6277,
+    "note": "One primary lane per collected test."
+  },
+  "connected_staging": {
+    "console_origin": null,
+    "signup_url": null,
+    "zero_budget_organization_id": null,
+    "zero_budget_team_id": null,
+    "console_connection": "pending",
+    "verified_test_subjects": "pending confirmation and test access",
+    "gateway_staging_url": null,
+    "exact_clerk_identity_issuer": null,
+    "installed_signing_key_id": null,
+    "registered_binding_id": null,
+    "second_isolated_workspace": null,
+    "end_to_end_passed": false,
+    "handoff": "plans/issue-344-console-staging-handoff.md",
+    "proposed_integration_id": "console-staging",
+    "proposed_audience": "deltallm-console-staging",
+    "proposed_assertion_issuer": null,
+    "note": "Private staging URLs and zero-budget workspace confirmed. Signing configuration, bindings, second customer access, and compatible dev gateway routes remain pending.",
+    "gateway_external_routes_available": false,
+    "gateway_route_probe": {
+      "date": "2026-10-06",
+      "credential_free": true,
+      "exchange_post_empty_body_status": 405,
+      "exchange_post_allow": "GET",
+      "exchange_get_status": 404,
+      "openapi_get_status": 200,
+      "openapi_external_paths": [],
+      "note": "Current dev endpoint does not serve the new interface; the probe does not distinguish older binary from upstream routing."
+    },
+    "handoff_contract_verification": {
+      "complete_claim_and_response_schema_parity": true,
+      "local_post_route_declarations": true,
+      "focused_http_and_diagnostics_tests_passed": 16,
+      "local_links_and_whitespace": true,
+      "renewal_endpoint": "/auth/external/exchange",
+      "signed_revocation_endpoint": "/auth/external/revoke"
+    },
+    "deployment_values": "Private staging values are retained in the ignored local handoff; the public handoff uses placeholders."
+  },
+  "delivery_review": {
+    "date": "2026-10-07",
+    "cache_write_outage_retains_primary_authorization": true,
+    "invalid_cache_lookup_uses_primary": true,
+    "conflicting_atomic_fill_still_denied": true,
+    "focused_key_http_and_diagnostics_tests_passed": 32,
+    "final_ci_image_build_required": true,
+    "dev_deployment_access": "blocked: configured Google Cloud credentials require interactive reauthentication",
+    "secret_or_private_staging_findings": 0,
+    "files_scanned": 164,
+    "append_only_migration_whitespace": "Unfiltered staged diff check flags one blank line at the end of the already rehearsed initial external-auth migration. Its checksum is retained; no SQL behavior changes.",
+    "app_sandbox_attempt": {
+      "passed_before_interruption": 871,
+      "failed": 9,
+      "cause": "Loopback HTTP/WebSocket test-server binds denied by sandbox; interrupted and rerun with permitted local networking."
+    },
+    "image_ci_gate": {
+      "state": "supplied as reviewable patch, not active",
+      "patch": "plans/issue-344-ci-image-build.patch",
+      "reason": "GitHub publication token lacks workflow-write scope"
+    }
+  }
+}

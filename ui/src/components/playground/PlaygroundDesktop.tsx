@@ -1,3 +1,4 @@
+import { uiMount } from '../../lib/uiMount';
 import { useEffect, useRef, useState } from 'react';
 import {
   Activity,
@@ -729,7 +730,7 @@ export default function PlaygroundDesktop({
                   </div>
                 </div>
 
-                <ApiKeyInput value={apiKey} onChange={setApiKey} />
+                {!uiMount().external_console && <ApiKeyInput value={apiKey} onChange={setApiKey} />}
 
                 {mode === 'chat' && (
                   <div className="ml-auto flex items-end h-full pt-5">

@@ -11,7 +11,6 @@ from typing import Any
 import urllib.parse
 
 from src.auth.roles import (
-    PLATFORM_ROLE_PERMISSIONS,
     Permission,
     PlatformRole,
     TeamRole,
@@ -22,6 +21,7 @@ from src.auth.sso_identity import (
     SSOIdentityAssertion,
 )
 from src.db.platform_accounts import ensure_platform_account
+from src.db.platform_sessions import PlatformSessionRepository
 from src.db.platform_memberships import (
     lock_sso_default_team,
     seed_organization_membership,
@@ -29,6 +29,7 @@ from src.db.platform_memberships import (
 )
 from src.services.organization_mutation_policy import OrganizationMutationPolicy
 from src.services.sso_account_service import SSOAccountService
+from src.services.platform_session_service import PlatformSessionService
 from src.models.platform_auth import PlatformAuthContext
 
 
@@ -51,9 +52,14 @@ class AccountAuthState:
 class PlatformIdentityService:
     def __init__(self, db_client: Any, salt: str, session_ttl_hours: int = 12) -> None:
         self.db = db_client
-        self.salt = salt or "change-me"
+        self.salt = salt
         self.session_ttl_hours = session_ttl_hours
         self.totp_issuer = "DeltaLLM"
+        self.sessions = PlatformSessionService(
+            PlatformSessionRepository(db_client) if db_client is not None else None,
+            salt=self.salt,
+            lifetime=timedelta(hours=session_ttl_hours),
+        )
 
     def with_db(self, db_client: Any) -> PlatformIdentityService:
         service = PlatformIdentityService(
@@ -329,95 +335,10 @@ class PlatformIdentityService:
         return account
 
     async def get_context_for_session(self, session_token: str) -> PlatformAuthContext | None:
-        if self.db is None or not session_token:
-            return None
-
-        token_hash = self._hash_session_token(session_token)
-        rows = await self.db.query_raw(
-            """
-            SELECT
-                s.account_id,
-                s.mfa_verified,
-                s.expires_at,
-                a.email,
-                a.role,
-                a.force_password_change,
-                a.mfa_enabled,
-                a.is_active
-            FROM deltallm_platformsession s
-            JOIN deltallm_platformaccount a ON a.account_id = s.account_id
-            WHERE s.session_token_hash = $1
-              AND s.revoked_at IS NULL
-              AND s.expires_at > NOW()
-            LIMIT 1
-            """,
-            token_hash,
-        )
-        if not rows:
-            return None
-
-        row = rows[0]
-        if not bool(row.get("is_active", True)):
-            return None
-
-        await self.db.execute_raw(
-            "UPDATE deltallm_platformsession SET last_seen_at = NOW() WHERE session_token_hash = $1",
-            token_hash,
-        )
-
-        raw_role = str(row.get("role") or "org_user")
-        role = PlatformRole.ADMIN if raw_role == "platform_co_admin" else raw_role
-        permissions = sorted(PLATFORM_ROLE_PERMISSIONS.get(role, set()))
-
-        org_rows = await self.db.query_raw(
-            """
-            SELECT m.organization_id, m.role
-            FROM deltallm_organizationmembership m
-            JOIN deltallm_organizationtable o
-              ON o.organization_id = m.organization_id
-            WHERE m.account_id = $1
-              AND o.lifecycle_state = 'active'
-            """,
-            row["account_id"],
-        )
-        team_rows = await self.db.query_raw(
-            """
-            SELECT m.team_id, m.role
-            FROM deltallm_teammembership m
-            JOIN deltallm_teamtable t ON t.team_id = m.team_id
-            LEFT JOIN deltallm_organizationtable o
-              ON o.organization_id = t.organization_id
-            WHERE m.account_id = $1
-              AND (t.organization_id IS NULL OR o.lifecycle_state = 'active')
-            """,
-            row["account_id"],
-        )
-
-        expires_at = row.get("expires_at")
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00")).astimezone(UTC)
-
-        return PlatformAuthContext(
-            account_id=str(row["account_id"]),
-            email=str(row.get("email") or ""),
-            role=role,
-            mfa_enabled=bool(row.get("mfa_enabled", False)),
-            mfa_verified=bool(row.get("mfa_verified", False)),
-            force_password_change=bool(row.get("force_password_change", False)),
-            permissions=permissions,
-            organization_memberships=[dict(r) for r in org_rows],
-            team_memberships=[dict(r) for r in team_rows],
-            session_expires_at=expires_at if isinstance(expires_at, datetime) else None,
-        )
+        return await self.sessions.get_context(session_token)
 
     async def revoke_session(self, session_token: str) -> None:
-        if self.db is None:
-            return
-        token_hash = self._hash_session_token(session_token)
-        await self.db.execute_raw(
-            "UPDATE deltallm_platformsession SET revoked_at = NOW(), updated_at = NOW() WHERE session_token_hash = $1",
-            token_hash,
-        )
+        await self.sessions.revoke(session_token)
 
     async def start_mfa_enrollment(self, account_id: str) -> tuple[str, str] | None:
         if self.db is None:
@@ -463,49 +384,12 @@ class PlatformIdentityService:
         return True
 
     async def mark_session_mfa_verified(self, session_token: str) -> bool:
-        if self.db is None or not session_token:
-            return False
-        token_hash = self._hash_session_token(session_token)
-        rows = await self.db.query_raw(
-            """
-            UPDATE deltallm_platformsession
-            SET mfa_verified = true,
-                updated_at = NOW(),
-                last_seen_at = NOW()
-            WHERE session_token_hash = $1
-              AND revoked_at IS NULL
-              AND expires_at > NOW()
-            RETURNING session_id
-            """,
-            token_hash,
-        )
-        return bool(rows)
+        return await self.sessions.mark_mfa_verified(session_token)
 
     async def verify_mfa_for_session(self, *, session_token: str, code: str) -> bool:
-        if self.db is None or not session_token:
-            return False
-        token_hash = self._hash_session_token(session_token)
-        rows = await self.db.query_raw(
-            """
-            SELECT a.mfa_enabled, a.mfa_secret, a.is_active
-            FROM deltallm_platformsession s
-            JOIN deltallm_platformaccount a ON a.account_id = s.account_id
-            WHERE s.session_token_hash = $1
-              AND s.revoked_at IS NULL
-              AND s.expires_at > NOW()
-            LIMIT 1
-            """,
-            token_hash,
+        return await self.sessions.verify_mfa(
+            token=session_token, code=code, verify_code=self._verify_totp
         )
-        if not rows:
-            return False
-        row = rows[0]
-        if not bool(row.get("is_active", True)) or not bool(row.get("mfa_enabled", False)):
-            return False
-        secret = row.get("mfa_secret")
-        if not isinstance(secret, str) or not self._verify_totp(secret, code):
-            return False
-        return await self.mark_session_mfa_verified(session_token)
 
     async def change_password(
         self, account_id: str, new_password: str, current_password: str | None = None
@@ -818,18 +702,7 @@ class PlatformIdentityService:
         return True
 
     async def revoke_all_sessions_for_account(self, account_id: str) -> None:
-        if self.db is None:
-            return
-        await self.db.execute_raw(
-            """
-            UPDATE deltallm_platformsession
-            SET revoked_at = NOW(),
-                updated_at = NOW()
-            WHERE account_id = $1
-              AND revoked_at IS NULL
-            """,
-            account_id,
-        )
+        await self.sessions.revoke_for_account(account_id)
 
     async def mark_last_login(self, account_id: str) -> None:
         if self.db is None:
@@ -854,40 +727,11 @@ class PlatformIdentityService:
             mfa_prompt=not context.mfa_enabled,
         )
 
-    async def _create_session_from_email(self, email: str, mfa_verified: bool) -> str:
-        rows = await self.db.query_raw(
-            "SELECT account_id FROM deltallm_platformaccount WHERE lower(email) = lower($1) LIMIT 1",
-            email,
-        )
-        if not rows:
-            raise ValueError("account not found")
-        return await self._create_session(
-            account_id=rows[0]["account_id"], mfa_verified=mfa_verified
-        )
-
     async def _create_session(self, account_id: str, mfa_verified: bool) -> str:
-        token = f"psk_{secrets.token_urlsafe(32)}"
-        token_hash = self._hash_session_token(token)
-        expires_at = datetime.now(UTC) + timedelta(hours=self.session_ttl_hours)
-
-        await self.db.execute_raw(
-            """
-            INSERT INTO deltallm_platformsession (
-                session_id, account_id, session_token_hash, mfa_verified,
-                expires_at, created_at, updated_at, last_seen_at
-            )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4::timestamptz, NOW(), NOW(), NOW())
-            """,
-            account_id,
-            token_hash,
-            mfa_verified,
-            expires_at,
-        )
-
-        return token
+        return await self.sessions.create(account_id=account_id, mfa_verified=mfa_verified)
 
     def _hash_session_token(self, token: str) -> str:
-        return hashlib.sha256(f"{self.salt}:session:{token}".encode("utf-8")).hexdigest()
+        return self.sessions.hash_token(token)
 
     def _hash_password(self, raw_password: str) -> str:
         salt = secrets.token_bytes(16)

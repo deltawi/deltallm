@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from src.db.repositories import KeyRecord, KeyRepository
+from src.metrics.prometheus import get_prometheus_registry
+from src.models.errors import AuthenticationError, ServiceUnavailableError
 from src.services.key_service import KeyService
 
 
@@ -42,6 +47,28 @@ class RecordingRedis:
         self.store[key] = value
         self.ttls[key] = ttl
 
+    async def eval(self, script, numkeys, *args):
+        if "deltallm_key_auth_lookup_v5" in script:
+            return [self.store.get(args[0], ""), int(time.time() * 1000)]
+        if "deltallm_key_auth_fill_v5" in script:
+            key, payload, ttl, deadline = args
+            if int(time.time() * 1000) > int(deadline):
+                return ""
+            if key in self.store:
+                return self.store[key]
+            await self.setex(key, int(ttl), payload)
+            return payload
+        if "deltallm_key_auth_drop_v5" in script:
+            keys = [
+                key
+                for key in args
+                if key not in self.store
+                or json.loads(self.store[key]).get("cache_kind") != "revoked"
+            ]
+            await self.delete(*keys)
+            return len(keys)
+        raise AssertionError("Unsupported key auth cache script")
+
     async def delete(self, *keys: str):
         self.delete_calls.append(tuple(keys))
         for key in keys:
@@ -58,6 +85,96 @@ class LifecycleRowPrisma:
         del params
         self.sql = sql
         return [self.row]
+
+
+class FailedWriteRedis(RecordingRedis):
+    async def eval(self, script: str, numkeys: int, *args: str | int) -> object:
+        if "deltallm_key_auth_fill_v5" in script:
+            raise RedisConnectionError("Cache write unavailable")
+        return await super().eval(script, numkeys, *args)
+
+
+class InvalidClockRedis(RecordingRedis):
+    async def eval(self, script: str, numkeys: int, *args: str | int) -> object:
+        del script, numkeys, args
+        return ["", "invalid-clock"]
+
+
+class InvalidFillRedis(RecordingRedis):
+    async def eval(self, script: str, numkeys: int, *args: str | int) -> object:
+        if "deltallm_key_auth_fill_v5" in script:
+            return "invalid-cache-payload"
+        return await super().eval(script, numkeys, *args)
+
+
+@pytest.mark.asyncio
+async def test_cache_write_outage_keeps_primary_authorization_without_local_cache() -> None:
+    redis = FailedWriteRedis()
+    repo = InMemoryRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=redis)
+    registry = get_prometheus_registry()
+    metric = "deltallm_key_auth_cache_failures_total"
+    labels = {"reason": "write_unavailable"}
+    before = registry.get_sample_value(metric, labels) or 0
+
+    for _ in range(2):
+        auth = await service.get_auth_by_token_hash("owned")
+        assert auth.owner_account_id == "owner"
+
+    assert repo.calls == 2 and redis.store == {} and service.primary_gate.active == 0
+    assert registry.get_sample_value(metric, labels) == before + 2
+    del repo.records["owned"]
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash("owned")
+
+
+@pytest.mark.parametrize("bad_clock", [False, True])
+@pytest.mark.asyncio
+async def test_invalid_cache_lookup_uses_primary_and_still_denies_deleted_key(
+    bad_clock: bool,
+) -> None:
+    redis = InvalidClockRedis() if bad_clock else RecordingRedis()
+    redis.store["key:v5:owned"] = "invalid-cache-payload"
+    repo = InMemoryRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=redis)
+
+    auth = await service.get_auth_by_token_hash("owned")
+    assert auth.owner_account_id == "owner"
+    del repo.records["owned"]
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash("owned")
+    assert repo.calls == 2 and service.primary_gate.active == 0
+
+
+@pytest.mark.asyncio
+async def test_revocation_during_primary_read_denies_atomic_cache_fill() -> None:
+    redis = RecordingRedis()
+
+    class RevokingRepo(InMemoryRepo):
+        async def get_by_token(self, token_hash: str) -> KeyRecord | None:
+            record = await super().get_by_token(token_hash)
+            await redis.setex(
+                "key:v5:" + token_hash,
+                62,
+                json.dumps({"cache_version": 5, "cache_kind": "revoked"}),
+            )
+            return record
+
+    repo = RevokingRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=redis)
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash("owned")
+    assert repo.calls == 1 and service.primary_gate.active == 0
+    assert json.loads(redis.store["key:v5:owned"])["cache_kind"] == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_invalid_atomic_fill_does_not_allow_stale_primary_snapshot() -> None:
+    repo = InMemoryRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=InvalidFillRedis())
+    with pytest.raises(ServiceUnavailableError):
+        await service.get_auth_by_token_hash("owned")
+    assert repo.calls == 1 and service.primary_gate.active == 0
 
 
 @pytest.mark.asyncio
@@ -131,8 +248,8 @@ async def test_key_scope_invalidation_batches_redis_deletes() -> None:
 
     assert invalidated == 501
     assert [len(call) for call in redis.delete_calls] == [500, 1]
-    assert redis.delete_calls[0][0] == "key:v4:token-0"
-    assert redis.delete_calls[1][0] == "key:v4:token-500"
+    assert redis.delete_calls[0][0] == "key:v5:token-0"
+    assert redis.delete_calls[1][0] == "key:v5:token-500"
 
 
 @pytest.mark.asyncio
@@ -152,7 +269,7 @@ async def test_key_cache_ttl_respects_configured_limit() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v4:{token_hash}"
+    cache_key = f"key:v5:{token_hash}"
     assert redis.ttls[cache_key] == 300
 
 
@@ -173,7 +290,7 @@ async def test_key_cache_ttl_capped_by_key_expiry() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v4:{token_hash}"
+    cache_key = f"key:v5:{token_hash}"
     assert 1 <= redis.ttls[cache_key] <= 20
 
 
@@ -247,7 +364,7 @@ async def test_validate_key_ignores_pre_owner_contract_cache_entries() -> None:
 
     assert auth.owner_account_id == "acct-current"
     assert repo.calls == 1
-    assert f"key:v4:{token_hash}" in redis.store
+    assert f"key:v5:{token_hash}" in redis.store
 
 
 @pytest.mark.asyncio

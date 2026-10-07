@@ -144,6 +144,11 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
         checks["realtime"] = bool(realtime is not None and realtime.ready)
         details["realtime"] = {"state": "ready" if checks["realtime"] else "unavailable"}
 
+    external = getattr(request.app.state, "external_auth_runtime", None)
+    if external is not None:
+        checks["external_auth"] = await external.check_ready()
+        details["external_auth"] = {"state": "ready" if checks["external_auth"] else "unavailable"}
+
     audit_service = getattr(request.app.state, "audit_service", None)
     audit_health = getattr(audit_service, "worker_health", None)
     if audit_health is not None:
