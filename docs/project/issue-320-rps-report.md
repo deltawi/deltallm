@@ -26,12 +26,12 @@ Values are rounded for display; the JSON index keeps the original numbers.
 | Normal short ladder | 50 | 60 | 3,000 / 3,000 | 22.37 | 28.84 | +0.003040 | PASS |
 | Normal short ladder | 100 | 60 | 6,000 / 6,000 | 21.81 | 25.71 | +0.001411 | PASS |
 | Normal short ladder | 200 | 60 | 12,000 / 12,000 | 24.40 | 34.84 | -0.006730 | PASS |
-| Normal short ladder | 500 | 60 | 30,000 / 30,000 | 69.37 | 103.80 | +0.068335 | FAIL: growth |
-| SQL-cost repeat 1 | 500 | 60 | 30,000 / 30,000 | 75.23 | 117.84 | +0.070506 | FAIL: growth |
-| SQL-cost repeat 2 | 500 | 60 | 30,000 / 30,000 | 79.61 | 116.79 | +0.105515 | FAIL: growth |
+| Normal short ladder | 500 | 60 | 30,000 / 30,000 | 69.37 | 103.80 | +0.068335 | Growth limit exceeded |
+| SQL-cost repeat 1 | 500 | 60 | 30,000 / 30,000 | 75.23 | 117.84 | +0.070506 | Growth limit exceeded |
+| SQL-cost repeat 2 | 500 | 60 | 30,000 / 30,000 | 79.61 | 116.79 | +0.105515 | Growth limit exceeded |
 | SQL-cost repeat 3 | 500 | 60 | 30,000 / 30,000 | 63.84 | 94.60 | -0.075391 | PASS: diagnostic |
-| Standard storage, SQL sampler | 500 | 600 | 300,000 / 300,000 | 79.45 | 116.55 | +0.012308 | FAIL: growth |
-| Explicit PostgreSQL data volume, SQL sampler | 500 | 600 | 300,000 / 300,000 | 87.18 | 139.12 | +0.012879 | FAIL: growth |
+| Standard storage, SQL sampler | 500 | 600 | 300,000 / 300,000 | 79.45 | 116.55 | +0.012308 | Growth limit exceeded |
+| Explicit PostgreSQL data volume, SQL sampler | 500 | 600 | 300,000 / 300,000 | 87.18 | 139.12 | +0.012879 | Growth limit exceeded |
 
 The normal runner stopped after short 500 failed. **No ten-minute 50, 100, or
 200 RPS qualification stage ran on this image.** The later long 500 runs used
