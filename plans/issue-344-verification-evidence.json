@@ -103,6 +103,58 @@
       "total": 6320
     }
   },
+  "review_loop_round_1": {
+    "date": "2026-10-07",
+    "reviewed_revision": "d4c4b79c42a36f7e3e640b4c89a8cee44637c62c",
+    "finding": {
+      "priority": "P2",
+      "description": "The application CI job exceeded its 20-minute deadline after passing all 1588 tests, on both the initial run and retry.",
+      "ci_run": "https://github.com/deltawi/deltallm/actions/runs/37651123583",
+      "initial_pytest_seconds": 1161.25,
+      "retry_pytest_seconds": 1157.89
+    },
+    "fix": "Use two isolated pytest-xdist worker processes for the exact app lane in GitHub Actions. Preserve per-test application fixtures, explicit worker settings, serial local and collection defaults, other dependency lanes, existing deadlines, and all required gates.",
+    "focused_policy_and_process_tests": {
+      "passed": 35,
+      "each_selected_test_runs_once": true,
+      "both_workers_execute_tests": true,
+      "failure_reaches_controller": true,
+      "explicit_serial_execution_preserved": true
+    },
+    "hermetic": {
+      "passed": 4109,
+      "skipped": 3,
+      "seconds": 41.93,
+      "log": ".local/issue-344/review-loop-hermetic.log"
+    },
+    "app": {
+      "command": "GITHUB_ACTIONS=true uv run --no-sync pytest -q -m app --durations=25 --durations-min=0.5",
+      "passed_in_sandbox": 1578,
+      "sandbox_loopback_bind_failures": 10,
+      "seconds": 241.87,
+      "permitted_network_rerun_passed": 10,
+      "unique_application_tests_passed": 1588,
+      "log": ".local/issue-344/review-loop-app.log",
+      "network_log": ".local/issue-344/review-loop-wire.log",
+      "note": "All ten failures were denied disposable loopback server sockets. The exact ten network tests then passed with permitted sockets and two workers. No assertion was changed."
+    },
+    "test_collection": {
+      "hermetic": 4112,
+      "app": 1588,
+      "postgres": 457,
+      "redis": 102,
+      "helm": 80,
+      "total": 6339
+    },
+    "other_checks": [
+      "Ruff passed for all src and tests; formatting passed for both new Python modules.",
+      "Full collection and strict dependency-lane classification passed.",
+      "The CI workflow and aggregate test dependencies were reviewed and retained. No workflow, migration, production setting, or timeout was changed.",
+      "The lockfile changes add only pytest-xdist and execnet as development dependencies.",
+      "git diff --check passed."
+    ],
+    "temporary_fix_plan_deleted": true
+  },
   "test_lanes": {
     "hermetic": {
       "passed": 4072,

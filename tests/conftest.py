@@ -44,7 +44,7 @@ from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 
 
-pytest_plugins = ("tests.dependency_lanes",)
+pytest_plugins = ("tests.dependency_lanes", "tests.app_lane_workers")
 
 
 class NoopBudgetService:
