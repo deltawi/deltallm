@@ -22,6 +22,7 @@ from src.auth.sso_identity import (
 )
 from src.db.platform_accounts import ensure_platform_account
 from src.db.platform_sessions import PlatformSessionRepository
+from src.db.platform_passwords import PlatformPasswordRepository
 from src.db.platform_memberships import (
     lock_sso_default_team,
     seed_organization_membership,
@@ -30,6 +31,7 @@ from src.db.platform_memberships import (
 from src.services.organization_mutation_policy import OrganizationMutationPolicy
 from src.services.sso_account_service import SSOAccountService
 from src.services.platform_session_service import PlatformSessionService
+from src.services.platform_password_change import PlatformPasswordChangeService
 from src.models.platform_auth import PlatformAuthContext
 
 
@@ -392,35 +394,26 @@ class PlatformIdentityService:
         )
 
     async def change_password(
-        self, account_id: str, new_password: str, current_password: str | None = None
+        self,
+        account_id: str,
+        new_password: str,
+        current_password: str | None = None,
+        *,
+        require_existing_password: bool = False,
     ) -> bool:
         if self.db is None:
             return False
         self.validate_password_policy(new_password)
-        rows = await self.db.query_raw(
-            "SELECT password_hash FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
-            account_id,
+        return await PlatformPasswordChangeService(
+            PlatformPasswordRepository(self.db),
+            hash_password=self._hash_password,
+            verify_password=self._verify_password,
+        ).change(
+            account_id=account_id,
+            new_password=new_password,
+            current_password=current_password,
+            require_existing_password=require_existing_password,
         )
-        if not rows:
-            return False
-
-        existing_hash = rows[0].get("password_hash")
-        if isinstance(existing_hash, str) and existing_hash:
-            if not current_password or not self._verify_password(current_password, existing_hash):
-                return False
-
-        await self.db.execute_raw(
-            """
-            UPDATE deltallm_platformaccount
-            SET password_hash = $1,
-                force_password_change = false,
-                updated_at = NOW()
-            WHERE account_id = $2
-            """,
-            self._hash_password(new_password),
-            account_id,
-        )
-        return True
 
     async def get_account_by_email(self, email: str) -> dict[str, Any] | None:
         if self.db is None:

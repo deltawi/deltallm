@@ -7,6 +7,7 @@ from starlette.requests import Request
 import pytest
 
 from src.api.admin.endpoints.common import get_auth_scope
+from src.api.admin.endpoints.teams import _require_team_access
 from src.auth.external_client import ExternalClientResolver
 from src.auth.external_config import ExternalAuthSettings
 from src.auth.external_policy import CUSTOMER_PERMISSION_CEILING
@@ -109,6 +110,53 @@ def test_customer_permission_cannot_cross_registered_workspace(permission):
     scope = get_auth_scope(request(context), required_permission=permission)
     assert set(scope.org_ids) <= {"bound-org"} and set(scope.team_ids) <= {"bound-team"}
     assert scope.external_workspace == context.external_workspace
+
+
+class TeamLookup:
+    def __init__(self):
+        self.calls = []
+
+    async def query_raw(self, query, *params):
+        self.calls.append((query, params))
+        return [{"team_id": params[0], "organization_id": "bound-org"}]
+
+
+@pytest.mark.parametrize(
+    "org_role,team_role",
+    [
+        ("org_owner", "team_developer"),
+        ("org_member", "team_admin"),
+    ],
+)
+async def test_team_write_helper_does_not_restore_customer_administrator_permissions(
+    org_role, team_role
+):
+    context = customer().model_copy(
+        update={
+            "role": "org_user",
+            "organization_memberships": [{"organization_id": "bound-org", "role": org_role}],
+            "team_memberships": [{"team_id": "bound-team", "role": team_role}],
+        }
+    )
+    incoming = request(context)
+    database = TeamLookup()
+    with pytest.raises(HTTPException) as denied:
+        await _require_team_access(
+            incoming, get_auth_scope(incoming), database, "bound-team", write=True
+        )
+    assert denied.value.status_code == 403 and database.calls == []
+
+
+async def test_team_read_helper_does_not_disclose_foreign_team_existence():
+    context = customer()
+    incoming = request(context)
+    database = TeamLookup()
+    with pytest.raises(HTTPException) as denied:
+        await _require_team_access(incoming, get_auth_scope(incoming), database, "other-team")
+    assert denied.value.status_code == 404 and database.calls == []
+    assert await _require_team_access(
+        incoming, get_auth_scope(incoming), database, "bound-team"
+    ) == {"team_id": "bound-team", "organization_id": "bound-org"}
 
 
 @pytest.mark.asyncio

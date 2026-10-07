@@ -19,6 +19,7 @@ from src.middleware.platform_auth import (
     SESSION_COOKIE_NAME,
     get_configured_master_key,
     get_platform_auth_context,
+    requires_mfa_verification,
 )
 from src.models.errors import RateLimitError
 from src.auth.roles import PlatformRole, TeamRole
@@ -924,6 +925,8 @@ async def internal_change_password(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
             )
+        if context.external_workspace is not None and requires_mfa_verification(context):
+            raise HTTPException(status_code=403, detail="MFA verification required")
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
@@ -939,6 +942,7 @@ async def internal_change_password(
             account_id=context.account_id,
             current_password=payload.current_password,
             new_password=payload.new_password,
+            require_existing_password=context.external_workspace is not None,
         )
         if not ok:
             raise HTTPException(

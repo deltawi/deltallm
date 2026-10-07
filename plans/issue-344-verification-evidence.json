@@ -6,6 +6,41 @@
   "protocol": "external_customer_v1",
   "external_migration_count": 7,
   "qualification_scope": "Local gateway verification; production deployment and Replit Console integration not certified.",
+  "security_review_fixes": {
+    "date": "2026-10-07",
+    "reviewed_revision": "61c38a3a462f7eab2bd958fd5ce1149d5deb8020",
+    "scope": [
+      "Deny local password creation from external sessions; require current password proof and linked MFA for an existing password change.",
+      "Use shared scoped permissions for all team reads and mutations.",
+      "Restrict both team collection routes to the exact bound team; deny organization-wide member directories to external sessions.",
+      "Preserve ordinary operator access and reject a password update if the verified hash changed."
+    ],
+    "hermetic": {
+      "command": "uv run --no-sync pytest -q -m hermetic --durations=25 --durations-min=0.5",
+      "passed": 4087,
+      "skipped": 3
+    },
+    "app": {
+      "command": "uv run --no-sync pytest -q -m app --durations=25 --durations-min=0.5",
+      "passed": 1587,
+      "note": "The sandboxed full lane passed 1577 tests. Its 10 failures were loopback bind denials. All 10 passed on a permitted rerun of the two realtime wire tests and the parameterized HTTP stream-close test."
+    },
+    "postgres": {
+      "command": "uv run --no-sync pytest -q -m postgres --durations=25 --durations-min=0.5",
+      "passed": 425,
+      "skipped": 23,
+      "note": "Disposable PostgreSQL 15 with all migrations and UTC. Redis was not configured. Skips are not passes. Includes 15 directory, password, operator-access, and concurrent-password regressions."
+    },
+    "other_checks": [
+      "uv run --no-sync ruff check src tests",
+      "uv run --no-sync ruff format --check on all 13 touched Python paths",
+      "uv run --no-sync pytest -q tests/docs/test_generated_references.py tests/test_external_customer_scope.py tests/services/test_platform_password_change.py tests/services/test_identity_structure.py: 47 passed",
+      "uv run --no-sync python scripts/docs/export_openapi.py --check: current",
+      "uv run --no-sync mkdocs build --strict: passed",
+      "uv run --no-sync pytest --collect-only -qq --dependency-lane-report: 6307 tests",
+      "git diff --check: passed"
+    ]
+  },
   "test_lanes": {
     "hermetic": {
       "passed": 4072,

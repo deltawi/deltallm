@@ -15,6 +15,9 @@ ROOT = Path(__file__).parents[2] / "src"
         "services/platform_session_service.py",
         "services/sso_account_service.py",
         "auth/sso_identity.py",
+        "db/platform_passwords.py",
+        "services/platform_password_change.py",
+        "db/team_directory.py",
     ],
 )
 def test_session_and_account_boundaries_have_one_bounded_owner(module: str) -> None:

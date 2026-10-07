@@ -57,6 +57,10 @@ A removed membership stays removed. Further sign-ins do not reset roles, update 
 
 The session permits work in its bound organization and team. It can create private credentials and models, share eligible assets within that workspace, view its own usage, and manage its own keys under the current team self-service policy. It cannot create public grants, change budgets or owners, rotate keys, or administer other customers.
 
+Team lists and detail reads return only the registered team, including when other teams use the same organization. Organization-wide member lists and member searches require an operator session. Stored administrator membership roles do not override the customer permission ceiling.
+
+An external session cannot create a local gateway password. A linked account with an existing local password can change it only after gateway MFA verification, when required, and proof of the current password. A password change must not create an independent login method for a new Console customer.
+
 The browser UI uses `auth_mode=session`. `/auth/me` adds `session_source=external_customer`, `workspace`, and `expires_at`. A customer session plus any master credential is denied. The Console UI has no master-login fallback.
 
 The Playground requires an active API key owned by the customer and assigned to the exact bound runtime user and team. The Console validates the choice with `POST /auth/external/inference-key`, stores the raw key encrypted, and sends normal API-key inference requests. A gateway browser session does not authorize inference. See the [Console connection contract](../guides/console-gateway-connection.md).

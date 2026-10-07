@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import OrganizationRole, Permission, validate_organization_role
+from src.api.admin.auth_scope import require_organization_directory_access
 from src.audit.actions import AuditAction
 from src.services.asset_binding_mirror import (
     callable_catalog,
@@ -41,6 +42,7 @@ from src.db.organization_admin import (
     OrganizationPersistenceValues,
 )
 from src.db.route_groups import RouteGroupRepository
+from src.db.team_directory import TeamDirectoryRepository
 from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
 from src.middleware.admin import require_admin_permission
 from src.services.asset_visibility_preview import (
@@ -1941,7 +1943,16 @@ async def update_organization(
     "/ui/api/organizations/{organization_id}/members",
     dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
 )
-async def list_organization_members(request: Request, organization_id: str) -> list[dict[str, Any]]:
+async def list_organization_members(
+    request: Request,
+    organization_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_READ
+    )
+    require_organization_directory_access(scope, organization_id)
     db = db_or_503(request)
     rows = await db.query_raw(
         """
@@ -1990,11 +2001,8 @@ async def list_organization_member_candidates(
     scope = get_auth_scope(
         request, authorization, x_master_key, required_permission=Permission.ORG_READ
     )
+    require_organization_directory_access(scope, organization_id)
     db = db_or_503(request)
-    if not scope.is_platform_admin and organization_id not in scope.org_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
-        )
 
     # Privacy-by-default: do not return broad account listings.
     # Callers must provide an exact user identifier (case-insensitive).
@@ -2191,16 +2199,23 @@ async def remove_organization_member(
     "/ui/api/organizations/{organization_id}/teams",
     dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
 )
-async def list_organization_teams(request: Request, organization_id: str) -> list[dict[str, Any]]:
+async def list_organization_teams(
+    request: Request,
+    organization_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_READ
+    )
+    if not scope.is_platform_admin and organization_id not in scope.org_ids:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    workspace = scope.external_workspace
+    if workspace is not None and Permission.TEAM_READ not in scope.effective_permissions:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     db = db_or_503(request)
-    rows = await db.query_raw(
-        """
-        SELECT t.team_id, t.team_alias, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.blocked, t.created_at, t.updated_at,
-               (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count
-        FROM deltallm_teamtable t
-        WHERE t.organization_id = $1
-        ORDER BY t.created_at DESC
-        """,
+    rows = await TeamDirectoryRepository(db).list_for_organization(
         organization_id,
+        bound_team_id=workspace.team_id if workspace is not None else None,
     )
     return [to_json_value(dict(row)) for row in rows]

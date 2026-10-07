@@ -37,6 +37,13 @@ class AuthScope:
     external_workspace: ExternalWorkspaceContext | None = None
 
 
+def require_organization_directory_access(scope: AuthScope, organization_id: str) -> None:
+    if scope.external_workspace is not None or (
+        not scope.is_platform_admin and organization_id not in scope.org_ids
+    ):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+
 def get_auth_scope(
     request: Request,
     authorization: str | None = None,
