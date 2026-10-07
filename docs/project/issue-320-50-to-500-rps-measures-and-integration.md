@@ -4,9 +4,9 @@ Status: source integration record; not a clean-main qualification
 
 This record describes the earlier experimental branch and its 2026-10-04 main
 comparison. Its 500 RPS results, latency limits, and drain limits do not apply to
-the clean replay. Read [the clean integration plan](issue-320-main-integration-plan.md)
-and [the retained-measure audit](issue-320-retained-measure-audit.md) for current
-implementation and verification status.
+the clean replay. Read [the latest RPS report](issue-320-rps-report.md) for current
+verification results and [the accounting deployment guide](../deployment/accounting-v2.md)
+for the installed architecture and migration procedure.
 
 This document records the concrete measures that moved the issue 320 candidate from
 the first reliable 50 RPS result to the accepted 500 RPS qualification. It also records

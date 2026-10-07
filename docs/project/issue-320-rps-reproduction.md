@@ -10,15 +10,18 @@ The review bundle is `artifacts/issue320-evidence-20261007/`. It contains:
 - `all-runs.json` and `all-runs.md`: all 87 saved stage decisions.
 - `evidence/`: the four latest load campaigns, the accepted image records,
   and the final database verification attempts.
+- `history-reports/`: the original reports and campaign manifests for all
+  87 saved stages. Raw streams are retained only for the latest load campaigns.
 - `source-history.bundle`: complete Git history through the tested checkpoint,
   plus the locally known `feature/issue-320-concurrency` reference.
 - `tools/export_qualification_evidence.py`: standalone export and checksum tool.
 - `checksums.json`: SHA-256 identities for the review bundle files.
 
-The full history archive keeps every original file, including setup failures,
-command logs, and private diagnostic prototypes. Keep that archive for audits.
 The compact Git-tracked indexes contain results and checksums, not raw payloads
 or host command transcripts. Review local diagnostics before external publication.
+The old scratch archive and host-specific shell wrappers were removed from this
+package. They can be recovered from local Trash. They are not needed to reproduce
+the latest tests with the commands below.
 
 Verify the review bundle without starting Docker or Kubernetes:
 
@@ -28,12 +31,7 @@ python3 artifacts/issue320-evidence-20261007/tools/export_qualification_evidence
 git bundle verify artifacts/issue320-evidence-20261007/source-history.bundle
 ```
 
-The exporter needs Python 3.11 or newer. To check the full archive, use its
-separate checksum index:
-
-```sh
-python3 -c 'import json; from pathlib import Path; from tests.performance.export_qualification_evidence import verify_files; verify_files(Path("artifacts/archive/issue320-qualification-history-20261007"), json.loads(Path("artifacts/archive/issue320-qualification-history-20261007-checksums.json").read_text()))'
-```
+The exporter needs Python 3.11 or newer.
 
 ## Prepare a clean test checkout
 
@@ -90,10 +88,9 @@ uv run --frozen python scripts/check_lifecycle_image.py \
 
 Use a fresh output path for each attempt. A source rebuild can have a different
 image digest because external build inputs can change. Record the new identity;
-do not claim that a rebuild is the original tested image. The old
-`host-isolation/run.sh`, `build.sh`, and verification shell wrappers contain
-historical host paths or temporary relay settings. Keep them as evidence,
-but do not run them unchanged.
+do not claim that a rebuild is the original tested image. Use the commands in
+this guide. The removed host shell wrappers relied on old machine paths and
+temporary relay settings.
 
 ## Run the normal qualification
 

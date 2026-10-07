@@ -13,8 +13,7 @@ The report covers all 87 saved gateway stages in this clean integration worktree
 The [complete stage index](evidence/issue-320-20261007/all-runs.md) includes every
 pass and failure. Its [JSON file](evidence/issue-320-20261007/all-runs.json) records
 source and image identities, duration, main gate decisions, and original checksums.
-Setup failures with no arrival stage are in the local history archive, not counted
-as RPS results.
+Setup failures with no arrival stage are not counted as RPS results.
 
 ## Latest fixed-image results
 
@@ -141,8 +140,9 @@ contract, then run the normal unchanged-image short ladder and all four
 ten-minute stages. Do not bypass the existing stop rule.
 
 Before the future PR, inspect the current feature-branch base and choose a safe
-integration method. The locally recorded target is `5be17a63`; it has 78 commits
-not in this worktree, which has 109 commits not in that target. This report
+integration method. At source checkpoint `914693f1`, the locally recorded target
+`5be17a63` had 78 commits absent from that checkpoint. The checkpoint had 109
+commits absent from that target. This report
 does not establish compatibility with the current remote branch. No rebase,
 merge, push, or PR creation was done for this report.
 
@@ -152,16 +152,19 @@ The [reproduction guide](issue-320-rps-reproduction.md) gives the commands,
 pins, and diagnostic differences.
 
 - Latest review bundle: `artifacts/issue320-evidence-20261007/`.
-- Full recoverable history:
-  `artifacts/archive/issue320-qualification-history-20261007/`.
-- Full history checksum index:
-  `artifacts/archive/issue320-qualification-history-20261007-checksums.json`.
+- Original records for all 87 stages:
+  `artifacts/issue320-evidence-20261007/history-reports/`.
 - Versioned file identities:
   [bundle manifest](evidence/issue-320-20261007/bundle-manifest.json).
 
-The original `artifacts/qualification/` directory was moved into the history
-archive. Historical document paths under that directory now map to the same
-relative path in the archive. No original evidence, failed prototype, product
-test, migration, worktree, or image was deleted. The review bundle excludes
-command scratch files, bytecode, and duplicate generator streams; their originals
-remain in the archive. Large raw evidence stays local and ignored by Git.
+The old diagnostic archive and nine host-specific shell wrappers were removed
+from the worktree and moved to local Trash. Five obsolete progress plans were
+removed; Git history keeps their previous content. The concrete improvement
+list, current design and deployment guides, and regression fixtures remain.
+
+The review bundle keeps all 87 original stage reports with their checksums and
+the raw samples for the latest nine stages. Older raw streams, command scratch
+files, and failed one-off prototypes are no longer part of the upgrade package.
+The original archive can be recovered from Trash if those older files are needed.
+No product code, regression test, migration, worktree, or image was removed.
+Large raw evidence stays local and ignored by Git.
