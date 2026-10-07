@@ -11,7 +11,6 @@ from src.db.external_auth_records import (
     ExternalIntegrationRecord,
     ExternalSubjectRecord,
 )
-from src.db.external_auth_sessions import ExternalSessionRepository
 from src.db.external_auth_subjects import ExternalSubjectRepository
 from src.db.external_auth_transactions import ExternalAuthTransactions
 from src.models.external_auth import ExternalVersionRequest
@@ -51,8 +50,6 @@ class ExternalAuthAdministration:
             )
             if updated is None:
                 raise ExternalAuthError("identity_binding_conflict", status_code=409)
-            if not enabled:
-                await ExternalSessionRepository(db).revoke_scope(integration_id=integration_id)
             await self.audit.write(
                 db,
                 ExternalAuditEvent(
@@ -129,10 +126,6 @@ class ExternalAuthAdministration:
             )
             if result is None:
                 raise ExternalAuthError("identity_binding_conflict", status_code=409)
-            if not active:
-                await ExternalSessionRepository(db).revoke_scope(
-                    integration_id=binding.integration_id, binding_id=binding_id
-                )
             action = (
                 AuditAction.EXTERNAL_AUTH_BINDING_RESUME
                 if active

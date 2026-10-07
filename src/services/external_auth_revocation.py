@@ -37,9 +37,6 @@ class ExternalAuthRevocation:
             sessions = ExternalSessionRepository(db)
             if assertion.claims.purpose == ExternalPurpose.SUSPEND:
                 await subjects.set_state(subject.subject_id, state="suspended")
-                await sessions.revoke_scope(
-                    integration_id=assertion.integration_id, subject_id=subject.subject_id
-                )
                 action = AuditAction.EXTERNAL_AUTH_SUBJECT_SUSPEND
             else:
                 auth_time = datetime.fromtimestamp(assertion.claims.auth_time, UTC)

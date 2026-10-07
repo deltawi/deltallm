@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hmac
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from fastapi import HTTPException, Request
 
@@ -77,9 +77,11 @@ def get_auth_scope(
         context.role, Permission.PLATFORM_ADMIN
     ):
         return AuthScope(is_platform_admin=True, account_id=context.account_id)
-    return _context_scope(
-        context, [required_permission] if required_permission else any_permission or []
-    )
+    required = [required_permission] if required_permission else any_permission or []
+    scope = _context_scope(context, required)
+    if context.external_workspace is not None and required and not scope.granted_permissions:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return scope
 
 
 def _permission_maps(
@@ -108,16 +110,32 @@ def _permission_maps(
 def _context_scope(context: PlatformAuthContext, required: list[str]) -> AuthScope:
     organizations, teams = _permission_maps(context)
     effective = set().union(*organizations.values(), *teams.values())
-    granted = effective & set(required)
-    return AuthScope(
-        org_ids=[
-            key for key, values in organizations.items() if not required or values & set(required)
-        ],
-        team_ids=[key for key, values in teams.items() if not required or values & set(required)],
+    scope = AuthScope(
         org_permissions_by_id=organizations,
         team_permissions_by_id=teams,
-        granted_permissions=granted,
         effective_permissions=effective,
         account_id=context.account_id,
         external_workspace=context.external_workspace,
+    )
+    return scope_for_permissions(scope, required)
+
+
+def scope_for_permissions(scope: AuthScope, permissions: list[str]) -> AuthScope:
+    """Project an authenticated scope for capability or asset-policy checks, not authorization."""
+    if scope.is_platform_admin:
+        return scope
+    required = set(permissions)
+    return replace(
+        scope,
+        org_ids=[
+            key
+            for key, values in scope.org_permissions_by_id.items()
+            if not required or values & required
+        ],
+        team_ids=[
+            key
+            for key, values in scope.team_permissions_by_id.items()
+            if not required or values & required
+        ],
+        granted_permissions=scope.effective_permissions & required,
     )

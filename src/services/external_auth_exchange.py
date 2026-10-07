@@ -199,6 +199,8 @@ class ExternalAuthExchange:
             mfa_verified=not state.mfa_enabled,
             overlap_seconds=self.settings.previous_overlap_seconds,
         )
+        if issued is None:
+            raise ExternalAuthError("external_reauthentication_required")
         return ExternalExchangeResponse(
             session_token=token,
             session_generation=issued.generation,

@@ -59,6 +59,8 @@ The session permits work in its bound organization and team. It can create priva
 
 Team lists and detail reads return only the registered team, including when other teams use the same organization. Organization-wide member lists and member searches require an operator session. Stored administrator membership roles do not override the customer permission ceiling.
 
+Batch administration and batch create-session routes require an operator session. External customer sessions cannot read batch records, prompts, responses, costs, or scheduler details, or run batch maintenance actions. A scope request with a required permission fails with HTTP 403 when the customer has no live grant for that permission.
+
 An external session cannot create a local gateway password. A linked account with an existing local password can change it only after gateway MFA verification, when required, and proof of the current password. A password change must not create an independent login method for a new Console customer.
 
 The browser UI uses `auth_mode=session`. `/auth/me` adds `session_source=external_customer`, `workspace`, and `expires_at`. A customer session plus any master credential is denied. The Console UI has no master-login fallback.
@@ -66,6 +68,8 @@ The browser UI uses `auth_mode=session`. `/auth/me` adds `session_source=externa
 The Playground requires an active API key owned by the customer and assigned to the exact bound runtime user and team. The Console validates the choice with `POST /auth/external/inference-key`, stores the raw key encrypted, and sends normal API-key inference requests. A gateway browser session does not authorize inference. See the [Console connection contract](../guides/console-gateway-connection.md).
 
 Logout closes the external parent and all child sessions. It does not revoke application keys. Subject or binding suspension also leaves application keys unchanged. Use explicit key revocation or existing inference controls when those must stop.
+
+Integration disable, binding suspension, and subject suspension commit their state, epoch, and required audit in one short transaction. They do not scan session history. Session validation checks current epochs. Renewal also checks the epochs of the parent's last issued child, including an expired child. This durable record remains for seven days, longer than the maximum twelve-hour parent lifetime. A missing or stale record denies renewal. Resume permits a new parent; it cannot reopen an old parent. The existing cleanup worker removes historical records under the retention policy.
 
 Key removal commits deletion, required audit, and an exact-hash invalidation record together. Its response contains `enforcement`, `invalidation_id`, and `maximum_enforcement_delay_seconds`. `pending` means the durable worker must finish cache enforcement; the configured upper bound is 61 seconds with a 60-second cache lifetime. The UI displays that pending state and polls `GET /ui/api/key-revocations/{invalidation_id}`. The endpoint permits only the requesting account or an authorized operator and returns no key hash.
 

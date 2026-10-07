@@ -41,6 +41,68 @@
       "git diff --check: passed"
     ]
   },
+  "security_review_fixes_round_2": {
+    "date": "2026-10-07",
+    "reviewed_revision": "931fdd9a25df811f0e0ef67837cb85c323766d07",
+    "scope": [
+      "Reject required-permission requests when an external customer has no live grant.",
+      "Deny every batch administration and batch create-session route to external customer sessions before its handler runs. Preserve operator access.",
+      "Replace scope-wide historical session rewrites with atomic state, epoch, and required audit changes. Deny old children and old-parent renewal after resume.",
+      "Use the last issued child generation as the durable parent epoch record. Preserve renewal after child expiry; deny a missing epoch record.",
+      "Preserve customer private MCP asset access through optional permission projections that do not authorize a route."
+    ],
+    "hermetic": {
+      "command": "uv run --no-sync pytest -q -m hermetic --durations=25 --durations-min=0.5",
+      "passed": 4090,
+      "skipped": 3,
+      "log": ".local/issue-344/fix-round2-final-hermetic.log"
+    },
+    "app": {
+      "command": "uv run --no-sync pytest -q -m app --durations=25 --durations-min=0.5",
+      "passed": 1587,
+      "additional_new_regressions_passed": 1,
+      "log": ".local/issue-344/fix-round2-app.log",
+      "note": "The complete lane passed with permitted loopback test servers. The final optional MCP projection change was then checked against every UI MCP test and the new external customer private CRUD case: 49 scope/MCP tests passed."
+    },
+    "postgres": {
+      "command": "uv run --no-sync pytest -q -m postgres --durations=25 --durations-min=0.5",
+      "passed": 433,
+      "skipped": 23,
+      "additional_new_regressions_passed": 1,
+      "log": ".local/issue-344/fix-round2-postgres.log",
+      "note": "Disposable PostgreSQL 15 with all migrations and UTC. Redis was not configured. After the complete lane, all nine batch/epoch regressions passed again, including the added index-plan check. Skips are not passes."
+    },
+    "cardinality_and_atomicity": {
+      "retained_parent_rows": 30000,
+      "retained_child_rows_for_index_plan": 30000,
+      "integration_binding_subject_revocation_passed": true,
+      "history_not_rewritten": true,
+      "separate_client_denial_before_and_after_resume": true,
+      "old_parent_denied_and_new_parent_permitted": true,
+      "expired_child_can_pin_live_parent": true,
+      "missing_epoch_record_denies_renewal": true,
+      "required_audit_failure_rolls_back_disable": true,
+      "existing_parent_generation_index_used": true,
+      "new_dependency_round_trips": 0,
+      "statement_timeout_ms": 250,
+      "transaction_timeout_ms": 750
+    },
+    "other_checks": [
+      "uv run --no-sync ruff check src tests: passed",
+      "ruff format --check: all 10 new or previously formatted touched files passed. The three existing batch/MCP route modules fail full-file formatting at both the reviewed revision and the current tree; unrelated formatting was retained.",
+      "uv run --no-sync python -m scripts.docs.export_openapi --check: current, 245 paths and 314 operations",
+      "uv run --no-sync mkdocs build --strict: passed",
+      "git diff --check: passed; no migration changed"
+    ],
+    "test_collection": {
+      "hermetic": 4093,
+      "app": 1588,
+      "postgres": 457,
+      "redis": 102,
+      "helm": 80,
+      "total": 6320
+    }
+  },
   "test_lanes": {
     "hermetic": {
       "passed": 4072,

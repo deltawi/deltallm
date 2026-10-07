@@ -7,6 +7,7 @@ from starlette.requests import Request
 import pytest
 
 from src.api.admin.endpoints.common import get_auth_scope
+from src.api.admin.auth_scope import scope_for_permissions
 from src.api.admin.endpoints.teams import _require_team_access
 from src.auth.external_client import ExternalClientResolver
 from src.auth.external_config import ExternalAuthSettings
@@ -96,9 +97,11 @@ def test_every_scope_builder_obeys_customer_ceiling(permission):
     context = customer()
     assert not has_scoped_permission(context, permission)
     assert permission not in effective_permissions_for_context(context)
-    scope = get_auth_scope(request(context), required_permission=permission)
+    with pytest.raises(HTTPException) as denied:
+        get_auth_scope(request(context), required_permission=permission)
+    assert denied.value.status_code == 403
+    scope = get_auth_scope(request(context))
     assert not scope.is_platform_admin and permission not in scope.effective_permissions
-    assert not scope.granted_permissions and not scope.org_ids and not scope.team_ids
 
 
 @pytest.mark.parametrize("permission", list(CUSTOMER_PERMISSION_CEILING))
@@ -110,6 +113,39 @@ def test_customer_permission_cannot_cross_registered_workspace(permission):
     scope = get_auth_scope(request(context), required_permission=permission)
     assert set(scope.org_ids) <= {"bound-org"} and set(scope.team_ids) <= {"bound-team"}
     assert scope.external_workspace == context.external_workspace
+
+
+def test_customer_scope_requires_a_live_grant_and_checks_any_permission():
+    incoming = request(customer())
+    with pytest.raises(HTTPException) as denied:
+        get_auth_scope(incoming, any_permission=[Permission.PLATFORM_ADMIN, Permission.KEY_UPDATE])
+    assert denied.value.status_code == 403
+    scope = get_auth_scope(
+        incoming, any_permission=[Permission.PLATFORM_ADMIN, Permission.TEAM_READ]
+    )
+    assert scope.granted_permissions == {Permission.TEAM_READ}
+    empty = request(customer().model_copy(update={"permissions": []}))
+    with pytest.raises(HTTPException) as missing:
+        get_auth_scope(empty, required_permission=Permission.KEY_READ)
+    assert missing.value.status_code == 403
+
+
+def test_operator_scope_keeps_empty_filter_for_missing_permissions():
+    context = customer().model_copy(update={"role": "org_user", "external_workspace": None})
+    incoming = request(context)
+    incoming.state.master_session_status = MasterSessionStatus.MISSING
+    scope = get_auth_scope(incoming, required_permission=Permission.PLATFORM_ADMIN)
+    assert not scope.granted_permissions and not scope.org_ids and not scope.team_ids
+
+
+def test_optional_capability_projection_cannot_grant_a_missing_permission():
+    incoming = request(customer())
+    scope = get_auth_scope(incoming)
+    manage = scope_for_permissions(scope, [Permission.ORG_UPDATE])
+    assert not manage.is_platform_admin and not manage.granted_permissions
+    assert not manage.org_ids and not manage.team_ids
+    read = scope_for_permissions(scope, [Permission.TEAM_READ])
+    assert read == get_auth_scope(incoming, required_permission=Permission.TEAM_READ)
 
 
 class TeamLookup:

@@ -77,7 +77,7 @@ class ExternalSessionRepository:
         expires_at: datetime,
         mfa_verified: bool,
         overlap_seconds: int,
-    ) -> ExternalIssuedSession:
+    ) -> ExternalIssuedSession | None:
         rows = await self.db.query_raw(
             """
             WITH mfa_proof AS MATERIALIZED (
@@ -90,8 +90,14 @@ class ExternalSessionRepository:
                   AND previous.external_mfa_secret_digest = encode(digest(account.mfa_secret, 'sha256'), 'hex')
                 ORDER BY previous.external_generation DESC LIMIT 1
             ), advanced AS (
-                UPDATE deltallm_externalauthparentsession SET generation = generation + 1, updated_at = NOW()
-                WHERE parent_id = $1 AND revoked_at IS NULL AND expires_at > NOW() RETURNING generation
+                UPDATE deltallm_externalauthparentsession p SET generation = generation + 1, updated_at = NOW()
+                WHERE parent_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+                  AND (p.generation = 0 OR EXISTS (
+                    SELECT 1 FROM deltallm_platformsession pin
+                    WHERE pin.external_parent_id = p.parent_id AND pin.external_generation = p.generation
+                      AND pin.account_id = $2 AND pin.external_integration_epoch = $6
+                      AND pin.external_binding_epoch = $7 AND pin.external_subject_epoch = $8
+                  )) RETURNING generation
             ), retired AS (
                 UPDATE deltallm_platformsession child SET
                     expires_at = CASE WHEN child.external_generation = advanced.generation - 1
@@ -121,7 +127,7 @@ class ExternalSessionRepository:
             overlap_seconds,
         )
         if not rows:
-            raise ValueError("External parent is revoked or expired")
+            return None
         return ExternalIssuedSession(
             int(rows[0]["external_generation"]), rows[0]["mfa_verified"] is True
         )
@@ -136,24 +142,6 @@ class ExternalSessionRepository:
             WHERE external_parent_id IN (SELECT parent_id FROM revoked)
             """,
             parent_id,
-        )
-
-    async def revoke_scope(
-        self, *, integration_id: str, binding_id: str | None = None, subject_id: str | None = None
-    ) -> None:
-        await self.db.execute_raw(
-            """
-            WITH revoked AS (
-                UPDATE deltallm_externalauthparentsession p SET revoked_at = COALESCE(p.revoked_at, NOW()), updated_at = NOW()
-                FROM deltallm_externalauthsubject s WHERE p.subject_id = s.subject_id
-                  AND p.integration_id = $1 AND ($2::text IS NULL OR s.binding_id = $2)
-                  AND ($3::text IS NULL OR s.subject_id = $3) RETURNING p.parent_id
-            ) UPDATE deltallm_platformsession SET revoked_at = COALESCE(revoked_at, NOW()), updated_at = NOW()
-            WHERE external_parent_id IN (SELECT parent_id FROM revoked)
-            """,
-            integration_id,
-            binding_id,
-            subject_id,
         )
 
     async def get_active(self, token_hash: str) -> ExternalSessionRecord | None:
