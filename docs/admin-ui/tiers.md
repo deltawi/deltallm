@@ -91,7 +91,7 @@ Example `Growth` tier model policy:
 | `gpt-4o` | Yes | 100 | 250,000 | `growth-premium-pool` |
 | `claude-opus` | No | - | - | - |
 
-The **Output TPM** field is beside RPM and TPM in the model editor and bulk limit controls. It sets provider output per completion accounting minute for each organization and model. Leave it blank to remove that tier limit. An admitted call can exceed it; new calls then wait until reset. Team and key limits can narrow the allowance. The organization preview shows the effective value and tier source. Output limits require shared Redis with fail-closed coordination and `tier_policy_missing_service_mode: fail_closed` in enforce mode. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
+The **Output TPM** field is beside RPM and TPM in the model editor and bulk limit controls. It sets provider output per completion accounting minute for each organization and model. Leave it blank to remove that tier limit. An admitted call can exceed it; new calls then wait until reset. Team and key limits can narrow the allowance. The organization preview shows the effective value and tier source. Output limits require shared Redis with fail-closed coordination and `tier_policy_missing_service_mode: fail_closed` in enforce mode. Both tier modes require a restart when their effective values change. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
 
 ### Organization Assignment
 

@@ -4,10 +4,14 @@ from uuid import uuid4
 import pytest
 
 from src.config import AppConfig, Settings
-from src.config_runtime.dynamic import DynamicConfigManager, DynamicConfigValidationError
+from src.config_runtime.dynamic import (
+    DynamicConfigManager,
+    DynamicConfigRestartRequiredError,
+    DynamicConfigValidationError,
+)
 from src.db.tiers import TierModelPolicyRecord, TierRepository
 from src.services.output_policy_configuration import validate_output_policy_configuration
-from tests.conftest import FakeRedis
+from tests.config.test_dynamic import FakeRedis
 from tests.db.tier_migration_helpers import cleanup, connect_prisma, seed_tier, seed_tier_version
 
 pytestmark = pytest.mark.postgres
@@ -22,7 +26,11 @@ async def test_active_tier_output_guards_startup_and_config_transaction(monkeypa
         tier_policy_mode=initial_mode, tier_policy_missing_service_mode="fail_closed"
     )
     manager = DynamicConfigManager(
-        db, FakeRedis(), {}, poll_interval_seconds=0, runtime_settings=settings
+        db,
+        FakeRedis(),
+        {"general_settings": {"redis_degraded_mode": "fail_closed"}},
+        poll_interval_seconds=0,
+        runtime_settings=settings,
     )
     try:
         await seed_tier(db, tier_id=identity, tier_key=identity)
@@ -52,7 +60,9 @@ async def test_active_tier_output_guards_startup_and_config_transaction(monkeypa
             )
         await manager.initialize()
         mutation = AsyncMock()
-        with pytest.raises(DynamicConfigValidationError, match="tier_policy_missing_service_mode"):
+        with pytest.raises(
+            DynamicConfigRestartRequiredError, match="tier_policy_missing_service_mode"
+        ):
             await manager.update_config(
                 {
                     "general_settings": {
@@ -64,6 +74,13 @@ async def test_active_tier_output_guards_startup_and_config_transaction(monkeypa
                 updated_by=identity,
                 transaction_mutation=mutation,
             )
+        if initial_mode == "enforce":
+            with pytest.raises(DynamicConfigValidationError, match="Redis"):
+                await manager.update_config(
+                    {"general_settings": {"redis_degraded_mode": "fail_open"}},
+                    updated_by=identity,
+                    transaction_mutation=mutation,
+                )
         mutation.assert_not_awaited()
         assert (
             await db.query_raw(

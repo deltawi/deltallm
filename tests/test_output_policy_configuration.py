@@ -8,7 +8,11 @@ from starlette.requests import Request
 
 from src.api.admin.output_policy import validate_tier_output_write
 from src.config import AppConfig, Settings
-from src.config_runtime.dynamic import DynamicConfigManager, DynamicConfigValidationError
+from src.config_runtime.dynamic import (
+    DynamicConfigManager,
+    DynamicConfigRestartRequiredError,
+    DynamicConfigValidationError,
+)
 from src.services.output_policy_configuration import validate_output_policy_configuration
 from src.services.tier_policy_service import TierPolicyService
 from tests.config.test_dynamic import FakeDB, FakeRedis
@@ -108,7 +112,9 @@ async def test_tier_config_rejection_precedes_persistence_and_related_mutation(
     mutation = AsyncMock()
     manager.subscribe(subscriber)
     try:
-        with pytest.raises(DynamicConfigValidationError, match="tier_policy_missing_service_mode"):
+        with pytest.raises(
+            DynamicConfigRestartRequiredError, match="tier_policy_missing_service_mode"
+        ):
             await manager.update_config(
                 {
                     "general_settings": {
@@ -121,7 +127,7 @@ async def test_tier_config_rejection_precedes_persistence_and_related_mutation(
             )
         assert db.config_value == before
         assert db.updated_by is None
-        assert db.output_reads == 1
+        assert db.output_reads == 0
         assert manager.get_config_generation() == 1
         assert redis.messages == []
         subscriber.assert_not_awaited()
@@ -130,13 +136,13 @@ async def test_tier_config_rejection_precedes_persistence_and_related_mutation(
         await manager.close()
 
 
-async def test_valid_tier_config_checks_policy_once_and_unrelated_config_does_not_read_it():
+async def test_valid_coordination_config_checks_policy_once_and_unrelated_config_does_not_read_it():
     db = OutputConfigDB(
         {
             "general_settings": {
                 "tier_policy_mode": "shadow",
                 "tier_policy_missing_service_mode": "fail_closed",
-                "redis_degraded_mode": "fail_closed",
+                "redis_degraded_mode": "fail_open",
             }
         }
     )
@@ -145,16 +151,62 @@ async def test_valid_tier_config_checks_policy_once_and_unrelated_config_does_no
     await manager.initialize()
     try:
         await manager.update_config(
-            {"general_settings": {"tier_policy_mode": "enforce"}}, updated_by="test"
+            {"general_settings": {"redis_degraded_mode": "fail_closed"}}, updated_by="test"
         )
-        assert manager.get_app_config().general_settings.tier_policy_mode == "enforce"
-        assert db.config_value["general_settings"]["tier_policy_mode"] == "enforce"
+        assert manager.get_app_config().general_settings.redis_degraded_mode == "fail_closed"
+        assert db.config_value["general_settings"]["redis_degraded_mode"] == "fail_closed"
         assert db.output_reads == 1
         await manager.update_config(
             {"general_settings": {"instance_name": "Changed"}}, updated_by="test"
         )
         assert manager.get_app_config().general_settings.instance_name == "Changed"
         assert db.output_reads == 1
+    finally:
+        await manager.close()
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"redis_degraded_mode": "fail_open"},
+        {"enable_jwt_auth": True},
+        {"custom_auth": "custom.handler"},
+    ],
+)
+@pytest.mark.parametrize("related_mutation", [False, True])
+async def test_output_contract_rejection_precedes_persistence_and_related_mutation(
+    update, related_mutation
+):
+    db = OutputConfigDB(
+        {
+            "general_settings": {
+                "tier_policy_mode": "enforce",
+                "tier_policy_missing_service_mode": "fail_closed",
+                "redis_degraded_mode": "fail_closed",
+            }
+        }
+    )
+    before = deepcopy(db.config_value)
+    redis = FakeRedis()
+    manager = DynamicConfigManager(db, redis, {}, poll_interval_seconds=0)
+    await manager.initialize()
+    subscriber = AsyncMock()
+    mutation = AsyncMock()
+    manager.subscribe(subscriber)
+    try:
+        with pytest.raises(DynamicConfigValidationError):
+            await manager.update_config(
+                {"general_settings": update},
+                updated_by="test",
+                transaction_mutation=mutation if related_mutation else None,
+            )
+        assert db.config_value == before
+        assert db.updated_by is None
+        assert db.output_reads == 1
+        assert manager.get_config_generation() == 1
+        assert redis.messages == []
+        subscriber.assert_not_awaited()
+        mutation.assert_not_awaited()
     finally:
         await manager.close()
 

@@ -748,8 +748,6 @@ async def test_asgi_stream_disconnect_accounts_and_enforces_next_call(output_app
                     "total_tokens": 3 + actual,
                 }
             yield f"data: {json.dumps(chunk)}\n\n".encode()
-            if actual is not None:
-                yield b"data: [DONE]\n\n"
             await anyio.sleep_forever()
 
     body = json.dumps(
@@ -762,7 +760,7 @@ async def test_asgi_stream_disconnect_accounts_and_enforces_next_call(output_app
         if not delivered_body:
             delivered_body = True
             return {"type": "http.request", "body": body, "more_body": False}
-        await (first_sent if actual is None else accounting_started).wait()
+        await first_sent.wait()
         return {"type": "http.disconnect"}
 
     async def send(message):
@@ -792,6 +790,7 @@ async def test_asgi_stream_disconnect_accounts_and_enforces_next_call(output_app
         app.state.http_client = provider
         await asyncio.wait_for(app(scope, receive, send), 3)
         assert first_sent.is_set()
+        assert accounting_started.is_set()
         assert int(await redis.hget(bucket_key(record, environment), "used")) == (actual or 0)
         assert int(await redis.hget(bucket_key(record, environment), "unknown")) == int(
             actual is None

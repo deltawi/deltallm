@@ -42,8 +42,9 @@ class OutputStreamEvidence:
                 if index not in self.seen:
                     self.final = None
                 self.seen.add(index)
-                if not choice.get("finish_reason") and choice.get("delta"):
+                if choice.get("delta"):
                     self.final = None
+                if not choice.get("finish_reason") and choice.get("delta"):
                     self.finished.discard(index)
                 if choice.get("finish_reason"):
                     self.finished.add(index)

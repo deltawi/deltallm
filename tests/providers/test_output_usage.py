@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 import httpx
@@ -157,10 +157,10 @@ async def test_multiple_choices_count_final_aggregate_and_new_choice_invalidates
     ]
     observer = Mock()
     [line async for line in adapter.translate_stream(lines(frames), output_observer=observer)]
-    observer.assert_called_once_with(8)
+    assert observer.call_args_list == [call(3), call(None), call(8)]
     observer.reset_mock()
     [line async for line in adapter.translate_stream(lines(frames[:-1]), output_observer=observer)]
-    observer.assert_called_once_with(None)
+    assert observer.call_args_list == [call(3), call(None)]
 
 
 async def test_partial_stream_with_usage_never_reports_complete_output():
@@ -412,11 +412,12 @@ async def test_bedrock_retains_final_usage_before_downstream_delivery(has_conten
     observer.assert_called_once_with(output_count)
 
 
-async def test_more_output_after_a_terminal_usage_invalidates_that_evidence():
+@pytest.mark.parametrize("finish_reason", [None, "stop", "tool_calls"])
+async def test_more_output_after_a_terminal_usage_invalidates_that_evidence(finish_reason):
     observer = Mock()
     frames = [
         chunk(usage={"completion_tokens": 3}),
-        chunk([{"index": 0, "delta": {"content": "later"}, "finish_reason": None}]),
+        chunk([{"index": 0, "delta": {"content": "later"}, "finish_reason": finish_reason}]),
     ]
     [
         line
@@ -424,4 +425,4 @@ async def test_more_output_after_a_terminal_usage_invalidates_that_evidence():
             lines(frames), output_observer=observer
         )
     ]
-    observer.assert_called_once_with(None)
+    assert observer.call_args_list == [call(3), call(None)]

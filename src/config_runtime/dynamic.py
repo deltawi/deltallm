@@ -13,6 +13,7 @@ from src.db.output_policy import OutputPolicyDatabase
 from src.config_runtime.loader import build_app_config, deep_merge
 from src.config_runtime.secrets import SecretResolver
 from src.metrics import increment_batch_scheduler_rollback, increment_config_reload
+from src.runtime_settings import resolve_general_setting
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,10 @@ _FIELD_SET_SENSITIVE_GENERAL_SETTINGS = frozenset(
         "embeddings_batch_scheduler_shadow_mode",
     }
 )
+_STARTUP_TIER_SETTINGS = {
+    "tier_policy_mode": "disabled",
+    "tier_policy_missing_service_mode": "fail_open",
+}
 
 
 class DynamicConfigPersistenceError(RuntimeError):
@@ -419,12 +424,12 @@ class DynamicConfigManager:
         output_policy_validated: bool = False,
     ) -> bool:
         candidate = app_config or self._build_app_config(db_config)
+        if self._config_generation > 0:
+            self._reject_startup_only_changes(candidate)
         if not output_policy_validated:
             await self._validate_output_policy_config(self.db, candidate)
         previous_app_config = self._config
         new_app_config = candidate
-        if self._config_generation > 0:
-            self._reject_startup_only_changes(new_app_config)
 
         changes = self._detect_app_config_changes(previous_app_config, new_app_config)
         if forced_modified_keys:
@@ -471,8 +476,14 @@ class DynamicConfigManager:
             for field_name in _STARTUP_ONLY_GENERAL_SETTINGS
             if getattr(current, field_name) != getattr(candidate, field_name)
         )
+        changed.extend(
+            field_name
+            for field_name, default in _STARTUP_TIER_SETTINGS.items()
+            if resolve_general_setting(current, self.runtime_settings, field_name, default)
+            != resolve_general_setting(candidate, self.runtime_settings, field_name, default)
+        )
         if changed:
-            fields = ", ".join(f"general_settings.{field_name}" for field_name in changed)
+            fields = ", ".join(f"general_settings.{field_name}" for field_name in sorted(changed))
             raise DynamicConfigRestartRequiredError(
                 f"startup-only settings require a restart: {fields}"
             )

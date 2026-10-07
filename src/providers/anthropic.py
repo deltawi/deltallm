@@ -366,6 +366,12 @@ class AnthropicAdapter(ProviderAdapter):
         # Maps Anthropic content-block indexes to OpenAI tool_calls indexes.
         tool_call_indexes: dict[int, int] = {}
 
+        def invalidate_output() -> None:
+            nonlocal final_output
+            if final_output is not None and output_observer is not None:
+                final_output = None
+                output_observer(None)
+
         def role_chunk() -> str:
             out = {
                 "id": stream_id,
@@ -388,16 +394,21 @@ class AnthropicAdapter(ProviderAdapter):
             if not payload:
                 continue
             if payload == "[DONE]":
+                invalidate_output()
                 raise invalid_provider_response_error()
 
             try:
                 event = json.loads(payload)
             except (RecursionError, TypeError, ValueError) as exc:
+                invalidate_output()
                 raise invalid_provider_response_error() from exc
             if not isinstance(event, dict):
+                invalidate_output()
                 raise invalid_provider_response_error()
 
             event_type = str(event.get("type") or "")
+            if event_type not in {"ping", "message_stop"}:
+                invalidate_output()
             if event_type == "error":
                 raise _map_anthropic_stream_error(event)
             if event_type == "ping":
@@ -522,6 +533,7 @@ class AnthropicAdapter(ProviderAdapter):
                         if isinstance(usage, Mapping)
                         else None
                     )
+                    output_observer(final_output)
                 finish_map = {
                     "end_turn": "stop",
                     "stop_sequence": "stop",
@@ -543,8 +555,6 @@ class AnthropicAdapter(ProviderAdapter):
             if event_type == "message_stop":
                 if not saw_message_start or not saw_terminal_delta:
                     raise invalid_provider_response_error()
-                if output_observer is not None:
-                    output_observer(final_output)
                 if not sent_role:
                     yield role_chunk()
                     sent_role = True

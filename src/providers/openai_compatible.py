@@ -118,6 +118,14 @@ async def translate_openai_compatible_stream(
     """Validate an OpenAI-compatible stream before releasing its pre-output frames."""
 
     evidence = OutputStreamEvidence(output_count) if output_observer is not None else None
+    reported_output: object = object()
+
+    def report_output(value: int | None) -> None:
+        nonlocal reported_output
+        if output_observer is not None and value != reported_output:
+            output_observer(value)
+            reported_output = value
+
     pending: list[str] = []
     pending_chars = 0
     pending_unknown_output_candidate = False
@@ -128,10 +136,14 @@ async def translate_openai_compatible_stream(
         if not line or line.startswith(":") or line.startswith("event:"):
             continue
         if len(line) > _MAX_STREAM_FRAME_CHARS:
+            if isinstance(reported_output, int):
+                report_output(None)
             raise _invalid_stream_response_error(
                 ProviderStreamValidationFailureReason.FRAME_TOO_LARGE
             )
         if not line.startswith("data:"):
+            if isinstance(reported_output, int):
+                report_output(None)
             raise _invalid_stream_response_error(ProviderStreamValidationFailureReason.INVALID_SSE)
 
         raw_payload = line[len("data:") :].strip()
@@ -146,10 +158,14 @@ async def translate_openai_compatible_stream(
                 )
                 raise _invalid_stream_response_error(reason)
             if output_observer is not None:
-                output_observer(evidence.complete(terminal=True))
+                report_output(evidence.complete(terminal=True))
             yield line
             return
 
+        # New unvalidated data can invalidate a count already sent to the owner.
+        # A transport failure before the next frame keeps complete evidence.
+        if isinstance(reported_output, int):
+            report_output(None)
         try:
             payload = json.loads(raw_payload)
         except (RecursionError, TypeError, ValueError) as exc:
@@ -176,6 +192,9 @@ async def translate_openai_compatible_stream(
 
         if evidence is not None:
             evidence.observe(payload, choices)
+            complete = evidence.complete()
+            if complete is not None:
+                report_output(complete)
 
         if normalize_usage is not None and payload.get("usage"):
             payload = {**payload, "usage": normalize_usage(payload["usage"])}
@@ -218,7 +237,7 @@ async def translate_openai_compatible_stream(
         )
 
     if output_observer is not None:
-        output_observer(evidence.complete())
+        report_output(evidence.complete())
 
 
 def _valid_stream_choices(choices: list[object]) -> bool:

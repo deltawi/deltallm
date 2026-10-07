@@ -25,20 +25,17 @@ Anthropic, Gemini, and Bedrock adapters retain their endpoint capabilities.
 
 | Gate | Result |
 | --- | --- |
-| Full hermetic lane, with loopback sockets | 4,136 passed; no skips |
-| Full application lane | 1,609 passed; two final config-denial regression cases also passed in the focused admin run |
+| Full hermetic lane, with loopback sockets | 4,216 passed; no skips |
+| Full application lane | 1,613 passed |
 | Full PostgreSQL lane, with Redis | 390 passed, including the pinned isolated SDK cases |
-| Full Redis lane | 185 passed |
+| Full Redis lane | 221 passed; no skips |
 | Full Helm lane | 71 passed |
-| Final focused policy, tier API, accounting contract, and lane checks | 156 passed |
-| Final focused Redis accounting checks | 31 passed |
-| Final model admin checks | 9 passed, including environment-based publication checks and config-denial responses |
 | Fresh, last-release, shared-feature, and model-identity recovery migrations | Passed |
 | Upgrade from the shared scalar output TPM head | Passed with the same migration verifier |
 | Prisma generation | Passed |
 | Ruff check for `src` and `tests`; changed Python format checks | Passed |
 | UI unit tests | 304 passed |
-| Collection and lane audit | 6,393 tests, each in one primary lane |
+| Collection and lane audit | 6,511 tests, each in one primary lane |
 | Generated OpenAPI/config/provider references | Passed; OpenAPI regenerated |
 | Documentation tests, health, strict build, and public containment | Passed |
 | Production UI build | Passed; initial JS gzip reduced from 370.39 kB to 328.55 kB |
@@ -53,12 +50,32 @@ fixture server were removed or stopped after verification.
 
 Review fixes make startup, admin writes, and inference use the same tier-setting
 resolver. Explicit config values take precedence over environment defaults.
-Tier mode changes validate output policies before config persistence or related
-mutations. Peer reload rejection preserves the last valid runtime state. The
-admin config API returns `400` for invalid updates. Tests check one policy read
+Both tier modes bind at startup. Dynamic changes to their effective values
+return `409 restart_required` before config persistence or related mutations.
+Relevant coordination and authentication changes validate output policies
+before saving. Peer reload rejection preserves the last valid runtime state.
+The admin config API returns `400` for invalid updates. Tests check one policy read
 for a relevant update and no policy read for unrelated updates. Inference adds
 no SQL or Redis calls. The simulator uses the inferred deployment model type
 and omits output TPM projections for non-text requests.
+
+The review loop completed on 2026-10-08 and used three passes against the complete
+PR. It reran the four backend lanes, lint, and documentation checks. UI, Helm,
+migration recovery, and load evidence retain the prior qualification results;
+this loop changes no UI or schema. Pass 1 fixed two P2
+findings: startup-bound tier modes could be saved without changing the live
+service, and compatible streams could lose complete usage before EOF or
+`[DONE]`. Pass 2 fixed the same late-reporting issue between Anthropic's terminal
+`message_delta` and `message_stop`. Pass 3 found no P0, P1, or P2 findings. Each
+temporary fix plan was deleted after its fix and focused checks.
+
+OpenAI-compatible and Anthropic adapters now retain complete raw output before
+the next read. Later output or invalid evidence clears that count. Transport
+failure and disconnect retain valid final evidence. Regressions cover zero
+output, positive output, crossing the limit, later malformed events, and all
+four text endpoints with real Redis. Quota accounting stays in the existing
+finalizer, with one normal write per positive or unknown attempt and no quota
+I/O per frame.
 
 The real Redis tests cover all seven scopes, concurrent replica accounting,
 organization sharing, model separation, limit edits without counter reset,
@@ -142,7 +159,8 @@ limits. New auth entries use version 6; invalidation clears versions 4, 5, and
 
 Use shared standalone Redis, fail-closed coordination, and stored-key auth for
 shared policies. Enforced tier output limits also require
-`tier_policy_missing_service_mode: fail_closed`. Startup, reload, policy writes,
+`tier_policy_missing_service_mode: fail_closed`. Tier mode changes require a
+deployment configuration change and restart. Startup, reload, policy writes,
 activation, and re-enable checks reject incompatible configuration. Missing or
 stale enforced snapshots close admission. Realtime rejects a matching
 model-only output policy. Provider-native async batches remain unsupported;

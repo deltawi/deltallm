@@ -178,19 +178,57 @@ async def test_output_config_denial_returns_client_error_without_persistence(
     test_app.state.dynamic_config_manager = manager
     test_app.state.app_config = manager.get_app_config()
     payload = (
-        {"general_settings": {"tier_policy_missing_service_mode": "fail_open"}}
+        {"general_settings": {"enable_jwt_auth": True}}
         if endpoint == "settings"
         else {"config": {"timeout": 61}}
     )
     try:
         response = await client.put(f"/ui/api/{endpoint}", headers=_headers(test_app), json=payload)
         assert response.status_code == 400, response.text
-        assert (
-            "tier_policy_missing_service_mode" if endpoint == "settings" else "Redis"
-        ) in response.json()["detail"]
+        assert ("stored API-key" if endpoint == "settings" else "Redis") in response.json()[
+            "detail"
+        ]
         assert db.config_value == before
         assert db.updated_by is None
         assert db.output_reads == 1
+        assert manager.get_config_generation() == 1
+    finally:
+        await manager.close()
+
+
+@pytest.mark.parametrize(
+    "field,environment,candidate",
+    [
+        ("tier_policy_mode", "enforce", "disabled"),
+        ("tier_policy_missing_service_mode", "fail_closed", "fail_open"),
+    ],
+)
+async def test_tier_mode_settings_require_restart_before_persistence(
+    client, test_app, field, environment, candidate
+):
+    from src.config import Settings
+    from src.config_runtime.dynamic import DynamicConfigManager
+    from tests.test_output_policy_configuration import OutputConfigDB
+
+    db = OutputConfigDB({})
+    manager = DynamicConfigManager(
+        db, None, {}, poll_interval_seconds=0, runtime_settings=Settings(**{field: environment})
+    )
+    await manager.initialize()
+    test_app.state.dynamic_config_manager = manager
+    test_app.state.app_config = manager.get_app_config()
+    try:
+        response = await client.put(
+            "/ui/api/settings",
+            headers=_headers(test_app),
+            json={"general_settings": {field: candidate}},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "restart_required"
+        assert field in response.json()["detail"]["message"]
+        assert db.config_value == {}
+        assert db.updated_by is None
+        assert db.output_reads == 0
         assert manager.get_config_generation() == 1
     finally:
         await manager.close()
