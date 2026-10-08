@@ -1,0 +1,560 @@
+{
+  "before_revision": "9b380b23e528bbe5a63f0be230e0d9094416360a",
+  "after_source_sha256": "27a19d048a8942f836ca0637bb0562091cac6e40760b2cbc76c07b0e8101dcec",
+  "results": [
+    {
+      "run_id": "8e8fc0e77a5f498f9f317568cb90885a",
+      "started_at": "2026-10-08T19:34:39.671554+00:00",
+      "target_rate_rps": 50,
+      "target_count": 500,
+      "client_started_count": 500,
+      "generator_dropped_count": 0,
+      "completion_count": 500,
+      "success_count": 500,
+      "status_counts": {
+        "200": 500
+      },
+      "arrival_window_seconds": 10,
+      "drain_window_seconds": 0.000277083003311418,
+      "client_started_rps": 50.0,
+      "arrival_window_completion_rps": 50.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.0012540865076589398,
+        "p50": 0.0011488750024000183,
+        "p95": 0.0019354589894646779,
+        "p99": 0.002926374989328906,
+        "max": 0.007647124992217869
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.0010571080931986217,
+        "p50": 0.0010886249947361648,
+        "p95": 0.0011375420144759119,
+        "p99": 0.0011728330136975273,
+        "max": 0.008525333003490232
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "in_flight_samples": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          9,
+          0
+        ]
+      ],
+      "in_flight_slope_per_second": 0.0,
+      "label": "before",
+      "path": "warm",
+      "populated_maps": false,
+      "redis_calls": 500,
+      "primary_calls": 0,
+      "provider_calls": 0,
+      "provider_seconds": 0,
+      "fixture_note": "Fixed in-process primary; real standalone Redis; no provider",
+      "cache_value_bytes": {
+        "v5": 0,
+        "v7": 1428
+      }
+    },
+    {
+      "run_id": "37cac3a817504b6ea00a68e1f14d11c8",
+      "started_at": "2026-10-08T19:34:49.908076+00:00",
+      "target_rate_rps": 50,
+      "target_count": 500,
+      "client_started_count": 500,
+      "generator_dropped_count": 0,
+      "completion_count": 500,
+      "success_count": 500,
+      "status_counts": {
+        "200": 500
+      },
+      "arrival_window_seconds": 10,
+      "drain_window_seconds": 0.0007002079946687445,
+      "client_started_rps": 50.0,
+      "arrival_window_completion_rps": 50.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.0024699750000145284,
+        "p50": 0.002325624998775311,
+        "p95": 0.004056874997331761,
+        "p99": 0.005937833004281856,
+        "max": 0.016553790992475115
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.0011102039163815788,
+        "p50": 0.001151166987256147,
+        "p95": 0.0013720830029342324,
+        "p99": 0.003030167004908435,
+        "max": 0.009392624982865527
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "in_flight_samples": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          9,
+          0
+        ]
+      ],
+      "in_flight_slope_per_second": 0.0,
+      "label": "after",
+      "path": "warm",
+      "populated_maps": false,
+      "redis_calls": 500,
+      "primary_calls": 0,
+      "provider_calls": 0,
+      "provider_seconds": 0,
+      "fixture_note": "Fixed in-process primary; real standalone Redis; no provider",
+      "cache_value_bytes": {
+        "v5": 1288,
+        "v7": 1479
+      }
+    },
+    {
+      "run_id": "77c270e7005840e39674af4b80ec49b7",
+      "started_at": "2026-10-08T19:35:00.156733+00:00",
+      "target_rate_rps": 50,
+      "target_count": 500,
+      "client_started_count": 500,
+      "generator_dropped_count": 0,
+      "completion_count": 500,
+      "success_count": 500,
+      "status_counts": {
+        "200": 500
+      },
+      "arrival_window_seconds": 10,
+      "drain_window_seconds": 0.0002163749886676669,
+      "client_started_rps": 50.0,
+      "arrival_window_completion_rps": 50.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.00469972543604672,
+        "p50": 0.0049668340070638806,
+        "p95": 0.006497042006230913,
+        "p99": 0.007263999999850057,
+        "max": 0.01101820899930317
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.001124565905163763,
+        "p50": 0.001159499995992519,
+        "p95": 0.0013039580080658197,
+        "p99": 0.0017764999938663095,
+        "max": 0.003983957998570986
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "in_flight_samples": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          9,
+          0
+        ]
+      ],
+      "in_flight_slope_per_second": 0.0,
+      "label": "before",
+      "path": "warm",
+      "populated_maps": true,
+      "redis_calls": 500,
+      "primary_calls": 0,
+      "provider_calls": 0,
+      "provider_seconds": 0,
+      "fixture_note": "Fixed in-process primary; real standalone Redis; no provider",
+      "cache_value_bytes": {
+        "v5": 0,
+        "v7": 35472
+      }
+    },
+    {
+      "run_id": "708eb35371f44092947357faed2555a5",
+      "started_at": "2026-10-08T19:35:10.376966+00:00",
+      "target_rate_rps": 50,
+      "target_count": 500,
+      "client_started_count": 500,
+      "generator_dropped_count": 0,
+      "completion_count": 500,
+      "success_count": 500,
+      "status_counts": {
+        "200": 500
+      },
+      "arrival_window_seconds": 10,
+      "drain_window_seconds": 0.0005216249992372468,
+      "client_started_rps": 50.0,
+      "arrival_window_completion_rps": 50.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.00398299260402564,
+        "p50": 0.003456917009316385,
+        "p95": 0.006190250001964159,
+        "p99": 0.007533625001087785,
+        "max": 0.011606542000663467
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.0011013194821716751,
+        "p50": 0.0011219169973628595,
+        "p95": 0.0012327079894021153,
+        "p99": 0.0017570829950273037,
+        "max": 0.004359541984740645
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "in_flight_samples": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          9,
+          0
+        ]
+      ],
+      "in_flight_slope_per_second": 0.0,
+      "label": "after",
+      "path": "warm",
+      "populated_maps": true,
+      "redis_calls": 500,
+      "primary_calls": 0,
+      "provider_calls": 0,
+      "provider_seconds": 0,
+      "fixture_note": "Fixed in-process primary; real standalone Redis; no provider",
+      "cache_value_bytes": {
+        "v5": 1288,
+        "v7": 35523
+      }
+    },
+    {
+      "run_id": "a5afb658fc7544a9abbdde26eda43648",
+      "started_at": "2026-10-08T19:35:20.602844+00:00",
+      "target_rate_rps": 50,
+      "target_count": 500,
+      "client_started_count": 500,
+      "generator_dropped_count": 0,
+      "completion_count": 500,
+      "success_count": 500,
+      "status_counts": {
+        "200": 500
+      },
+      "arrival_window_seconds": 10,
+      "drain_window_seconds": 0.00022466600057668984,
+      "client_started_rps": 50.0,
+      "arrival_window_completion_rps": 50.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.004828693582618143,
+        "p50": 0.004696415999205783,
+        "p95": 0.005636792004224844,
+        "p99": 0.0079209169925889,
+        "max": 0.010963667009491473
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.001039537179400213,
+        "p50": 0.0010839580063475296,
+        "p95": 0.0011193750106031075,
+        "p99": 0.0011693749984260648,
+        "max": 0.0012303750118007883
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "in_flight_samples": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          9,
+          0
+        ]
+      ],
+      "in_flight_slope_per_second": 0.0,
+      "label": "before",
+      "path": "cold",
+      "populated_maps": true,
+      "redis_calls": 1000,
+      "primary_calls": 500,
+      "provider_calls": 0,
+      "provider_seconds": 0,
+      "fixture_note": "Fixed in-process primary; real standalone Redis; no provider",
+      "cache_value_bytes": {
+        "v5": 0,
+        "v7": 35474
+      }
+    },
+    {
+      "run_id": "ee4c0d15084d4583a5d7f33493870474",
+      "started_at": "2026-10-08T19:35:30.822555+00:00",
+      "target_rate_rps": 50,
+      "target_count": 500,
+      "client_started_count": 500,
+      "generator_dropped_count": 0,
+      "completion_count": 500,
+      "success_count": 500,
+      "status_counts": {
+        "200": 500
+      },
+      "arrival_window_seconds": 10,
+      "drain_window_seconds": 0.00021229099365882576,
+      "client_started_rps": 50.0,
+      "arrival_window_completion_rps": 50.0,
+      "max_in_flight_observed": 1,
+      "latency_seconds": {
+        "mean": 0.004974093353695934,
+        "p50": 0.004715333998319693,
+        "p95": 0.007228125003166497,
+        "p99": 0.00880900000629481,
+        "max": 0.011043625010643154
+      },
+      "scheduling_lag_seconds": {
+        "mean": 0.0010444228253618348,
+        "p50": 0.0010816249996423721,
+        "p95": 0.0011388749990146607,
+        "p99": 0.0011950829939451069,
+        "max": 0.0015540000022156164
+      },
+      "ttft_seconds": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "in_flight_samples": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          9,
+          0
+        ]
+      ],
+      "in_flight_slope_per_second": 0.0,
+      "label": "after",
+      "path": "cold",
+      "populated_maps": true,
+      "redis_calls": 1000,
+      "primary_calls": 500,
+      "provider_calls": 0,
+      "provider_seconds": 0,
+      "fixture_note": "Fixed in-process primary; real standalone Redis; no provider",
+      "cache_value_bytes": {
+        "v5": 1290,
+        "v7": 35525
+      }
+    }
+  ],
+  "preliminary_runs": [
+    {
+      "directory": "preliminary-full-guard",
+      "note": "Initial full v5 snapshot prototype. A warm 500 RPS case had dropped arrivals; subsequent cases did not run."
+    },
+    {
+      "directory": "preliminary-small-guard",
+      "note": "Final small v5 guard, without garbage collection between completed cases. A warm 500 RPS case had dropped arrivals and one bounded primary fallback."
+    },
+    {
+      "directory": "isolated-500",
+      "note": "Final small guard with completed-case garbage collected outside the arrival window. All four warm cases passed at 500 RPS with expected calls; the pre-fix populated cold case fell back on primary when Redis lookup exceeded 100 ms (3785 Redis calls, 2500 primary calls for 2500 successes). The after cold case did not run. This does not qualify cold capacity at 500 RPS."
+    }
+  ]
+}

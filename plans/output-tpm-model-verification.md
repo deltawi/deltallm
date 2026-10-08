@@ -129,6 +129,86 @@ removed after verification. The merged UI initial JavaScript bundle is
 
 ## Dependency and capacity evidence
 
+### Revocation fixes after the main merge review
+
+The follow-up fixes both P1 findings on merge commit
+`9b380b23e528bbe5a63f0be230e0d9094416360a`:
+
+- A v7 allow now requires a live v5 allow with the same random guard. Atomic
+  fill writes both entries with the same TTL. Missing, expired, changed, or
+  pre-fix guards discard the v7 allow and use the bounded primary read. A v5
+  revocation cannot leave usable v7 auth even if no request sees its tombstone
+  before it expires. Output policy is read only from the primary or v7.
+- Atomic revocation publishes v5/v7 tombstones and clears exact v4/v6 entries.
+  The rollback command uses this owner and no longer sends a separate delete.
+  Stop and drain old readers before reconciliation to prevent an old in-flight
+  fill from restoring its own format. Exact deletion covers old 300-second
+  entries without relying on their expiry.
+
+Real Redis regression tests cover observed and unobserved three-second v5
+tombstone expiry with a thirty-second v7 allow, guard loss and replacement,
+malformed guards, pre-fix cache entries, delayed fills, first committed fills,
+and raw legacy entries. Real PostgreSQL/Redis tests cover durable removal,
+outbox recovery, and rollback preview, apply, and retry. An additional check
+loads the actual v5 main and v6 parent readers: the v5 reader accepts the
+compatibility entry, and both deleted-key scenarios deny after the fix. Its
+source and result are included in the raw archive below.
+
+| Follow-up gate | Result |
+| --- | --- |
+| Hermetic | 4,433 passed |
+| Application | 1,616 passed, including local HTTP/WebSocket cases |
+| PostgreSQL and cross-owner Redis | 485 passed; one opt-in Console cardinality profile skipped |
+| Redis | 240 passed |
+| Collection and lane audit | 6,855 tests, each assigned to one primary lane |
+| Python | Full repository Ruff and all changed-file format checks passed |
+| Documentation | Generated references, health, strict build, and public containment passed |
+| Final fix review | No remaining P0, P1, or P2 finding in this fix |
+
+The UI, Helm chart, schema, and migrations are unchanged by this follow-up;
+their merge qualification above remains applicable. The temporary fix plan is
+removed after implementation and verification. All task-owned test containers
+are removed before the update is pushed.
+
+The [auth load summary](output-tpm-revocation-load-summary.json) and
+[raw samples](output-tpm-revocation-load-results.zip) retain the full
+qualification and preliminary trials. The archive contains 36 files and
+passes its CRC check. Reproduce the qualification with:
+
+```sh
+python -m tests.performance.key_auth_revocation_profile \
+  --before 9b380b23e528bbe5a63f0be230e0d9094416360a \
+  --redis-url "$DELTALLM_TEST_REDIS_URL" \
+  --output-dir /tmp/output-tpm-auth-profile --rate 50 --duration 10
+```
+
+The runner uses real standalone Redis and a fixed in-process primary. Primary
+call counts represent the joined SQL operation; timings do not include SQL or
+a provider. It releases completed cases before the next arrival window. Each
+case completes all 500 calls with zero dropped arrivals and zero sampled queue
+growth. Both maps contain 64 IDs of 256 bytes in the populated cases.
+
+| Auth path | Before / after Redis calls | Before / after primary calls | Before p50 / p95 / p99, ms | After p50 / p95 / p99, ms |
+| --- | --- | --- | --- | --- |
+| Warm, empty maps | 500 / 500 | 0 / 0 | 1.15 / 1.94 / 2.93 | 2.33 / 4.06 / 5.94 |
+| Warm, populated maps | 500 / 500 | 0 / 0 | 4.97 / 6.50 / 7.26 | 3.46 / 6.19 / 7.53 |
+| Cold, populated maps | 1,000 / 1,000 | 500 / 500 | 4.70 / 5.64 / 7.92 | 4.72 / 7.23 / 8.81 |
+
+Local timing varies across cases and does not establish production capacity.
+The extra v5 entry omits all new output policy fields. In the populated fixture
+it uses 1,288 bytes beside the 35,523-byte v7 entry, rather than copying the two
+large output maps. Other legacy auth fields and metadata still need memory
+headroom; these fixture sizes are not a maximum.
+
+Preliminary 500-RPS trials retain their failed samples. After releasing
+completed cases, all four warm cases meet their call budgets at 500 RPS. The
+pre-fix populated cold case exceeds the 100-ms Redis lookup budget and uses
+bounded primary fallback: all 2,500 calls complete, but only 3,785 Redis calls
+occur instead of 5,000. The after cold case did not run at that rate. Earlier
+warm trials also have generator drops and a primary fallback. These trials do
+not qualify cold capacity at 500 RPS. The 50-RPS run compares both versions at
+the repository's qualification direction and retains every raw sample.
+
 The [load summaries](output-tpm-model-load-summary.json) and
 [raw archive](output-tpm-model-load-results.zip) retain every result. The archive
 contains 28 files and passed its CRC check. The profile uses constant arrivals,
@@ -188,8 +268,9 @@ budget before production enablement.
 
 Apply `202610070001_model_output_tpm_limits` after the scalar migration. Upgrade
 or drain every old API and local batch-worker replica before enabling model
-limits. New auth entries use version 6; invalidation clears versions 4, 5, and
-6. Default null fields retain the existing scalar behavior.
+limits. New auth entries use version 7 with a matching v5 guard; invalidation
+clears allow records in versions 4, 5, 6, and 7 and preserves tombstones.
+Default null fields retain the existing scalar behavior.
 
 Use shared standalone Redis, fail-closed coordination, and stored-key auth for
 shared policies. Enforced tier output limits also require

@@ -84,9 +84,8 @@ async def main(apply: bool, approval_reference: str | None) -> None:
                 if not page:
                     break
                 for identifier, token_hash in page:
-                    # v5 markers protect current replicas. Delete exact v4 entries for old binaries.
+                    # The cache owner reconciles all supported versions atomically.
                     await KeyAuthCache(redis).revoke(token_hash, ttl_seconds=60)
-                    await redis.delete("key:v4:" + token_hash)
                     after = identifier
                     reconciled += 1
         async with transactions.transaction("validation") as tx:

@@ -78,6 +78,134 @@ async def test_older_console_replica_revocation_blocks_new_lookup_and_delayed_fi
         await reader.fill(token_hash, auth, ttl_seconds=60, deadline_ms=lookup.fill_deadline_ms)
 
 
+@pytest.mark.parametrize("observed", [False, True])
+async def test_shorter_legacy_revocation_cannot_restore_longer_cached_allow(peers, observed):
+    local, remote, token_hash = peers
+
+    class Repository:
+        record = KeyRecord(token=token_hash, output_tpm_limit=123)
+        calls = 0
+
+        async def get_by_token(self, token):
+            assert token == token_hash
+            self.calls += 1
+            return self.record
+
+    repository = Repository()
+    service = KeyService(repository, remote, auth_cache_ttl_seconds=30)
+    assert (await service.get_auth_by_token_hash(token_hash)).key_output_tpm_limit == 123
+    repository.record = None  # The old replica commits the durable key removal first.
+    await local.setex(
+        f"key:v5:{token_hash}",
+        3,  # A valid old replica uses a one-second auth TTL plus its two-second guard.
+        json.dumps({"cache_version": 5, "cache_kind": "revoked"}),
+    )
+    if observed:
+        with pytest.raises(AuthenticationError):
+            await service.get_auth_by_token_hash(token_hash)
+    await asyncio.sleep(3.1)
+    assert await local.get(f"key:v5:{token_hash}") is None
+    assert await local.ttl(KeyAuthCache.key(token_hash)) > 0
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash(token_hash)
+    assert repository.calls == 2
+    assert await local.get(KeyAuthCache.key(token_hash)) is None
+
+
+@pytest.mark.parametrize("replacement", [None, "{}", '"invalid"', "old_allow", "new_guard"])
+async def test_missing_or_replaced_legacy_guard_requires_fresh_primary_policy(peers, replacement):
+    local, remote, token_hash = peers
+
+    class Repository:
+        limit = 123
+        calls = 0
+
+        async def get_by_token(self, token):
+            self.calls += 1
+            return KeyRecord(token=token, output_tpm_limit=self.limit)
+
+    repository = Repository()
+    service = KeyService(repository, remote, auth_cache_ttl_seconds=30)
+    await service.get_auth_by_token_hash(token_hash)
+    guard_key = f"key:v5:{token_hash}"
+    if replacement is None:
+        await local.delete(guard_key)
+    else:
+        if replacement in ("old_allow", "new_guard"):
+            guard = json.loads(await local.get(guard_key))
+            if replacement == "old_allow":
+                guard.pop("cache_guard")
+            else:
+                guard["cache_guard"] = uuid4().hex
+            replacement = json.dumps(guard)
+        await local.setex(guard_key, 30, replacement)
+    repository.limit = 456
+    for source in ("database", "redis"):
+        auth = await service.get_auth_by_token_hash(token_hash)
+        assert auth.key_output_tpm_limit == 456 and auth.metadata["auth_cache_source"] == source
+    assert repository.calls == 2
+    current = json.loads(await local.get(KeyAuthCache.key(token_hash)))
+    guard = json.loads(await local.get(guard_key))
+    assert current["cache_guard"] == guard["cache_guard"]
+    assert current["auth"]["key_output_tpm_limit"] == 456
+    assert "key_output_tpm_limit" not in guard["auth"]
+    assert current["auth"]["api_key"] == guard["auth"]["api_key"]
+    assert abs(await local.pttl(KeyAuthCache.key(token_hash)) - await local.pttl(guard_key)) < 100
+
+
+async def test_pre_fix_v7_allow_is_replaced_from_primary_and_old_v5_reader_remains_compatible(
+    peers,
+):
+    local, remote, token_hash = peers
+    stale = UserAPIKeyAuth(api_key=token_hash, key_output_tpm_limit=123)
+    for version in (5, 7):
+        await local.setex(
+            f"key:v{version}:{token_hash}",
+            300,
+            json.dumps(
+                {
+                    "cache_version": version,
+                    "cache_kind": "allow",
+                    "auth": stale.model_dump(mode="json"),
+                }
+            ),
+        )
+
+    class Repository:
+        calls = 0
+
+        async def get_by_token(self, token):
+            self.calls += 1
+            return KeyRecord(token=token, output_tpm_limit=456, owner_account_id="owner")
+
+    repository = Repository()
+    service = KeyService(repository, remote, auth_cache_ttl_seconds=30)
+    assert (await service.get_auth_by_token_hash(token_hash)).key_output_tpm_limit == 456
+    assert (await service.get_auth_by_token_hash(token_hash)).key_output_tpm_limit == 456
+    assert repository.calls == 1
+    legacy = json.loads(await local.get(f"key:v5:{token_hash}"))
+    assert legacy["cache_version"] == 5 and legacy["cache_kind"] == "allow"
+    assert UserAPIKeyAuth.model_validate(legacy["auth"]).owner_account_id == "owner"
+
+
+@pytest.mark.parametrize("version", [4, 6])
+async def test_revocation_clears_raw_legacy_auth_even_when_its_ttl_exceeds_rollback_wait(
+    peers, version
+):
+    local, remote, token_hash = peers
+    legacy_key = f"key:v{version}:{token_hash}"
+    legacy = UserAPIKeyAuth(api_key=token_hash, owner_account_id="owner")
+    await remote.setex(legacy_key, 300, legacy.model_dump_json())
+    assert (
+        UserAPIKeyAuth.model_validate_json(await remote.get(legacy_key)).owner_account_id == "owner"
+    )
+    assert await remote.ttl(legacy_key) > 61
+    await KeyAuthCache(local).revoke(token_hash, ttl_seconds=1)
+    assert await remote.get(legacy_key) is None
+    with pytest.raises(AuthenticationError):
+        await KeyAuthCache(remote).lookup(token_hash)
+
+
 async def test_policy_invalidation_drops_legacy_allow_but_preserves_revocations(peers):
     local, remote, token_hash = peers
     cache = KeyAuthCache(local)

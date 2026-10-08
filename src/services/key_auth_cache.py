@@ -4,32 +4,47 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from typing import Protocol
+from uuid import uuid4
 
 from pydantic import ValidationError
 
 from src.models.errors import AuthenticationError, ServiceUnavailableError
 from src.models.responses import UserAPIKeyAuth
 
-# Older Console replicas use v5 tombstones. Read only their denials, never
-# their allow records: those records do not contain output TPM policy fields.
-_LEGACY_REVOCATION = """
-local legacy = redis.call('GET', KEYS[2])
-if legacy then
-    local ok, decoded = pcall(cjson.decode, legacy)
-    if ok and type(decoded) == 'table' and decoded.cache_version == 5
-        and decoded.cache_kind == 'revoked' then return legacy end
+# Older Console replicas replace v5 entries on revocation. Pair allow entries
+# so even an expired, unobserved v5 tombstone cannot leave a valid v7 snapshot.
+_CACHED_VALUE = """
+local function decode(value)
+    if not value then return nil end
+    local ok, decoded = pcall(cjson.decode, value)
+    if ok and type(decoded) == 'table' then return decoded end
+end
+local function cached_value()
+    local legacy = redis.call('GET', KEYS[2])
+    local guard = decode(legacy)
+    if guard and guard.cache_version == 5 and guard.cache_kind == 'revoked' then
+        return legacy
+    end
+    local value = redis.call('GET', KEYS[1])
+    local current = decode(value)
+    if current and current.cache_version == 7 and current.cache_kind == 'allow' then
+        if type(current.cache_guard) ~= 'string' or current.cache_guard == ''
+            or not guard or guard.cache_version ~= 5 or guard.cache_kind ~= 'allow'
+            or guard.cache_guard ~= current.cache_guard then
+            redis.call('DEL', KEYS[1])
+            return ''
+        end
+    end
+    return value or ''
 end
 """
 AUTH_CACHE_LOOKUP = (
     """
 -- deltallm_key_auth_lookup_v7
 local now = redis.call('TIME')
-local function cached_value()
 """
-    + _LEGACY_REVOCATION
+    + _CACHED_VALUE
     + """
-    return redis.call('GET', KEYS[1]) or ''
-end
 return {cached_value(), tonumber(now[1])*1000 + math.floor(tonumber(now[2])/1000)}
 """
 )
@@ -37,14 +52,15 @@ AUTH_CACHE_FILL = (
     """
 -- deltallm_key_auth_fill_v7
 """
-    + _LEGACY_REVOCATION
+    + _CACHED_VALUE
     + """
+local cached = cached_value()
+if cached ~= '' then return cached end
 local now = redis.call('TIME')
 local clock = tonumber(now[1])*1000 + math.floor(tonumber(now[2])/1000)
-if clock > tonumber(ARGV[3]) then return '' end
-local cached = redis.call('GET', KEYS[1])
-if cached then return cached end
-redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX')
+if clock > tonumber(ARGV[4]) then return '' end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
 return ARGV[1]
 """
 )
@@ -66,6 +82,7 @@ AUTH_CACHE_REVOKE = """
 -- deltallm_key_auth_revoke_v7
 redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
 redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('DEL', KEYS[3], KEYS[4])
 return 1
 """
 
@@ -127,15 +144,28 @@ class KeyAuthCache:
         ttl_seconds: int,
         deadline_ms: int,
     ) -> UserAPIKeyAuth:
-        payload = json.dumps(
-            {"cache_version": 7, "cache_kind": "allow", "auth": auth.model_dump(mode="json")}
-        )
+        snapshot = {
+            "cache_kind": "allow",
+            "cache_guard": uuid4().hex,
+            "auth": auth.model_dump(mode="json"),
+        }
+        # The v5 reader predates output policy. Do not copy large output maps
+        # into its guard; those fields are read only from the v7 snapshot.
+        legacy_snapshot = {
+            **snapshot,
+            "auth": {
+                name: value
+                for name, value in snapshot["auth"].items()
+                if not name.endswith("_output_tpm_limit")
+            },
+        }
         result = await self.redis.eval(
             AUTH_CACHE_FILL,
             2,
             self.key(token_hash),
             f"key:v5:{token_hash}",
-            payload,
+            json.dumps({"cache_version": 7, **snapshot}),
+            json.dumps({"cache_version": 5, **legacy_snapshot}),
             ttl_seconds,
             deadline_ms,
         )
@@ -145,12 +175,14 @@ class KeyAuthCache:
         return resolved
 
     async def revoke(self, token_hash: str, *, ttl_seconds: int) -> None:
-        # Publish both tombstones in one operation, including for rollback.
+        # Publish tombstones and clear older raw snapshots in one operation.
         await self.redis.eval(
             AUTH_CACHE_REVOKE,
-            2,
+            4,
             self.key(token_hash),
             f"key:v5:{token_hash}",
+            f"key:v4:{token_hash}",
+            f"key:v6:{token_hash}",
             json.dumps({"cache_version": 7, "cache_kind": "revoked"}),
             json.dumps({"cache_version": 5, "cache_kind": "revoked"}),
             ttl_seconds + 2,
