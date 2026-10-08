@@ -156,6 +156,13 @@ real Prisma, Redis, or Helm usage is missing its matching explicit marker. This
 keeps lane selection exhaustive and prevents infrastructure tests from silently
 running in a fake-only job.
 
+In GitHub Actions, the exact `-m app` selection uses two pytest-xdist worker
+processes. Each test still creates its own application and fake stores. The
+other lanes, collection-only commands, and local commands remain serial by
+default. Use `-n 0` to request serial execution or `-n 2` to reproduce the
+application CI run locally. Explicit worker settings take precedence. This
+policy keeps the existing CI deadline and all required checks.
+
 ## Reporting Issues
 
 When reporting bugs, please include:

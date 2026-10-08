@@ -1,3 +1,4 @@
+import { inferenceFetch } from '../../lib/inferenceTransport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Message, ModelOption, RequestStats } from './types';
 
@@ -89,7 +90,7 @@ export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption
     }
 
     try {
-      const res = await fetch('/v1/chat/completions', {
+      const res = await inferenceFetch('/v1/chat/completions', apiKey, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

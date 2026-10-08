@@ -28,13 +28,15 @@ import PromptTemplateDetail from './pages/PromptTemplateDetail';
 import MCPServers from './pages/MCPServers';
 import MCPServerDetail from './pages/MCPServerDetail';
 import MCPApprovalQueue from './pages/MCPApprovalQueue';
-import Playground from './pages/Playground';
 import { ToastProvider } from './components/ToastProvider';
 import BrandingProvider from './components/BrandingProvider';
 import Button from './components/Button';
 import { defaultRouteForUiAccess, resolveUiAccess } from './lib/authorization';
-import { loginPathFor, returnToFromSearch } from './lib/authRedirect';
+import { consoleSignInPath, uiMount } from './lib/uiMount';
+import { sessionPrincipal } from './lib/authTypes';
+import { loginPathFor, returnToFromSearch, safeReturnTo } from './lib/authRedirect';
 
+const Playground = lazy(() => import('./pages/Playground'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const ApiKeys = lazy(() => import('./pages/ApiKeys'));
 const Organizations = lazy(() => import('./pages/Organizations'));
@@ -163,6 +165,14 @@ function AppRoutes() {
 
   if (!isAuthenticated) {
     const returnTo = `${location.pathname}${location.search}${location.hash}`;
+    if (uiMount().external_console) {
+      return <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center"><h1 className="text-xl font-semibold">Sign in to the Console</h1>
+          <p className="my-4">Your gateway session has ended.</p>
+          <a className="text-brand-primary underline" href={consoleSignInPath(safeReturnTo(returnTo))}>Continue to sign in</a>
+        </div>
+      </div>;
+    }
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
@@ -190,7 +200,7 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route element={<Layout key={sessionPrincipal(session)} />}>
         <Route path="/" element={uiAccess.dashboard ? <Dashboard /> : <Navigate to={defaultRoute} replace />} />
         <Route path="/models" element={uiAccess.models ? <Models /> : <Navigate to="/" replace />} />
         <Route path="/models/new" element={uiAccess.model_admin ? <ChunkedRoute><ModelCreate /></ChunkedRoute> : <Navigate to="/models" replace />} />
@@ -220,7 +230,7 @@ function AppRoutes() {
         <Route path="/batches" element={uiAccess.batches ? <BatchJobs /> : <Navigate to="/" replace />} />
         <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
         <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />
-        <Route path="/playground" element={uiAccess.playground ? <Playground /> : <Navigate to="/" replace />} />
+        <Route path="/playground" element={uiAccess.playground ? <ChunkedRoute><Playground /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route
           path="/settings"
           element={uiAccess.settings ? (

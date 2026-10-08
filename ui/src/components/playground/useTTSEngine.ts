@@ -1,3 +1,4 @@
+import { inferenceFetch } from '../../lib/inferenceTransport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ModelOption } from './types';
 import { getTtsConfig } from './types';
@@ -100,7 +101,7 @@ export function useTTSEngine(opts: { apiKey: string; selectedModel: ModelOption 
     setStats(null);
     const startTime = performance.now();
     try {
-      const res = await fetch('/v1/audio/speech', {
+      const res = await inferenceFetch('/v1/audio/speech', apiKey, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

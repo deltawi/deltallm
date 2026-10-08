@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 import time
 from typing import Any
@@ -43,7 +44,7 @@ from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 
 
-pytest_plugins = ("tests.dependency_lanes",)
+pytest_plugins = ("tests.dependency_lanes", "tests.app_lane_workers")
 
 
 class NoopBudgetService:
@@ -282,6 +283,45 @@ class FakeRedis:
         return await self.eval(script, numkeys, *args)
 
     async def eval(self, script: str, numkeys: int, *args):
+        if "deltallm_key_auth_revoke_v7" in script:
+            key, legacy_key, payload, legacy_payload, ttl = args
+            await self.setex(str(key), int(ttl), str(payload))
+            await self.setex(str(legacy_key), int(ttl), str(legacy_payload))
+            return 1
+        if "deltallm_key_auth_lookup_v7" in script or "deltallm_key_auth_fill_v7" in script:
+            legacy = self.store.get(str(args[1]), "")
+            try:
+                decoded = json.loads(legacy)
+                revoked = decoded.get("cache_version") == 5 and decoded.get("cache_kind") == "revoked"
+            except (ValueError, AttributeError, TypeError):
+                revoked = False
+            if "deltallm_key_auth_lookup_v7" in script:
+                return [legacy if revoked else self.store.get(str(args[0]), ""), int(time.time() * 1000)]
+            if revoked:
+                return legacy
+            key, legacy_key, payload, ttl, deadline = args
+            if int(time.time() * 1000) > int(deadline):
+                return ""
+            if str(key) in self.store:
+                return self.store[str(key)]
+            await self.setex(str(key), int(ttl), str(payload))
+            return str(payload)
+        if "deltallm_key_auth_drop_v7" in script:
+            keys = []
+            for value in args[:numkeys]:
+                key = str(value)
+                payload = self.store.get(key)
+                if payload:
+                    try:
+                        revoked = json.loads(payload).get("cache_kind") == "revoked"
+                    except (ValueError, AttributeError, TypeError):
+                        revoked = False
+                    if not revoked:
+                        keys.append(key)
+            if keys:
+                await self.delete(*keys)
+            return len(keys)
+
         if "redis.call('SETEX', KEYS[2]" in script:
             lock_key = str(args[0])
             cache_key = str(args[1])

@@ -5,7 +5,15 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from src.auth.roles import ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, Permission, has_platform_permission
+from src.auth.external_errors import ExternalAuthUnavailable
+from src.auth.external_policy import CUSTOMER_PERMISSION_CEILING
+from src.middleware.external_auth import carries_external_session, require_unmixed_external_auth
+from src.auth.roles import (
+    ORG_ROLE_PERMISSIONS,
+    TEAM_ROLE_PERMISSIONS,
+    Permission,
+    has_platform_permission,
+)
 from src.models.platform_auth import PlatformAuthContext
 from src.services.master_session_service import MASTER_SESSION_COOKIE_NAME, MasterSessionStatus
 
@@ -13,6 +21,7 @@ SESSION_COOKIE_NAME = "deltallm_session"
 
 
 async def attach_platform_auth_context(request: Request) -> None:
+    request.state.external_session_unavailable = False
     request.state.platform_auth = None
     request.state.master_session_status = MasterSessionStatus.MISSING
 
@@ -35,7 +44,11 @@ async def attach_platform_auth_context(request: Request) -> None:
     if service is None:
         return
 
-    context = await service.get_context_for_session(token)
+    try:
+        context = await service.get_context_for_session(token)
+    except ExternalAuthUnavailable:
+        request.state.external_session_unavailable = True
+        return
     if context is None:
         return
 
@@ -61,11 +74,18 @@ def get_configured_master_key(request: Request) -> str | None:
 
 
 def has_master_key_session(request: Request) -> bool:
+    context = get_platform_auth_context(request)
+    if carries_external_session(request) or (
+        context is not None and context.external_workspace is not None
+    ):
+        return False
     return get_master_session_status(request) == MasterSessionStatus.ACTIVE
 
 
 def get_master_session_status(request: Request) -> MasterSessionStatus:
-    value = getattr(getattr(request, "state", None), "master_session_status", MasterSessionStatus.MISSING)
+    value = getattr(
+        getattr(request, "state", None), "master_session_status", MasterSessionStatus.MISSING
+    )
     try:
         return MasterSessionStatus(value)
     except (TypeError, ValueError):
@@ -82,11 +102,18 @@ def requires_mfa_verification(context: PlatformAuthContext | None) -> bool:
 
 def require_platform_permission(permission: str) -> Callable[[Request], Any]:
     async def _require(request: Request) -> PlatformAuthContext:
+        require_unmixed_external_auth(request)
         context = get_platform_auth_context(request)
         if context is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-        if not has_platform_permission(context.role, permission):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
+        if context.external_workspace is not None or not has_platform_permission(
+            context.role, permission
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+            )
         return context
 
     return _require
@@ -96,7 +123,7 @@ def has_platform_admin_session(request: Request) -> bool:
     if has_master_key_session(request):
         return True
     context = get_platform_auth_context(request)
-    if context is None:
+    if context is None or context.external_workspace is not None:
         return False
     return has_platform_permission(context.role, Permission.PLATFORM_ADMIN)
 
@@ -107,6 +134,17 @@ def has_scoped_permission(
     organization_id: str | None = None,
     team_id: str | None = None,
 ) -> bool:
+    workspace = context.external_workspace
+    if workspace is not None:
+        if context.force_password_change:
+            return False
+        if permission not in CUSTOMER_PERMISSION_CEILING or permission not in context.permissions:
+            return False
+        if organization_id is not None and organization_id != workspace.organization_id:
+            return False
+        if team_id is not None and team_id != workspace.team_id:
+            return False
+        return True
     if has_platform_permission(context.role, Permission.PLATFORM_ADMIN):
         return True
 

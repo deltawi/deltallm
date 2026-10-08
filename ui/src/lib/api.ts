@@ -2,6 +2,7 @@ import type { TeamRecord, TeamMemberRecord, TeamMemberCandidate } from './api/te
 export type { TeamRecord, TeamMemberRecord, TeamMemberCandidate } from './api/teamContracts';
 export type * from './api/tierContracts';
 import type { OrganizationTierPolicyPreview, TierPolicySimulation, TierPolicySimulationPayload } from './api/tierContracts';
+import type { KeyRemovalResult } from './api/keyRevocations';
 import type { Paginated, Pagination } from './api/pagination';
 import type { BatchItemError } from './api/batchContracts';
 import type { ManagedAssetAccess, ManagedAssetAccessInput } from './api/managedAssets';
@@ -1098,8 +1099,8 @@ export const keys = {
   update: (tokenHash: string, payload: object, signal?: AbortSignal) =>
     apiFetch<ApiKey>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'PUT', json: payload, signal }),
   regenerate: (tokenHash: string) => apiFetch<{ token: string; raw_key: string }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/regenerate`, { method: 'POST' }),
-  revoke: (tokenHash: string) => apiFetch<{ revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
-  delete: (tokenHash: string) => apiFetch<{ deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
+  revoke: (tokenHash: string) => apiFetch<KeyRemovalResult & { revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
+  delete: (tokenHash: string) => apiFetch<KeyRemovalResult & { deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
   assetVisibility: (tokenHash: string, params?: AssetVisibilityParams) =>
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-visibility`, params)),
   assetAccess: (tokenHash: string, params?: ScopedAssetAccessParams) =>
@@ -1412,41 +1413,5 @@ export const invitations = {
     apiFetch<{ cancelled: boolean; invitation_id: string }>(`/ui/api/invitations/${encodeURIComponent(invitationId)}/cancel`, { method: 'POST' }),
 };
 
-export interface SelfRegistrationPublicConfig {
-  enabled: boolean;
-  mode: string | null;
-  sandbox_access_enabled: boolean;
-}
-
-export interface AuthSsoConfig {
-  sso_enabled: boolean;
-  provider?: string;
-  self_registration?: SelfRegistrationPublicConfig;
-}
-
-export const auth = {
-  me: () => apiFetch<unknown>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
-  internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
-    apiFetch<unknown>('/auth/internal/login', { method: 'POST', json: payload }),
-  masterLogin: (masterKey: string) =>
-    apiFetch<unknown>('/auth/master/login', { method: 'POST', json: { master_key: masterKey } }),
-  internalLogout: () => apiFetch<unknown>('/auth/internal/logout', { method: 'POST' }),
-  changePassword: (current_password: string | null, new_password: string) =>
-    apiFetch<unknown>('/auth/internal/change-password', { method: 'POST', json: { current_password, new_password } }),
-  invitation: (token: string) => apiFetch<unknown>(`/auth/invitations/${encodeURIComponent(token)}`),
-  acceptInvitation: (payload: { token: string; password?: string | null }) =>
-    apiFetch<InvitationAcceptResult>('/auth/invitations/accept', { method: 'POST', json: payload }),
-  forgotPassword: (email: string) =>
-    apiFetch<{ requested: boolean }>('/auth/internal/forgot-password', { method: 'POST', json: { email } }),
-  validateResetPasswordToken: (token: string) =>
-    apiFetch<{ valid: boolean; email?: string }>(`/auth/internal/reset-password/${encodeURIComponent(token)}`),
-  resetPassword: (token: string, new_password: string) =>
-    apiFetch<{ changed: boolean }>('/auth/internal/reset-password', { method: 'POST', json: { token, new_password } }),
-  ssoConfig: () => apiFetch<AuthSsoConfig>('/auth/sso-config'),
-  ssoLogin: (state: string, returnTo = '/') => apiFetch<{ authorize_url: string }>(
-    `/auth/login?state=${encodeURIComponent(state)}&return_to=${encodeURIComponent(returnTo)}`,
-  ),
-  mfaEnrollStart: () => apiFetch<{ secret: string; otpauth_url: string }>('/auth/mfa/enroll/start', { method: 'POST' }),
-  mfaEnrollConfirm: (code: string) => apiFetch<{ mfa_enabled: boolean }>('/auth/mfa/enroll/confirm', { method: 'POST', json: { code } }),
-  mfaVerify: (code: string) => apiFetch<{ mfa_verified: boolean }>('/auth/mfa/verify', { method: 'POST', json: { code } }),
-};
+export { auth } from './api/auth';
+export type { AuthSsoConfig, SelfRegistrationPublicConfig } from './api/auth';

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from src.db.repositories import KeyRecord, KeyRepository
+from src.metrics.prometheus import get_prometheus_registry
+from src.models.errors import AuthenticationError, ServiceUnavailableError
+from src.services.key_auth_cache import KeyAuthCache
 from src.services.key_service import KeyService
 
 
@@ -34,6 +40,7 @@ class RecordingRedis:
         self.store: dict[str, str] = {}
         self.ttls: dict[str, int] = {}
         self.delete_calls: list[tuple[str, ...]] = []
+        self.eval_calls: list[tuple[str, int]] = []
 
     async def get(self, key: str):
         return self.store.get(key)
@@ -41,6 +48,47 @@ class RecordingRedis:
     async def setex(self, key: str, ttl: int, value: str):
         self.store[key] = value
         self.ttls[key] = ttl
+
+    async def eval(self, script, numkeys, *args):
+        self.eval_calls.append((script, numkeys))
+        if "deltallm_key_auth_revoke_v7" in script:
+            key, legacy_key, payload, legacy_payload, ttl = args
+            await self.setex(str(key), int(ttl), str(payload))
+            await self.setex(str(legacy_key), int(ttl), str(legacy_payload))
+            return 1
+        if "deltallm_key_auth_lookup_v7" in script or "deltallm_key_auth_fill_v7" in script:
+            legacy = self.store.get(str(args[1]), "")
+            try:
+                decoded = json.loads(legacy)
+                revoked = (
+                    decoded.get("cache_version") == 5 and decoded.get("cache_kind") == "revoked"
+                )
+            except (ValueError, AttributeError, TypeError):
+                revoked = False
+            if "deltallm_key_auth_lookup_v7" in script:
+                return [
+                    legacy if revoked else self.store.get(str(args[0]), ""),
+                    int(time.time() * 1000),
+                ]
+            if revoked:
+                return legacy
+            key, legacy_key, payload, ttl, deadline = args
+            if int(time.time() * 1000) > int(deadline):
+                return ""
+            if str(key) in self.store:
+                return self.store[str(key)]
+            await self.setex(str(key), int(ttl), str(payload))
+            return str(payload)
+        if "deltallm_key_auth_drop_v7" in script:
+            keys = [
+                key
+                for key in args
+                if key not in self.store
+                or json.loads(self.store[key]).get("cache_kind") != "revoked"
+            ]
+            await self.delete(*keys)
+            return len(keys)
+        raise AssertionError("Unsupported key auth cache script")
 
     async def delete(self, *keys: str):
         self.delete_calls.append(tuple(keys))
@@ -58,6 +106,96 @@ class LifecycleRowPrisma:
         del params
         self.sql = sql
         return [self.row]
+
+
+class FailedWriteRedis(RecordingRedis):
+    async def eval(self, script: str, numkeys: int, *args: str | int) -> object:
+        if "deltallm_key_auth_fill_v7" in script:
+            raise RedisConnectionError("Cache write unavailable")
+        return await super().eval(script, numkeys, *args)
+
+
+class InvalidClockRedis(RecordingRedis):
+    async def eval(self, script: str, numkeys: int, *args: str | int) -> object:
+        del script, numkeys, args
+        return ["", "invalid-clock"]
+
+
+class InvalidFillRedis(RecordingRedis):
+    async def eval(self, script: str, numkeys: int, *args: str | int) -> object:
+        if "deltallm_key_auth_fill_v7" in script:
+            return "invalid-cache-payload"
+        return await super().eval(script, numkeys, *args)
+
+
+@pytest.mark.asyncio
+async def test_cache_write_outage_keeps_primary_authorization_without_local_cache() -> None:
+    redis = FailedWriteRedis()
+    repo = InMemoryRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=redis)
+    registry = get_prometheus_registry()
+    metric = "deltallm_key_auth_cache_failures_total"
+    labels = {"reason": "write_unavailable"}
+    before = registry.get_sample_value(metric, labels) or 0
+
+    for _ in range(2):
+        auth = await service.get_auth_by_token_hash("owned")
+        assert auth.owner_account_id == "owner"
+
+    assert repo.calls == 2 and redis.store == {} and service.primary_gate.active == 0
+    assert registry.get_sample_value(metric, labels) == before + 2
+    del repo.records["owned"]
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash("owned")
+
+
+@pytest.mark.parametrize("bad_clock", [False, True])
+@pytest.mark.asyncio
+async def test_invalid_cache_lookup_uses_primary_and_still_denies_deleted_key(
+    bad_clock: bool,
+) -> None:
+    redis = InvalidClockRedis() if bad_clock else RecordingRedis()
+    redis.store["key:v7:owned"] = "invalid-cache-payload"
+    repo = InMemoryRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=redis)
+
+    auth = await service.get_auth_by_token_hash("owned")
+    assert auth.owner_account_id == "owner"
+    del repo.records["owned"]
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash("owned")
+    assert repo.calls == 2 and service.primary_gate.active == 0
+
+
+@pytest.mark.asyncio
+async def test_revocation_during_primary_read_denies_atomic_cache_fill() -> None:
+    redis = RecordingRedis()
+
+    class RevokingRepo(InMemoryRepo):
+        async def get_by_token(self, token_hash: str) -> KeyRecord | None:
+            record = await super().get_by_token(token_hash)
+            await redis.setex(
+                "key:v7:" + token_hash,
+                62,
+                json.dumps({"cache_version": 7, "cache_kind": "revoked"}),
+            )
+            return record
+
+    repo = RevokingRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=redis)
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash("owned")
+    assert repo.calls == 1 and service.primary_gate.active == 0
+    assert json.loads(redis.store["key:v7:owned"])["cache_kind"] == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_invalid_atomic_fill_does_not_allow_stale_primary_snapshot() -> None:
+    repo = InMemoryRepo({"owned": KeyRecord(token="owned", owner_account_id="owner")})
+    service = KeyService(repository=repo, redis_client=InvalidFillRedis())
+    with pytest.raises(ServiceUnavailableError):
+        await service.get_auth_by_token_hash("owned")
+    assert repo.calls == 1 and service.primary_gate.active == 0
 
 
 @pytest.mark.asyncio
@@ -120,6 +258,71 @@ async def test_key_cache_invalidation_by_hash() -> None:
     assert repo.calls == 2
 
 
+@pytest.mark.parametrize("version", [4, 5, 6])
+async def test_legacy_allow_cannot_hide_output_policy_and_new_cache_retains_it(version):
+    token = "output-policy-upgrade"
+    redis = RecordingRedis()
+    legacy_auth = {"api_key": token}
+    redis.store[f"key:v{version}:{token}"] = json.dumps(
+        {"cache_version": 5, "cache_kind": "allow", "auth": legacy_auth}
+        if version == 5
+        else legacy_auth
+    )
+    repo = InMemoryRepo(
+        {
+            token: KeyRecord(
+                token=token,
+                output_tpm_limit=10,
+                user_output_tpm_limit=20,
+                team_output_tpm_limit=30,
+                org_output_tpm_limit=40,
+                model_output_tpm_limit={"model": 50},
+                team_model_output_tpm_limit={"model": 60},
+            )
+        }
+    )
+    service = KeyService(repository=repo, redis_client=redis)
+    for source in ("database", "redis"):
+        auth = await service.get_auth_by_token_hash(token)
+        assert auth.metadata["auth_cache_source"] == source
+        assert (
+            auth.key_output_tpm_limit,
+            auth.user_output_tpm_limit,
+            auth.team_output_tpm_limit,
+            auth.org_output_tpm_limit,
+        ) == (10, 20, 30, 40)
+        assert auth.key_model_output_tpm_limit == {"model": 50}
+        assert auth.team_model_output_tpm_limit == {"model": 60}
+    assert repo.calls == 1
+    assert len(redis.eval_calls) == 3  # Cold lookup + fill, then one cache-hit operation.
+    assert json.loads(redis.store[KeyAuthCache.key(token)])["cache_version"] == 7
+
+
+@pytest.mark.parametrize("scope", ["key", "team", "organization", "user"])
+async def test_output_policy_invalidation_preserves_both_revocation_namespaces(scope):
+    token = "revoked-output-policy"
+    redis = RecordingRedis()
+    service = KeyService(repository=ScopedRepo([token]), redis_client=redis)
+    await service.mark_key_revoked_by_hash(token)
+    for version in (4, 6):
+        redis.store[f"key:v{version}:{token}"] = "{}"
+    invalidate = {
+        "key": service.invalidate_key_cache_by_hash,
+        "team": service.invalidate_keys_for_team,
+        "organization": service.invalidate_keys_for_org,
+        "user": service.invalidate_keys_for_user,
+    }[scope]
+    await invalidate(token)
+    assert set(redis.store) == {f"key:v5:{token}", f"key:v7:{token}"}
+    for version in (5, 7):
+        assert json.loads(redis.store[f"key:v{version}:{token}"]) == {
+            "cache_version": version,
+            "cache_kind": "revoked",
+        }
+    with pytest.raises(AuthenticationError):
+        await service.get_auth_by_token_hash(token)
+
+
 @pytest.mark.asyncio
 async def test_key_scope_invalidation_batches_redis_deletes() -> None:
     tokens = [f"token-{index}" for index in range(501)]
@@ -130,9 +333,9 @@ async def test_key_scope_invalidation_batches_redis_deletes() -> None:
     invalidated = await service.invalidate_keys_for_org("org-1")
 
     assert invalidated == 501
-    assert [len(call) for call in redis.delete_calls] == [500, 500, 2, 500, 1]
+    assert [len(call) for call in redis.delete_calls] == [500, 500, 500, 3, 500, 1]
     assert set(key for call in redis.delete_calls for key in call) == {
-        f"key:v{version}:{token}" for version in (4, 5, 6) for token in tokens
+        f"key:v{version}:{token}" for version in (4, 5, 6, 7) for token in tokens
     }
 
 
@@ -153,7 +356,7 @@ async def test_key_cache_ttl_respects_configured_limit() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v6:{token_hash}"
+    cache_key = f"key:v7:{token_hash}"
     assert redis.ttls[cache_key] == 300
 
 
@@ -174,7 +377,7 @@ async def test_key_cache_ttl_capped_by_key_expiry() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:v6:{token_hash}"
+    cache_key = f"key:v7:{token_hash}"
     assert 1 <= redis.ttls[cache_key] <= 20
 
 
@@ -248,7 +451,7 @@ async def test_validate_key_ignores_pre_owner_contract_cache_entries() -> None:
 
     assert auth.owner_account_id == "acct-current"
     assert repo.calls == 1
-    assert f"key:v6:{token_hash}" in redis.store
+    assert f"key:v7:{token_hash}" in redis.store
 
 
 @pytest.mark.asyncio

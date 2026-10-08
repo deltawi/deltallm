@@ -11,6 +11,14 @@ DeltaLLM supports API authentication, browser-based admin sessions, invitation-b
 | Sign in to the Admin UI | Bootstrap admin account |
 | Use company identity | SSO |
 
+## Trusted Console customer sessions
+
+A trusted Console backend can exchange a verified Clerk identity for an opaque, customer-scoped gateway session. Register the existing organization/team binding first. Identity uses the exact issuer and stable subject; email never silently links an existing account. External sign-in is disabled by default and requires the coordinated deployment protocol.
+
+The Console stores gateway sessions in an encrypted backend vault and proxies customer requests under `/gateway/`. Customer sessions retain MFA and password-change controls and have a fixed workspace permission ceiling. Private credentials and models belong to the customer account. Playground inference uses a separately selected, owned API key, with existing billing and inference restrictions.
+
+See [external customer configuration](../configuration/external-customer-auth.md) and the [Console connection contract](../guides/console-gateway-connection.md) for assertion verification, replay protection, renewal, logout, key revocation, and rollout.
+
 ## Quick Success Path
 
 1. Set a valid `DELTALLM_MASTER_KEY`

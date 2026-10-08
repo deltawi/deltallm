@@ -93,6 +93,40 @@ Output TPM appeared beside RPM and TPM, in the grid, and in bulk controls. The
 team detail editor loaded its saved scalar and model output limits. This smoke
 check used local fixture responses; backend authorization was checked by tests.
 
+## Main merge verification (2026-10-08)
+
+The branch merges `main` at `4facbbea0730ed64058b954b1dc47979f2c940f7`
+(Console sign-in). Seven conflict files were resolved. The Console scope checks,
+bounded primary fallback, atomic cache fill, and revocation owner remain in
+place. Team directory queries include the scalar and model output fields.
+
+The combined auth contract uses cache version 7. It ignores older allow
+records, invalidates allow records in versions 4, 5, 6, and 7, and retains
+revocation tombstones. Lookup and fill also check version 5 denials. Revocation
+publishes version 5 and 7 tombstones atomically. This adds no Redis round trip:
+a warm auth lookup remains one operation, and a cold lookup remains one joined
+SQL read and one cache fill. Quota admission and completion budgets are unchanged.
+
+| Gate | Result |
+| --- | --- |
+| Hermetic | 4,433 passed across the full lane and socket-dependent rerun |
+| Application | 1,616 passed across the full lane and local HTTP/WebSocket reruns |
+| PostgreSQL | 484 passed; one opt-in Console cardinality profile skipped |
+| Redis | 230 passed |
+| Helm | 80 passed |
+| Collection and lane audit | 6,844 tests, each assigned to one primary lane |
+| Migrations | Fresh, last release, shared feature, model-identity recovery, and upgrade from the new main passed |
+| UI | 311 unit tests passed; production build and conflict-path lint passed |
+| Full UI lint | Existing 88 errors and 3 warnings remain unchanged |
+| Python | Prisma generation, full Ruff check, and changed cache/test format checks passed |
+| Documentation | Generated references, health, strict build, and public containment passed |
+
+The sandbox prevents local socket binding. The affected three hermetic and ten
+application cases were rerun with loopback access and all passed. The database
+and Redis checks used disposable services. Both task-owned containers were
+removed after verification. The merged UI initial JavaScript bundle is
+311.30 kB gzip.
+
 ## Dependency and capacity evidence
 
 The [load summaries](output-tpm-model-load-summary.json) and

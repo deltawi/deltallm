@@ -13,8 +13,7 @@ Each deployment defines:
 
 ![Models](images/models-list.png)
 
-**Access:** any authenticated account can view the Models page; only platform admins can create,
-edit, or delete deployments. See [Access requirements](access-requirements.md), [model deployment
+**Access:** authenticated accounts see permitted models. Platform administrators manage deployments; eligible creator accounts, including [external customer sessions](../configuration/external-customer-auth.md), can create and manage their own private models and permitted workspace grants. External grants stay within the registered customer organization/team. See [Access requirements](access-requirements.md), [model deployment
 configuration](../configuration/models.md), and [provider capabilities](../providers/capabilities.md).
 
 ## Quick Success Workflow

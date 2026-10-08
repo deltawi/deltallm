@@ -91,3 +91,9 @@ Runtime requests still use the normal budget and rate-limit checks for the organ
 - Service accounts are non-login owners for shared services, jobs, or automations
 - Keys no longer carry model allowlists on the key record. The create/edit dialog writes callable-target bindings, access-group bindings, and scope policies so a key can inherit its team asset set or narrow it further.
 - When rate limits are updated via the admin API or UI, the key validation cache is automatically invalidated so new limits take effect immediately
+
+## Keys with a Console customer session
+
+An [external customer session](../configuration/external-customer-auth.md) can list, create, revoke, and delete its own keys in its fixed team, subject to the team's self-service policy. It cannot regenerate keys, change ownership or budgets, or administer another customer's keys. Playground selection requires the exact mapped account, runtime user, and team.
+
+Revocation can return `pending` while durable cache invalidation completes. The UI shows this state and polls enforcement status. With the enabled feature's maximum 60-second cache lifetime, enforcement is bounded by 61 seconds. Signing out closes browser sessions; application keys remain active until explicitly revoked or blocked by inference controls.

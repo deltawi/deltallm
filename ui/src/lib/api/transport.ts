@@ -1,3 +1,5 @@
+import { mountedPath, uiMount } from '../uiMount';
+
 export class ApiError extends Error {
   status: number;
   detail?: unknown;
@@ -22,8 +24,8 @@ export function structuredApiErrorDetail(error: unknown): StructuredApiErrorDeta
   if (!(error instanceof ApiError) || !error.detail || typeof error.detail !== 'object') {
     return null;
   }
-  const wrapper = error.detail as { detail?: unknown };
-  const detail = wrapper.detail;
+  const wrapper = error.detail as { detail?: unknown; error?: unknown };
+  const detail = wrapper.detail ?? wrapper.error;
   if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
   return detail as StructuredApiErrorDetail;
 }
@@ -53,8 +55,9 @@ async function parseErrorDetail(response: Response): Promise<unknown> {
 }
 
 function errorMessage(status: number, detail: unknown): string {
-  if (detail && typeof detail === 'object' && 'detail' in detail) {
-    const nested = (detail as { detail?: unknown }).detail;
+  if (detail && typeof detail === 'object') {
+    const wrapper = detail as { detail?: unknown; error?: unknown };
+    const nested = wrapper.detail ?? wrapper.error;
     if (typeof nested === 'string' && nested.trim()) return nested;
     if (nested && typeof nested === 'object' && 'message' in nested) {
       const message = (nested as { message?: unknown }).message;
@@ -70,10 +73,17 @@ export async function apiFetch<T>(
   opts?: RequestInit & { json?: unknown },
 ): Promise<T> {
   const body = opts && 'json' in opts ? JSON.stringify(opts.json ?? null) : opts?.body;
-  const response = await fetch(path, {
+  const headers = buildHeaders(opts?.headers, body);
+  if (uiMount().external_console) {
+    const supplied = new Headers(headers);
+    if (supplied.has('Authorization') || supplied.has('X-Master-Key')) {
+      throw new Error('Browser credentials are not accepted by the Console proxy');
+    }
+  }
+  const response = await fetch(mountedPath(path), {
     credentials: 'include',
     ...opts,
-    headers: buildHeaders(opts?.headers, body),
+    headers,
     body,
   });
 

@@ -10,6 +10,7 @@ from src.db.cache_invalidation_outbox import (
     CacheInvalidationOutboxRecord,
     CacheInvalidationOutboxRepository,
 )
+from src.metrics.external_auth import external_key_revocation_delay
 from src.services.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,17 @@ class CacheInvalidationWorker:
             if not completed:
                 self._log_transition_skipped(record, transition="completed")
                 return
+            if (record.metadata or {}).get(
+                "auth_revocation"
+            ) is True and record.created_at is not None:
+                created = (
+                    record.created_at.replace(tzinfo=UTC)
+                    if record.created_at.tzinfo is None
+                    else record.created_at.astimezone(UTC)
+                )
+                external_key_revocation_delay.observe(
+                    max(0, (datetime.now(UTC) - created).total_seconds())
+                )
             logger.info(
                 "cache invalidation outbox record completed",
                 extra={
@@ -167,7 +179,10 @@ class CacheInvalidationWorker:
             await self.key_service.invalidate_keys_for_user(record.scope_id)
             return
         if record.scope_type == "key_hash":
-            await self.key_service.invalidate_key_cache_by_hash(record.scope_id)
+            if (record.metadata or {}).get("auth_revocation") is True:
+                await self.key_service.mark_key_revoked_by_hash(record.scope_id)
+            else:
+                await self.key_service.invalidate_key_cache_by_hash(record.scope_id)
             return
         raise ValueError(f"Unsupported cache invalidation scope_type: {record.scope_type}")
 

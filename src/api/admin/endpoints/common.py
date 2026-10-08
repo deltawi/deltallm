@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 import logging
@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import HTTPException, Request, status
 from prisma.errors import RawQueryError
 
+from src.api.admin.auth_scope import AuthScope, get_auth_scope as get_auth_scope
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.db.repositories import AuditRepository
@@ -65,9 +66,8 @@ async def managed_asset_membership_transaction(db: Any) -> AsyncIterator[Any]:
             yield tx
     except RawQueryError as exc:
         metadata = exc.meta if isinstance(exc.meta, Mapping) else {}
-        if (
-            metadata.get("code") == "23514"
-            and any(message in str(exc) for message in _MODEL_CREDENTIAL_AUDIENCE_CONSTRAINTS)
+        if metadata.get("code") == "23514" and any(
+            message in str(exc) for message in _MODEL_CREDENTIAL_AUDIENCE_CONSTRAINTS
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -78,18 +78,6 @@ async def managed_asset_membership_transaction(db: Any) -> AsyncIterator[Any]:
                 ),
             ) from exc
         raise
-
-
-@dataclass
-class AuthScope:
-    is_platform_admin: bool = False
-    org_ids: list[str] = field(default_factory=list)
-    team_ids: list[str] = field(default_factory=list)
-    org_permissions_by_id: dict[str, set[str]] = field(default_factory=dict)
-    team_permissions_by_id: dict[str, set[str]] = field(default_factory=dict)
-    granted_permissions: set[str] = field(default_factory=set)
-    effective_permissions: set[str] = field(default_factory=set)
-    account_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -110,126 +98,6 @@ USER_PROFILE_TYPE_ALIASES = {
     "user": "internal_user",
     "admin": "team_admin",
 }
-
-
-def get_auth_scope(
-    request: Request,
-    authorization: str | None = None,
-    x_master_key: str | None = None,
-    required_permission: str | None = None,
-    any_permission: list[str] | None = None,
-) -> AuthScope:
-    from src.middleware.platform_auth import (
-        get_configured_master_key,
-        has_master_key_session,
-        master_key_session_unavailable,
-    )
-
-    configured = get_configured_master_key(request)
-
-    if authorization and authorization.lower().startswith("bearer "):
-        provided = authorization.split(" ", 1)[1].strip()
-    else:
-        provided = x_master_key
-
-    import hmac as _hmac
-
-    if configured and provided and _hmac.compare_digest(provided, configured):
-        return AuthScope(is_platform_admin=True)
-    if has_master_key_session(request):
-        return AuthScope(is_platform_admin=True)
-
-    from src.middleware.platform_auth import get_platform_auth_context
-    from src.middleware.platform_auth import requires_mfa_verification
-    from src.auth.roles import (
-        has_platform_permission,
-        Permission as Perm,
-        ORG_ROLE_PERMISSIONS,
-        TEAM_ROLE_PERMISSIONS,
-    )
-
-    context = get_platform_auth_context(request)
-    if context is None:
-        if master_key_session_unavailable(request):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Authentication service unavailable",
-                headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
-            )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
-        )
-    if requires_mfa_verification(context):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required"
-        )
-
-    account_id = str(context.account_id) if context.account_id else None
-
-    if has_platform_permission(context.role, Perm.PLATFORM_ADMIN):
-        return AuthScope(is_platform_admin=True, account_id=account_id)
-
-    org_permissions_by_id: dict[str, set[str]] = {}
-    for membership in context.organization_memberships:
-        role_perms = ORG_ROLE_PERMISSIONS.get(str(membership.get("role") or ""), set())
-        organization_id = str(membership.get("organization_id") or "").strip()
-        if not organization_id:
-            continue
-        org_permissions_by_id.setdefault(organization_id, set()).update(role_perms)
-
-    team_permissions_by_id: dict[str, set[str]] = {}
-    for membership in context.team_memberships:
-        role_perms = TEAM_ROLE_PERMISSIONS.get(str(membership.get("role") or ""), set())
-        team_id = str(membership.get("team_id") or "").strip()
-        if not team_id:
-            continue
-        team_permissions_by_id.setdefault(team_id, set()).update(role_perms)
-
-    effective_permissions: set[str] = set()
-    for permissions in org_permissions_by_id.values():
-        effective_permissions.update(permissions)
-    for permissions in team_permissions_by_id.values():
-        effective_permissions.update(permissions)
-
-    permissions_to_check: list[str] = []
-    if required_permission:
-        permissions_to_check = [required_permission]
-    elif any_permission:
-        permissions_to_check = list(any_permission)
-
-    if permissions_to_check:
-        org_ids_set: set[str] = set()
-        granted: set[str] = set()
-        for organization_id, role_perms in org_permissions_by_id.items():
-            matched = [p for p in permissions_to_check if p in role_perms]
-            if matched:
-                org_ids_set.add(organization_id)
-                granted.update(matched)
-
-        team_ids_set: set[str] = set()
-        for team_id, role_perms in team_permissions_by_id.items():
-            matched = [p for p in permissions_to_check if p in role_perms]
-            if matched:
-                team_ids_set.add(team_id)
-                granted.update(matched)
-
-        org_ids = list(org_ids_set)
-        team_ids = list(team_ids_set)
-    else:
-        org_ids = list(org_permissions_by_id)
-        team_ids = list(team_permissions_by_id)
-        granted = set()
-
-    return AuthScope(
-        is_platform_admin=False,
-        org_ids=org_ids,
-        team_ids=team_ids,
-        org_permissions_by_id=org_permissions_by_id,
-        team_permissions_by_id=team_permissions_by_id,
-        granted_permissions=granted,
-        effective_permissions=effective_permissions,
-        account_id=account_id,
-    )
 
 
 def db_or_503(request: Request) -> Any:

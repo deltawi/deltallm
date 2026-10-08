@@ -1,3 +1,5 @@
+import { uiMount } from '../lib/uiMount';
+import ConsoleInferenceKey from '../components/playground/ConsoleInferenceKey';
 import { useEffect, useMemo, useState } from 'react';
 import { models as modelsApi } from '../lib/api';
 import type { ModelOption, PlaygroundMode } from '../components/playground/types';
@@ -88,5 +90,10 @@ export default function Playground() {
     stt,
   };
 
-  return isMd ? <PlaygroundDesktop {...sharedProps} /> : <PlaygroundMobile {...sharedProps} />;
+  const view = isMd ? <PlaygroundDesktop {...sharedProps} /> : <PlaygroundMobile {...sharedProps} />;
+  if (!uiMount().external_console) return view;
+  return <div className="flex h-full flex-col">
+    <ConsoleInferenceKey onSelection={(ready) => setApiKey(ready ? 'console-selected-key' : '')} />
+    <div className="min-h-0 flex-1">{view}</div>
+  </div>;
 }

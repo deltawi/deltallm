@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.startup_settings import startup_setting
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -85,12 +87,7 @@ def _build_redis_client(settings: Any, cfg: Any) -> Redis:
 
 
 def _startup_setting(general_settings: Any, settings: Any, field_name: str, default: Any) -> Any:
-    fields_set = getattr(general_settings, "model_fields_set", None)
-    if fields_set is None or field_name in fields_set:
-        value = getattr(general_settings, field_name, None)
-        if value is not None:
-            return value
-    return getattr(settings, field_name, default)
+    return startup_setting(general_settings, settings, field_name, default)
 
 
 async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
@@ -98,6 +95,11 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     file_config = load_yaml_dict(settings.config_path)
     cfg = build_app_config(file_config, secret_resolver=SecretResolver())
 
+    from src.ui.config import UIMountSettings
+
+    app.state.ui_mount = UIMountSettings.model_validate(
+        _startup_setting(cfg.general_settings, settings, "ui_mount", UIMountSettings())
+    )
     app.state.settings = settings
     app.state.app_config = cfg
 

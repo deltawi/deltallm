@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from src.auth.external_policy import CUSTOMER_PERMISSION_CEILING
 from src.auth.roles import (
     ORG_ROLE_PERMISSIONS,
     PLATFORM_ROLE_PERMISSIONS,
@@ -13,6 +14,9 @@ from src.auth.roles import (
 def effective_permissions_for_context(context: Any | None) -> list[str]:
     if context is None:
         return []
+
+    if getattr(context, "external_workspace", None) is not None:
+        return sorted(set(context.permissions) & CUSTOMER_PERMISSION_CEILING)
 
     permissions: set[str] = set()
     role = str(getattr(context, "role", "") or "")
@@ -35,6 +39,7 @@ def build_ui_access(
     effective_permissions: Iterable[str],
     organization_memberships: Iterable[dict[str, Any]] | None = None,
     spend_reporting_v2_enabled: bool = False,
+    external_customer: bool = False,
 ) -> dict[str, bool]:
     permissions = set(effective_permissions)
     is_platform_admin = Permission.PLATFORM_ADMIN in permissions
@@ -47,7 +52,7 @@ def build_ui_access(
         is_platform_admin or Permission.SPEND_READ in permissions
     )
     can_create_team = is_platform_admin
-    if not can_create_team:
+    if not can_create_team and not external_customer:
         for membership in list(organization_memberships or []):
             org_role = str(membership.get("role") or "")
             if Permission.TEAM_UPDATE in ORG_ROLE_PERMISSIONS.get(org_role, set()):
@@ -79,11 +84,13 @@ def build_ui_access(
         and (is_platform_admin or Permission.ORG_READ in permissions),
         "organization_create": is_platform_admin,
         "teams": authenticated and (is_platform_admin or Permission.TEAM_READ in permissions),
-        "team_create": authenticated and can_create_team,
+        "team_create": authenticated and can_create_team and not external_customer,
         "people_access": is_platform_admin,
         "usage": authenticated and can_view_usage,
         "audit": authenticated and (is_platform_admin or Permission.AUDIT_READ in permissions),
-        "batches": authenticated and (is_platform_admin or Permission.KEY_READ in permissions),
+        "batches": authenticated
+        and not external_customer
+        and (is_platform_admin or Permission.KEY_READ in permissions),
         "guardrails": is_platform_admin,
         "playground": authenticated,
         "settings": is_platform_admin,
