@@ -1,3 +1,4 @@
+import { mountedAssetPath } from '../lib/uiMount';
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import {
@@ -96,7 +97,7 @@ export default function BrandLogo({
     return (
       <div className={clsx('flex min-w-0 items-center', className)}>
         <img
-          src={fullLogoUrl}
+          src={mountedAssetPath(fullLogoUrl)}
           alt={branding.instance_name}
           className={clsx('h-8 w-auto max-w-full object-contain object-left', fullClassName)}
           onError={() => markFailed(fullLogoUrl)}
@@ -109,7 +110,7 @@ export default function BrandLogo({
     <div className={clsx('flex min-w-0 items-center gap-2.5', className)}>
       {visibleUrl ? (
         <img
-          src={visibleUrl}
+          src={mountedAssetPath(visibleUrl)}
           alt={variant === 'mark' ? `${branding.instance_name} logo` : ''}
           className={clsx('h-8 w-8 shrink-0 object-contain', markClassName)}
           onError={() => markFailed(visibleUrl)}

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Literal, Any
 
 from pydantic import BaseModel, Field
+from src.models.external_auth import ExternalWorkspaceContext, ExternalWorkspaceResponse
 
 
 class PlatformAuthContext(BaseModel):
@@ -17,6 +18,7 @@ class PlatformAuthContext(BaseModel):
     organization_memberships: list[dict[str, Any]] = Field(default_factory=list)
     team_memberships: list[dict[str, Any]] = Field(default_factory=list)
     session_expires_at: datetime | None = None
+    external_workspace: ExternalWorkspaceContext | None = None
 
 
 class InternalLoginRequest(BaseModel):
@@ -125,6 +127,9 @@ class UIAccessResponse(BaseModel):
 class CurrentSessionResponse(BaseModel):
     authenticated: bool
     auth_mode: str | None = None
+    session_source: Literal["operator", "external_customer"] | None = None
+    expires_at: datetime | None = None
+    workspace: ExternalWorkspaceResponse | None = None
     account_id: str | None = None
     email: str | None = None
     role: str | None = None

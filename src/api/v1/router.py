@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from src.api.external_auth import router as external_auth_router
 from src.api.v1.endpoints import (
     audio_speech_router,
     audio_transcription_router,
@@ -43,5 +44,6 @@ v1_router.include_router(models_router)
 v1_router.include_router(spend_router)
 v1_router.include_router(global_router)
 v1_router.include_router(auth_router)
+v1_router.include_router(external_auth_router)
 
 __all__ = ["v1_router"]

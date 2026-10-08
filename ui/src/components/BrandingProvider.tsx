@@ -1,3 +1,4 @@
+import { mountedAssetPath } from '../lib/uiMount';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { branding as brandingApi } from '../lib/api';
@@ -106,12 +107,12 @@ export default function BrandingProvider({ children }: { children: ReactNode }) 
 
     const activeFavicon = favicon;
     const customFavicon = branding.favicon_url;
-    const intendedUrl = customFavicon || defaultFavicon;
+    const intendedUrl = mountedAssetPath(customFavicon || defaultFavicon);
     const handleFaviconError = () => {
       if (activeFavicon.href !== new URL(intendedUrl, document.baseURI).toString()) return;
       activeFavicon.onerror = null;
       activeFavicon.type = 'image/svg+xml';
-      activeFavicon.href = defaultFavicon;
+      activeFavicon.href = mountedAssetPath(defaultFavicon);
     };
 
     activeFavicon.onerror = customFavicon ? handleFaviconError : null;

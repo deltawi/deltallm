@@ -18,6 +18,8 @@ const testSources = [
   'tests/themeSettingsPanel.test.tsx',
   'tests/authRedirect.test.ts',
   'tests/authSession.test.ts',
+  'tests/externalConsole.test.ts',
+  'tests/externalConsoleLifecycle.test.tsx',
   'tests/modelFormShared.test.ts',
   'tests/modelNamedCredentialCreate.test.tsx',
   'tests/modelsApi.test.ts',

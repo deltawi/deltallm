@@ -604,7 +604,7 @@ async def get_settings(
         return {}
 
     scope = get_auth_scope(request, authorization, x_master_key)
-    general = to_json_value(app_config.general_settings.model_dump())
+    general = to_json_value(app_config.general_settings.model_dump(exclude={"external_auth"}))
     if not scope.is_platform_admin:
         general.pop("master_key", None)
 

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from time import monotonic
+
+from prisma.errors import PrismaError
+from redis.exceptions import RedisError
+
+from src.concurrency import BoundedCapacityGate, CapacityGateFull, CapacityGateTimedOut
+from src.metrics.key_auth_cache import KeyAuthCacheFailureReason, record_key_auth_cache_failure
+from src.services.key_auth_cache import KeyAuthCache, KeyCacheLookup
 
 from src.db.repositories import KeyRepository
-from src.models.errors import AuthenticationError
+from src.models.errors import AuthenticationError, ServiceUnavailableError
 from src.models.responses import UserAPIKeyAuth
 from src.services.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 from src.services.runtime_scopes import annotate_auth_metadata
@@ -30,6 +38,8 @@ class KeyService:
     ) -> None:
         self.repository = repository
         self.redis = redis_client
+        self.auth_cache = KeyAuthCache(redis_client) if redis_client is not None else None
+        self.primary_gate = BoundedCapacityGate(concurrency=4, max_waiters=8)
         self.salt = salt
         self.auth_cache_ttl_seconds = max(1, int(auth_cache_ttl_seconds))
         self.lifecycle_authorizer = lifecycle_authorizer
@@ -38,79 +48,71 @@ class KeyService:
         return hashlib.sha256(f"{self.salt}:{raw_key}".encode("utf-8")).hexdigest()
 
     async def validate_key(self, raw_key: str) -> UserAPIKeyAuth:
-        token_hash = self.hash_key(raw_key)
-        cache_key = self._cache_key(token_hash)
-
-        if self.redis is not None:
-            cached = await self.redis.get(cache_key)
-            if cached:
-                logger.info("key validation cache hit", extra={"token_hash": token_hash})
-                payload = json.loads(cached if isinstance(cached, str) else cached.decode("utf-8"))
-                return self._mark_cache_source(UserAPIKeyAuth.model_validate(payload), "redis")
-
-        record = await self.repository.get_by_token(token_hash)
-        if record is None:
-            logger.warning("invalid api key", extra={"token_hash": token_hash})
-            raise AuthenticationError(message="Invalid API key", code="invalid_api_key")
-
-        now = datetime.now(tz=UTC)
-        if record.expires and record.expires < now:
-            logger.warning("expired api key", extra={"token_hash": token_hash})
-            raise AuthenticationError(message="API key expired", code="invalid_api_key")
-
-        await self._validate_organization(record)
-
-        auth = self._auth_from_record(record)
-
-        if self.redis is not None:
-            ttl = self.auth_cache_ttl_seconds
-            if record.expires is not None:
-                ttl = max(1, min(ttl, int((record.expires - now).total_seconds())))
-            await self.redis.setex(cache_key, ttl, auth.model_dump_json())
-
-        return auth
+        return await self.get_auth_by_token_hash(self.hash_key(raw_key))
 
     async def get_auth_by_token_hash(self, token_hash: str) -> UserAPIKeyAuth:
-        normalized_hash = str(token_hash or "").strip()
-        if not normalized_hash:
-            raise AuthenticationError(message="Invalid API key", code="invalid_api_key")
-
-        cache_key = self._cache_key(normalized_hash)
-        now = datetime.now(tz=UTC)
-
-        if self.redis is not None:
-            cached = await self.redis.get(cache_key)
-            if cached:
-                payload = json.loads(cached if isinstance(cached, str) else cached.decode("utf-8"))
-                return self._mark_cache_source(UserAPIKeyAuth.model_validate(payload), "redis")
-
-        record = await self.repository.get_by_token(normalized_hash)
-        if record is None:
-            logger.warning(
-                "missing api key for stored token hash", extra={"token_hash": normalized_hash}
-            )
-            raise AuthenticationError(message="Invalid API key", code="invalid_api_key")
-        if record.expires and record.expires < now:
-            logger.warning(
-                "expired api key for stored token hash", extra={"token_hash": normalized_hash}
-            )
-            raise AuthenticationError(message="API key expired", code="invalid_api_key")
-
-        await self._validate_organization(record)
-
-        auth = self._auth_from_record(record)
-        if self.redis is not None:
+        normalized = str(token_hash or "").strip()
+        if not normalized:
+            raise AuthenticationError(code="invalid_api_key")
+        started = monotonic()
+        lookup: KeyCacheLookup | None = None
+        if self.auth_cache is not None:
+            try:
+                async with asyncio.timeout(0.1):
+                    lookup = await self.auth_cache.lookup(normalized)
+            except (RedisError, OSError, TimeoutError):
+                record_key_auth_cache_failure(KeyAuthCacheFailureReason.READ_UNAVAILABLE)
+                lookup = None
+            except (ServiceUnavailableError, ValueError, TypeError):
+                record_key_auth_cache_failure(KeyAuthCacheFailureReason.INVALID_PAYLOAD)
+                lookup = None
+            if lookup is not None and lookup.auth is not None:
+                return self._mark_cache_source(lookup.auth, "redis")
+        auth = await self._load_primary_auth(normalized, started=started)
+        if self.auth_cache is not None and lookup is not None:
             ttl = self.auth_cache_ttl_seconds
-            if record.expires is not None:
-                ttl = max(1, min(ttl, int((record.expires - now).total_seconds())))
-            await self.redis.setex(cache_key, ttl, auth.model_dump_json())
+            if auth.expires is not None:
+                expiry = datetime.fromisoformat(auth.expires.replace("Z", "+00:00"))
+                ttl = max(1, min(ttl, int((expiry - datetime.now(UTC)).total_seconds())))
+            try:
+                async with asyncio.timeout(max(0.001, 1 - (monotonic() - started))):
+                    auth = await self.auth_cache.fill(
+                        normalized, auth, ttl_seconds=ttl, deadline_ms=lookup.fill_deadline_ms
+                    )
+            except (RedisError, OSError, TimeoutError):
+                # The primary authorized this request. Cache delivery cannot turn it into denial.
+                record_key_auth_cache_failure(KeyAuthCacheFailureReason.WRITE_UNAVAILABLE)
         return auth
+
+    async def _load_primary_auth(self, token_hash: str, *, started: float) -> UserAPIKeyAuth:
+        try:
+            await self.primary_gate.acquire(timeout_seconds=0.05)
+        except (CapacityGateFull, CapacityGateTimedOut) as exc:
+            raise ServiceUnavailableError(code="key_auth_capacity_unavailable") from exc
+        try:
+            async with asyncio.timeout(max(0.001, 1 - (monotonic() - started))):
+                record = await self.repository.get_by_token(token_hash)
+                if record is None:
+                    raise AuthenticationError(code="invalid_api_key")
+                if record.expires and record.expires <= datetime.now(UTC):
+                    raise AuthenticationError(message="API key expired", code="invalid_api_key")
+                await self._validate_organization(record)
+                return self._auth_from_record(record)
+        except (PrismaError, TimeoutError) as exc:
+            raise ServiceUnavailableError(code="key_auth_database_unavailable") from exc
+        finally:
+            await self.primary_gate.release()
+
+    async def mark_key_revoked_by_hash(self, token_hash: str) -> None:
+        if self.auth_cache is None:
+            raise CacheInvalidationBackendUnavailable("redis unavailable")
+        await self.auth_cache.revoke(token_hash, ttl_seconds=self.auth_cache_ttl_seconds)
 
     async def invalidate_key_cache_by_hash(self, token_hash: str) -> None:
         if self.redis is None:
             return
         cache_key = self._cache_key(token_hash)
-        await self.redis.delete(cache_key)
+        await self.auth_cache.invalidate([cache_key])
 
     async def invalidate_keys_for_team(self, team_id: str) -> int:
         return await self._invalidate_keys_by_scope("team_id", team_id)
@@ -172,7 +174,7 @@ class KeyService:
         count = 0
         for start in range(0, len(cache_keys), _CACHE_DELETE_BATCH_SIZE):
             batch = cache_keys[start : start + _CACHE_DELETE_BATCH_SIZE]
-            await self.redis.delete(*batch)
+            await self.auth_cache.invalidate(batch)
             count += len(batch)
         return count
 
@@ -180,7 +182,7 @@ class KeyService:
     def _cache_key(token_hash: str) -> str:
         # Version the serialized auth contract so entries without lifecycle
         # state cannot silently authenticate an inactive organization.
-        return f"key:v4:{token_hash}"
+        return KeyAuthCache.key(token_hash)
 
     def _auth_from_record(self, record: Any) -> UserAPIKeyAuth:
         auth = UserAPIKeyAuth(

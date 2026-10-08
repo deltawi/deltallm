@@ -3,15 +3,18 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
+from src.api.admin.batch_access import require_operator_batch_access
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, get_auth_scope, to_json_value
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.batch.create.admin_service import BatchCreateSessionAdminService
 from src.services.ui_authorization import build_batch_create_session_capabilities
 
-router = APIRouter(tags=["Admin Batch Create Sessions"])
+router = APIRouter(
+    tags=["Admin Batch Create Sessions"], dependencies=[Depends(require_operator_batch_access)]
+)
 
 _VALID_CREATE_SESSION_STATUSES = {
     "staged",

@@ -162,6 +162,7 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
         BootstrapStatus("sso_auth", "ready"),
         BootstrapStatus("jwt_auth", "ready"),
         BootstrapStatus("custom_auth", "ready"),
+        BootstrapStatus("external_auth", "disabled"),
     )
 
 
@@ -209,6 +210,7 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(
         BootstrapStatus("sso_auth", "disabled"),
         BootstrapStatus("jwt_auth", "disabled"),
         BootstrapStatus("custom_auth", "disabled"),
+        BootstrapStatus("external_auth", "disabled"),
     )
 
 

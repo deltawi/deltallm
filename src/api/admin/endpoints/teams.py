@@ -9,8 +9,6 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import (
     Permission,
-    ORG_ROLE_PERMISSIONS,
-    TEAM_ROLE_PERMISSIONS,
     TeamRole,
     validate_team_role,
 )
@@ -33,7 +31,8 @@ from src.db.callable_target_access_groups import CallableTargetAccessGroupBindin
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.route_groups import RouteGroupRepository
-from src.middleware.platform_auth import get_platform_auth_context
+from src.db.team_directory import TeamDirectoryRepository, TeamDirectoryScope
+from src.middleware.platform_auth import get_platform_auth_context, has_scoped_permission
 from src.services.asset_binding_mirror import reload_callable_target_grants
 from src.services.asset_visibility_preview import build_asset_visibility_preview
 from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state
@@ -157,6 +156,13 @@ async def _require_team_access(
     *,
     write: bool = False,
 ) -> dict[str, Any]:
+    required_perm = Permission.TEAM_UPDATE if write else Permission.TEAM_READ
+    ctx = get_platform_auth_context(request)
+    if ctx is not None and ctx.external_workspace is not None:
+        if team_id != ctx.external_workspace.team_id:
+            raise HTTPException(status_code=404, detail="Team not found")
+        if not has_scoped_permission(ctx, required_perm, team_id=team_id):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
     rows = await db.query_raw(
         """
         SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
@@ -179,25 +185,11 @@ async def _require_team_access(
     if scope.is_platform_admin:
         return team
 
-    required_perm = Permission.TEAM_UPDATE if write else Permission.TEAM_READ
     team_org = team.get("organization_id")
-
-    ctx = get_platform_auth_context(request)
-    if ctx:
-        if team_org:
-            for membership in ctx.organization_memberships:
-                if str(membership.get("organization_id")) != team_org:
-                    continue
-                role = str(membership.get("role") or "")
-                if required_perm in ORG_ROLE_PERMISSIONS.get(role, set()):
-                    return team
-
-        for membership in ctx.team_memberships:
-            if str(membership.get("team_id")) != team_id:
-                continue
-            role = str(membership.get("role") or "")
-            if required_perm in TEAM_ROLE_PERMISSIONS.get(role, set()):
-                return team
+    if ctx is not None and has_scoped_permission(
+        ctx, required_perm, organization_id=team_org, team_id=team_id
+    ):
+        return team
 
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
@@ -237,62 +229,17 @@ async def list_teams(
     )
     db = db_or_503(request)
 
-    clauses: list[str] = []
-    params: list[Any] = []
-
-    if not scope.is_platform_admin:
-        scope_clauses: list[str] = []
-        if scope.org_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
-            params.extend(scope.org_ids)
-            scope_clauses.append(f"t.organization_id IN ({ph})")
-        if scope.team_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
-            params.extend(scope.team_ids)
-            scope_clauses.append(f"t.team_id IN ({ph})")
-        if not scope_clauses:
-            return {
-                "data": [],
-                "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
-            }
-        clauses.append("(" + " OR ".join(scope_clauses) + ")")
-
-    if search:
-        params.append(f"%{search}%")
-        clauses.append(f"(t.team_alias ILIKE ${len(params)} OR t.team_id ILIKE ${len(params)})")
-    if organization_id:
-        params.append(organization_id)
-        clauses.append(f"t.organization_id = ${len(params)}")
-
-    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-
-    select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit,
-                   t.rph_limit, t.rpd_limit, t.tpd_limit,
-                   t.model_rpm_limit, t.model_tpm_limit, t.blocked,
-                   t.self_service_keys_enabled, t.self_service_max_keys_per_user,
-                   t.self_service_budget_ceiling, t.self_service_require_expiry, t.self_service_max_expiry_days,
-                   o.lifecycle_state AS organization_lifecycle_state,
-                   t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count"""
-
-    count_rows = await db.query_raw(
-        f"SELECT COUNT(*) AS total FROM deltallm_teamtable t {where_sql}",
-        *params,
-    )
-    total = int((count_rows[0] if count_rows else {}).get("total") or 0)
-
-    params.append(limit)
-    params.append(offset)
-    rows = await db.query_raw(
-        f"""
-        SELECT {select_cols}
-        FROM deltallm_teamtable t
-        LEFT JOIN deltallm_organizationtable o ON o.organization_id = t.organization_id
-        {where_sql}
-        ORDER BY t.created_at DESC
-        LIMIT ${len(params) - 1} OFFSET ${len(params)}
-        """,
-        *params,
+    page = await TeamDirectoryRepository(db).list(
+        TeamDirectoryScope(
+            scope.is_platform_admin,
+            tuple(scope.org_ids),
+            tuple(scope.team_ids),
+            scope.external_workspace,
+        ),
+        search=search,
+        organization_id=organization_id,
+        limit=limit,
+        offset=offset,
     )
 
     return {
@@ -301,13 +248,13 @@ async def list_teams(
                 dict(row),
                 capabilities=build_team_capabilities(scope, dict(row)),
             )
-            for row in rows
+            for row in page.rows
         ],
         "pagination": {
-            "total": total,
+            "total": page.total,
             "limit": limit,
             "offset": offset,
-            "has_more": offset + limit < total,
+            "has_more": offset + limit < page.total,
         },
     }
 

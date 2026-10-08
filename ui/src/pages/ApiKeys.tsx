@@ -1,3 +1,5 @@
+import KeyRevocationNotice from '../components/KeyRevocationNotice';
+import type { KeyRemovalResult } from '../lib/api/keyRevocations';
 import { useState, useEffect, useMemo } from 'react';
 import { useApi } from '../lib/hooks';
 import { keys, serviceAccounts, teams } from '../lib/api';
@@ -117,7 +119,7 @@ export default function ApiKeys() {
   const canCreateSelf = permissions.has('key.create_self') || isAdmin;
   const canCreate = isAdmin || canCreateSelf;
   const canRevoke = isAdmin || permissions.has('key.create_self');
-  const canRegenerate = isAdmin || permissions.has('key.create_self');
+  const canRegenerate = session?.session_source !== 'external_customer' && (isAdmin || permissions.has('key.create_self'));
 
   const [viewTab, setViewTab] = useState<ViewTab>(isAdmin ? 'all' : 'my');
   const [search, setSearch] = useState('');
@@ -148,6 +150,7 @@ export default function ApiKeys() {
   const [copied, setCopied] = useState(false);
   const [form, setForm] = useState<KeyFormState>(() => emptyForm());
   const [error, setError] = useState<string | null>(null);
+  const [revocation, setRevocation] = useState<KeyRemovalResult | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [newServiceAccountName, setNewServiceAccountName] = useState('');
@@ -503,7 +506,8 @@ export default function ApiKeys() {
   const handleRevoke = async (hash: string) => {
     if (!confirm('Are you sure you want to revoke this key?')) return;
     try {
-      await keys.revoke(hash);
+      const result = await keys.revoke(hash);
+      setRevocation(result);
       refetch();
     } catch (err: unknown) {
       alert(getErrorMessage(err, 'Failed to revoke key'));
@@ -665,6 +669,7 @@ export default function ApiKeys() {
         </div>
       )}
     >
+      {revocation && <KeyRevocationNotice key={revocation.invalidation_id} result={revocation} />}
       <div className="hidden md:block">
         <ContentCard>
           <DataTable columns={columns} data={items} loading={loading} emptyMessage={myKeysMode ? 'You have no personal keys yet' : 'No API keys created yet'} pagination={pagination} onPageChange={setPageOffset} />

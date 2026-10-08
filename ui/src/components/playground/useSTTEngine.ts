@@ -1,3 +1,4 @@
+import { inferenceFetch } from '../../lib/inferenceTransport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ModelOption } from './types';
 
@@ -143,7 +144,7 @@ export function useSTTEngine(opts: { apiKey: string; selectedModel: ModelOption 
       formData.append('response_format', responseFormat);
       if (outputPrompt) formData.append('prompt', outputPrompt);
 
-      const res = await fetch('/v1/audio/transcriptions', {
+      const res = await inferenceFetch('/v1/audio/transcriptions', apiKey, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}` },
         body: formData,

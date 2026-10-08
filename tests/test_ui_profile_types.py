@@ -13,7 +13,14 @@ class DummyIdentityService:
         if len(raw_password or "") < 12:
             raise ValueError("password must be at least 12 characters")
 
-    async def change_password(self, account_id: str, new_password: str, current_password: str | None = None):
+    async def change_password(
+        self,
+        account_id: str,
+        new_password: str,
+        current_password: str | None = None,
+        *,
+        require_existing_password: bool = False,
+    ):
         return None
 
     async def admin_set_password(self, *, account_id: str, new_password: str) -> bool:
@@ -43,7 +50,10 @@ class FakeDB:
     async def execute_raw(self, query: str, *params):
         if "INSERT INTO deltallm_platformaccount" in query:
             email, role, is_active = params
-            account = next((a for a in self.accounts.values() if a["email"].lower() == str(email).lower()), None)
+            account = next(
+                (a for a in self.accounts.values() if a["email"].lower() == str(email).lower()),
+                None,
+            )
             now = datetime.now(tz=UTC)
             if account is None:
                 account_id = f"acct-{len(self.accounts) + 1}"
@@ -150,7 +160,9 @@ async def test_create_rbac_account_short_password_rejected_before_insert(client,
 
     assert response.status_code == 400
     assert response.json()["detail"] == "password must be at least 12 characters"
-    assert "shortpass@example.com" not in {account["email"] for account in fake_db.accounts.values()}
+    assert "shortpass@example.com" not in {
+        account["email"] for account in fake_db.accounts.values()
+    }
 
 
 @pytest.mark.asyncio

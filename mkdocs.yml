@@ -104,6 +104,8 @@ nav:
           - Application keys: admin-ui/api-keys.md
           - Plans and tiers: guides/admin-tiers.md
           - Set up sign-in and SSO: guides/admin-authentication.md
+          - External customer sign-in: configuration/external-customer-auth.md
+          - Connect a Console: guides/console-gateway-connection.md
       - Monitor and control:
           - Dashboard: admin-ui/dashboard.md
           - Usage and spending: admin-ui/usage.md
