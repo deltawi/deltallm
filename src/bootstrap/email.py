@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.bootstrap.status import BootstrapStatus
-from src.db.email_feedback import EmailFeedbackRepository
-from src.db.email import EmailOutboxRepository
+from src.db.email.email_feedback import EmailFeedbackRepository
+from src.db.email.email import EmailOutboxRepository
 from src.email.models import EmailConfigurationError
 from src.services.email_feedback_service import EmailFeedbackService
 from src.services.email_delivery_service import EmailDeliveryService

@@ -34,9 +34,9 @@ from src.billing.accounting.transport.accounting_rpc_contracts import (
     rpc_request_bytes,
 )
 from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 
 
 _JOURNAL_REPLIES = TypeAdapter(list[JournalReceipt])

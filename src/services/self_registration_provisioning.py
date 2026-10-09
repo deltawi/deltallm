@@ -6,8 +6,8 @@ from typing import Any
 
 from src.auth.roles import PlatformRole
 from src.auth.sso_identity import SSOAccountMatch, SSOIdentityAssertion
-from src.db.platform_accounts import PlatformAccountRecord
-from src.db.platform_memberships import seed_organization_membership, seed_team_membership
+from src.db.identity.platform_accounts import PlatformAccountRecord
+from src.db.identity.platform_memberships import seed_organization_membership, seed_team_membership
 from src.services.organization_mutation_policy import OrganizationMutationPolicy
 from src.services.sso_account_service import SSOAccountService
 from src.config import SelfRegistrationSettings

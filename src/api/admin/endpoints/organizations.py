@@ -36,14 +36,17 @@ from src.api.admin.endpoints.organization_schemas import (
     OrganizationResponse,
 )
 from src.api.admin.organization_mutations import require_active_organization_mutation
-from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
-from src.db.callable_targets import CallableTargetBindingRepository
-from src.db.organization_admin import (
+from src.db.routing.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+from src.db.routing.callable_targets import CallableTargetBindingRepository
+from src.db.organizations.organization_admin import (
     OrganizationAdminRepository,
     OrganizationPersistenceValues,
 )
-from src.db.route_groups import RouteGroupRepository
-from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.audit.repository import (
+    AUDIT_METADATA_RETENTION_DAYS_KEY,
+    AUDIT_PAYLOAD_RETENTION_DAYS_KEY,
+)
 from src.middleware.admin import require_admin_permission
 from src.services.asset_visibility_preview import (
     build_asset_visibility_preview,

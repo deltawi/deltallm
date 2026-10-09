@@ -5,7 +5,7 @@ import os
 import asyncpg
 import pytest
 
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes, seed_closed_accounting_history

@@ -12,9 +12,9 @@ from pydantic import Field
 from src.billing.accounting.journal.accounting_journal_claims import JournalClaim, JournalFailure
 from src.billing.charges.selector_charge import FrozenBillingContract, Identifier
 from src.concurrency import BoundedCapacityGate
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.metrics.accounting_journal import JournalAction, JournalActionOutcome, journal_action
 from src.telemetry.worker_idle import IdleWorkerPoll
 from src.telemetry.lifecycle import (

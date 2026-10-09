@@ -6,7 +6,7 @@ import hashlib
 import secrets
 from typing import Any
 
-from src.db.email_tokens import EmailTokenRecord, EmailTokenRepository
+from src.db.identity.email_tokens import EmailTokenRecord, EmailTokenRepository
 from src.email.config import normalize_email_base_url
 
 
@@ -54,7 +54,9 @@ class EmailTokenService:
         email: str,
         created_by_account_id: str | None = None,
     ) -> TokenIssueResult:
-        ttl_minutes = int(getattr(self._general_settings(), "password_reset_token_ttl_minutes", 60) or 60)
+        ttl_minutes = int(
+            getattr(self._general_settings(), "password_reset_token_ttl_minutes", 60) or 60
+        )
         return await self._issue_token(
             purpose="password_reset",
             account_id=account_id,
@@ -91,7 +93,9 @@ class EmailTokenService:
         )
 
     def build_action_url(self, *, path: str, raw_token: str) -> str:
-        base_url = normalize_email_base_url(getattr(self._general_settings(), "email_base_url", None))
+        base_url = normalize_email_base_url(
+            getattr(self._general_settings(), "email_base_url", None)
+        )
         suffix = f"{path}?token={raw_token}"
         return f"{base_url}{suffix}"
 
@@ -121,7 +125,9 @@ class EmailTokenService:
         return TokenIssueResult(raw_token=raw_token, record=record)
 
     def _hash_token(self, *, purpose: str, raw_token: str) -> str:
-        return hashlib.sha256(f"{self.salt}:email-token:{purpose}:{raw_token}".encode("utf-8")).hexdigest()
+        return hashlib.sha256(
+            f"{self.salt}:email-token:{purpose}:{raw_token}".encode("utf-8")
+        ).hexdigest()
 
     def _general_settings(self) -> Any:
         cfg = self._config_getter()

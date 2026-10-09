@@ -4,12 +4,15 @@ from typing import Any
 
 from fastapi import Request
 
-from src.db.callable_target_access_groups import (
+from src.db.routing.callable_target_access_groups import (
     CallableTargetAccessGroupBindingRecord,
     CallableTargetAccessGroupBindingRepository,
 )
-from src.db.callable_targets import CallableTargetBindingRecord, CallableTargetBindingRepository
-from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRepository
+from src.db.routing.callable_targets import (
+    CallableTargetBindingRecord,
+    CallableTargetBindingRepository,
+)
+from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRepository
 from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
     with_authorization_snapshot,

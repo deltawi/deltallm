@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.organization_mutation_guard import OrganizationMutationGuardRepository
+from src.db.organizations.organization_mutation_guard import OrganizationMutationGuardRepository
 from src.models.organization_lifecycle import OrganizationLifecycleState
 from src.services.organization_mutation_policy import (
     OrganizationMutationInactiveError,

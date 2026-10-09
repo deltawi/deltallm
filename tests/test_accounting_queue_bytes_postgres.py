@@ -8,7 +8,7 @@ import pytest
 
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.accounting_protocol import ReserveDecision
-from src.db.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting.accounting_protocol import AccountingProtocolRepository
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_accounting_protocol_postgres import (
     _create_window,

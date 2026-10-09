@@ -10,7 +10,7 @@ from src.audit.actions import AuditAction, normalize_audit_action
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
 from src.auth.roles import Permission, has_platform_permission
-from src.db.repositories import AuditRepository
+from src.db.audit.repository import AuditRepository
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.audit_service import (
     AuditEventInput,

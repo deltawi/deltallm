@@ -8,7 +8,7 @@ import hmac
 import json
 from typing import Any, Mapping
 
-from src.db.email_feedback import EmailFeedbackRepository, EmailWebhookEventRecord
+from src.db.email.email_feedback import EmailFeedbackRepository, EmailWebhookEventRecord
 
 
 class EmailFeedbackError(ValueError):
@@ -53,7 +53,9 @@ class EmailFeedbackService:
         self.repository = repository
         self._config_getter = config_getter
 
-    async def handle_resend_webhook(self, *, headers: Mapping[str, str], raw_body: bytes) -> EmailFeedbackOutcome:
+    async def handle_resend_webhook(
+        self, *, headers: Mapping[str, str], raw_body: bytes
+    ) -> EmailFeedbackOutcome:
         secret = self._resend_webhook_secret()
         if not secret:
             raise EmailFeedbackError("resend_webhook_signing_secret is not configured")
@@ -81,10 +83,7 @@ class EmailFeedbackService:
         recipient_addresses = tuple(
             sorted(
                 address
-                for address in {
-                    _normalize_email_address(item)
-                    for item in raw_recipients
-                }
+                for address in {_normalize_email_address(item) for item in raw_recipients}
                 if address is not None
             )
         )
@@ -191,10 +190,12 @@ class EmailFeedbackService:
             "signature": webhook_signature,
         }
 
-    def _verify_standard_webhook(self, *, secret: str, body: str, headers: Mapping[str, str]) -> None:
+    def _verify_standard_webhook(
+        self, *, secret: str, body: str, headers: Mapping[str, str]
+    ) -> None:
         secret_value = secret
         if secret_value.startswith("whsec_"):
-            secret_value = secret_value[len("whsec_"):]
+            secret_value = secret_value[len("whsec_") :]
         signed_content = f"{headers['id']}.{headers['timestamp']}.{body}".encode("utf-8")
         expected = base64.b64encode(
             hmac.new(secret_value.encode("utf-8"), signed_content, hashlib.sha256).digest()

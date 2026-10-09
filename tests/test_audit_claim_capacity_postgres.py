@@ -7,9 +7,9 @@ import pytest
 from prisma import Prisma
 from prisma.errors import RawQueryError
 
-from src.db.audit_ingestion import AuditIngestionRepository
-from src.db.allocated_client import AllocatedPrisma, DatabaseOwner, DatabaseUnavailableError
-from src.db.allocation_config import DatabasePolicy
+from src.db.audit.audit_ingestion import AuditIngestionRepository
+from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner, DatabaseUnavailableError
+from src.db.runtime.allocation_config import DatabasePolicy
 
 pytestmark = pytest.mark.postgres
 

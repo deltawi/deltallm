@@ -2,8 +2,8 @@ from copy import deepcopy
 
 import pytest
 
-from src.db.route_groups import RouteGroupRepository, RouteGroupRecord
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.routing.route_groups import RouteGroupRepository, RouteGroupRecord
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.router.selection.policy import RouteSelectorActivationUnsupportedError
 from tests.db.test_route_policy_repository import (
     _RoutePolicyDB,

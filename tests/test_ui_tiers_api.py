@@ -9,7 +9,7 @@ import pytest
 
 from src.audit.actions import AuditAction
 from src.auth.roles import OrganizationRole, PlatformRole
-from src.db.tiers import (
+from src.db.tiers.tiers import (
     TierActivationActiveVersionChangedError,
     TierActivationConfigurationChangedError,
     TierBootstrapIdempotencyConflictError,
@@ -351,7 +351,9 @@ class _FakeTierRepository:
         source = self.versions.get(source_tier_version_id)
         if source is None or source.tier_id != tier_id:
             return None
-        tier_versions = [version for version in self.versions.values() if version.tier_id == tier_id]
+        tier_versions = [
+            version for version in self.versions.values() if version.tier_id == tier_id
+        ]
         tier_version_id = f"version-{len(self.versions) + 1}"
         cloned_policies = [
             replace(
@@ -372,7 +374,8 @@ class _FakeTierRepository:
         record = TierVersionRecord(
             tier_version_id=tier_version_id,
             tier_id=tier_id,
-            version_number=max((version.version_number for version in tier_versions), default=0) + 1,
+            version_number=max((version.version_number for version in tier_versions), default=0)
+            + 1,
             status="draft",
             created_by_account_id=created_by_account_id,
             created_by_kind=created_by_kind,
@@ -571,9 +574,7 @@ class _FakeTierRepository:
         self._guard_configuration(tier_id, tier_version_id, expected_revision)
         records = self.model_policies.get(tier_version_id, [])
         remaining = [
-            policy
-            for policy in records
-            if policy.tier_model_policy_id != tier_model_policy_id
+            policy for policy in records if policy.tier_model_policy_id != tier_model_policy_id
         ]
         if len(remaining) == len(records):
             raise TierConfigurationVersionNotFoundError("model policy not found")
@@ -614,7 +615,11 @@ class _FakeTierRepository:
         for record in records:
             matches = (
                 (not selected_ids or record.tier_model_policy_id in selected_ids)
-                and (not lowered or lowered in record.callable_key.lower() or lowered in str(record.capacity_pool_key or "").lower())
+                and (
+                    not lowered
+                    or lowered in record.callable_key.lower()
+                    or lowered in str(record.capacity_pool_key or "").lower()
+                )
                 and (enabled is None or record.enabled is enabled)
                 and (not access_mode or record.access_mode == access_mode)
                 and (not capacity_pool_key or record.capacity_pool_key == capacity_pool_key)
@@ -631,7 +636,11 @@ class _FakeTierRepository:
                 )
             )
         self.model_policies[tier_version_id] = updated_records
-        version = self._bump_configuration_revision(tier_version_id) if affected else self.versions[tier_version_id]
+        version = (
+            self._bump_configuration_revision(tier_version_id)
+            if affected
+            else self.versions[tier_version_id]
+        )
         return TierModelPolicyBulkMutationResult(
             affected,
             version.configuration_revision,
@@ -663,8 +672,7 @@ class _FakeTierRepository:
             records = [
                 record
                 for record in records
-                if lowered in record.pool_key.lower()
-                or lowered in record.callable_key.lower()
+                if lowered in record.pool_key.lower() or lowered in record.callable_key.lower()
             ]
         if callable_key:
             records = [record for record in records if record.callable_key == callable_key]
@@ -782,9 +790,7 @@ class _FakeTierRepository:
             raise TierConfigurationPoolInUseError("capacity pool is in use")
         records = self.capacity_pools.get(tier_version_id, [])
         remaining = [
-            pool
-            for pool in records
-            if pool.tier_capacity_pool_id != tier_capacity_pool_id
+            pool for pool in records if pool.tier_capacity_pool_id != tier_capacity_pool_id
         ]
         if len(remaining) == len(records):
             raise TierConfigurationVersionNotFoundError("capacity pool not found")
@@ -838,12 +844,8 @@ class _FakeTierRepository:
                 tier_version_id=version.tier_version_id,
                 version_number=version.version_number,
                 configuration_revision=version.configuration_revision,
-                model_policy_count=len(
-                    self.model_policies.get(version.tier_version_id, [])
-                ),
-                capacity_pool_count=len(
-                    self.capacity_pools.get(version.tier_version_id, [])
-                ),
+                model_policy_count=len(self.model_policies.get(version.tier_version_id, [])),
+                capacity_pool_count=len(self.capacity_pools.get(version.tier_version_id, [])),
                 created_by_account_id=version.created_by_account_id,
                 created_by_kind=version.created_by_kind,
                 created_by_email=version.created_by_email,
@@ -853,7 +855,11 @@ class _FakeTierRepository:
             )
 
         last_activity = max(
-            [value for value in [record.updated_at, *(item.updated_at for item in versions)] if value],
+            [
+                value
+                for value in [record.updated_at, *(item.updated_at for item in versions)]
+                if value
+            ],
             default=None,
         )
         active_assignment_count = self.active_assignment_counts.get(record.tier_id, 0)
@@ -1081,9 +1087,7 @@ async def test_tier_admin_bootstrap_creates_draft_and_replays_without_duplicate_
         "enabled": True,
     }
 
-    created_response = await client.post(
-        "/ui/api/tiers/bootstrap", headers=headers, json=payload
-    )
+    created_response = await client.post("/ui/api/tiers/bootstrap", headers=headers, json=payload)
 
     assert created_response.status_code == 200
     created = created_response.json()
@@ -1094,9 +1098,7 @@ async def test_tier_admin_bootstrap_creates_draft_and_replays_without_duplicate_
     assert created["initial_version"]["created_by_kind"] == "master_key"
     assert len(audit.sync_calls) == 2
 
-    replay_response = await client.post(
-        "/ui/api/tiers/bootstrap", headers=headers, json=payload
-    )
+    replay_response = await client.post("/ui/api/tiers/bootstrap", headers=headers, json=payload)
 
     assert replay_response.status_code == 200
     replay = replay_response.json()
@@ -1114,9 +1116,7 @@ async def test_tier_admin_bootstrap_creates_draft_and_replays_without_duplicate_
         json={**payload, "name": "Changed input"},
     )
     assert mismatch_response.status_code == 409
-    assert mismatch_response.json()["detail"]["code"] == (
-        "tier_bootstrap_idempotency_conflict"
-    )
+    assert mismatch_response.json()["detail"]["code"] == ("tier_bootstrap_idempotency_conflict")
 
 
 @pytest.mark.asyncio
@@ -1462,9 +1462,7 @@ async def test_tier_admin_activation_preview_and_guarded_activation(client, test
         },
     )
     assert active_changed_response.status_code == 409
-    assert active_changed_response.json()["detail"]["code"] == (
-        "tier_activation_active_changed"
-    )
+    assert active_changed_response.json()["detail"]["code"] == ("tier_activation_active_changed")
 
     activate_response = await client.post(
         f"{base_path}/activate",
@@ -1886,9 +1884,7 @@ async def test_tier_admin_disable_rejects_live_or_scheduled_assignment(client, t
 async def test_tier_admin_disable_maps_database_race_to_conflict(client, test_app):
     repository = _FakeTierRepository()
     repository.seed_tier()
-    repository.update_error = (
-        "cannot disable tier while enabled organization assignments exist"
-    )
+    repository.update_error = "cannot disable tier while enabled organization assignments exist"
     test_app.state.tier_repository = repository
 
     response = await client.patch(
@@ -2013,7 +2009,9 @@ async def test_tier_capacity_boost_endpoint_writes_deletes_and_audits(client, te
     )
     test_app.state.redis = redis
     test_app.state.audit_service = audit
-    test_app.state.tier_policy_service = _SnapshotTierPolicyService(_capacity_dashboard_snapshot(pool))
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(
+        _capacity_dashboard_snapshot(pool)
+    )
 
     response = await client.post(
         "/ui/api/tier-capacity/boosts",
@@ -2079,7 +2077,9 @@ async def test_tier_capacity_boost_endpoint_rejects_unknown_pool(client, test_ap
         source_pool_ids=("pool-1",),
     )
     test_app.state.redis = FakeRedis()
-    test_app.state.tier_policy_service = _SnapshotTierPolicyService(_capacity_dashboard_snapshot(pool))
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(
+        _capacity_dashboard_snapshot(pool)
+    )
 
     response = await client.post(
         "/ui/api/tier-capacity/boosts",
@@ -2152,7 +2152,9 @@ async def test_tier_capacity_boost_endpoint_rejects_non_member_org(client, test_
         source_pool_ids=("pool-1",),
     )
     test_app.state.redis = FakeRedis()
-    test_app.state.tier_policy_service = _SnapshotTierPolicyService(_capacity_dashboard_snapshot(pool))
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(
+        _capacity_dashboard_snapshot(pool)
+    )
 
     response = await client.post(
         "/ui/api/tier-capacity/boosts",

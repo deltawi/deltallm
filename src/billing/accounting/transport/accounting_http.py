@@ -17,8 +17,8 @@ from src.billing.accounting.transport.accounting_auth import (
     ACCOUNTING_TIMESTAMP_HEADER,
     accounting_signature,
 )
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.outbound.http import suppress_httpcore_debug_traces
 from src.outbound.network_policy import (
     OutboundNetworkPolicy,

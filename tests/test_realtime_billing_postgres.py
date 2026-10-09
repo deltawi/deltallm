@@ -10,8 +10,8 @@ import pytest
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.db.realtime_billing import RealtimeBillingRepository
-from src.db.realtime_recovery import RealtimeBillingRecovery
+from src.db.billing.realtime_billing import RealtimeBillingRepository
+from src.db.billing.realtime_recovery import RealtimeBillingRecovery
 from src.realtime.errors import RealtimeError
 from tests import test_selector_charge_db_integration as fixtures
 from tests.realtime.test_pricing import charge_context, receipt

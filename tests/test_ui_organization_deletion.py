@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from src.auth.roles import OrganizationRole, PlatformRole
-from src.db.organization_deletion_records import (
+from src.db.organizations.deletion.organization_deletion_records import (
     OrganizationDeletionCounts,
     OrganizationDeletionJobRecord,
     OrganizationDeletionPlanRecord,

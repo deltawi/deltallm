@@ -20,7 +20,10 @@ from src.billing.accounting.durable_microbatch import (
     DurableMicrobatcher,
 )
 from src.billing.accounting.accounting_snapshots import finalization_bytes, reservation_bytes
-from src.db.accounting_protocol import AccountingProtocolRepository, AccountingProtocolUnavailable
+from src.db.accounting.accounting_protocol import (
+    AccountingProtocolRepository,
+    AccountingProtocolUnavailable,
+)
 from src.metrics.accounting import (
     increment_accounting_failure,
     increment_accounting_decision,

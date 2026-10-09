@@ -16,7 +16,7 @@ from src.bootstrap.accounting_role_builders import (
     build_accounting_projection_runtime,
     build_accounting_request_runtime,
 )
-from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
 from src.lifecycle_settings import LifecycleSettings
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.process_lifecycle import ProcessLifecycle

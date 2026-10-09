@@ -1,17 +1,18 @@
 """Response serializers for the admin MCP endpoints."""
+
 from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Any
 
 from src.api.admin.endpoints.common import to_json_value
-from src.db.mcp import (
+from src.db.mcp.mcp import (
     MCPApprovalRequestRecord,
     MCPServerBindingRecord,
     MCPServerRecord,
     MCPToolPolicyRecord,
 )
-from src.db.mcp_scope_policies import MCPScopePolicyRecord
+from src.db.mcp.mcp_scope_policies import MCPScopePolicyRecord
 from src.mcp.capabilities import extract_tool_schemas
 from src.services.managed_asset_access import (
     AssetAccessPolicy,
@@ -65,7 +66,9 @@ def _serialize_scope_policy(policy: MCPScopePolicyRecord) -> dict[str, Any]:
     return to_json_value(asdict(policy))
 
 
-def _serialize_server_summary(server: MCPServerRecord | None, *, server_id: str | None = None) -> dict[str, Any]:
+def _serialize_server_summary(
+    server: MCPServerRecord | None, *, server_id: str | None = None
+) -> dict[str, Any]:
     if server is None:
         return {
             "mcp_server_id": server_id,

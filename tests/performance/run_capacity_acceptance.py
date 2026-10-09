@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import httpx
 import yaml
 
-from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
 from tests.performance.capacity_fixture import (
     capacity_release,
     capacity_values,

@@ -107,7 +107,7 @@ cache. UI reports keep one bounded result and one owned, abortable request.
 
 To avoid adding a concern to the oversized spend endpoint, the existing shared
 HTTP reporting dependencies and SQL deadline/allocation implementation were moved
-to `api/admin/spend_reporting_dependencies.py` and `db/reporting.py`. All old
+to `api/admin/spend_reporting_dependencies.py` and `db/runtime/reporting.py`. All old
 callers use those same owners; no compatibility copy remains. The HTTP adapter
 still resolves legacy dynamic app-state settings, and the SQL adapter preserves
 the existing Prisma exception classifier. These bounded seams intentionally do

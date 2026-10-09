@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from src.db.tiers import OrganizationTierAssignmentRecord
+from src.db.tiers.tiers import OrganizationTierAssignmentRecord
 from src.services.cache_invalidation import CacheInvalidationResult
 
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.callable_targets import CallableTargetBindingRepository
-from src.db.repositories import ModelDeploymentRepository
-from src.db.route_groups import RouteGroupRepository
+from src.db.routing.callable_targets import CallableTargetBindingRepository
+from src.db.catalog.model_deployments import ModelDeploymentRepository
+from src.db.routing.route_groups import RouteGroupRepository
 from src.services.route_group_mutations import RouteGroupMutationService
 
 

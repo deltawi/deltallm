@@ -11,7 +11,7 @@ from src.billing.accounting.reporting.accounting_projection import (
     AccountingCompatibilityProjector,
     AccountingProjectionConfig,
 )
-from src.db.accounting_projection import AccountingProjectionEvent
+from src.db.accounting.reporting.accounting_projection import AccountingProjectionEvent
 
 
 @pytest.mark.parametrize("suffix", ["expired:v2", "reconciled:v2"])

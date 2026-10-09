@@ -7,9 +7,9 @@ import pytest
 
 from src.billing.accounting.accounting_protocol import AccountingOutcome
 from src.billing.accounting.journal.accounting_recovery import RecoveryAction
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_journal import AccountingJournalRepository
-from src.db.accounting_recovery import AccountingRecoveryRepository
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
+from src.db.accounting.accounting_recovery import AccountingRecoveryRepository
 from tests.test_accounting_journal_postgres import at_ordinal
 from tests.test_accounting_journal_worker_postgres import worker
 from tests.test_accounting_local_leases_postgres import deadline, funded

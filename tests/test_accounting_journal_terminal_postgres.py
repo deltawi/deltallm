@@ -14,9 +14,9 @@ from src.billing.accounting.permits.accounting_local_receipts import LocalReceip
 from src.billing.accounting.accounting_local_service import LocalAccountingService
 from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
 from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
-from src.db.accounting_journal import AccountingJournalRepository
-from src.db.accounting_local_leases import AccountingLocalLeaseRepository
-from src.db.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
+from src.db.accounting.permits.accounting_local_leases import AccountingLocalLeaseRepository
+from src.db.accounting.accounting_protocol import AccountingProtocolRepository
 from tests.test_accounting_journal_postgres import counts
 from tests.test_accounting_journal_worker_postgres import worker
 from tests.test_accounting_local_handles import values as handle_values

@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.named_credentials import NamedCredentialRecord
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.catalog.named_credentials import NamedCredentialRecord
+from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.providers.healthcheck import HealthProbeResult
 from src.router import (
     BackgroundHealthChecker,

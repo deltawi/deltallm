@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 
-from src.db.mcp import MCPToolPolicyRecord
+from src.db.mcp.mcp import MCPToolPolicyRecord
 from src.models.errors import RateLimitError
 from src.services.limit_counter import LegacyParallelLease, LimitCounter
 
@@ -47,7 +47,9 @@ class MCPToolPolicyEnforcer:
         )
         try:
             if policy.max_rpm is not None and policy.max_rpm > 0:
-                await self.rate_limiter.check_rate_limit("mcp_tool_rpm", entity_id, policy.max_rpm, 1)
+                await self.rate_limiter.check_rate_limit(
+                    "mcp_tool_rpm", entity_id, policy.max_rpm, 1
+                )
             if policy.max_concurrency is not None and policy.max_concurrency > 0:
                 parallel_lease = await self.rate_limiter.acquire_legacy_parallel_lease(
                     "mcp_tool",

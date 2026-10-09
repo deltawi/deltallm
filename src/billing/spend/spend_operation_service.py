@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from src.billing.spend.spend_operations import OperationHandle, SpendPersistenceUnavailable
-from src.db.spend_operations import SpendOperationRepository
+from src.db.billing.spend_operations import SpendOperationRepository
 from src.metrics.spend_ingestion import (
     increment_spend_ingestion_failure,
     set_spend_ingestion_backlog,

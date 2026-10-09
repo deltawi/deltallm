@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.accounting_journal import AccountingJournalRepository
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes, seed_closed_accounting_history
 from tests.test_accounting_local_leases_postgres import allocation, deadline, owner, terminal

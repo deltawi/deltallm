@@ -61,7 +61,7 @@ for Redis, billing, unsupported policies or missing prices. See the
 | `src/realtime/admission.py`, `routing.py`, `capacity.py` | Pinned routes and prices, existing authorization, per-turn dispatch, owned shared leases and revocation |
 | `src/bootstrap/realtime.py` | Composition from existing services, recovery attachment even when new sessions are disabled |
 | `src/billing/charges/realtime_usage.py`, `realtime_pricing.py`, `realtime_charge.py` | Stable receipt identities, exclusive token/duration units, frozen exact prices and attribution |
-| `src/db/realtime_billing.py`, `realtime_recovery.py` | Bounded durable intent/receipt journal and settlement through the existing spend worker |
+| `src/db/billing/realtime_billing.py`, `realtime_recovery.py` | Bounded durable intent/receipt journal and settlement through the existing spend worker |
 
 Lower layers receive typed inputs and socket protocols, never fabricated HTTP
 requests. Shared authentication accepts `HTTPConnection` for headers, app and

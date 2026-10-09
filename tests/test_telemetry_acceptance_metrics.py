@@ -9,9 +9,9 @@ import httpx
 from prisma.errors import DataError, RawQueryError, TransactionError, TransactionExpiredError
 import pytest
 
-from src.db.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
-from src.db.spend_ingestion import SpendIngestionRepository
-from src.db.telemetry_acceptance import (
+from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
+from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.runtime.telemetry_acceptance import (
     AcceptanceFailure,
     TelemetryDatabaseUnavailable,
     classify_acceptance_failure,

@@ -15,7 +15,9 @@ from src.api.admin.endpoints.organization_deletion_schemas import (
 from src.auth.roles import Permission, has_platform_permission
 from src.middleware.admin import require_admin_permission
 from src.middleware.platform_auth import get_platform_auth_context
-from src.db.organization_deletion_records import OrganizationDeletionJobRecord
+from src.db.organizations.deletion.organization_deletion_records import (
+    OrganizationDeletionJobRecord,
+)
 from src.models.organization_lifecycle import ORGANIZATION_LIFECYCLE_PROTOCOL_VERSION
 from src.services.organization_deletion import (
     OrganizationDeletionConflictError,

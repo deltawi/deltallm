@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 
 
 class FakePrisma:

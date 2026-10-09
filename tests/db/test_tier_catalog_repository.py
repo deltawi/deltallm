@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from src.db.tiers import TierRepository
+from src.db.tiers.tiers import TierRepository
 
 from tests.db.tier_repository_fakes import _FakePrisma
 

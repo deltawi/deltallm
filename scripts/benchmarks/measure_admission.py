@@ -25,8 +25,8 @@ from scripts.benchmarks.ingestion_database import (
     ORGANIZATION,
     ingestion_database,
 )
-from src.db.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
-from src.db.spend_ingestion import SpendIngestionRepository
+from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
+from src.db.billing.spend_ingestion import SpendIngestionRepository
 
 
 @dataclass

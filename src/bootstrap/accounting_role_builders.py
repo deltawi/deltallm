@@ -31,12 +31,12 @@ from src.bootstrap.accounting_roles import (
     AccountingProjectionRuntime,
     AccountingRequestRuntime,
 )
-from src.db.accounting_calls import AccountingQueryClient
-from src.db.accounting_health import AccountingBacklogRepository
-from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
-from src.db.accounting_presence import AccountingPresenceRepository
-from src.db.accounting_read_model import AccountingReadModelRepository
-from src.db.accounting_recovery import AccountingRecoveryRepository
+from src.db.accounting.accounting_calls import AccountingQueryClient
+from src.db.accounting.health.accounting_health import AccountingBacklogRepository
+from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.db.accounting.health.accounting_presence import AccountingPresenceRepository
+from src.db.accounting.reporting.accounting_read_model import AccountingReadModelRepository
+from src.db.accounting.accounting_recovery import AccountingRecoveryRepository
 from src.process_lifecycle import ProcessLifecycle
 
 

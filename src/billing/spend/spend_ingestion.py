@@ -27,9 +27,9 @@ from src.billing.spend.spend_operations import OperationHandle, SpendPersistence
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.billing.charges.selector_charge import AcceptedSelectorCharge
 from src.billing.spend.spend import PreparedSpendEvent, SpendTrackingService, _failure_metadata
-from src.db.client import is_prisma_transaction_client
+from src.db.runtime.client import is_prisma_transaction_client
 from src.db.errors import is_record_specific_database_error
-from src.db.spend_ingestion import SpendIngestionRepository, SpendOutboxRecord
+from src.db.billing.spend_ingestion import SpendIngestionRepository, SpendOutboxRecord
 from src.metrics.spend_ingestion import (
     increment_spend_ingestion_cleanup,
     increment_spend_ingestion_enqueue,
@@ -54,8 +54,8 @@ from src.telemetry.lifecycle import (
 from src.telemetry.worker_idle import IdleWorkerPoll
 
 if TYPE_CHECKING:
-    from src.db.billing_operation_recovery import BillingOperationRecovery
-    from src.db.realtime_recovery import RealtimeBillingRecovery
+    from src.db.billing.billing_operation_recovery import BillingOperationRecovery
+    from src.db.billing.realtime_recovery import RealtimeBillingRecovery
 
 logger = logging.getLogger(__name__)
 _SELECTOR_RECEIPT_ACCEPT_TIMEOUT_SECONDS = 2.0

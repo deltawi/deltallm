@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from src.db.tiers import TierCapacityPoolRecord, TierModelPolicyRecord, TierRecord
+from src.db.tiers.tiers import TierCapacityPoolRecord, TierModelPolicyRecord, TierRecord
 from src.services.tier_admin_errors import TierAdminValidationError
 from src.services.tiers import (
     float_gte_one_or_none,

@@ -141,7 +141,7 @@ Add unit tests in `tests/config/test_dynamic.py` for:
 ### 5.2 Keep branding SQL behind a repository
 
 The current feature added another raw SQL operation to `UIBrandingAssetService`. While touching this
-seam, move branding persistence into `src/db/ui_branding_assets.py`:
+seam, move branding persistence into `src/db/catalog/ui_branding_assets.py`:
 
 - `list_known()`;
 - `upsert(asset, updated_by=...)`;
@@ -426,7 +426,7 @@ Gate:
 
 Files:
 
-- `src/db/ui_branding_assets.py` (new)
+- `src/db/catalog/ui_branding_assets.py` (new)
 - `src/services/ui_branding_assets.py`
 - `src/config.py`
 - `src/api/admin/endpoints/config.py`
@@ -488,8 +488,8 @@ Gate:
 Backend focused gates:
 
 ```bash
-uv run ruff check src/config_runtime/dynamic.py src/api/audit.py src/api/admin/endpoints/common.py src/db/ui_branding_assets.py src/services/ui_branding_assets.py src/config.py src/api/admin/endpoints/config.py tests/config/test_dynamic.py tests/test_control_audit_mode.py tests/test_ui_branding.py tests/test_ui_branding_db_integration.py
-uv run ruff format --check src/config_runtime/dynamic.py src/api/audit.py src/api/admin/endpoints/common.py src/db/ui_branding_assets.py src/services/ui_branding_assets.py src/config.py src/api/admin/endpoints/config.py tests/config/test_dynamic.py tests/test_control_audit_mode.py tests/test_ui_branding.py tests/test_ui_branding_db_integration.py
+uv run ruff check src/config_runtime/dynamic.py src/api/audit.py src/api/admin/endpoints/common.py src/db/catalog/ui_branding_assets.py src/services/ui_branding_assets.py src/config.py src/api/admin/endpoints/config.py tests/config/test_dynamic.py tests/test_control_audit_mode.py tests/test_ui_branding.py tests/test_ui_branding_db_integration.py
+uv run ruff format --check src/config_runtime/dynamic.py src/api/audit.py src/api/admin/endpoints/common.py src/db/catalog/ui_branding_assets.py src/services/ui_branding_assets.py src/config.py src/api/admin/endpoints/config.py tests/config/test_dynamic.py tests/test_control_audit_mode.py tests/test_ui_branding.py tests/test_ui_branding_db_integration.py
 uv run pytest tests/config/test_dynamic.py tests/test_control_audit_mode.py tests/test_ui_branding.py
 uv run pytest tests/test_ui_branding_db_integration.py
 ```

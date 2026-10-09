@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.logical_models import LogicalModelRecord
+from src.db.catalog.logical_models import LogicalModelRecord
 from src.models.responses import UserAPIKeyAuth
 from src.services.creator_model_access import CreatorModelAccessService, CreatorModelAccessSnapshot
 from src.services.managed_asset_access import (

@@ -3,6 +3,7 @@
 Thin wrappers around :class:`MCPRepository` plus scope-aware raw SQL for
 listing bindings / tool policies when the caller is not a platform admin.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException, Request, status
 
 from src.api.admin.endpoints.common import AuthScope
-from src.db.mcp import (
+from src.db.mcp.mcp import (
     MCPApprovalRequestRecord,
     MCPRepository,
     MCPServerBindingRecord,
@@ -46,7 +47,7 @@ async def _server_visible_to_scope(request: Request, scope: AuthScope, server_id
             SELECT 1
             FROM deltallm_mcpserver s
             WHERE s.mcp_server_id = $1
-              AND {_server_visibility_exists_clause('s', scope, params)}
+              AND {_server_visibility_exists_clause("s", scope, params)}
         ) AS visible
         """,
         *params,
@@ -54,15 +55,21 @@ async def _server_visible_to_scope(request: Request, scope: AuthScope, server_id
     return bool((exists_rows[0] if exists_rows else {}).get("visible"))
 
 
-async def _load_approval_request_or_404(request: Request, approval_request_id: str) -> MCPApprovalRequestRecord:
+async def _load_approval_request_or_404(
+    request: Request, approval_request_id: str
+) -> MCPApprovalRequestRecord:
     repository = _repository_or_503(request)
     approval = await repository.get_approval_request(approval_request_id)
     if approval is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP approval request not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="MCP approval request not found"
+        )
     return approval
 
 
-async def _load_server_summary_map(request: Request, server_ids: list[str]) -> dict[str, MCPServerRecord]:
+async def _load_server_summary_map(
+    request: Request, server_ids: list[str]
+) -> dict[str, MCPServerRecord]:
     if not server_ids:
         return {}
     repository = _repository_or_503(request)

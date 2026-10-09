@@ -6,8 +6,8 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from src.db.route_groups import RouteGroupRepository
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError, parse_policy_json
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError, parse_policy_json
 from src.router.selection.policy import RouteSelectorActivationUnsupportedError
 from tests.db.tier_migration_helpers import connect_prisma
 from tests.db.test_route_policy_publication_invariants import (

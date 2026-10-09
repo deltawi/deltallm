@@ -15,9 +15,9 @@ from src.billing.accounting.journal.accounting_recovery import (
     RecoveryConfig,
 )
 from src.concurrency import CapacityGateFull
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
-from src.db.accounting_recovery import AccountingRecoveryRepository
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.accounting.accounting_recovery import AccountingRecoveryRepository
 from src.telemetry.lifecycle import WorkerState
 
 

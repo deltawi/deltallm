@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.mcp import MCPRepository
+from src.db.mcp.mcp import MCPRepository
 
 
 class _FakePrisma:

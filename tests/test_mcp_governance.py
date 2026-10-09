@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
-from src.db.mcp_scope_policies import MCPScopePolicyRecord
+from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp.mcp_scope_policies import MCPScopePolicyRecord
 from src.mcp.governance import MCPGovernanceService
 
 
@@ -42,7 +42,9 @@ class _FakeMCPRepository:
             items = [item for item in items if item.enabled is enabled]
         return items[offset : offset + limit], len(items)
 
-    async def list_bindings(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if server_id is not None:
             items = [item for item in items if item.mcp_server_id == server_id]
@@ -54,7 +56,9 @@ class _FakeMCPRepository:
             items = [item for item in items if item.enabled is enabled]
         return items[offset : offset + limit], len(items)
 
-    async def list_tool_policies(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_tool_policies(
+        self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.policies)
         if server_id is not None:
             items = [item for item in items if item.mcp_server_id == server_id]
@@ -84,13 +88,41 @@ async def test_mcp_governance_service_filters_disabled_servers_and_bindings() ->
                 _server("srv-disabled", "hidden", enabled=False),
             ],
             bindings=[
-                MCPServerBindingRecord("bind-enabled", "srv-enabled", "team", "team-1", True, ["search"]),
-                MCPServerBindingRecord("bind-disabled", "srv-enabled", "team", "team-2", False, ["search"]),
-                MCPServerBindingRecord("bind-hidden", "srv-disabled", "team", "team-1", True, ["secret"]),
+                MCPServerBindingRecord(
+                    "bind-enabled", "srv-enabled", "team", "team-1", True, ["search"]
+                ),
+                MCPServerBindingRecord(
+                    "bind-disabled", "srv-enabled", "team", "team-2", False, ["search"]
+                ),
+                MCPServerBindingRecord(
+                    "bind-hidden", "srv-disabled", "team", "team-1", True, ["secret"]
+                ),
             ],
             policies=[
-                MCPToolPolicyRecord("policy-enabled", "srv-enabled", "search", "team", "team-1", False, None, None, None, None),
-                MCPToolPolicyRecord("policy-hidden", "srv-disabled", "secret", "team", "team-1", True, None, None, None, None),
+                MCPToolPolicyRecord(
+                    "policy-enabled",
+                    "srv-enabled",
+                    "search",
+                    "team",
+                    "team-1",
+                    False,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                MCPToolPolicyRecord(
+                    "policy-hidden",
+                    "srv-disabled",
+                    "secret",
+                    "team",
+                    "team-1",
+                    True,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
             ],
         )
     )
@@ -100,9 +132,15 @@ async def test_mcp_governance_service_filters_disabled_servers_and_bindings() ->
     assert [server.server_key for server in service.list_enabled_servers()] == ["docs"]
     assert service.get_server("srv-enabled") is not None
     assert service.get_server("srv-disabled") is None
-    assert [binding.mcp_binding_id for binding in service.list_effective_bindings(scopes=[("team", "team-1")])] == ["bind-enabled"]
+    assert [
+        binding.mcp_binding_id
+        for binding in service.list_effective_bindings(scopes=[("team", "team-1")])
+    ] == ["bind-enabled"]
     assert service.list_effective_bindings(scopes=[("team", "team-2")]) == []
-    assert [policy.mcp_tool_policy_id for policy in service.list_effective_tool_policies(scopes=[("team", "team-1")])] == ["policy-enabled"]
+    assert [
+        policy.mcp_tool_policy_id
+        for policy in service.list_effective_tool_policies(scopes=[("team", "team-1")])
+    ] == ["policy-enabled"]
 
 
 @pytest.mark.asyncio
@@ -115,15 +153,33 @@ async def test_mcp_governance_service_filters_tool_policies_by_server() -> None:
             ],
             bindings=[],
             policies=[
-                MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-1", True, None, None, None, None),
-                MCPToolPolicyRecord("policy-2", "srv-github", "search", "team", "team-1", True, None, None, None, None),
+                MCPToolPolicyRecord(
+                    "policy-1", "srv-docs", "search", "team", "team-1", True, None, None, None, None
+                ),
+                MCPToolPolicyRecord(
+                    "policy-2",
+                    "srv-github",
+                    "search",
+                    "team",
+                    "team-1",
+                    True,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
             ],
         )
     )
 
     await service.reload()
 
-    assert [policy.mcp_tool_policy_id for policy in service.list_effective_tool_policies(scopes=[("team", "team-1")], server_id="srv-github")] == ["policy-2"]
+    assert [
+        policy.mcp_tool_policy_id
+        for policy in service.list_effective_tool_policies(
+            scopes=[("team", "team-1")], server_id="srv-github"
+        )
+    ] == ["policy-2"]
 
 
 @pytest.mark.asyncio
@@ -135,9 +191,15 @@ async def test_mcp_governance_service_resolves_org_ceiling_with_team_restrict() 
                 _server("srv-github", "github", enabled=True),
             ],
             bindings=[
-                MCPServerBindingRecord("bind-org-docs", "srv-docs", "organization", "org-1", True, None),
-                MCPServerBindingRecord("bind-org-github", "srv-github", "organization", "org-1", True, None),
-                MCPServerBindingRecord("bind-team-docs", "srv-docs", "team", "team-1", True, ["search"]),
+                MCPServerBindingRecord(
+                    "bind-org-docs", "srv-docs", "organization", "org-1", True, None
+                ),
+                MCPServerBindingRecord(
+                    "bind-org-github", "srv-github", "organization", "org-1", True, None
+                ),
+                MCPServerBindingRecord(
+                    "bind-team-docs", "srv-docs", "team", "team-1", True, ["search"]
+                ),
             ],
             policies=[],
             scope_policies=[
@@ -149,14 +211,19 @@ async def test_mcp_governance_service_resolves_org_ceiling_with_team_restrict() 
                 )
             ],
         ),
-        policy_repository=_FakeMCPRepository(servers=[], bindings=[], policies=[], scope_policies=[
-            MCPScopePolicyRecord(
-                mcp_scope_policy_id="mcp-policy-team-1",
-                scope_type="team",
-                scope_id="team-1",
-                mode="restrict",
-            )
-        ]),
+        policy_repository=_FakeMCPRepository(
+            servers=[],
+            bindings=[],
+            policies=[],
+            scope_policies=[
+                MCPScopePolicyRecord(
+                    mcp_scope_policy_id="mcp-policy-team-1",
+                    scope_type="team",
+                    scope_id="team-1",
+                    mode="restrict",
+                )
+            ],
+        ),
     )
 
     await service.reload()

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from src.db.budgets import BudgetRepository
+from src.db.billing.budgets import BudgetRepository
 from src.models.errors import RoutingFailureAction, ServiceUnavailableError
 
 logger = logging.getLogger(__name__)

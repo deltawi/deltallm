@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.db.cache_invalidation_outbox import (
+from src.db.runtime.cache_invalidation_outbox import (
     CACHE_INVALIDATION_STATUSES,
     CacheInvalidationOutboxRepository,
 )

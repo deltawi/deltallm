@@ -12,9 +12,9 @@ from src.api.admin.route_group_contracts import (
     RoutePolicySimulationSelection,
     RoutePolicySimulationSummary,
 )
-from src.db.prompt_registry import PromptRegistryRepository
-from src.db.route_group_identity import RouteGroupIdentityNotFoundError
-from src.db.route_groups import RouteGroupRepository
+from src.db.catalog.prompt_registry import PromptRegistryRepository
+from src.db.routing.route_group_identity import RouteGroupIdentityNotFoundError
+from src.db.routing.route_groups import RouteGroupRepository
 from src.models.errors import RateLimitError, ServiceUnavailableError, TimeoutError
 from src.router import (
     ROUTING_MODE_CONTEXT_KEY,

@@ -12,8 +12,8 @@ from scripts.benchmarks.ingestion_database import (
     SPEND,
     ingestion_database,
 )
-from src.db.audit_ingestion import AuditIngestionRepository
-from src.db.spend_ingestion import SpendIngestionRepository
+from src.db.audit.audit_ingestion import AuditIngestionRepository
+from src.db.billing.spend_ingestion import SpendIngestionRepository
 
 
 class CaptureQuery:

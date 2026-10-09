@@ -12,8 +12,8 @@ from src.billing.accounting.transport.accounting_auth import (
     verify_accounting_signature,
 )
 from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 from src.outbound.network_policy import OutboundNetworkPolicy
 
 

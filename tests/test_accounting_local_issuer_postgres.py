@@ -21,8 +21,8 @@ from src.billing.accounting.transport.accounting_local_wire import (
     restore_wire_terminals,
 )
 from src.billing.accounting.accounting_protocol import ReserveDecision
-from src.db.accounting_protocol import AccountingProtocolRepository
-from src.db.accounting_local_leases import AccountingLocalLeaseRepository
+from src.db.accounting.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting.permits.accounting_local_leases import AccountingLocalLeaseRepository
 from tests.test_accounting_local_leases_postgres import deadline, owner
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_accounting_protocol_postgres import (

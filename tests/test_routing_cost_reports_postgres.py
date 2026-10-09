@@ -6,8 +6,8 @@ import pytest
 
 from src.billing.charges.operation_reservation import ComponentState
 from src.billing.spend.spend import SpendTrackingService
-from src.db.billing_operations import BillingOperationRepository
-from src.db.routing_costs import routing_cost_observation, routing_cost_query
+from src.db.billing.billing_operations import BillingOperationRepository
+from src.db.routing.routing_costs import routing_cost_observation, routing_cost_query
 from src.services.spend_visibility import SpendVisibility
 from tests import test_billing_operations_postgres as operation_fixtures
 from tests.test_billing_operations_postgres import deadline
