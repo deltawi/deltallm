@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { ChevronRight, type LucideIcon } from 'lucide-react';
 
 export type SummaryItem = {
@@ -42,6 +42,8 @@ type TextTabsProps<T extends string> = {
 };
 
 type IconTabsProps<T extends string> = {
+  id?: string;
+  label?: string;
   items: Array<{
     id: T;
     label: ReactNode;
@@ -209,63 +211,42 @@ export function IconTabs<T extends string>({
   active,
   onChange,
   variant = 'line',
+  id,
+  label = 'Sections',
 }: IconTabsProps<T>) {
-  if (variant === 'card') {
-    return (
-      <div className="flex overflow-x-auto border-b border-gray-100">
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onChange(item.id)}
-              className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-5 py-4 text-sm font-medium transition-colors ${
-                active === item.id
-                  ? 'border-brand-primary bg-blue-50/40 text-brand-primary-ink'
-                  : 'border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-800'
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {item.label}
-              {item.count !== undefined ? (
-                <span
-                  className={`ml-0.5 rounded px-1.5 py-0.5 text-xs font-semibold ${
-                    active === item.id ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'
-                  }`}
-                >
-                  {item.count}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-    );
-  }
-
+  const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   return (
-    <div className="mb-4 flex gap-1 border-b border-gray-200">
-      {items.map((item) => {
+    <div role="tablist" aria-label={label} className={`flex overflow-x-auto border-b ${variant === 'card' ? 'border-gray-100' : 'mb-4 gap-1 border-gray-200'}`}>
+      {items.map((item, index) => {
         const Icon = item.icon;
+        const selected = active === item.id;
         return (
           <button
             key={item.id}
+            ref={(element) => { buttons.current[index] = element; }}
             type="button"
+            role="tab"
+            id={id ? `${id}-tab-${item.id}` : undefined}
+            aria-controls={id ? `${id}-panel-${item.id}` : undefined}
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
             onClick={() => onChange(item.id)}
-            className={`flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
-              active === item.id
-                ? 'border-brand-primary text-brand-primary-ink'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
+            onKeyDown={(event) => {
+              let next: number;
+              if (event.key === 'ArrowRight') next = (index + 1) % items.length;
+              else if (event.key === 'ArrowLeft') next = (index - 1 + items.length) % items.length;
+              else if (event.key === 'Home') next = 0;
+              else if (event.key === 'End') next = items.length - 1;
+              else return;
+              event.preventDefault();
+              onChange(items[next].id);
+              buttons.current[next]?.focus();
+            }}
+            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-primary ${variant === 'card' ? 'px-5 py-4' : 'px-4 py-2.5'} ${selected ? `border-brand-primary text-brand-primary-ink ${variant === 'card' ? 'bg-blue-50/40' : ''}` : `border-transparent text-gray-500 ${variant === 'card' ? 'hover:bg-gray-50 hover:text-gray-800' : 'hover:text-gray-700'}`}`}
           >
-            <Icon className="h-4 w-4" />
+            <Icon className="h-4 w-4" aria-hidden="true" />
             {item.label}
-            {item.count !== undefined ? (
-              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-semibold text-gray-500">
-                {item.count}
-              </span>
-            ) : null}
+            {item.count !== undefined && <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${variant === 'card' && selected ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{item.count}</span>}
           </button>
         );
       })}

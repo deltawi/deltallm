@@ -1,25 +1,19 @@
 import { useState } from 'react';
 import {
   BookOpen,
-  CheckCircle2,
   ChevronDown,
   Clock,
-  Code2,
   FlaskConical,
-  GitBranch,
-  ListChecks,
   RotateCcw,
   Tag,
   Trash2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import PolicyGuidedEditor from '../PolicyGuidedEditor';
+import RouteGroupPolicyEditor from './RouteGroupPolicyEditor';
 import RouteGroupPolicySimulationPanel from './RouteGroupPolicySimulationPanel';
 import PolicySelectorSummary from './PolicySelectorSummary';
-import PolicyPublishControl from './PolicyPublishControl';
 import SelectorTools from './SelectorTools';
 import {
-  routeGroupStrategyOptions,
   type PolicyAction,
   type PolicyGuidedValues,
 } from '../../lib/routeGroups';
@@ -98,6 +92,8 @@ interface BindingFormValues {
 }
 
 interface RouteGroupAdvancedTabProps {
+  section: 'policy' | 'advanced';
+  defaultStrategy?: string | null;
   /* Prompt Binding */
   bindings: PromptBinding[];
   templates: PromptTemplate[];
@@ -160,6 +156,8 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 export default function RouteGroupAdvancedTab({
+  section,
+  defaultStrategy,
   bindings,
   templates,
   bindingForm,
@@ -212,25 +210,11 @@ export default function RouteGroupAdvancedTab({
     });
 
   const publishedPolicy = policies.find((p) => p.status === 'published') ?? null;
-  const activeStrategy = guidedPolicy?.strategy ?? 'simple-shuffle';
-  const STRATEGY_LABELS: Record<string, string> = {
-    'simple-shuffle': 'Shuffle',
-    weighted: 'Weighted',
-    'least-busy': 'Least Busy',
-    'latency-based-routing': 'Latency',
-    'cost-based-routing': 'Cost',
-    'usage-based-routing': 'Usage',
-    'tag-based-routing': 'Tag (Legacy)',
-    'priority-based-routing': 'Priority',
-    'rate-limit-aware': 'Rate Limit',
-  };
-  const strategyLabel = STRATEGY_LABELS[activeStrategy] ?? activeStrategy;
-
   return (
     <div className="space-y-3">
 
       {/* ── 1. Prompt Binding ── */}
-      {canManageBindings ? <AccordionCard
+      {section === 'advanced' && canManageBindings ? <AccordionCard
         id="prompt-binding"
         open={openSections.has('prompt-binding')}
         onToggle={() => toggle('prompt-binding')}
@@ -379,129 +363,18 @@ export default function RouteGroupAdvancedTab({
         </div>
       </AccordionCard> : null}
 
-      {/* ── 2. Routing Policy ── */}
-      <AccordionCard
-        id="routing-policy"
-        open={openSections.has('routing-policy')}
-        onToggle={() => toggle('routing-policy')}
-        icon={GitBranch}
-        iconBg="bg-blue-100"
-        iconColor="text-brand-primary-ink"
-        title="Routing Policy"
-        subtitle="Choose a model selector and routing strategy, then publish to make them active."
-        borderAccent="border-blue-200"
-        badge={
-          publishedPolicy ? (
-            <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-600/20">
-              {strategyLabel}
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
-              default shuffle
-            </span>
-          )
-        }
-      >
-        <div className="px-5 py-5 space-y-5">
-          {publishedPolicy && <PolicySelectorSummary policy={publishedPolicy.policy_json} label={`Active selector (v${publishedPolicy.version})`} />}
-          {/* Header actions row */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {/* Guided / Raw JSON toggle */}
-            <div className="flex items-center gap-1 border border-slate-200 bg-slate-100 rounded-lg p-1">
-              <button
-                type="button"
-                onClick={() => showAdvancedJson && onToggleAdvancedJson()}
-                disabled={!canWrite}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${!showAdvancedJson ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                <ListChecks className="h-3.5 w-3.5" /> Guided
-              </button>
-              <button
-                type="button"
-                onClick={() => !showAdvancedJson && onToggleAdvancedJson()}
-                disabled={!canWrite}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${showAdvancedJson ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                <Code2 className="h-3.5 w-3.5" /> Raw JSON
-              </button>
-            </div>
-
-            {/* Action buttons */}
-            <div className="flex items-center gap-2">
-              {policyMessage && (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700">
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                  {policyMessage}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={onValidate}
-                disabled={!canWrite || isPolicyBusy || !hasMembers}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 transition-colors"
-              >
-                {policyAction === 'validate' ? 'Validating…' : 'Validate'}
-              </button>
-              <button
-                type="button"
-                onClick={onSaveDraft}
-                disabled={!canWrite || isPolicyBusy || !hasMembers}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 transition-colors"
-              >
-                {policyAction === 'save-draft' ? 'Saving…' : 'Save Draft'}
-              </button>
-              <PolicyPublishControl policy={simulationPolicy} activePolicy={publishedPolicy?.policy_json ?? null}
-                busy={isPolicyBusy} disabled={!canWrite || !hasMembers || !canSimulate} onPublish={onPublish} />
-            </div>
-          </div>
-
-          {!hasMembers && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
-              Add at least one deployment in the Models tab before validating or publishing a policy.
-            </div>
-          )}
-
-          {policyError && (
-            <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-sm text-red-700">
-              {policyError}
-            </div>
-          )}
-
-          {/* Guided editor */}
-          {!showAdvancedJson && (
-            <fieldset disabled={!canWrite || isPolicyBusy || !canSimulate}><PolicyGuidedEditor
-              routeGroupId={routeGroupId}
-              values={guidedPolicy}
-              onChange={onGuidedPolicyChange}
-              strategyOptions={routeGroupStrategyOptions(guidedPolicy.strategy)}
-              memberOptions={members}
-              workloadMode={workloadMode}
-            /></fieldset>
-          )}
-
-          {/* Policy preview / raw JSON */}
-          <details className="space-y-1.5" open={showAdvancedJson}>
-            <summary className="cursor-pointer text-xs font-medium text-slate-500">
-              {showAdvancedJson ? 'Raw JSON Editor' : 'Effective Policy Preview'}
-            </summary>
-            {showAdvancedJson ? (
-              <textarea
-                aria-label="Policy JSON (import or export)"
-                value={policyText}
-                disabled={!canWrite}
-                onChange={(e) => onPolicyTextChange(e.target.value)}
-                rows={10}
-                spellCheck={false}
-                className="w-full rounded-lg bg-gray-950 p-4 text-sm text-green-400 font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-brand-primary shadow-inner"
-              />
-            ) : (
-              <div className="rounded-lg bg-gray-950 p-4 shadow-inner overflow-x-auto">
-                <pre className="text-sm text-green-400 font-mono leading-relaxed">{guidedPreview}</pre>
-              </div>
-            )}
-          </details>
-        </div>
-      </AccordionCard>
+      {section === 'policy' && <>
+      <RouteGroupPolicyEditor
+        routeGroupId={routeGroupId} workloadMode={workloadMode} guidedPolicy={guidedPolicy}
+        members={members} guidedPreview={guidedPreview} simulationPolicy={simulationPolicy}
+        canSimulate={canSimulate} canWrite={canWrite} policyText={policyText}
+        policyMessage={policyMessage} policyError={policyError} isPolicyBusy={isPolicyBusy}
+        policyAction={policyAction} showAdvancedJson={showAdvancedJson} hasMembers={hasMembers}
+        onToggleAdvancedJson={onToggleAdvancedJson} onGuidedPolicyChange={onGuidedPolicyChange}
+        onPolicyTextChange={onPolicyTextChange} onValidate={onValidate} onSaveDraft={onSaveDraft}
+        onPublish={onPublish} policies={policies} loadingPolicies={loadingPolicies}
+        hasPoliciesError={hasPoliciesError} defaultStrategy={defaultStrategy}
+      />
 
       {/* ── 3. Policy Simulation ── */}
       <SelectorTools routeGroupId={routeGroupId} groupKey={groupKey} policy={simulationPolicy} />
@@ -662,6 +535,8 @@ export default function RouteGroupAdvancedTab({
         </div>
       </AccordionCard>
 
+      </>}
+      {section === 'advanced' && !canManageBindings && <p className="rounded-xl border border-gray-200 bg-white p-5 text-sm text-gray-500">Prompt binding requires administrator access.</p>}
     </div>
   );
 }

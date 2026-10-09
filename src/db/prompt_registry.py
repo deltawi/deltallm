@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.db.admin_asset_lists import ListDirection, PromptSortKey, list_asset_rows
+
 from src.services.asset_ownership import normalize_owner_scope_type, owner_scope_from_metadata
 from src.services.asset_scopes import normalize_scope_type, scope_lookup_candidates
 
@@ -48,6 +50,8 @@ class PromptTemplateRecord:
     binding_count: int = 0
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    created_by_user_id: str | None = None
+    visibility: str | None = None
 
 
 @dataclass
@@ -123,74 +127,22 @@ class PromptRegistryRepository:
         limit: int = 100,
         offset: int = 0,
         managed_asset_ids: list[str] | None = None,
+        sort_by: PromptSortKey | None = None,
+        sort_direction: ListDirection = "desc",
     ) -> tuple[list[PromptTemplateRecord], int]:
         if self.prisma is None:
             return [], 0
-        if managed_asset_ids is not None and not managed_asset_ids:
-            return [], 0
-
-        clauses: list[str] = []
-        params: list[Any] = []
-        if search:
-            params.append(f"%{search}%")
-            clauses.append(
-                f"(t.template_key ILIKE ${len(params)} OR t.name ILIKE ${len(params)} OR COALESCE(t.description, '') ILIKE ${len(params)})"
-            )
-        if managed_asset_ids is not None:
-            normalized_ids = [
-                str(item).strip() for item in managed_asset_ids if str(item).strip()
-            ]
-            if not normalized_ids:
-                return [], 0
-            placeholders: list[str] = []
-            for asset_id in normalized_ids:
-                params.append(asset_id)
-                placeholders.append(f"${len(params)}")
-            clauses.append(f"t.managed_asset_id IN ({', '.join(placeholders)})")
-
-        where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        count_rows = await self.prisma.query_raw(
-            f"SELECT COUNT(*)::int AS total FROM deltallm_prompttemplate t {where_sql}",
-            *params,
+        result = await list_asset_rows(
+            self.prisma,
+            kind="prompt",
+            search=search,
+            limit=limit,
+            offset=offset,
+            managed_asset_ids=managed_asset_ids,
+            sort_by=sort_by or "created_at",
+            sort_direction=sort_direction,
         )
-        total = int((count_rows[0] if count_rows else {}).get("total") or 0)
-
-        params.extend([limit, offset])
-        rows = await self.prisma.query_raw(
-            f"""
-            SELECT
-                t.prompt_template_id,
-                t.template_key,
-                t.name,
-                t.managed_asset_id,
-                t.description,
-                t.owner_scope,
-                t.metadata,
-                t.created_at,
-                t.updated_at,
-                (
-                    SELECT COUNT(*)::int
-                    FROM deltallm_promptversion v
-                    WHERE v.prompt_template_id = t.prompt_template_id
-                ) AS version_count,
-                (
-                    SELECT COUNT(*)::int
-                    FROM deltallm_promptlabel l
-                    WHERE l.prompt_template_id = t.prompt_template_id
-                ) AS label_count,
-                (
-                    SELECT COUNT(*)::int
-                    FROM deltallm_promptbinding b
-                    WHERE b.prompt_template_id = t.prompt_template_id
-                ) AS binding_count
-            FROM deltallm_prompttemplate t
-            {where_sql}
-            ORDER BY t.created_at DESC, t.template_key ASC
-            LIMIT ${len(params) - 1} OFFSET ${len(params)}
-            """,
-            *params,
-        )
-        return [self._to_template_record(row) for row in rows], total
+        return [self._to_template_record(row) for row in result.rows], result.total
 
     async def get_template(self, template_key: str) -> PromptTemplateRecord | None:
         if self.prisma is None:
@@ -1129,6 +1081,10 @@ class PromptRegistryRepository:
             binding_count=int(row.get("binding_count") or 0),
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
+            created_by_user_id=str(row["created_by_user_id"])
+            if row.get("created_by_user_id")
+            else None,
+            visibility=str(row["visibility"]) if row.get("visibility") else None,
         )
 
     def _to_version_record(self, row: dict[str, Any]) -> PromptVersionRecord:

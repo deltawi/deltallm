@@ -27,6 +27,9 @@ from src.db.logical_models import LogicalModelRecord, LogicalModelRepository
 from src.db.managed_assets import ManagedAssetAccessRepository
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.api.admin.list_contracts import AdminListResponse, ModelListItem
+from src.services.admin_list_health import list_health_refs, list_health_snapshot
+from src.services.model_admin_listing import ModelSortKey, SortDirection, model_list_page
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated
@@ -279,6 +282,13 @@ async def scoped_model_entries_for_principal(
         entry["display_name"] = (
             str(logical_model.display_name or api_model_id) if logical_model else api_model_id
         )
+        entry["created_by_user_id"] = logical_model.created_by_user_id if logical_model else None
+        if logical_model:
+            entry["created_at"] = entry.get("created_at") or logical_model.created_at
+            if logical_model.updated_at and (
+                not entry.get("updated_at") or logical_model.updated_at > entry["updated_at"]
+            ):
+                entry["updated_at"] = logical_model.updated_at
     visible_policies, creator_names = await _model_access_by_name(
         request.app,
         principal,
@@ -342,9 +352,7 @@ async def _control_plane_model_entries(app: Any) -> list[dict[str, Any]]:
     """Build control-plane entries from persisted, unresolved deployment records."""
 
     runtime_entries = model_entries(app)
-    runtime_deployment_ids = {
-        str(entry.get("deployment_id") or "") for entry in runtime_entries
-    }
+    runtime_deployment_ids = {str(entry.get("deployment_id") or "") for entry in runtime_entries}
     repository = _model_deployment_repository(app)
     list_all = getattr(repository, "list_all", None)
     if not callable(list_all):
@@ -383,6 +391,8 @@ async def _control_plane_model_entries(app: Any) -> list[dict[str, Any]]:
                 "deployment_id": record.deployment_id,
                 "model_id": record.model_id,
                 "model_name": record.model_name,
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
                 "routable": routable,
                 "runtime_status": "active"
                 if routable
@@ -486,10 +496,7 @@ def _apply_principal_credential_view(
     has_named_binding = bool(named_credential_id or binding_state or binding_mode)
     can_revoke = bool(
         binding_state == ModelCredentialBindingState.ACTIVE.value
-        and (
-            (principal is not None and principal.is_platform_admin)
-            or credential_owned
-        )
+        and ((principal is not None and principal.is_platform_admin) or credential_owned)
     )
     entry["credential_binding"] = {
         "state": binding_state,
@@ -1158,7 +1165,11 @@ async def _reload_model_runtime_after_commit(
     return warnings
 
 
-@router.get("/ui/api/models", dependencies=[Depends(require_authenticated)])
+@router.get(
+    "/ui/api/models",
+    dependencies=[Depends(require_authenticated)],
+    response_model=AdminListResponse[ModelListItem],
+)
 async def list_models(
     request: Request,
     search: str | None = Query(default=None),
@@ -1166,49 +1177,33 @@ async def list_models(
     mode: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    sort_by: ModelSortKey | None = Query(default=None),
+    sort_direction: SortDirection = Query(default="desc"),
 ) -> dict[str, Any]:
-    health_backend = getattr(request.app.state, "router_state_backend", None)
     principal = asset_principal_for_request(request)
     entries = await scoped_model_entries_for_principal(request, principal)
-
-    if search:
-        q = search.lower()
-        entries = [
-            e
-            for e in entries
-            if q in e["model_name"].lower()
-            or q in str(e.get("display_name") or "").lower()
-            or q in e["deployment_id"].lower()
-            or q in e.get("provider", "").lower()
-        ]
-    if provider:
-        p = provider.lower()
-        entries = [e for e in entries if e.get("provider", "").lower() == p]
-    if mode:
-        m = mode.lower()
-        entries = [e for e in entries if (e.get("mode") or "chat").lower() == m]
-
-    total = len(entries)
-    page = entries[offset : offset + limit]
-
-    for entry in page:
-        healthy = bool(entry.get("routable", True))
-        if healthy and health_backend is not None:
-            health = await health_backend.get_health(
-                _runtime_health_ref(request.app, entry["deployment_id"])
-            )
-            healthy = str(health.get("healthy", "true")) != "false"
-        entry["healthy"] = healthy
-
-    return {
-        "data": page,
-        "pagination": {
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + limit < total,
-        },
-    }
+    health = await list_health_snapshot(
+        getattr(request.app.state, "router_state_backend", None),
+        list_health_refs(
+            getattr(getattr(request.app.state, "router", None), "deployment_registry", None),
+            [
+                str(entry["deployment_id"])
+                for entry in entries
+                if entry.get("routable") is not False
+            ],
+        ),
+    )
+    return model_list_page(
+        entries,
+        health=health,
+        search=search,
+        provider=provider,
+        mode=mode,
+        sort_by=sort_by,
+        sort_direction=sort_direction,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/ui/api/models/provider-health-summary", dependencies=[Depends(require_authenticated)])
@@ -1533,9 +1528,7 @@ async def revoke_model_credential_binding(
     logical_model, model_policy = model_access if model_access is not None else (None, None)
     warnings = await _reload_model_runtime_after_commit(
         request.app,
-        fail_closed_asset_id=(
-            model_policy.asset.asset_id if model_policy is not None else None
-        ),
+        fail_closed_asset_id=(model_policy.asset.asset_id if model_policy is not None else None),
         fail_closed_model_names={
             logical_model.model_name if logical_model is not None else deployment.model_name
         },
@@ -1982,9 +1975,7 @@ async def update_model(
             "named_credential_id": stored_deployment.named_credential_id,
             "credential_binding_mode": stored_deployment.credential_binding_mode,
             "credential_binding_state": stored_deployment.credential_binding_state,
-            "credential_bound_by_account_id": (
-                stored_deployment.credential_bound_by_account_id
-            ),
+            "credential_bound_by_account_id": (stored_deployment.credential_bound_by_account_id),
             "deltallm_params": dict(stored_deployment.deltallm_params),
             "model_info": dict(stored_deployment.model_info or {}),
         }
@@ -2026,13 +2017,11 @@ async def update_model(
     )
     display_name = _display_name_or_400(payload, fallback=existing_display_name)
     display_name_changed = logical_model is not None and display_name != existing_display_name
-    existing_named_credential_id = str(
-        found_deployment.get("named_credential_id") or ""
-    ).strip() or None
+    existing_named_credential_id = (
+        str(found_deployment.get("named_credential_id") or "").strip() or None
+    )
     credential_replaced = named_credential_id != existing_named_credential_id
-    existing_binding_state = str(
-        found_deployment.get("credential_binding_state") or ""
-    ).strip()
+    existing_binding_state = str(found_deployment.get("credential_binding_state") or "").strip()
     if (
         not credential_replaced
         and policy is not None
@@ -2064,23 +2053,19 @@ async def update_model(
             principal.account_id if credential_binding_mode is not None else None
         )
     else:
-        raw_binding_mode = str(
-            found_deployment.get("credential_binding_mode") or ""
-        ).strip()
+        raw_binding_mode = str(found_deployment.get("credential_binding_mode") or "").strip()
         try:
             credential_binding_mode = (
-                ModelCredentialBindingMode(raw_binding_mode)
-                if raw_binding_mode
-                else None
+                ModelCredentialBindingMode(raw_binding_mode) if raw_binding_mode else None
             )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The model credential binding is invalid; choose a replacement credential",
             ) from exc
-        credential_bound_by_account_id = str(
-            found_deployment.get("credential_bound_by_account_id") or ""
-        ).strip() or None
+        credential_bound_by_account_id = (
+            str(found_deployment.get("credential_bound_by_account_id") or "").strip() or None
+        )
         if credential_binding_mode is None and named_credential_id:
             access_repository = _managed_asset_repository(request.app)
             credential_policy = (
@@ -2094,8 +2079,7 @@ async def update_model(
             if (
                 credential_policy is not None
                 and policy is not None
-                and credential_policy.asset.owner_account_id
-                == policy.asset.owner_account_id
+                and credential_policy.asset.owner_account_id == policy.asset.owner_account_id
             ):
                 credential_binding_mode = ModelCredentialBindingMode.OWNER_DELEGATED
                 credential_bound_by_account_id = credential_policy.asset.owner_account_id

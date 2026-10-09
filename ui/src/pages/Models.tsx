@@ -5,13 +5,17 @@ import { models, type ModelDeploymentDetail } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
-import DataTable from '../components/DataTable';
+import type { Column } from '../components/DataTable';
+import AssetList from '../components/admin/lists/AssetList';
+import { assetMetadataColumns } from '../components/admin/lists/assetMetadataColumns';
+import { CopyIdentifier, ListIdentity } from '../components/admin/lists/AssetListCells';
+import ModelTypePill from '../components/models/ModelTypePill';
+import { useAssetListSort } from '../lib/useAssetListSort';
 import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
-import { ContentCard, IndexShell } from '../components/admin/shells';
-import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/modelFormShared';
-import ModelsMobileList, { type ModelFilterValue } from '../components/models/ModelsMobileList';
-import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
+import { IndexShell } from '../components/admin/shells';
+import { MODE_OPTIONS } from '../components/modelFormShared';
+import { Box, Plus, Pencil, Trash2 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { mutationOutcome } from '../lib/mutationOutcome';
@@ -24,22 +28,24 @@ export default function Models() {
   const isPlatformAdmin = isPlatformAdminSession(authMode, session);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [modeFilter, setModeFilter] = useState<ModelFilterValue>('all');
+  const [modeFilter, setModeFilter] = useState('all');
   const [pageOffset, setPageOffset] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const pageSize = 10;
-  const { data: result, loading, refetch } = useApi(
+  const listSort = useAssetListSort(['name', 'mode', 'provider', 'health', 'created_by', 'updated_at', 'visibility'] as const, () => setPageOffset(0));
+  const { data: result, loading, error, refetch } = useApi(
     (signal) => models.list(
       {
         search,
         mode: modeFilter === 'all' ? undefined : modeFilter,
         limit: pageSize,
         offset: pageOffset,
+        sort_by: listSort.sortBy, sort_direction: listSort.sortDirection,
       },
       signal,
     ),
-    [search, modeFilter, pageOffset],
+    [search, modeFilter, pageOffset, listSort.sortBy, listSort.sortDirection],
   );
   const items = result?.data || [];
   const pagination = result?.pagination;
@@ -73,59 +79,28 @@ export default function Models() {
     }
   };
 
-  const handleModeFilterChange = (value: ModelFilterValue) => {
+  const handleModeFilterChange = (value: string) => {
     setModeFilter(value);
     setPageOffset(0);
   };
 
-  const modeLabel = (mode: string) => {
-    const opt = MODE_OPTIONS.find(o => o.value === mode);
-    return opt ? opt.label : mode;
-  };
-
   const rowMode = (row: ModelDeploymentDetail) => {
-    const metadataMode = row.model_info.mode;
+    const metadataMode = row.model_info?.mode;
     return row.mode || (typeof metadataMode === 'string' ? metadataMode : 'chat');
   };
 
   const displayName = (row: ModelDeploymentDetail) => row.display_name || row.model_name;
   const apiModelId = (row: ModelDeploymentDetail) => row.api_model_id || row.model_name;
 
-  const columns = [
-    { key: 'model_name', header: 'Model', render: (r: ModelDeploymentDetail) => (
-      <div className="min-w-0">
-        <div className="font-medium text-gray-900">{displayName(r)}</div>
-        <code className="block max-w-72 truncate text-xs text-gray-400">{apiModelId(r)}</code>
-      </div>
-    ) },
-    { key: 'mode', header: 'Type', render: (r: ModelDeploymentDetail) => {
-      const mode = rowMode(r);
-      return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>{modeLabel(mode)}</span>;
-    }},
-    { key: 'provider', header: 'Provider', render: (r: ModelDeploymentDetail) => <ProviderBadge provider={r.provider} model={r.deltallm_params.model} /> },
-    { key: 'credential_source', header: 'Credentials', render: (r: ModelDeploymentDetail) => (
-      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${r.credential_source === 'named' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-700'}`}>
-        {r.credential_source === 'named' ? 'Named' : 'Inline'}
-      </span>
-    )},
-    { key: 'deployment_id', header: 'Deployment ID', render: (r: ModelDeploymentDetail) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.deployment_id}</code> },
-    { key: 'healthy', header: 'Health', render: (r: ModelDeploymentDetail) => <StatusBadge status={r.healthy ? 'healthy' : 'unhealthy'} /> },
-    {
-      key: 'actions', header: '', render: (r: ModelDeploymentDetail) => (
-        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-          {isPlatformAdmin || r.access?.capabilities.write ? (
-            <>
-              <button aria-label={`Edit ${displayName(r)}`} onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
-            </>
-          ) : null}
-          {isPlatformAdmin || r.access?.capabilities.delete ? (
-            <>
-              <button aria-label={`Delete ${displayName(r)}`} onClick={() => setDeleteTarget(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
-            </>
-          ) : null}
-        </div>
-      ),
-    },
+  const columns: Column<ModelDeploymentDetail>[] = [
+    { key: 'name', header: 'Model', sortKey: 'name', render: (row) => <ListIdentity name={displayName(row)} identifier={apiModelId(row)} onOpen={() => navigate(modelDetailPath(row.deployment_id))} secondary={<><CopyIdentifier value={row.deployment_id} label="Deployment ID" />{row.deltallm_params.tpm || row.deltallm_params.rpm ? <span className="block text-gray-400 md:hidden">{row.deltallm_params.tpm ? `TPM ${row.deltallm_params.tpm}` : `RPM ${row.deltallm_params.rpm}`}</span> : null}</>} actions={<>
+      {isPlatformAdmin || row.access?.capabilities.write ? <button type="button" aria-label={`Edit ${displayName(row)}`} onClick={() => navigate(modelEditPath(row.deployment_id))} className="rounded-lg p-1.5 hover:bg-gray-100"><Pencil className="h-4 w-4 text-gray-500" /></button> : null}
+      {isPlatformAdmin || row.access?.capabilities.delete ? <button type="button" aria-label={`Delete ${displayName(row)}`} onClick={() => setDeleteTarget(row.deployment_id)} className="rounded-lg p-2 md:p-1.5 hover:bg-red-50"><Trash2 className="h-4 w-4 text-red-500" /></button> : null}
+    </>} /> },
+    { key: 'mode', header: 'Type', sortKey: 'mode', render: (row) => <ModelTypePill mode={rowMode(row)} /> },
+    { key: 'provider', header: 'Provider', sortKey: 'provider', render: (row) => <ProviderBadge provider={row.provider} model={row.deltallm_params.model} /> },
+    { key: 'health', header: 'Health', sortKey: 'health', render: (row) => <StatusBadge status={row.health_status || (row.healthy == null ? 'unknown' : row.healthy ? 'healthy' : 'unhealthy')} /> },
+    ...assetMetadataColumns<ModelDeploymentDetail>(),
   ];
 
   return (
@@ -142,65 +117,11 @@ export default function Models() {
           <Plus className="h-4 w-4" /> Add Model
         </button>
       ) : undefined}
-      toolbar={(
-        <div className="hidden w-full flex-wrap items-center gap-3 md:flex">
-          <div className="relative w-full sm:w-72">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search models..."
-              className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
-            />
-          </div>
-          <select
-            value={modeFilter}
-            onChange={(e) => handleModeFilterChange(e.target.value as ModelFilterValue)}
-            aria-label="Filter model type"
-            className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
-          >
-            <option value="all">All types</option>
-            {MODE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+
     >
-      <div className="hidden md:block">
-        <ContentCard>
-          <DataTable
-            columns={columns}
-            data={items}
-            loading={loading}
-            emptyMessage="No models configured"
-            onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))}
-            pagination={pagination}
-            onPageChange={setPageOffset}
-          />
-        </ContentCard>
-      </div>
-      <div className="md:hidden">
-        <ModelsMobileList
-          items={items}
-          loading={loading}
-          pagination={pagination}
-          pageSize={pageSize}
-          onPageChange={setPageOffset}
-          searchValue={searchInput}
-          onSearchChange={setSearchInput}
-          activeFilter={modeFilter}
-          onFilterChange={handleModeFilterChange}
-          emptyMessage="No models configured"
-          canEdit={(row) => isPlatformAdmin || Boolean(row.access?.capabilities.write)}
-          canDelete={(row) => isPlatformAdmin || Boolean(row.access?.capabilities.delete)}
-          onView={(id) => navigate(modelDetailPath(id))}
-          onEdit={(id) => navigate(modelEditPath(id))}
-          onDelete={setDeleteTarget}
-        />
-      </div>
+      <AssetList columns={columns} data={items} rowKey={(row) => row.deployment_id} loading={loading} error={error} onRetry={refetch} emptyMessage="No models configured" search={searchInput} searchLabel="Search models" onSearchChange={setSearchInput} sort={listSort.sort} onSortChange={listSort.onSortChange} pagination={pagination} onPageChange={setPageOffset} onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))} filters={
+        <select value={modeFilter} onChange={(event) => handleModeFilterChange(event.target.value)} aria-label="Filter model type" className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary md:text-sm"><option value="all">All types</option>{MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+      } />
       <ConfirmDialog
         open={deleteTarget !== null}
         title="Delete model deployment"

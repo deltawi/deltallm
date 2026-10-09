@@ -61,6 +61,19 @@ class ModelDeploymentRecord:
     credential_bound_at: datetime | None = None
     credential_revoked_at: datetime | None = None
     governance_source: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+def _deployment_timestamp(value: object) -> datetime | None:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _model_deployment_record(row: dict[str, Any]) -> ModelDeploymentRecord:
@@ -90,6 +103,8 @@ def _model_deployment_record(row: dict[str, Any]) -> ModelDeploymentRecord:
         governance_source=str(row.get("governance_source"))
         if row.get("governance_source") is not None
         else None,
+        created_at=_deployment_timestamp(row.get("created_at")),
+        updated_at=_deployment_timestamp(row.get("updated_at")),
     )
 
 
@@ -112,6 +127,7 @@ class ModelDeploymentRepository:
         rows = await self.prisma.query_raw(
             """
             SELECT deployment_id, model_name, model_id, named_credential_id,
+                   created_at, updated_at,
                    credential_binding_mode, credential_binding_state,
                    credential_bound_by_account_id, credential_bound_at,
                    credential_revoked_at, deltallm_params, model_info,

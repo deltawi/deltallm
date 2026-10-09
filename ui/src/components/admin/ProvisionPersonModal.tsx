@@ -1,373 +1,110 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Mail, ShieldCheck, UserRound, UserRoundPlus } from 'lucide-react';
 import Modal from '../Modal';
 import { rbac, type ProvisionPersonResponse } from '../../lib/api';
+import { changeProvisionMethod, initialProvisionForm, ORGANIZATION_ROLES, personInputClass, provisionPayload, TEAM_ROLES, validateProvisionForm, type OrganizationOption, type PersonFormIssue, type PersonTab, type ProvisionForm, type TeamOption } from '../../lib/peopleForm';
 import { useToast } from '../ToastProvider';
 import Button from '../Button';
+import { IconTabs } from './shells';
+import AccountStatusControl from '../people/AccountStatusControl';
+import PersonAccessFields from '../people/PersonAccessFields';
+import type { ScopeSelectionState } from '../people/PersonScopeSelect';
 
-type ProvisionMode = 'invite_email' | 'create_account';
-type ScopeType = 'none' | 'organization' | 'team';
-
-type OptionItem = {
-  organization_id?: string;
-  organization_name?: string | null;
-  team_id?: string;
-  team_alias?: string | null;
-};
-
-interface ProvisionPersonModalProps {
-  open: boolean;
-  onClose: () => void;
+interface Props {
+  open: boolean; onClose: () => void;
   onSuccess: (result: ProvisionPersonResponse) => Promise<void> | void;
-  orgList: OptionItem[];
-  teamList: OptionItem[];
-  initialOrganizationId?: string | null;
-  initialTeamId?: string | null;
+  orgList: OrganizationOption[]; teamList: TeamOption[];
+  initialOrganizationId?: string | null; initialTeamId?: string | null;
 }
 
-const PLATFORM_ROLES = [
-  { value: 'org_user', label: 'Organization User' },
-  { value: 'platform_admin', label: 'Platform Admin' },
-] as const;
-
-const ORGANIZATION_ROLES = [
-  { value: 'org_member', label: 'Member' },
-  { value: 'org_owner', label: 'Owner' },
-  { value: 'org_admin', label: 'Admin' },
-  { value: 'org_billing', label: 'Billing' },
-  { value: 'org_auditor', label: 'Auditor' },
-] as const;
-
-const TEAM_ROLES = [
-  { value: 'team_admin', label: 'Admin' },
-  { value: 'team_developer', label: 'Developer' },
-  { value: 'team_viewer', label: 'Viewer' },
-] as const;
-
-function defaultScopeType(initialOrganizationId?: string | null, initialTeamId?: string | null): ScopeType {
-  if (initialTeamId) return 'team';
-  if (initialOrganizationId) return 'organization';
-  return 'none';
-}
-
-export default function ProvisionPersonModal({
-  open,
-  onClose,
-  onSuccess,
-  orgList,
-  teamList,
-  initialOrganizationId,
-  initialTeamId,
-}: ProvisionPersonModalProps) {
+function ProvisionPersonEditor({ onClose, onSuccess, orgList, teamList, initialOrganizationId, initialTeamId }: Omit<Props, 'open'>) {
   const { pushToast } = useToast();
-  const [email, setEmail] = useState('');
-  const [mode, setMode] = useState<ProvisionMode>('invite_email');
-  const [platformRole, setPlatformRole] = useState('org_user');
-  const [scopeType, setScopeType] = useState<ScopeType>('none');
-  const [organizationId, setOrganizationId] = useState('');
-  const [organizationRole, setOrganizationRole] = useState('org_member');
-  const [teamId, setTeamId] = useState('');
-  const [teamRole, setTeamRole] = useState('team_viewer');
-  const [password, setPassword] = useState('');
-  const [isActive, setIsActive] = useState(true);
+  const id = useId();
+  const formRef = useRef<HTMLFormElement>(null);
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  const [form, setForm] = useState(() => initialProvisionForm({ initialOrganizationId, initialTeamId }, orgList, teamList));
+  const [tab, setTab] = useState<PersonTab>('details');
+  const [selection, setSelection] = useState<ScopeSelectionState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [issue, setIssue] = useState<PersonFormIssue | null>(null);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
-    setEmail('');
-    setMode('invite_email');
-    setPlatformRole('org_user');
-    setScopeType(defaultScopeType(initialOrganizationId, initialTeamId));
-    setOrganizationId(initialOrganizationId || orgList[0]?.organization_id || '');
-    setOrganizationRole('org_member');
-    setTeamId(initialTeamId || teamList[0]?.team_id || '');
-    setTeamRole('team_viewer');
-    setPassword('');
-    setIsActive(true);
-    setError('');
-  }, [open, initialOrganizationId, initialTeamId, orgList, teamList]);
-
-  useEffect(() => {
-    if (mode === 'invite_email' && platformRole !== 'org_user') {
-      setPlatformRole('org_user');
-    }
-  }, [mode, platformRole]);
-
-  useEffect(() => {
-    if (platformRole === 'platform_admin') {
-      setScopeType('none');
-      return;
-    }
-    if (scopeType === 'none' && (initialOrganizationId || initialTeamId) && mode === 'invite_email') {
-      setScopeType(defaultScopeType(initialOrganizationId, initialTeamId));
-    }
-  }, [initialOrganizationId, initialTeamId, mode, platformRole, scopeType]);
-
-  useEffect(() => {
-    if (scopeType !== 'team') return;
-    if (!teamList.some((item) => item.team_id === teamId)) {
-      setTeamId(teamList[0]?.team_id || '');
-    }
-  }, [scopeType, teamId, teamList]);
-
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const close = () => { if (!pending.current) onClose(); };
+  const change = (next: ProvisionForm) => { setForm(next); setIssue(null); setError(''); };
+  const items = [{ id: 'details' as const, label: 'Details', icon: UserRound }, { id: 'access' as const, label: 'Access', icon: ShieldCheck }];
+  const selectedId = form.scope === 'organization' ? form.organizationId : form.teamId;
+  const currentSelection = selection?.kind === form.scope && selection.value === selectedId ? selection : null;
+  const fallbackName = form.scope === 'organization' ? orgList.find((item) => item.organization_id === selectedId)?.organization_name : teamList.find((item) => item.team_id === selectedId)?.team_alias;
+  const summaryName = form.platformRole === 'platform_admin' ? 'Platform Admin' : form.scope !== 'none' ? currentSelection?.selected?.label || fallbackName || selectedId || 'Choose initial access' : form.mode === 'invite_email' ? 'Initial access required' : 'No initial scope';
+  const roles = form.scope === 'organization' ? ORGANIZATION_ROLES : TEAM_ROLES;
+  const summaryDetail = form.platformRole === 'platform_admin' ? form.active ? 'Account active' : 'Account disabled' : form.scope !== 'none' ? `${form.scope === 'organization' ? 'Organization' : 'Team'} · ${roles.find((role) => role.value === (form.scope === 'organization' ? form.organizationRole : form.teamRole))?.label || ''}` : form.mode === 'invite_email' ? 'Choose an organization or team' : 'Organization User';
+  const reportIssue = (next: PersonFormIssue) => {
+    setIssue(next); setError(next.message); setTab(next.tab);
+    window.requestAnimationFrame(() => formRef.current?.querySelector<HTMLElement>(`[data-person-field="${next.field}"]`)?.focus());
+  };
   const submit = async () => {
-    const normalizedEmail = email.trim();
-    if (!normalizedEmail) {
-      setError('Email is required');
-      return;
+    if (pending.current) return;
+    const nextIssue = validateProvisionForm(form);
+    if (nextIssue) { reportIssue(nextIssue); return; }
+    if (form.scope !== 'none') {
+      const field = form.scope === 'organization' ? 'organizationId' : 'teamId';
+      if (!currentSelection || currentSelection.loading) { reportIssue({ tab: 'access', field, message: 'Wait for initial access to finish loading.' }); return; }
+      if (currentSelection.error || !currentSelection.selected) { reportIssue({ tab: 'access', field, message: currentSelection.error || 'Select available initial access.' }); return; }
     }
-    if (mode === 'invite_email' && scopeType === 'none') {
-      setError('Select organization or team access for the invitation');
-      return;
-    }
-    if (mode === 'create_account' && !password.trim()) {
-      setError('Password is required when creating an account manually');
-      return;
-    }
-    if (scopeType === 'organization' && !organizationId) {
-      setError('Select an organization');
-      return;
-    }
-    if (scopeType === 'team' && !teamId) {
-      setError('Select a team');
-      return;
-    }
-
-    setSaving(true);
-    setError('');
+    pending.current = true; setSaving(true); setError(''); setIssue(null);
     try {
-      const payload = {
-        email: normalizedEmail,
-        mode,
-        platform_role: platformRole,
-        password: mode === 'create_account' ? password.trim() : undefined,
-        is_active: mode === 'create_account' ? isActive : undefined,
-        organization_id: scopeType === 'organization' ? organizationId : undefined,
-        organization_role: scopeType === 'organization' ? organizationRole : undefined,
-        team_id: scopeType === 'team' ? teamId : undefined,
-        team_role: scopeType === 'team' ? teamRole : undefined,
-      };
-      const result = await rbac.provisionPerson(payload);
-      pushToast({
-        tone: 'success',
-        message: mode === 'invite_email' ? 'Invitation queued for delivery.' : 'Account created.',
-      });
+      const result = await rbac.provisionPerson(provisionPayload(form));
+      if (!mounted.current) return;
+      setForm((current) => ({ ...current, password: '' }));
+      pushToast({ tone: 'success', message: form.mode === 'invite_email' ? 'Invitation queued for delivery.' : 'Account created.' });
       onClose();
-      void Promise.resolve(onSuccess(result)).catch((refreshError: any) => {
-        pushToast({
-          tone: 'info',
-          message: refreshError?.message || 'Person provisioned, but the list could not be refreshed. Reload to confirm the latest state.',
-        });
-      });
-    } catch (err: any) {
-      setError(err?.message || 'Failed to provision access');
+      void Promise.resolve().then(() => onSuccess(result)).catch(() => pushToast({ tone: 'info', message: 'Access was saved, but the list could not be refreshed. Reload to see the latest state.' }));
+    } catch (err: unknown) {
+      if (mounted.current) setError(err instanceof Error ? err.message : 'Failed to provision access.');
     } finally {
-      setSaving(false);
+      pending.current = false;
+      if (mounted.current) setSaving(false);
     }
   };
-
-  return (
-    <Modal open={open} onClose={() => { if (!saving) onClose(); }} title="Add Person">
-      <div className="space-y-5">
-        {error ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-        ) : null}
-
-        <section className="space-y-3">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900">Identity</h3>
-            <p className="mt-1 text-xs text-gray-500">Choose who should receive access.</p>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-gray-700">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(event) => { setEmail(event.target.value); setError(''); }}
-              placeholder="user@example.com"
-              autoComplete="email"
-              data-autofocus="true"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-            />
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900">Onboarding</h3>
-            <p className="mt-1 text-xs text-gray-500">Choose whether to invite them by email or create the account directly.</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2 rounded-xl bg-gray-100 p-1">
-            <button
-              type="button"
-              onClick={() => { setMode('invite_email'); setError(''); }}
-              className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                mode === 'invite_email' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              Send invite email
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('create_account'); setError(''); }}
-              className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                mode === 'create_account' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              Create account manually
-            </button>
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900">Access</h3>
-            <p className="mt-1 text-xs text-gray-500">Set the platform role and optional initial scope grant.</p>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-gray-700">Platform role</label>
-            <select
-              value={platformRole}
-              onChange={(event) => { setPlatformRole(event.target.value); setError(''); }}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-            >
-              {PLATFORM_ROLES.filter((item) => mode === 'create_account' || item.value !== 'platform_admin').map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {platformRole !== 'platform_admin' ? (
-            <>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">Initial access</label>
-                <select
-                  value={scopeType}
-                  onChange={(event) => { setScopeType(event.target.value as ScopeType); setError(''); }}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                >
-                  <option value="none">No initial scope</option>
-                  <option value="organization">Organization</option>
-                  <option value="team">Team</option>
-                </select>
-              </div>
-
-              {scopeType === 'organization' ? (
-                <>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Organization</label>
-                    <select
-                      value={organizationId}
-                      onChange={(event) => { setOrganizationId(event.target.value); setError(''); }}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    >
-                      {orgList.map((item) => (
-                        <option key={item.organization_id} value={item.organization_id}>
-                          {item.organization_name || item.organization_id}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Organization role</label>
-                    <select
-                      value={organizationRole}
-                      onChange={(event) => setOrganizationRole(event.target.value)}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    >
-                      {ORGANIZATION_ROLES.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              ) : null}
-
-              {scopeType === 'team' ? (
-                <>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Team</label>
-                    <select
-                      value={teamId}
-                      onChange={(event) => { setTeamId(event.target.value); setError(''); }}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    >
-                      {teamList.map((item) => (
-                        <option key={item.team_id} value={item.team_id}>
-                          {item.team_alias || item.team_id}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Team role</label>
-                    <select
-                      value={teamRole}
-                      onChange={(event) => setTeamRole(event.target.value)}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    >
-                      {TEAM_ROLES.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              Platform admins receive full control-plane access and do not need an initial organization or team grant.
-            </div>
-          )}
-        </section>
-
-        {mode === 'create_account' ? (
-          <section className="space-y-3">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-900">Account setup</h3>
-              <p className="mt-1 text-xs text-gray-500">Manual creation sets the initial password immediately.</p>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => { setPassword(event.target.value); setError(''); }}
-                placeholder="At least 12 characters"
-                autoComplete="new-password"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
-              />
-            </div>
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={isActive}
-                onChange={(event) => setIsActive(event.target.checked)}
-                className="rounded border-gray-300"
-              />
-              Account active
-            </label>
-          </section>
-        ) : null}
-
-        <div className="flex items-center justify-end gap-3">
-          <Button variant="secondary" onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
-          <Button
-            onClick={submit}
-            loading={saving}
-          >
-            {saving ? 'Saving…' : mode === 'invite_email' ? 'Send Invitation' : 'Create Account'}
-          </Button>
-        </div>
+  return <Modal open focused onClose={close} title="Add person" icon={<UserRoundPlus className="h-5 w-5" />} description="Set up sign-in and initial access." navigation={<IconTabs id={id} label="New person settings" items={items} active={tab} onChange={setTab} />} footer={
+    <div className="space-y-3">
+      {error && <div id={`${id}-error`} role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 text-xs leading-5 text-gray-500"><span className="block max-w-56 truncate font-medium text-gray-700">{summaryName}</span>{summaryDetail}</p>
+        <div className="ml-auto flex gap-2"><Button variant="ghost" disabled={saving} onClick={close}>Cancel</Button><Button form={`${id}-form`} type="submit" loading={saving}>{saving ? 'Saving…' : form.mode === 'invite_email' ? 'Send invitation' : 'Create account'}</Button></div>
       </div>
-    </Modal>
-  );
+    </div>
+  }>
+    <form id={`${id}-form`} ref={formRef} noValidate onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      {items.map((item) => <div key={item.id} role="tabpanel" id={`${id}-panel-${item.id}`} aria-labelledby={`${id}-tab-${item.id}`} hidden={tab !== item.id}>
+        <fieldset disabled={saving} className="min-w-0 space-y-5" aria-describedby={error ? `${id}-error` : undefined}>
+          {item.id === 'details' ? <>
+            <label className="block space-y-1.5 text-sm font-medium text-gray-700">Email
+              <input value={form.email} type="email" onChange={(event) => change({ ...form, email: event.target.value })} placeholder="person@example.com" autoComplete="email" data-autofocus="true" data-person-field="email" aria-invalid={issue?.field === 'email' || undefined} aria-describedby={issue?.field === 'email' ? `${id}-error` : undefined} className={personInputClass} />
+            </label>
+            <fieldset className="min-w-0"><legend className="mb-2 text-sm font-medium text-gray-700">How should they get access?</legend>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {(['invite_email', 'create_account'] as const).map((mode) => <label key={mode} className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 ${form.mode === mode ? 'border-brand-primary bg-brand-primary-soft' : 'border-gray-200'}`}>
+                  <input type="radio" name={`${id}-method`} value={mode} checked={form.mode === mode} onChange={() => change(changeProvisionMethod(form, mode, { initialOrganizationId, initialTeamId }))} className="mt-1 shrink-0 accent-brand-primary" />
+                  <span><span className="block text-sm font-medium text-gray-900">{mode === 'invite_email' ? 'Email invitation' : 'Create manually'}</span><span className="block text-xs leading-5 text-gray-500">{mode === 'invite_email' ? 'Send a link to accept access.' : 'Set the initial password now.'}</span></span>
+                </label>)}
+              </div>
+            </fieldset>
+            {form.mode === 'invite_email' ? <p className="flex items-start gap-2 rounded-lg bg-gray-50 p-3 text-xs leading-5 text-gray-500"><Mail aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />The invitation includes the organization or team access selected in the Access tab.</p> : <div className="space-y-4 border-t border-gray-200 pt-5">
+              <label className="block space-y-1.5 text-sm font-medium text-gray-700">Password
+                <input type="password" value={form.password} onChange={(event) => change({ ...form, password: event.target.value })} autoComplete="new-password" placeholder="At least 12 characters" data-person-field="password" aria-invalid={issue?.field === 'password' || undefined} aria-describedby={issue?.field === 'password' ? `${id}-error` : `${id}-password-hint`} className={personInputClass} />
+              </label>
+              <p id={`${id}-password-hint`} className="text-xs leading-5 text-gray-500">Required for manual account creation.</p>
+              <AccountStatusControl active={form.active} onChange={(active) => change({ ...form, active })} />
+            </div>}
+          </> : <PersonAccessFields id={id} form={form} onChange={change} organizations={orgList} teams={teamList} saving={saving} issue={issue} onSelectionStatus={setSelection} selection={selection} />}
+        </fieldset>
+      </div>)}
+    </form>
+  </Modal>;
+}
+
+export default function ProvisionPersonModal({ open, ...props }: Props) {
+  return open ? <ProvisionPersonEditor key={JSON.stringify([props.initialOrganizationId, props.initialTeamId])} {...props} /> : null;
 }

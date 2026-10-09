@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.db.admin_asset_lists import GroupSortKey, ListDirection, list_asset_rows
+from src.services.admin_list_health import ListHealthSnapshot
+
 from src.db.route_group_identity import (
     RouteGroupIdentity,
     RouteGroupIdentityNotFoundError,
@@ -95,6 +98,11 @@ class RouteGroupRecord:
     owner_scope_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    created_by_user_id: str | None = None
+    visibility: str | None = None
+    health_status: str | None = None
+    active_member_count: int | None = None
+    healthy_member_count: int | None = None
 
 
 @dataclass
@@ -183,65 +191,24 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
         limit: int = 100,
         offset: int = 0,
         managed_asset_ids: list[str] | None = None,
+        sort_by: GroupSortKey | None = None,
+        sort_direction: ListDirection = "desc",
+        health: ListHealthSnapshot | None = None,
     ) -> tuple[list[RouteGroupRecord], int]:
         if self.prisma is None:
             return [], 0
-        if managed_asset_ids is not None and not managed_asset_ids:
-            return [], 0
-
-        clauses: list[str] = []
-        params: list[Any] = []
-        if search:
-            params.append(f"%{search}%")
-            clauses.append(
-                f"(group_key ILIKE ${len(params)} OR COALESCE(name, '') ILIKE ${len(params)})"
-            )
-        if managed_asset_ids is not None:
-            normalized_ids = [
-                str(item).strip() for item in managed_asset_ids if str(item).strip()
-            ]
-            if not normalized_ids:
-                return [], 0
-            placeholders: list[str] = []
-            for asset_id in normalized_ids:
-                params.append(asset_id)
-                placeholders.append(f"${len(params)}")
-            clauses.append(f"managed_asset_id IN ({', '.join(placeholders)})")
-
-        where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        count_rows = await self.prisma.query_raw(
-            f"SELECT COUNT(*)::int AS total FROM deltallm_routegroup {where_sql}",
-            *params,
+        result = await list_asset_rows(
+            self.prisma,
+            kind="group",
+            search=search,
+            limit=limit,
+            offset=offset,
+            managed_asset_ids=managed_asset_ids,
+            sort_by=sort_by or "created_at",
+            sort_direction=sort_direction,
+            health=health,
         )
-        total = int((count_rows[0] if count_rows else {}).get("total") or 0)
-
-        params.extend([limit, offset])
-        rows = await self.prisma.query_raw(
-            f"""
-            SELECT
-                g.route_group_id,
-                g.group_key,
-                g.managed_asset_id,
-                g.name,
-                g.mode,
-                g.routing_strategy,
-                g.enabled,
-                g.metadata,
-                g.created_at,
-                g.updated_at,
-                (
-                    SELECT COUNT(*)::int
-                    FROM deltallm_routegroupmember m
-                    WHERE m.route_group_id = g.route_group_id
-                ) AS member_count
-            FROM deltallm_routegroup g
-            {where_sql}
-            ORDER BY g.created_at DESC, g.group_key ASC
-            LIMIT ${len(params) - 1} OFFSET ${len(params)}
-            """,
-            *params,
-        )
-        return [self._to_group_record(row) for row in rows], total
+        return [self._to_group_record(row) for row in result.rows], result.total
 
     async def get_group(self, group_key: str) -> RouteGroupRecord | None:
         return await self._get_group(self._group_lookup(group_key))
@@ -321,8 +288,7 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             return {}
         placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
         classifier_placeholders = ", ".join(
-            f"${index}"
-            for index in range(len(normalized_ids) + 1, (len(normalized_ids) * 2) + 1)
+            f"${index}" for index in range(len(normalized_ids) + 1, (len(normalized_ids) * 2) + 1)
         )
         rows = await self.prisma.query_raw(
             f"""
@@ -1033,6 +999,17 @@ class RouteGroupRepository(RoutePolicyLifecycleMixin):
             owner_scope_id=owner_scope.scope_id,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
+            created_by_user_id=str(row["created_by_user_id"])
+            if row.get("created_by_user_id")
+            else None,
+            visibility=str(row["visibility"]) if row.get("visibility") else None,
+            health_status=str(row["health_status"]) if row.get("health_status") else None,
+            active_member_count=int(row["active_member_count"])
+            if row.get("active_member_count") is not None
+            else None,
+            healthy_member_count=int(row["healthy_member_count"])
+            if row.get("healthy_member_count") is not None and row.get("health_status") != "unknown"
+            else None,
         )
 
     @staticmethod

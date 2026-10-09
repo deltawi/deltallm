@@ -55,6 +55,19 @@ Team developers with the `key.create_self` permission can create their own API k
 
 Self-service users cannot see or manage keys owned by other users through the My Keys view.
 
+## Key dialog
+
+The create and edit dialog has three tabs:
+
+- **Details**: key name, team, and the owner controls available for the operation.
+- **Access**: inherit team access or select a smaller set of targets and access groups.
+- **Limits**: budget, expiry where supported, and rate limits. Open **Hourly and daily limits** for RPH, RPD, and TPD.
+
+An empty limit adds no key limit. Team and organization limits still apply.
+The save controls remain visible when the form scrolls.
+After creation, select **Copy key** in the one-time key dialog.
+A failed clipboard operation shows an error so you can copy the displayed key manually.
+
 ## Key fields
 
 - **Key name**: human-readable label shown in the table

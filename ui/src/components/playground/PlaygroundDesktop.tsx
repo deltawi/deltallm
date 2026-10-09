@@ -39,6 +39,7 @@ import type { ChatEngine } from './useChatEngine';
 import type { TTSEngine } from './useTTSEngine';
 import type { STTEngine } from './useSTTEngine';
 import { useBranding } from '../../lib/brandingContext';
+import PlaygroundModelStatus from './PlaygroundModelStatus';
 
 interface SharedProps {
   mode: PlaygroundMode;
@@ -720,12 +721,7 @@ export default function PlaygroundDesktop({
                       <ChevronDown className="h-4 w-4" />
                     </div>
                     {selectedModel && (
-                      <div
-                        className={`absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-white ${
-                          selectedModel.status === 'online' ? 'bg-green-500' : 'bg-yellow-500'
-                        }`}
-                        title={`Status: ${selectedModel.status}`}
-                      />
+                      <PlaygroundModelStatus status={selectedModel.status} className="absolute -top-6 right-0" />
                     )}
                   </div>
                 </div>
