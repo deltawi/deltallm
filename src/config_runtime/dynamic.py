@@ -8,10 +8,12 @@ from copy import deepcopy
 from typing import Any, Awaitable, Callable
 
 from src.batch.scheduling import resolve_scheduler_modes_from_settings, scheduler_rollback_events
-from src.config import AppConfig
+from src.config import AppConfig, Settings
+from src.db.output_policy import OutputPolicyDatabase
 from src.config_runtime.loader import build_app_config, deep_merge
 from src.config_runtime.secrets import SecretResolver
 from src.metrics import increment_batch_scheduler_rollback, increment_config_reload
+from src.runtime_settings import resolve_general_setting
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,10 @@ _FIELD_SET_SENSITIVE_GENERAL_SETTINGS = frozenset(
         "embeddings_batch_scheduler_shadow_mode",
     }
 )
+_STARTUP_TIER_SETTINGS = {
+    "tier_policy_mode": "disabled",
+    "tier_policy_missing_service_mode": "fail_open",
+}
 
 
 class DynamicConfigPersistenceError(RuntimeError):
@@ -92,7 +98,11 @@ class DynamicConfigManager:
         secret_resolver: SecretResolver | None = None,
         channel_name: str = "config_updates",
         poll_interval_seconds: float | None = 30.0,
+        output_policy_degraded_mode: str = "fail_open",
+        runtime_settings: Settings | None = None,
     ) -> None:
+        self.output_policy_degraded_mode = output_policy_degraded_mode
+        self.runtime_settings = runtime_settings
         self.db = db_client
         self.redis = redis_client
         self.file_config = deepcopy(file_config)
@@ -174,7 +184,9 @@ class DynamicConfigManager:
                 transaction_mutation=transaction_mutation,
             )
             try:
-                await self._apply_db_config(next_db_config, app_config=next_app_config)
+                await self._apply_db_config(
+                    next_db_config, app_config=next_app_config, output_policy_validated=True
+                )
             except Exception as exc:
                 if transaction_mutation is None:
                     await self._restore_db_config_if_current(
@@ -225,6 +237,7 @@ class DynamicConfigManager:
             next_app_config = self._build_app_config(next_db_config)
             if self._config_generation > 0:
                 self._reject_startup_only_changes(next_app_config)
+            await self._validate_output_policy_config(self.db, next_app_config)
             if transaction_mutation is not None:
                 await transaction_mutation(self.db)
             await self._store_db_config(next_db_config, updated_by=updated_by)
@@ -243,6 +256,7 @@ class DynamicConfigManager:
                 next_app_config = self._build_app_config(next_db_config)
                 if self._config_generation > 0:
                     self._reject_startup_only_changes(next_app_config)
+                await self._validate_output_policy_config(transaction, next_app_config)
                 if transaction_mutation is not None:
                     await transaction_mutation(transaction)
                 await self._store_db_config(
@@ -261,6 +275,32 @@ class DynamicConfigManager:
             raise DynamicConfigPersistenceError("failed to persist dynamic config") from exc
 
         return next_db_config, next_app_config
+
+    async def _validate_output_policy_config(
+        self, db: OutputPolicyDatabase | None, candidate: AppConfig
+    ) -> None:
+        from src.services.output_policy_configuration import (
+            output_policy_configuration_changed,
+            validate_output_policy_configuration,
+        )
+
+        if db is None or not output_policy_configuration_changed(
+            self._config, candidate, self.runtime_settings
+        ):
+            return
+        try:
+            await validate_output_policy_configuration(
+                db,
+                candidate,
+                redis_available=self.redis is not None,
+                degraded_mode=(
+                    candidate.general_settings.redis_degraded_mode
+                    or self.output_policy_degraded_mode
+                ),
+                runtime_settings=self.runtime_settings,
+            )
+        except ValueError as exc:
+            raise DynamicConfigValidationError(str(exc)) from exc
 
     async def _restore_db_config_if_current(
         self,
@@ -383,11 +423,15 @@ class DynamicConfigManager:
         *,
         forced_modified_keys: tuple[str, ...] = (),
         app_config: AppConfig | None = None,
+        output_policy_validated: bool = False,
     ) -> bool:
-        previous_app_config = self._config
-        new_app_config = app_config or self._build_app_config(db_config)
+        candidate = app_config or self._build_app_config(db_config)
         if self._config_generation > 0:
-            self._reject_startup_only_changes(new_app_config)
+            self._reject_startup_only_changes(candidate)
+        if not output_policy_validated:
+            await self._validate_output_policy_config(self.db, candidate)
+        previous_app_config = self._config
+        new_app_config = candidate
 
         changes = self._detect_app_config_changes(previous_app_config, new_app_config)
         if forced_modified_keys:
@@ -434,8 +478,14 @@ class DynamicConfigManager:
             for field_name in _STARTUP_ONLY_GENERAL_SETTINGS
             if getattr(current, field_name) != getattr(candidate, field_name)
         )
+        changed.extend(
+            field_name
+            for field_name, default in _STARTUP_TIER_SETTINGS.items()
+            if resolve_general_setting(current, self.runtime_settings, field_name, default)
+            != resolve_general_setting(candidate, self.runtime_settings, field_name, default)
+        )
         if changed:
-            fields = ", ".join(f"general_settings.{field_name}" for field_name in changed)
+            fields = ", ".join(f"general_settings.{field_name}" for field_name in sorted(changed))
             raise DynamicConfigRestartRequiredError(
                 f"startup-only settings require a restart: {fields}"
             )

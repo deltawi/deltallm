@@ -42,6 +42,12 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     validate_runtime_user_scope,
 )
+from src.api.admin.output_policy import (
+    invalidate_output_policy_now,
+    output_policy_change,
+    schedule_output_policy_invalidation,
+)
+from src.db.output_policy import persist_output_policy
 from src.api.admin.organization_mutations import require_active_organization_mutation
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
@@ -57,7 +63,14 @@ logger = logging.getLogger(__name__)
 _INT64_SIGN_BIT = 1 << 63
 _UINT64_MODULUS = 1 << 64
 _SELF_SERVICE_KEY_CREATE_LOCK_NAMESPACE = "self_service_key_create"
-_SELF_SERVICE_RATE_LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "rph_limit", "rpd_limit", "tpd_limit")
+_SELF_SERVICE_RATE_LIMIT_FIELDS = (
+    "rpm_limit",
+    "tpm_limit",
+    "output_tpm_limit",
+    "rph_limit",
+    "rpd_limit",
+    "tpd_limit",
+)
 
 
 def _transaction_repository(
@@ -284,7 +297,7 @@ async def _validate_self_service_constraints(
         for limit_field in _SELF_SERVICE_RATE_LIMIT_FIELDS
     }
     team_rows = await db.query_raw(
-        "SELECT rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
+        "SELECT rpm_limit, tpm_limit, output_tpm_limit, rph_limit, rpd_limit, tpd_limit FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
         team_id,
     )
     if team_rows:
@@ -587,7 +600,7 @@ async def list_keys(
             vt.spend,
             vt.max_budget,
             vt.rpm_limit,
-            vt.tpm_limit,
+            vt.tpm_limit, vt.output_tpm_limit, vt.model_output_tpm_limit,
             vt.rph_limit,
             vt.rpd_limit,
             vt.tpd_limit,
@@ -639,6 +652,7 @@ async def create_key(
     max_budget = payload.get("max_budget")
     rpm_limit = payload.get("rpm_limit")
     tpm_limit = payload.get("tpm_limit")
+    output_change = output_policy_change(request, payload, scope="key")
     rph_limit = payload.get("rph_limit")
     rpd_limit = payload.get("rpd_limit")
     tpd_limit = payload.get("tpd_limit")
@@ -732,6 +746,7 @@ async def create_key(
                     expires=expires,
                     rpm_limit=rpm_limit,
                     tpm_limit=tpm_limit,
+                    output_tpm_limit=output_change.value,
                     rph_limit=rph_limit,
                     rpd_limit=rpd_limit,
                     tpd_limit=tpd_limit,
@@ -787,6 +802,8 @@ async def create_key(
                     expires=expires,
                 )
 
+            await persist_output_policy(tx, scope="key", identity=token_hash, change=output_change)
+
         response = {
             "token": token_hash,
             "raw_key": raw_key,
@@ -799,6 +816,8 @@ async def create_key(
             "max_budget": max_budget,
             "rpm_limit": rpm_limit,
             "tpm_limit": tpm_limit,
+            "output_tpm_limit": output_change.value,
+            "model_output_tpm_limit": output_change.model_value,
             "rph_limit": rph_limit,
             "rpd_limit": rpd_limit,
             "tpd_limit": tpd_limit,
@@ -870,7 +889,7 @@ async def update_key(
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     rows = await db.query_raw(
         """
-        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
+        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, output_tpm_limit, model_output_tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
         FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
@@ -902,6 +921,7 @@ async def update_key(
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = payload.get("rpm_limit", existing.get("rpm_limit"))
     tpm_limit = payload.get("tpm_limit", existing.get("tpm_limit"))
+    output_change = output_policy_change(request, payload, scope="key")
     rph_limit = payload.get("rph_limit", existing.get("rph_limit"))
     rpd_limit = payload.get("rpd_limit", existing.get("rpd_limit"))
     tpd_limit = payload.get("tpd_limit", existing.get("tpd_limit"))
@@ -979,6 +999,7 @@ async def update_key(
                 token_hash,
             )
 
+            await persist_output_policy(tx, scope="key", identity=token_hash, change=output_change)
             updated_rows = await tx.query_raw(
                 """
                 SELECT
@@ -994,7 +1015,7 @@ async def update_key(
                     vt.spend,
                     vt.max_budget,
                     vt.rpm_limit,
-                    vt.tpm_limit,
+                    vt.tpm_limit, vt.output_tpm_limit, vt.model_output_tpm_limit,
                     vt.rph_limit,
                     vt.rpd_limit,
                     vt.tpd_limit,
@@ -1014,9 +1035,14 @@ async def update_key(
             if not updated_rows:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
             updated = _key_response_payload(dict(updated_rows[0]))
+            await schedule_output_policy_invalidation(
+                tx, request=request, scope="key", identity=token_hash, change=output_change
+            )
 
         key_service = getattr(request.app.state, "key_service", None)
-        if key_service:
+        if output_change.changed:
+            await invalidate_output_policy_now(request, scope="key", identity=token_hash)
+        elif key_service:
             await key_service.invalidate_key_cache_by_hash(token_hash)
         await emit_admin_mutation_audit(
             request=request,

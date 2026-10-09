@@ -84,7 +84,11 @@ class MCPChatExecutionService:
                 routing.routing_context,
                 RequestTokenDemand(
                     input_tokens=token_estimate,
-                    requested_output_tokens=phase_payload.max_tokens,
+                    requested_output_tokens=(
+                        phase_payload.max_completion_tokens
+                        if phase_payload.max_completion_tokens is not None
+                        else phase_payload.max_tokens
+                    ),
                 ),
             )
             attempted_primary = phase_primary

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,6 +12,8 @@ from src.bootstrap.auth import init_auth_runtime, shutdown_auth_runtime
 
 @pytest.fixture(autouse=True)
 def _stub_organization_lifecycle_authorizer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.bootstrap.auth.validate_output_policy_configuration", AsyncMock())
+
     class FakeOrganizationLifecycleAuthorizer:
         def __init__(self, repository, **kwargs) -> None:  # noqa: ANN001, ANN003
             self.repository = repository
@@ -82,6 +85,8 @@ def _auth_config(
 
 @pytest.mark.asyncio
 async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.bootstrap import auth
+
     created: dict[str, object] = {}
 
     class FakePlatformIdentityService:
@@ -126,7 +131,7 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
             prisma_manager=SimpleNamespace(client="db-client"),
             redis="redis-client",
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
             control_http_client="control-http-client",
         )
@@ -136,6 +141,10 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
         app, _auth_config(enable_sso=True, enable_jwt=True, custom_auth="module.handler")
     )
 
+    assert (
+        auth.validate_output_policy_configuration.await_args.kwargs["runtime_settings"]
+        is app.state.settings
+    )
     assert app.state.key_service[0] == "key-service"
     assert created["platform_identity_service"].bootstrap_calls == [("admin@example.com", "secret")]
     assert created["platform_identity_service"].totp_issuer == "Acme AI"
@@ -184,7 +193,7 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(
             prisma_manager=SimpleNamespace(client="db-client"),
             redis="redis-client",
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
         )
     )
@@ -230,7 +239,7 @@ async def test_init_auth_runtime_requires_jwt_issuer(monkeypatch: pytest.MonkeyP
             prisma_manager=SimpleNamespace(client="db-client"),
             redis="redis-client",
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
         )
     )
@@ -262,7 +271,7 @@ async def test_init_auth_runtime_marks_incomplete_sso_degraded(
             prisma_manager=SimpleNamespace(client="db-client"),
             redis=None,
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
         )
     )
@@ -298,7 +307,7 @@ async def test_init_auth_runtime_keeps_sso_disabled_when_redis_missing(
             prisma_manager=SimpleNamespace(client="db-client"),
             redis=None,
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
         )
     )
@@ -348,7 +357,7 @@ async def test_init_auth_runtime_starts_and_stops_cache_invalidation_worker(
             prisma_manager=SimpleNamespace(client="db-client"),
             redis="redis-client",
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
         )
     )
@@ -409,7 +418,7 @@ async def test_init_auth_runtime_does_not_start_cache_worker_when_redis_missing(
             prisma_manager=SimpleNamespace(client="db-client"),
             redis=None,
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
         )
     )
@@ -467,7 +476,7 @@ async def test_init_auth_runtime_does_not_start_cache_worker_when_later_startup_
             prisma_manager=SimpleNamespace(client="db-client"),
             redis="redis-client",
             salt_key="salt",
-            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            settings=SimpleNamespace(redis_degraded_mode="fail_open", app_env="test"),
             http_client="http-client",
         )
     )

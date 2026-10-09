@@ -1,3 +1,5 @@
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
@@ -212,6 +214,7 @@ export default function Organizations() {
     soft_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '',
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -279,6 +282,7 @@ export default function Organizations() {
       soft_budget: '',
       rpm_limit: '',
       tpm_limit: '',
+      output_tpm_limit: '',
       rph_limit: '',
       rpd_limit: '',
       tpd_limit: '',
@@ -345,6 +349,7 @@ export default function Organizations() {
         soft_budget: form.soft_budget ? Number(form.soft_budget) : null,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : null,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : null,
+        output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : null,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : null,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : null,
@@ -384,6 +389,7 @@ export default function Organizations() {
       soft_budget: row.soft_budget != null ? String(row.soft_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
+      output_tpm_limit: row.output_tpm_limit != null ? String(row.output_tpm_limit) : '',
       rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
       rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
       tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
@@ -761,6 +767,7 @@ export default function Organizations() {
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per minute</p>
             </div>
+              <OutputTpmField value={form.output_tpm_limit} onChange={(value) => setForm({ ...form, output_tpm_limit: value })} />
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
               <input

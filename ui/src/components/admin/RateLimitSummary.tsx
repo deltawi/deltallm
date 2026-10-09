@@ -6,6 +6,7 @@ type RateLimitValue = number | null | undefined;
 type RateLimitSummaryProps = {
   rpm_limit?: RateLimitValue;
   tpm_limit?: RateLimitValue;
+  output_tpm_limit?: RateLimitValue;
   rph_limit?: RateLimitValue;
   rpd_limit?: RateLimitValue;
   tpd_limit?: RateLimitValue;
@@ -34,6 +35,7 @@ function formatRateLimitValue(value: number): string {
 function buildRateLimitItems({
   rpm_limit,
   tpm_limit,
+  output_tpm_limit,
   rph_limit,
   rpd_limit,
   tpd_limit,
@@ -41,6 +43,7 @@ function buildRateLimitItems({
   return [
     { key: 'rpm_limit', label: 'RPM', value: rpm_limit ?? null },
     { key: 'tpm_limit', label: 'TPM', value: tpm_limit ?? null },
+    { key: 'output_tpm_limit', label: 'Output TPM', value: output_tpm_limit ?? null },
     { key: 'rph_limit', label: 'RPH', value: rph_limit ?? null },
     { key: 'rpd_limit', label: 'RPD', value: rpd_limit ?? null },
     { key: 'tpd_limit', label: 'TPD', value: tpd_limit ?? null },

@@ -1,3 +1,4 @@
+import { parseOutputTpm, OUTPUT_TPM_HELP } from '../../lib/outputTpm';
 import { Edit3, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { Pagination, TierModelPolicy, TierModelPolicyPayload } from '../../lib/api';
@@ -27,6 +28,7 @@ type PolicyEditorSections = Record<PolicyEditorSection, boolean>;
 type RateLimitFormKey =
   | 'rpm_limit'
   | 'tpm_limit'
+  | 'output_tpm_limit'
   | 'rph_limit'
   | 'rpd_limit'
   | 'tpd_limit'
@@ -35,6 +37,7 @@ type RateLimitFormKey =
   | 'batch_tpm_limit';
 
 const CORE_RATE_LIMIT_FIELDS: Array<{ label: string; key: RateLimitFormKey; help: string }> = [
+  { label: 'Output TPM', key: 'output_tpm_limit', help: `Allowance per organization for this model. ${OUTPUT_TPM_HELP}` },
   {
     label: 'RPM',
     key: 'rpm_limit',
@@ -104,7 +107,7 @@ type TierModelPolicyGridProps = {
   onCreate: (policy: TierModelPolicyPayload) => Promise<void>;
   onUpdate: (existing: TierModelPolicy, policy: TierModelPolicyPayload) => Promise<void>;
   onDelete: (policy: TierModelPolicy) => Promise<void>;
-  onBulkLimits: (limits: { rpm_limit?: number; tpm_limit?: number }) => Promise<void>;
+  onBulkLimits: (limits: { rpm_limit?: number; tpm_limit?: number; output_tpm_limit?: number }) => Promise<void>;
   onLoadPoolOptions?: (
     callableKey: string,
     search: string,
@@ -145,7 +148,7 @@ export default function TierModelPolicyGrid({
   const [editingPolicy, setEditingPolicy] = useState<TierModelPolicy | 'new' | null>(null);
   const [form, setForm] = useState<TierModelPolicyForm>(emptyModelPolicyForm());
   const [localError, setLocalError] = useState<string | null>(null);
-  const [bulk, setBulk] = useState({ rpm_limit: '', tpm_limit: '' });
+  const [bulk, setBulk] = useState({ rpm_limit: '', tpm_limit: '', output_tpm_limit: '' });
   const [openSections, setOpenSections] = useState<PolicyEditorSections>({
     limits: true,
     pricing: false,
@@ -292,12 +295,13 @@ export default function TierModelPolicyGrid({
   const applyBulk = async () => {
     if (locked) return;
     try {
-      const limits: { rpm_limit?: number; tpm_limit?: number } = {};
+      const limits: { rpm_limit?: number; tpm_limit?: number; output_tpm_limit?: number } = {};
       if (bulk.rpm_limit.trim()) limits.rpm_limit = parsePositiveIntegerInput(bulk.rpm_limit, 'RPM');
       if (bulk.tpm_limit.trim()) limits.tpm_limit = parsePositiveIntegerInput(bulk.tpm_limit, 'TPM');
+      if (bulk.output_tpm_limit.trim()) limits.output_tpm_limit = parseOutputTpm(bulk.output_tpm_limit)!;
       setLocalError(null);
       await onBulkLimits(limits);
-      setBulk({ rpm_limit: '', tpm_limit: '' });
+      setBulk({ rpm_limit: '', tpm_limit: '', output_tpm_limit: '' });
     } catch (err: unknown) {
       setLocalError(errorMessage(err, 'Failed to apply bulk policy updates.'));
     }
@@ -417,9 +421,10 @@ export default function TierModelPolicyGrid({
             <p className="text-xs font-semibold uppercase text-gray-500">Bulk limits</p>
             <p className="mt-0.5 text-xs text-gray-500">Applies to all {pagination.total} policies matching the current search and filters, including other pages.</p>
           </div>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-[repeat(3,minmax(0,1fr))_auto]">
             <BulkInput label="RPM" value={bulk.rpm_limit} disabled={locked} onChange={(value) => setBulk({ ...bulk, rpm_limit: value })} />
             <BulkInput label="TPM" value={bulk.tpm_limit} disabled={locked} onChange={(value) => setBulk({ ...bulk, tpm_limit: value })} />
+            <BulkInput label="Output TPM" value={bulk.output_tpm_limit} disabled={locked} onChange={(value) => setBulk({ ...bulk, output_tpm_limit: value })} />
             <button
               type="button"
               onClick={applyBulk}
@@ -442,6 +447,7 @@ export default function TierModelPolicyGrid({
                 <>
                   <th className="px-4 py-2 text-left">RPM</th>
                   <th className="px-4 py-2 text-left">TPM</th>
+                  <th className="px-4 py-2 text-left">Output TPM</th>
                   <th className="px-4 py-2 text-left">Advanced</th>
                   <th className="px-4 py-2 text-left">Pool</th>
                   <th className="px-4 py-2 text-left">Priority</th>
@@ -459,7 +465,7 @@ export default function TierModelPolicyGrid({
           <tbody className="divide-y divide-gray-100">
             {sortedPolicies.length === 0 ? (
               <tr>
-                <td colSpan={view === 'limits' ? 8 : 6} className="px-4 py-8 text-center text-sm text-gray-400">No model policies match this view.</td>
+                <td colSpan={view === 'limits' ? 9 : 6} className="px-4 py-8 text-center text-sm text-gray-400">No model policies match this view.</td>
               </tr>
             ) : sortedPolicies.map((policy) => (
               <tr key={`${policy.callable_key}:${policy.priority}`}>
@@ -473,6 +479,7 @@ export default function TierModelPolicyGrid({
                   <>
                     <td className="px-4 py-3 text-xs text-gray-600">{formatLimit(policy.rpm_limit)}</td>
                     <td className="px-4 py-3 text-xs text-gray-600">{formatLimit(policy.tpm_limit)}</td>
+                    <td className="px-4 py-3 text-xs text-gray-600">{formatLimit(policy.output_tpm_limit)}</td>
                     <td className="px-4 py-3 text-xs text-gray-500">{policyAdvancedLimitCount(policy) || '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-500">{policy.capacity_pool_key || '—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-600">{policy.priority}</td>

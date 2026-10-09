@@ -23,6 +23,15 @@ class Cache:
         self.unavailable = unavailable
         self.markers = {}
 
+    async def eval(self, script, numkeys, *args):
+        assert "deltallm_key_auth_revoke_v7" in script and numkeys == 4
+        key, legacy_key, v4_key, v6_key, payload, legacy_payload, ttl = args
+        await self.setex(key, ttl, payload)
+        await self.setex(legacy_key, ttl, legacy_payload)
+        self.markers.pop(v4_key, None)
+        self.markers.pop(v6_key, None)
+        return 1
+
     async def setex(self, key, ttl, payload):
         if self.unavailable:
             raise ConnectionError("test outage")
@@ -119,6 +128,7 @@ async def test_key_removal_commits_required_audit_and_exact_hash_outbox_before_m
     assert audited[0]["payload_json"]["event"]["action"] == AuditAction.ADMIN_KEY_SELF_REVOKE.value
     if not unavailable:
         assert cache.markers[KeyService._cache_key(token_hash)][0] == 62
+        assert cache.markers[f"key:v5:{token_hash}"][0] == 62
 
 
 async def test_key_removal_audit_failure_rolls_back_key_and_outbox(external_database, monkeypatch):

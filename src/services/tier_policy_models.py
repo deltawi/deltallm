@@ -28,6 +28,7 @@ class TierPolicySource:
 class TierPolicyLimits:
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    output_tpm_limit: int | None = None
     rph_limit: int | None = None
     rpd_limit: int | None = None
     tpd_limit: int | None = None

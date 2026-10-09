@@ -6,7 +6,7 @@ A tier answers:
 
 - which models an organization can use
 - what customer price applies for those models
-- what RPM and TPM limits apply
+- what RPM, TPM, and Output TPM limits apply per model and organization
 - which shared capacity pool protects scarce model capacity
 
 Use tiers when you want to manage customer plans such as `starter`, `growth`, or `enterprise` without configuring every organization one by one.
@@ -79,7 +79,7 @@ For each model, choose:
 
 - whether the model is allowed
 - the customer-facing price
-- RPM and TPM limits
+- RPM, TPM, and Output TPM limits
 - optional batch and cache pricing
 - optional capacity pool
 
@@ -90,6 +90,8 @@ Example `Growth` tier model policy:
 | `gpt-4o-mini` | Yes | 1000 | 1,000,000 | None |
 | `gpt-4o` | Yes | 100 | 250,000 | `growth-premium-pool` |
 | `claude-opus` | No | - | - | - |
+
+The **Output TPM** field is beside RPM and TPM in the model editor and bulk limit controls. It sets provider output per completion accounting minute for each organization and model. Leave it blank to remove that tier limit. An admitted call can exceed it; new calls then wait until reset. Team and key limits can narrow the allowance. The organization preview shows the effective value and tier source. Output limits require shared Redis with fail-closed coordination and `tier_policy_missing_service_mode: fail_closed` in enforce mode. Both tier modes require a restart when their effective values change. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
 
 ### Organization Assignment
 
@@ -125,7 +127,7 @@ Do not create that policy again with organization fields.
 
 In `enforce` mode, an active tier controls the policy.
 The API rejects new organization-level per-model limit maps and organization Asset Access writes.
-You can still edit organization-wide RPM, TPM, RPH, RPD, and TPD hard caps.
+You can still edit organization-wide RPM, TPM, Output TPM, RPH, RPD, and TPD caps.
 
 An organization can have legacy per-model RPM or TPM maps from before its tier assignment.
 Its Service Policy card shows a warning because those safety caps still apply with the tier.
@@ -149,7 +151,7 @@ This matches the explicit migration checkbox in the drawer.
 In `disabled` mode, legacy Asset Access still controls access, including when an assignment is staged.
 In `enforce` mode, the tier controls access. The organization Asset Access editor is hidden.
 
-The optional organization RPM, TPM, RPH, RPD, and TPD fields are global hard caps. They apply across all models, teams, and keys in addition to the tier's per-model controls. Leave them blank when no extra organization-wide ceiling is needed. Budgets, budget resets, and audit-content storage also remain organization settings.
+The optional organization RPM, TPM, Output TPM, RPH, RPD, and TPD fields are global caps. They apply across all models, teams, and keys in addition to the tier's per-model controls. Leave them blank when no extra organization-wide ceiling is needed. Budgets, budget resets, and audit-content storage also remain organization settings.
 
 ## Tiers and Asset Access
 

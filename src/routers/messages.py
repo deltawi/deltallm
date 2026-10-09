@@ -62,6 +62,10 @@ async def messages(request: Request):
             message=exc.message,
         )
     translator = AnthropicStreamTranslator(model=payload.model)
+    if canonical.stream:
+        # Messages always reports usage. Keep canonical evidence for its
+        # translator, including the provider's usage-only terminal chunk.
+        canonical.stream_options = {"include_usage": True}
     return await handle_chat_like_request(
         request,
         canonical,

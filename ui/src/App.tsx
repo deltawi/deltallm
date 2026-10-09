@@ -11,16 +11,15 @@ import MFAVerify from './pages/MFAVerify';
 import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
 import Models from './pages/Models';
-import Tiers from './pages/Tiers';
-import TierDetail from './pages/TierDetail';
-import ApiKeys from './pages/ApiKeys';
-import Teams from './pages/Teams';
+const Tiers = lazy(() => import('./pages/Tiers'));
+const TierDetail = lazy(() => import('./pages/TierDetail'));
+const Teams = lazy(() => import('./pages/Teams'));
 import UsersPage from './pages/UsersPage';
 import Usage from './pages/Usage';
 import Guardrails from './pages/Guardrails';
 import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
-import TeamDetail from './pages/TeamDetail';
+const TeamDetail = lazy(() => import('./pages/TeamDetail'));
 import ModelDetail from './pages/ModelDetail';
 import NamedCredentials from './pages/NamedCredentials';
 import AuditLogs from './pages/AuditLogs';
@@ -39,6 +38,7 @@ import { loginPathFor, returnToFromSearch, safeReturnTo } from './lib/authRedire
 
 const Playground = lazy(() => import('./pages/Playground'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const ApiKeys = lazy(() => import('./pages/ApiKeys'));
 const Organizations = lazy(() => import('./pages/Organizations'));
 const OrganizationDetail = lazy(() => import('./pages/OrganizationDetail'));
 const OrganizationCreate = lazy(() => import('./pages/OrganizationCreate'));
@@ -206,8 +206,8 @@ function AppRoutes() {
         <Route path="/models/new" element={uiAccess.model_admin ? <ChunkedRoute><ModelCreate /></ChunkedRoute> : <Navigate to="/models" replace />} />
         <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
         <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ChunkedRoute><ModelEdit /></ChunkedRoute> : <Navigate to="/models" replace />} />
-        <Route path="/tiers" element={uiAccess.tiers ? <Tiers /> : <Navigate to="/" replace />} />
-        <Route path="/tiers/:tierId" element={uiAccess.tiers ? <TierDetail /> : <Navigate to="/" replace />} />
+        <Route path="/tiers" element={uiAccess.tiers ? <ChunkedRoute><Tiers /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/tiers/:tierId" element={uiAccess.tiers ? <ChunkedRoute><TierDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/named-credentials" element={uiAccess.named_credentials ? <NamedCredentials /> : <Navigate to="/" replace />} />
         <Route path="/route-groups" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroups /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/route-groups/by-id/:routeGroupId" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
@@ -217,13 +217,13 @@ function AppRoutes() {
         <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <MCPServers /> : <Navigate to="/" replace />} />
         <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <MCPServerDetail /> : <Navigate to="/" replace />} />
         <Route path="/mcp-approvals" element={uiAccess.mcp_approvals ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
-        <Route path="/keys" element={uiAccess.keys ? <ApiKeys /> : <Navigate to="/" replace />} />
+        <Route path="/keys" element={uiAccess.keys ? <ChunkedRoute><ApiKeys /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/organizations" element={uiAccess.organizations ? <ChunkedRoute><Organizations /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/organizations/new" element={uiAccess.organization_create ? <ChunkedRoute><OrganizationCreate /></ChunkedRoute> : <Navigate to="/organizations" replace />} />
         <Route path="/organizations/:orgId" element={uiAccess.organizations ? <ChunkedRoute><OrganizationDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/teams" element={uiAccess.teams ? <Teams /> : <Navigate to="/" replace />} />
+        <Route path="/teams" element={uiAccess.teams ? <ChunkedRoute><Teams /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/teams/new" element={uiAccess.team_create ? <ChunkedRoute><TeamCreate /></ChunkedRoute> : <Navigate to="/teams" replace />} />
-        <Route path="/teams/:teamId" element={uiAccess.teams ? <TeamDetail /> : <Navigate to="/" replace />} />
+        <Route path="/teams/:teamId" element={uiAccess.teams ? <ChunkedRoute><TeamDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/users" element={uiAccess.people_access ? <UsersPage /> : <Navigate to="/" replace />} />
         <Route path="/audit" element={uiAccess.audit ? <AuditLogs /> : <Navigate to="/" replace />} />
         <Route path="/usage" element={uiAccess.usage ? <Usage /> : <Navigate to="/" replace />} />

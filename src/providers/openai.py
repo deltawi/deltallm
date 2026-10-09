@@ -6,6 +6,8 @@ from typing import Any, AsyncIterator
 import httpx
 
 from src.models.errors import FailureClassification, ProxyError
+from src.providers.output_usage import compatible_output_count
+from collections.abc import Callable
 from src.models.request_serialization import dump_openai_chat_request
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
@@ -64,6 +66,9 @@ _CONTENT_MESSAGE_MARKERS = (
 class OpenAIAdapter(ProviderAdapter):
     provider_name = "openai"
 
+    def complete_output_count(self, payload: object) -> int | None:
+        return compatible_output_count(payload)
+
     def reported_token_receipt(self, payload: object) -> ProviderTokenReceipt | None:
         return openai_token_receipt(payload)
 
@@ -121,10 +126,13 @@ class OpenAIAdapter(ProviderAdapter):
         provider_stream: AsyncIterator[str],
         *,
         model_name: str | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> AsyncIterator[str]:
         async for chunk in translate_openai_compatible_stream(
             provider_stream,
             classify_failure=self._classify_failure,
+            output_observer=output_observer,
+            output_count=self.complete_output_count,
         ):
             yield chunk
 

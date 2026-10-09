@@ -117,6 +117,7 @@ class TierModelPolicyRecord:
     access_mode: str = "allow"
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    output_tpm_limit: int | None = None
     rph_limit: int | None = None
     rpd_limit: int | None = None
     tpd_limit: int | None = None
@@ -375,6 +376,7 @@ def to_model_policy_record(row: dict[str, Any]) -> TierModelPolicyRecord:
         access_mode=str(row.get("access_mode") or "allow"),
         rpm_limit=int_or_none(row.get("rpm_limit")),
         tpm_limit=int_or_none(row.get("tpm_limit")),
+        output_tpm_limit=int_or_none(row.get("output_tpm_limit")),
         rph_limit=int_or_none(row.get("rph_limit")),
         rpd_limit=int_or_none(row.get("rpd_limit")),
         tpd_limit=int_or_none(row.get("tpd_limit")),
