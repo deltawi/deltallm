@@ -8,8 +8,8 @@ from src.billing.accounting.health.accounting_admission_monitor import Accountin
 from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
 from src.billing.accounting.health.accounting_native_observation import NativeAccountingObservation
 from src.billing.accounting.health.accounting_presence import ProjectionPresence
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
 from src.concurrency import CapacityGateFull
 from src.telemetry.lifecycle import WorkerState
 from src.billing.accounting.health.accounting_health import (

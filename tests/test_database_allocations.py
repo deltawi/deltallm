@@ -8,13 +8,13 @@ from prisma import Prisma
 from pydantic import ValidationError
 
 from src.config import GeneralSettings, Settings
-from src.db.allocated_client import (
+from src.db.runtime.allocated_client import (
     AllocatedPrisma,
     AllocatedTransaction,
     DatabaseOwner,
     DatabaseUnavailableError,
 )
-from src.db.allocation_config import DatabasePolicy, resolve_allocation_settings
+from src.db.runtime.allocation_config import DatabasePolicy, resolve_allocation_settings
 from src.database_settings import DatabaseAllocationSettings
 from src.config_runtime.dynamic import DynamicConfigManager, DynamicConfigRestartRequiredError
 

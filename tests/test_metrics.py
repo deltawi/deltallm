@@ -4,9 +4,9 @@ import pytest
 
 from src.bootstrap.metrics import PrometheusSnapshotService
 from src.cache import CacheKeyBuilder, InMemoryBackend, PrometheusCacheMetrics
-from src.db.callable_target_policies import CallableTargetScopePolicyRecord
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.prompt_registry import PromptResolvedRecord
+from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.catalog.prompt_registry import PromptResolvedRecord
 from src.metrics import (
     ProviderStreamValidationFailureReason,
     increment_provider_stream_validation_failure,

@@ -34,7 +34,7 @@ from src.batch.worker_types import (
     BatchItemLeaseLostError,
 )
 from src.config import GeneralSettings
-from src.db.repositories import KeyRecord
+from src.db.identity.key_repository import KeyRecord
 from src.guardrails.exceptions import GuardrailViolationError
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter

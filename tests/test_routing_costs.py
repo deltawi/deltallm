@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from src.billing.pricing.routing_costs import RoutingCostObservation, aggregate_routing_costs
-from src.db.routing_costs import routing_cost_query, routing_cost_observation
+from src.db.routing.routing_costs import routing_cost_query, routing_cost_observation
 from src.services.spend_visibility import SpendVisibility
 
 

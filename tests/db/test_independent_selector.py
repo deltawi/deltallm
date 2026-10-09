@@ -5,10 +5,10 @@ import json
 import pytest
 import pytest_asyncio
 
-from src.db import route_policy_dependencies
-from src.db.repositories import ModelDeploymentRepository
-from src.db.route_groups import RouteGroupRepository
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.routing import route_policy_dependencies
+from src.db.catalog.model_deployments import ModelDeploymentRepository
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
 from tests.db import test_route_policy_selector_integration as fixtures
 from tests.db.test_selector_activation import qualify
 from tests.db.tier_migration_helpers import connect_prisma

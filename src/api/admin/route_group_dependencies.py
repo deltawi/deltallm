@@ -5,8 +5,8 @@ from uuid import UUID
 
 from fastapi import HTTPException, Request
 
-from src.db.route_group_identity import RouteGroupIdentity
-from src.db.route_groups import RouteGroupRepository
+from src.db.routing.route_group_identity import RouteGroupIdentity
+from src.db.routing.route_groups import RouteGroupRepository
 
 
 @dataclass(frozen=True)

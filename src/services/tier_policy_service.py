@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from src.db.tiers import TierPolicyLoadResult
+from src.db.tiers.tiers import TierPolicyLoadResult
 from src.telemetry.lifecycle import WorkerHealth, WorkerState, stop_tasks_before_deadline
 from src.shutdown import cleanup_deadline
 from src.services.tier_policy_compiler import compile_tier_policy_snapshot

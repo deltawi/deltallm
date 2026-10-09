@@ -8,7 +8,7 @@ from time import monotonic
 
 import yaml
 
-from src.db.migration_status import verify_migration_status
+from src.db.runtime.migration_status import verify_migration_status
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.lifecycle_cluster import LifecycleCluster
 from tests.performance.lifecycle_fixtures import CHART, release

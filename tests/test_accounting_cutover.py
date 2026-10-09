@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.db.accounting_cutover import require_legacy_work_drained
+from src.db.accounting.accounting_cutover import require_legacy_work_drained
 
 
 @pytest.mark.parametrize("lane", ["realtime", "spend", "selector", "batch"])

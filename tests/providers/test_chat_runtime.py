@@ -6,8 +6,8 @@ import pytest
 
 from src.config import AppConfig
 from src.config_runtime.secrets import SecretResolver
-from src.db.named_credentials import NamedCredentialRecord
-from src.db.repositories import ModelDeploymentRecord
+from src.db.catalog.named_credentials import NamedCredentialRecord
+from src.db.catalog.model_deployments import ModelDeploymentRecord
 from src.services.model_deployments import (
     build_model_registry_from_config,
     build_model_registry_from_records,

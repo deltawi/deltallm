@@ -10,7 +10,7 @@ from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
 from src.startup_config import StartupConfig
-from src.db.migration_status import verify_migration_status
+from src.db.runtime.migration_status import verify_migration_status
 from src.process_lifecycle import ProcessLifecycle
 from src.bootstrap.dependency_capacity import DependencyAllocationSnapshot
 from src.redis_runtime import build_redis_client
@@ -21,31 +21,31 @@ from src.config import (
     resolve_telemetry_database_settings,
 )
 from src.config_runtime.dynamic import DynamicConfigManager
-from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
-from src.db.callable_targets import CallableTargetBindingRepository
-from src.db.callable_target_policies import CallableTargetScopePolicyRepository
+from src.db.routing.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+from src.db.routing.callable_targets import CallableTargetBindingRepository
+from src.db.routing.callable_target_policies import CallableTargetScopePolicyRepository
 from src.spend_operation_settings import SpendOperationAllocation
-from src.db.client import (
+from src.db.runtime.client import (
     prisma_manager,
     telemetry_prisma_manager,
     foreground_prisma_manager,
     telemetry_worker_prisma_manager,
     telemetry_settlement_prisma_manager,
 )
-from src.db.allocation_config import DatabasePolicy
-from src.db.accounting_pool import accounting_postgres_manager
-from src.db.email import EmailOutboxRepository
-from src.db.email_tokens import EmailTokenRepository
-from src.db.invitations import InvitationRepository
-from src.db.logical_models import LogicalModelRepository
-from src.db.managed_assets import ManagedAssetAccessRepository
-from src.db.mcp import MCPRepository
-from src.db.mcp_scope_policies import MCPScopePolicyRepository
-from src.db.named_credentials import NamedCredentialRepository
-from src.db.prompt_registry import PromptRegistryRepository
-from src.db.repositories import ModelDeploymentRepository
-from src.db.route_groups import RouteGroupRepository
-from src.db.tiers import TierRepository
+from src.db.runtime.allocation_config import DatabasePolicy
+from src.db.runtime.accounting_pool import accounting_postgres_manager
+from src.db.email.email import EmailOutboxRepository
+from src.db.identity.email_tokens import EmailTokenRepository
+from src.db.identity.invitations import InvitationRepository
+from src.db.catalog.logical_models import LogicalModelRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.mcp.mcp import MCPRepository
+from src.db.mcp.mcp_scope_policies import MCPScopePolicyRepository
+from src.db.catalog.named_credentials import NamedCredentialRepository
+from src.db.catalog.prompt_registry import PromptRegistryRepository
+from src.db.catalog.model_deployments import ModelDeploymentRepository
+from src.db.routing.route_groups import RouteGroupRepository
+from src.db.tiers.tiers import TierRepository
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.azure import AzureOpenAIAdapter

@@ -28,8 +28,8 @@ from src.billing.accounting.journal.accounting_local_terminal import LocalTermin
 from src.billing.accounting.transport.accounting_remote_leases import RemoteLocalLeasePersistence
 from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
 from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
-from src.db.accounting_health import AccountingBacklogRepository
-from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.db.accounting.health.accounting_health import AccountingBacklogRepository
+from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
 from src.outbound.network_policy import OutboundNetworkPolicy
 from tests.test_accounting_local_leases_postgres import deadline
 from tests.test_accounting_local_runtime_postgres import handle

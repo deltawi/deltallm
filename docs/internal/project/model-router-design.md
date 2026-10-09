@@ -37,8 +37,8 @@ activation point only after PR 4 supplies the complete safe execution path.
 | File route-group and router settings | `src/route_group_config.py` |
 | Selector activation guard and routing fingerprint | `src/router/selection/policy.py` |
 | Route-policy normalization and group/member validation | `src/router/policy_validation.py` |
-| Policy history, publish, and rollback transactions | `src/db/route_policy_lifecycle.py` |
-| Immutable database runtime snapshot | `src/db/route_groups.py` |
+| Policy history, publish, and rollback transactions | `src/db/routing/route_policy_lifecycle.py` |
+| Immutable database runtime snapshot | `src/db/routing/route_groups.py` |
 | Projection, prompt, exact parser, decision, and request-local lifecycle | `src/router/selection/` |
 | Shared direct chat resolution, signing/send/translation, bounded response | `src/providers/chat_upstream.py`, `src/providers/chat_hop.py`, existing adapters |
 | Classifier-only request preparation, concrete target, and usage receipt | `src/router/selection/provider.py` |
@@ -539,7 +539,7 @@ Both `uv run ruff check` and `uv run ruff format --check` passed on these 19 Pyt
 src/api/admin/endpoints/route_groups.py
 src/api/admin/request_validation.py
 src/api/admin/route_group_contracts.py
-src/db/route_policy_lifecycle.py
+src/db/routing/route_policy_lifecycle.py
 src/router/policy_validation.py
 src/services/route_groups.py
 src/services/route_policy_publication.py

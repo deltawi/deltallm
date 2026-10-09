@@ -14,7 +14,7 @@ from prisma.errors import RawQueryError
 
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
-from src.db.repositories import AuditRepository
+from src.db.audit.repository import AuditRepository
 from src.guardrails.catalog import (
     get_guardrail_preset_by_class_path,
     guardrail_threshold_from_params,

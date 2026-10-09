@@ -18,12 +18,9 @@ from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
     with_authorization_snapshot,
 )
-from src.db.named_credentials import NamedCredentialRepository
-from src.db.repositories import (
-    ModelDeploymentRecord,
-    ModelDeploymentRepository,
-)
-from src.db.route_groups import RouteGroupRepository
+from src.db.catalog.named_credentials import NamedCredentialRepository
+from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.routing.route_groups import RouteGroupRepository
 from src.metrics import increment_router_health_update_failure
 from src.providers.resolution import validate_provider_mode_compatibility
 from src.router import (

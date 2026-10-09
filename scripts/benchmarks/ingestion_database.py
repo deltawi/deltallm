@@ -8,8 +8,8 @@ from uuid import uuid4
 
 from prisma import Prisma
 
-from src.db.allocated_client import AllocatedPrisma, DatabaseOwner
-from src.db.allocation_config import DatabasePolicy
+from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner
+from src.db.runtime.allocation_config import DatabasePolicy
 
 AUDIT = "deltallm_audit_ingestion_outbox"
 SPEND = "deltallm_spend_ingestion_outbox"

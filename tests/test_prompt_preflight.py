@@ -4,7 +4,7 @@ import asyncio
 import httpx
 import pytest
 
-from src.db.prompt_registry import PromptBindingRecord, PromptResolvedRecord
+from src.db.catalog.prompt_registry import PromptBindingRecord, PromptResolvedRecord
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_targets import CallableTarget
 from src.services.creator_prompt_access import CreatorPromptAccessSnapshot

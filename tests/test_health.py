@@ -14,7 +14,7 @@ from src.bootstrap.asset_readiness import (
     realtime_check,
 )
 from src.lifecycle_settings import LifecycleSettings
-from src.db.client import PrismaClientManager
+from src.db.runtime.client import PrismaClientManager
 from src.process_lifecycle import ProcessLifecycle
 from src.readiness import ReadinessRuntime
 

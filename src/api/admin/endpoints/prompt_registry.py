@@ -15,8 +15,8 @@ from src.api.admin.endpoints.managed_assets import (
 )
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.managed_assets import ManagedAssetAccessRepository
-from src.db.prompt_registry import PromptRegistryRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.middleware.admin import require_admin_permission, require_authenticated
 from src.services.asset_ownership import (
     apply_owner_scope_to_metadata,

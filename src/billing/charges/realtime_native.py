@@ -35,7 +35,7 @@ from src.billing.charges.realtime_charge import RealtimeChargeContext
 from src.billing.charges.realtime_accounting_bounds import RealtimeCostBounds
 from src.billing.charges.realtime_usage import RealtimeUsageReceipt
 from src.billing.spend.spend_operations import SpendPersistenceUnavailable
-from src.db.realtime_billing import RealtimeBillingRepository
+from src.db.billing.realtime_billing import RealtimeBillingRepository
 from src.realtime.errors import RealtimeError
 
 

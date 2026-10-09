@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 
 from src.config import DatabaseConnectionSettings
-from src.db.accounting_pool import (
+from src.db.runtime.accounting_pool import (
     AccountingPostgresClient,
     AccountingPostgresManager,
     _accounting_schema,
     accounting_postgres_dsn,
 )
-from src.db.telemetry_acceptance import (
+from src.db.runtime.telemetry_acceptance import (
     AcceptanceFailure,
     DatabasePoolAcquisitionTimeout,
     classify_acceptance_failure,

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, status
 
-from src.db.named_credentials import NamedCredentialRecord
+from src.db.catalog.named_credentials import NamedCredentialRecord
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,

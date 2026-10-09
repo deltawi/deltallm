@@ -19,8 +19,8 @@ from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.bootstrap.realtime import init_realtime_runtime
 from src.config import AppConfig
-from src.db.key_repository import KeyRepository
-from src.db.spend_ingestion import SpendIngestionRepository
+from src.db.identity.key_repository import KeyRepository
+from src.db.billing.spend_ingestion import SpendIngestionRepository
 from src.realtime.config import RealtimeSettings
 from src.router import (
     build_deployment_registry,
@@ -106,7 +106,7 @@ async def bootstrap(app, dependencies, profile):
         salt="test-salt",
         lifecycle_authorizer=state.organization_lifecycle_authorizer,
     )
-    from src.db.callable_targets import CallableTargetBindingRecord
+    from src.db.routing.callable_targets import CallableTargetBindingRecord
     from src.services.callable_target_grants import CallableTargetGrantService
     from tests.conftest import InMemoryCallableTargetBindingRepository
 

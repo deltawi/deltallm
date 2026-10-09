@@ -18,7 +18,7 @@ from src.cache import (
 )
 from src.cache.backends.base import CacheBackend, CacheEntry
 from src.callbacks import CallbackManager, CustomLogger
-from src.db.repositories import KeyRecord
+from src.db.identity.key_repository import KeyRecord
 from src.router import build_deployment_registry
 from src.models.errors import AuthenticationUnavailableError
 

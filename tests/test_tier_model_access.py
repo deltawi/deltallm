@@ -8,8 +8,8 @@ from fastapi import HTTPException
 
 from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS
 from src.batch.request_validation import parse_batch_input_line
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
 from src.models.errors import PermissionDeniedError
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
@@ -25,7 +25,9 @@ class _FakeCallableTargetBindingRepository:
     def __init__(self, bindings: list[CallableTargetBindingRecord]) -> None:
         self.bindings = list(bindings)
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -71,8 +73,7 @@ class _FakeTierPolicyService:
         snapshot_stale: bool = False,
     ) -> None:
         self.allowed_by_org = {
-            org_id: frozenset(values)
-            for org_id, values in (allowed_by_org or {}).items()
+            org_id: frozenset(values) for org_id, values in (allowed_by_org or {}).items()
         }
         self.denied = set(denied or set())
         self.explicit_orgs = set(explicit_orgs or set(self.allowed_by_org))
@@ -513,9 +514,7 @@ async def test_master_key_bypasses_tier_policy_access() -> None:
 async def test_v1_models_filters_by_tier_policy(client, test_app) -> None:
     record = next(iter(test_app.state._test_repo.records.values()))
     record.organization_id = "org-1"
-    test_app.state.callable_target_grant_service = await _loaded_grant_service(
-        bindings=[]
-    )
+    test_app.state.callable_target_grant_service = await _loaded_grant_service(bindings=[])
     test_app.state.tier_policy_service = _FakeTierPolicyService(
         allowed_by_org={"org-1": {"gpt-4o-mini"}},
     )

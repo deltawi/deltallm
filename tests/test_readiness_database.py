@@ -5,8 +5,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.db.allocated_client import AllocatedTransaction, DatabaseOwner, DatabaseUnavailableError
-from src.db.allocation_config import DatabasePolicy
+from src.db.runtime.allocated_client import (
+    AllocatedTransaction,
+    DatabaseOwner,
+    DatabaseUnavailableError,
+)
+from src.db.runtime.allocation_config import DatabasePolicy
 
 pytestmark = pytest.mark.hermetic
 

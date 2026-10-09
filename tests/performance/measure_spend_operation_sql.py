@@ -17,8 +17,8 @@ from src.billing.spend.spend_operations import (
     OperationPrincipal,
     SpendOperationIntent,
 )
-from src.db.spend_ingestion import SpendIngestionRepository
-from src.db.spend_operations import SpendOperationRepository
+from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.billing.spend_operations import SpendOperationRepository
 from tests.performance.gateway_concurrency_dependencies import fixture_database_url
 
 
@@ -201,7 +201,7 @@ async def measure(args: argparse.Namespace, *, database_url: str | None = None) 
             "recovery_plan": recovery_plan,
         }
         report["repository_sha256"] = hashlib.sha256(
-            Path("src/db/spend_operations.py").read_bytes()
+            Path("src/db/billing/spend_operations.py").read_bytes()
         ).hexdigest()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")

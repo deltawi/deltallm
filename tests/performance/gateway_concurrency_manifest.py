@@ -71,7 +71,7 @@ async def local_manifest(
 
     from src.config import GeneralSettings, Settings, _resolve_env_token
     from src.config_startup import startup_field_values
-    from src.db.allocation_config import resolve_allocation_settings
+    from src.db.runtime.allocation_config import resolve_allocation_settings
     from tests.performance.gateway_concurrency_dependencies import local_dependencies
 
     profile_path = Path(

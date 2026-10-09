@@ -18,8 +18,8 @@ from src.billing.accounting.health.accounting_read_model_health import (
     ReadModelHealth,
     ReadModelProgress,
 )
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permit_results import invalid_result
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_permit_results import invalid_result
 from src.metrics.accounting import increment_accounting_projection
 from src.telemetry.worker_idle import IdleWorkerPoll
 from src.telemetry.lifecycle import (

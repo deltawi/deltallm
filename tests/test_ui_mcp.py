@@ -8,14 +8,14 @@ from prometheus_client import generate_latest
 
 from src.audit.actions import AuditAction
 from src.auth.roles import OrganizationRole, TeamRole
-from src.db.mcp import (
+from src.db.mcp.mcp import (
     MCPApprovalRequestRecord,
     MCPRepository,
     MCPServerBindingRecord,
     MCPServerRecord,
     MCPToolPolicyRecord,
 )
-from src.db.mcp_scope_policies import MCPScopePolicyRecord
+from src.db.mcp.mcp_scope_policies import MCPScopePolicyRecord
 from src.metrics import get_prometheus_registry
 from src.mcp.capabilities import extract_tool_schemas, namespace_tools
 from src.mcp.health import MCPHealthProbe
@@ -422,7 +422,7 @@ class _FakeManagedAssetAccessRepository:
         del changed_by_account_id
         current = self.policies[policy.asset.asset_id]
         if current.asset.policy_version != expected_policy_version:
-            from src.db.managed_assets import ManagedAssetPolicyConflictError
+            from src.db.catalog.managed_assets import ManagedAssetPolicyConflictError
 
             raise ManagedAssetPolicyConflictError("asset policy changed")
         updated = AssetAccessPolicy(
@@ -453,9 +453,7 @@ def _asset_user_context(account_id: str, *, team_ids: tuple[str, ...] = ()) -> P
         account_id=account_id,
         email=f"{account_id}@example.com",
         role="platform_user",
-        team_memberships=[
-            {"team_id": team_id, "role": "team_developer"} for team_id in team_ids
-        ],
+        team_memberships=[{"team_id": team_id, "role": "team_developer"} for team_id in team_ids],
     )
 
 

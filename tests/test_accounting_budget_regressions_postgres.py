@@ -19,12 +19,12 @@ from src.billing.accounting.accounting_protocol import (
     AccountingScope,
     ReserveDecision,
 )
-from src.db.accounting_budget_reads import AccountingBudgetReadRepository
-from src.db.accounting_journal import AccountingJournalRepository
-from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
-from src.db.budget_notifications import BudgetNotificationRepository
-from src.db.accounting_read_model import AccountingReadModelRepository
-from src.db.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting.accounting_budget_reads import AccountingBudgetReadRepository
+from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
+from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.db.billing.budget_notifications import BudgetNotificationRepository
+from src.db.accounting.reporting.accounting_read_model import AccountingReadModelRepository
+from src.db.accounting.accounting_protocol import AccountingProtocolRepository
 from tests.accounting_read_model_fixtures import reporting_finalization, reporting_handle
 from tests.test_accounting_local_leases_postgres import deadline, owner
 from tests.test_accounting_protocol_postgres import (

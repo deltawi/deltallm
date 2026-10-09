@@ -43,10 +43,10 @@ from src.api.admin.route_group_dependencies import (
     route_group_context,
     route_group_repository as _repository_or_503,
 )
-from src.db.prompt_registry import PromptRegistryRepository
-from src.db.managed_assets import ManagedAssetAccessRepository
-from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
-from src.db.route_groups import RouteGroupRepository
+from src.db.catalog.prompt_registry import PromptRegistryRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.routing.route_groups import RouteGroupRepository
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_admin_permission, require_authenticated
 from src.router.policy_validation import (
@@ -730,9 +730,7 @@ async def _publish_route_group_policy_response(
     return response
 
 
-@router.get(
-    "/ui/api/route-groups", dependencies=[Depends(require_authenticated)]
-)
+@router.get("/ui/api/route-groups", dependencies=[Depends(require_authenticated)])
 async def list_route_groups(
     request: Request,
     search: str | None = Query(default=None),
@@ -808,9 +806,7 @@ async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
         ),
         "members": await _serialize_group_members(request, members),
         "policy": (
-            _policy_response_payload(published_policy)
-            if published_policy is not None
-            else None
+            _policy_response_payload(published_policy) if published_policy is not None else None
         ),
         "bindings": [_binding_response_payload(binding) for binding in bindings],
     }
@@ -855,8 +851,12 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
         existing_metadata=None,
         raw_metadata=payload.get("metadata"),
         raw_default_prompt=payload.get("default_prompt", ...),
-        raw_owner_scope_type=(payload.get("owner_scope_type", ...) if principal.is_platform_admin else "global"),
-        raw_owner_scope_id=(payload.get("owner_scope_id", ...) if principal.is_platform_admin else None),
+        raw_owner_scope_type=(
+            payload.get("owner_scope_type", ...) if principal.is_platform_admin else "global"
+        ),
+        raw_owner_scope_id=(
+            payload.get("owner_scope_id", ...) if principal.is_platform_admin else None
+        ),
         principal=principal,
     )
 

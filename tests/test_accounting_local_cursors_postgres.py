@@ -16,7 +16,7 @@ from src.billing.accounting.accounting_protocol import (
     PreissuedPermitClaim,
 )
 from tests.accounting_adapters.permit_repository import AccountingPermitRepository
-from src.db.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting.accounting_protocol import AccountingProtocolRepository
 from src.billing.accounting.permits.preissued_permits import PermitSubject
 from tests.test_accounting_local_leases_postgres import allocation, funded, owner, deadline
 from tests.test_accounting_permits_postgres import CountingClient

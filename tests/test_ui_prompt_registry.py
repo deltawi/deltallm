@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from src.db.prompt_registry import (
+from src.db.catalog.prompt_registry import (
     PromptBindingRecord,
     PromptLabelRecord,
     PromptTemplateRecord,
@@ -368,7 +368,7 @@ class _FakeManagedAssetAccessRepository:
         del changed_by_account_id
         current = self.policies[policy.asset.asset_id]
         if current.asset.policy_version != expected_policy_version:
-            from src.db.managed_assets import ManagedAssetPolicyConflictError
+            from src.db.catalog.managed_assets import ManagedAssetPolicyConflictError
 
             raise ManagedAssetPolicyConflictError("asset policy changed")
         updated = AssetAccessPolicy(
@@ -899,7 +899,9 @@ async def test_creator_prompt_reader_editor_owner_and_outsider_capabilities(clie
     created_payload = created.json()
     assert created_payload["access"]["effective_role"] == "owner"
     assert created_payload["access"]["visibility"] == "team"
-    assert re.fullmatch(r"prm-[0-9a-hjkmnp-tv-z]{4}-creator\.prompt", created_payload["template_key"])
+    assert re.fullmatch(
+        r"prm-[0-9a-hjkmnp-tv-z]{4}-creator\.prompt", created_payload["template_key"]
+    )
     asset_id = created_payload["access"]["managed_asset_id"]
     template_key = created_payload["template_key"]
 

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from src.db.managed_assets import ManagedAssetAccessRepository
-from src.db.route_groups import RouteGroupRepository
+from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.routing.route_groups import RouteGroupRepository
 from src.models.responses import UserAPIKeyAuth
 from src.services.managed_asset_access import (
     MANAGED_ASSET_RESOURCE_BATCH_SIZE,

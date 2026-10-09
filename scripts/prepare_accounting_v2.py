@@ -8,8 +8,8 @@ from datetime import timedelta
 import json
 
 from src.config import DatabaseConnectionSettings
-from src.db.client import PrismaClientManager
-from src.db.accounting_cutover import require_legacy_work_drained
+from src.db.runtime.client import PrismaClientManager
+from src.db.accounting.accounting_cutover import require_legacy_work_drained
 
 _LEGACY_HOLDS = """
 SELECT count(*) AS hold_count FROM (

@@ -5,9 +5,9 @@ import pytest
 
 from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.db.billing_operation_recovery import BillingOperationRecovery
-from src.db.billing_operations import BillingOperationRepository
-from src.db.spend_ingestion import SpendIngestionRepository
+from src.db.billing.billing_operation_recovery import BillingOperationRecovery
+from src.db.billing.billing_operations import BillingOperationRepository
+from src.db.billing.spend_ingestion import SpendIngestionRepository
 from tests.test_billing_operation_repository import transaction_mock
 from tests.test_spend_ingestion import _OutboxDB, _Writer
 
@@ -70,7 +70,7 @@ async def test_quarantine_skips_enqueue_and_reports_only_committed_allowlisted_c
     monkeypatch.setattr(SpendIngestionRepository, "enqueue", enqueue)
     metric = MagicMock()
     monkeypatch.setattr(
-        "src.db.billing_operation_recovery.increment_spend_ingestion_failure", metric
+        "src.db.billing.billing_operation_recovery.increment_spend_ingestion_failure", metric
     )
     assert await recovery_with_transactions(context, empty).recover() == 1
     enqueue.assert_not_awaited()

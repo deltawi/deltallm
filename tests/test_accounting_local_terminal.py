@@ -215,8 +215,8 @@ async def test_store_validates_the_whole_batch_before_removal(failure):
 
 async def test_expiry_after_ack_preparation_cannot_remove_any_proof(monkeypatch):
     from src.billing.accounting.journal import accounting_local_terminal
-    from src.db.accounting_calls import AccountingProtocolUnavailable
-    from src.db.telemetry_acceptance import AcceptanceFailure
+    from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+    from src.db.runtime.telemetry_acceptance import AcceptanceFailure
 
     values, receipts, persistence, owner = state()
     charge = receipts.retained_bytes

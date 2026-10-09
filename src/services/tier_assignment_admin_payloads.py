@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from src.db.tiers import OrganizationTierAssignmentRecord
+from src.db.tiers.tiers import OrganizationTierAssignmentRecord
 from src.services.tiers import (
     normalize_assignment_type,
     normalize_metadata,

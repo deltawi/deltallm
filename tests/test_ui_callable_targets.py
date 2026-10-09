@@ -5,13 +5,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.db.callable_target_access_groups import (
+from src.db.routing.callable_target_access_groups import (
     CallableTargetAccessGroupBindingCount,
     CallableTargetAccessGroupBindingRecord,
 )
-from src.db.callable_targets import CallableTargetBindingRecord
-from src.db.callable_target_policies import CallableTargetScopePolicyRecord
-from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRecord
 from src.governance.access_groups import normalize_access_group_key
 from src.services.asset_scopes import normalize_scope_type
 from src.services.callable_targets import CallableTarget
@@ -58,17 +58,26 @@ class _FakeMigrationDB:
                 org_id = str(params[0])
                 return [row for row in self.organizations if row["organization_id"] == org_id]
             return list(self.organizations)
-        if "FROM deltallm_teamtable" in query and "SELECT team_id, team_alias, organization_id, models" in query:
+        if (
+            "FROM deltallm_teamtable" in query
+            and "SELECT team_id, team_alias, organization_id, models" in query
+        ):
             if params:
                 org_id = str(params[0])
                 return [row for row in self.teams if row["organization_id"] == org_id]
             return list(self.teams)
-        if "FROM deltallm_verificationtoken vt" in query and "JOIN deltallm_teamtable t ON vt.team_id = t.team_id" in query:
+        if (
+            "FROM deltallm_verificationtoken vt" in query
+            and "JOIN deltallm_teamtable t ON vt.team_id = t.team_id" in query
+        ):
             if params:
                 org_id = str(params[0])
                 return [row for row in self.keys if row["organization_id"] == org_id]
             return list(self.keys)
-        if "FROM deltallm_usertable u" in query and "COALESCE(u.team_id, vt.team_id) AS team_id" in query:
+        if (
+            "FROM deltallm_usertable u" in query
+            and "COALESCE(u.team_id, vt.team_id) AS team_id" in query
+        ):
             if params:
                 org_id = str(params[0])
                 return [row for row in self.users if row["organization_id"] == org_id]
@@ -102,7 +111,12 @@ class _FakeMigrationDB:
 
 class _FakeScopeValidationDB:
     def __init__(self) -> None:
-        self.organizations = [{"organization_id": "org-1", "metadata": {"_callable_target_access": {"auto_follow_catalog": True}}}]
+        self.organizations = [
+            {
+                "organization_id": "org-1",
+                "metadata": {"_callable_target_access": {"auto_follow_catalog": True}},
+            }
+        ]
         self.teams = [{"team_id": "team-1", "organization_id": "org-1"}]
         self.keys = [{"token": "key-1", "team_id": "team-1", "organization_id": "org-1"}]
         self.users = [{"user_id": "user-1", "team_id": "team-1", "organization_id": "org-1"}]
@@ -181,7 +195,9 @@ class _FakeCallableTargetBindingRepository:
         self.bindings: list[CallableTargetBindingRecord] = []
         self._counter = 0
 
-    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -195,7 +211,11 @@ class _FakeCallableTargetBindingRepository:
     async def upsert_binding(self, *, callable_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         normalized_scope_type = normalize_scope_type(scope_type)
         for index, item in enumerate(self.bindings):
-            if item.callable_key == callable_key and item.scope_type == normalized_scope_type and item.scope_id == scope_id:
+            if (
+                item.callable_key == callable_key
+                and item.scope_type == normalized_scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -212,7 +232,9 @@ class _FakeCallableTargetBindingRepository:
         return record
 
     async def get_binding(self, binding_id: str):  # noqa: ANN201
-        return next((item for item in self.bindings if item.callable_target_binding_id == binding_id), None)
+        return next(
+            (item for item in self.bindings if item.callable_target_binding_id == binding_id), None
+        )
 
     async def delete_binding(self, binding_id: str) -> bool:
         kept = [item for item in self.bindings if item.callable_target_binding_id != binding_id]
@@ -229,7 +251,9 @@ class _FakeCallableTargetAccessGroupBindingRepository:
         self.unfiltered_list_calls = 0
         self.group_count_calls = 0
 
-    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         if group_key is None and scope_type is None and scope_id is None:
             self.unfiltered_list_calls += 1
         items = list(self.bindings)
@@ -261,7 +285,11 @@ class _FakeCallableTargetAccessGroupBindingRepository:
         normalized_group_key = normalize_access_group_key(group_key, strict=True)
         normalized_scope_type = normalize_scope_type(scope_type)
         for index, item in enumerate(self.bindings):
-            if item.group_key == normalized_group_key and item.scope_type == normalized_scope_type and item.scope_id == scope_id:
+            if (
+                item.group_key == normalized_group_key
+                and item.scope_type == normalized_scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -278,10 +306,21 @@ class _FakeCallableTargetAccessGroupBindingRepository:
         return record
 
     async def get_binding(self, binding_id: str):  # noqa: ANN201
-        return next((item for item in self.bindings if item.callable_target_access_group_binding_id == binding_id), None)
+        return next(
+            (
+                item
+                for item in self.bindings
+                if item.callable_target_access_group_binding_id == binding_id
+            ),
+            None,
+        )
 
     async def delete_binding(self, binding_id: str) -> bool:
-        kept = [item for item in self.bindings if item.callable_target_access_group_binding_id != binding_id]
+        kept = [
+            item
+            for item in self.bindings
+            if item.callable_target_access_group_binding_id != binding_id
+        ]
         if len(kept) == len(self.bindings):
             return False
         self.bindings = kept
@@ -321,7 +360,10 @@ class _FakeCallableTargetScopePolicyRepository:
         return record
 
     async def get_policy(self, policy_id: str):  # noqa: ANN201
-        return next((item for item in self.policies if item.callable_target_scope_policy_id == policy_id), None)
+        return next(
+            (item for item in self.policies if item.callable_target_scope_policy_id == policy_id),
+            None,
+        )
 
     async def delete_policy(self, policy_id: str) -> bool:
         kept = [item for item in self.policies if item.callable_target_scope_policy_id != policy_id]
@@ -357,7 +399,9 @@ class _FakeRouteGroupRepository:
     async def get_group(self, group_key: str):  # noqa: ANN201
         return self.groups.get(group_key)
 
-    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if group_key:
             items = [item for item in items if item.group_key == group_key]
@@ -373,7 +417,11 @@ class _FakeRouteGroupRepository:
             return None
         normalized_scope_type = normalize_scope_type(scope_type)
         for index, item in enumerate(self.bindings):
-            if item.group_key == group_key and item.scope_type == normalized_scope_type and item.scope_id == scope_id:
+            if (
+                item.group_key == group_key
+                and item.scope_type == normalized_scope_type
+                and item.scope_id == scope_id
+            ):
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -410,7 +458,9 @@ class _ReloadTracker:
 async def test_list_callable_targets_uses_runtime_catalog(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(
             key="gpt-4o-mini",
@@ -420,7 +470,9 @@ async def test_list_callable_targets_uses_runtime_catalog(client, test_app):
         "support-fast": CallableTarget(key="support-fast", target_type="route_group"),
     }
 
-    response = await client.get("/ui/api/callable-targets", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/callable-targets", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -445,10 +497,16 @@ async def test_list_callable_target_access_groups_combines_catalog_and_bindings(
     )
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
     test_app.state.callable_target_access_group_repository = access_group_repo
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
-        "support-fast": CallableTarget(key="support-fast", target_type="route_group", access_groups=frozenset({"beta"})),
+        "gpt-4o-mini": CallableTarget(
+            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
+        ),
+        "support-fast": CallableTarget(
+            key="support-fast", target_type="route_group", access_groups=frozenset({"beta"})
+        ),
     }
 
     response = await client.get(
@@ -462,7 +520,10 @@ async def test_list_callable_target_access_groups_combines_catalog_and_bindings(
     assert payload["pagination"]["total"] == 2
     groups = {item["group_key"]: item for item in payload["data"]}
     assert groups["beta"]["member_count"] == 2
-    assert {item["callable_key"] for item in groups["beta"]["members"]} == {"gpt-4o-mini", "support-fast"}
+    assert {item["callable_key"] for item in groups["beta"]["members"]} == {
+        "gpt-4o-mini",
+        "support-fast",
+    }
     assert groups["future"]["member_count"] == 0
     assert groups["future"]["binding_count"] == 1
     assert access_group_repo.group_count_calls == 1
@@ -470,7 +531,9 @@ async def test_list_callable_target_access_groups_combines_catalog_and_bindings(
 
 
 @pytest.mark.asyncio
-async def test_list_callable_target_access_groups_searches_and_pages_merged_groups(client, test_app):
+async def test_list_callable_target_access_groups_searches_and_pages_merged_groups(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     access_group_repo = _FakeCallableTargetAccessGroupBindingRepository()
     await access_group_repo.upsert_binding(
@@ -489,10 +552,16 @@ async def test_list_callable_target_access_groups_searches_and_pages_merged_grou
     )
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
     test_app.state.callable_target_access_group_repository = access_group_repo
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"alpha"})),
-        "support-fast": CallableTarget(key="support-fast", target_type="route_group", access_groups=frozenset({"beta"})),
+        "gpt-4o-mini": CallableTarget(
+            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"alpha"})
+        ),
+        "support-fast": CallableTarget(
+            key="support-fast", target_type="route_group", access_groups=frozenset({"beta"})
+        ),
     }
 
     response = await client.get(
@@ -517,9 +586,13 @@ async def test_callable_target_access_group_binding_admin_lifecycle(client, test
     test_app.state.prisma_manager = type("Prisma", (), {"client": scope_db})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
     test_app.state.callable_target_access_group_repository = repo
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "gpt-4o-mini": CallableTarget(
+            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
+        ),
     }
     headers = {"Authorization": "Bearer mk-test"}
 
@@ -550,7 +623,9 @@ async def test_callable_target_access_group_binding_admin_lifecycle(client, test
     assert listing.status_code == 200
     assert listing.json()["pagination"]["total"] == 1
 
-    scope_db.organizations[0]["metadata"] = {"_callable_target_access": {"auto_follow_catalog": True}}
+    scope_db.organizations[0]["metadata"] = {
+        "_callable_target_access": {"auto_follow_catalog": True}
+    }
     delete = await client.delete(
         f"/ui/api/callable-target-access-group-bindings/{payload['callable_target_access_group_binding_id']}",
         headers=headers,
@@ -605,7 +680,9 @@ async def test_callable_target_binding_admin_lifecycle(client, test_app):
     assert listing.status_code == 200
     assert listing.json()["pagination"]["total"] == 1
 
-    scope_db.organizations[0]["metadata"] = {"_callable_target_access": {"auto_follow_catalog": True}}
+    scope_db.organizations[0]["metadata"] = {
+        "_callable_target_access": {"auto_follow_catalog": True}
+    }
     delete = await client.delete(
         f"/ui/api/callable-target-bindings/{payload['callable_target_binding_id']}",
         headers=headers,
@@ -650,9 +727,10 @@ async def test_callable_target_route_group_binding_mirrors_route_group_bindings(
     )
 
     assert upsert.status_code == 200
-    assert {(binding.group_key, binding.scope_type, binding.scope_id) for binding in route_group_repo.bindings} == {
-        ("support-fast", "organization", "org-1")
-    }
+    assert {
+        (binding.group_key, binding.scope_type, binding.scope_id)
+        for binding in route_group_repo.bindings
+    } == {("support-fast", "organization", "org-1")}
 
     delete = await client.delete(
         f"/ui/api/callable-target-bindings/{upsert.json()['callable_target_binding_id']}",
@@ -668,7 +746,9 @@ async def test_callable_target_binding_rejects_unknown_target(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
     }
@@ -731,7 +811,9 @@ async def test_callable_target_binding_rejects_missing_team_scope(client, test_a
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
     }
@@ -751,7 +833,9 @@ async def test_callable_target_scope_policy_rejects_missing_api_key_scope(client
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
 
     response = await client.post(
         "/ui/api/callable-target-scope-policies",
@@ -768,7 +852,9 @@ async def test_callable_target_scope_policy_accepts_user_scope(client, test_app)
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
 
     response = await client.post(
         "/ui/api/callable-target-scope-policies",
@@ -787,7 +873,9 @@ async def test_callable_target_migration_report_summarizes_legacy_scope_data(cli
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeMigrationDB()})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
-    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_scope_policy_repository = (
+        _FakeCallableTargetScopePolicyRepository()
+    )
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
         "support-fast": CallableTarget(key="support-fast", target_type="route_group"),
@@ -806,7 +894,9 @@ async def test_callable_target_migration_report_summarizes_legacy_scope_data(cli
     assert payload["summary"]["users_with_legacy_models"] == 1
     assert payload["summary"]["missing_callable_keys_total"] == 1
     assert payload["summary"]["organizations_by_rollout_state"] == {"missing_catalog_keys": 1}
-    assert payload["summary"]["organization_ids_by_rollout_state"] == {"missing_catalog_keys": ["org-1"]}
+    assert payload["summary"]["organization_ids_by_rollout_state"] == {
+        "missing_catalog_keys": ["org-1"]
+    }
     assert payload["filters"]["rollout_states"] == []
 
     organization = payload["organizations"][0]
@@ -858,7 +948,9 @@ async def test_callable_target_migration_backfill_creates_bindings_and_policies(
     assert payload["applied"]["route_group_bindings_mirrored"] == 0
     assert reload_tracker.reload_count == 1
 
-    org_bindings = {(item.scope_type, item.scope_id, item.callable_key) for item in binding_repo.bindings}
+    org_bindings = {
+        (item.scope_type, item.scope_id, item.callable_key) for item in binding_repo.bindings
+    }
     assert ("organization", "org-1", "gpt-4o-mini") in org_bindings
     assert ("organization", "org-1", "support-fast") in org_bindings
     assert ("team", "team-1", "gpt-4o-mini") in org_bindings
@@ -879,14 +971,18 @@ async def test_callable_target_migration_backfill_creates_bindings_and_policies(
     assert report_payload["summary"]["teams_with_legacy_models"] == 1
     assert report_payload["summary"]["api_keys_with_legacy_models"] == 0
     assert report_payload["summary"]["users_with_legacy_models"] == 0
-    assert report_payload["summary"]["organizations_by_rollout_state"] == {"missing_catalog_keys": 1}
+    assert report_payload["summary"]["organizations_by_rollout_state"] == {
+        "missing_catalog_keys": 1
+    }
     assert payload["summary"]["organizations_by_rollout_state"] == {"missing_catalog_keys": 1}
     assert report_payload["organizations"][0]["api_keys"][0]["rollout_state"] == "ready_for_enforce"
     assert report_payload["organizations"][0]["users"][0]["rollout_state"] == "ready_for_enforce"
 
 
 @pytest.mark.asyncio
-async def test_callable_target_migration_backfill_returns_ready_for_enforce_when_catalog_is_complete(client, test_app):
+async def test_callable_target_migration_backfill_returns_ready_for_enforce_when_catalog_is_complete(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeReadyMigrationDB()})()
     binding_repo = _FakeCallableTargetBindingRepository()
@@ -922,7 +1018,9 @@ async def test_callable_target_migration_backfill_returns_ready_for_enforce_when
 
 
 @pytest.mark.asyncio
-async def test_callable_target_migration_backfill_mirrors_existing_route_group_bindings(client, test_app):
+async def test_callable_target_migration_backfill_mirrors_existing_route_group_bindings(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeReadyMigrationDB()})()
     binding_repo = _FakeCallableTargetBindingRepository()
@@ -993,7 +1091,9 @@ async def test_callable_target_migration_filter_targets_actionable_orgs_only(cli
     assert report_payload["filters"]["rollout_states"] == ["needs_org_bootstrap"]
     assert report_payload["summary"]["organizations_total"] == 1
     assert report_payload["summary"]["organizations_by_rollout_state"] == {"needs_org_bootstrap": 1}
-    assert report_payload["summary"]["organization_ids_by_rollout_state"] == {"needs_org_bootstrap": ["org-2"]}
+    assert report_payload["summary"]["organization_ids_by_rollout_state"] == {
+        "needs_org_bootstrap": ["org-2"]
+    }
     assert [org["organization_id"] for org in report_payload["organizations"]] == ["org-2"]
 
     alias_report = await client.get(
@@ -1025,7 +1125,9 @@ async def test_callable_target_migration_filter_targets_actionable_orgs_only(cli
     assert payload["summary"]["organizations_total"] == 0
     assert reload_tracker.reload_count == 1
 
-    org_bindings = {(item.scope_type, item.scope_id, item.callable_key) for item in binding_repo.bindings}
+    org_bindings = {
+        (item.scope_type, item.scope_id, item.callable_key) for item in binding_repo.bindings
+    }
     assert ("organization", "org-2", "gpt-4o-mini") in org_bindings
     assert ("organization", "org-2", "support-fast") in org_bindings
     assert ("team", "team-2", "gpt-4o-mini") in org_bindings

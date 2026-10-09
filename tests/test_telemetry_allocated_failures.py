@@ -5,9 +5,9 @@ import httpx
 import pytest
 from prisma.errors import TransactionExpiredError
 
-from src.db.allocated_client import DatabaseOwner, DatabaseUnavailableError
-from src.db.allocation_config import DatabasePolicy
-from src.db.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
+from src.db.runtime.allocated_client import DatabaseOwner, DatabaseUnavailableError
+from src.db.runtime.allocation_config import DatabasePolicy
+from src.db.runtime.telemetry_acceptance import AcceptanceFailure, classify_acceptance_failure
 from src.models.errors import RoutingFailureAction
 from tests.test_telemetry_acceptance_metrics import (
     Database,

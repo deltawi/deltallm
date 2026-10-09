@@ -74,7 +74,7 @@ async def test_rate_limit_rpm_enforced(client, test_app):
 
 @pytest.mark.asyncio
 async def test_rate_limit_org_rpm_enforced_before_key_limit(client, test_app):
-    from src.db.callable_targets import CallableTargetBindingRecord
+    from src.db.routing.callable_targets import CallableTargetBindingRecord
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {

@@ -244,6 +244,7 @@ class TestIntegrationHeaders:
         salt = "test-salt"
         raw_key = test_app.state._test_key
         import hashlib
+
         token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
 
         key = f"ratelimit:key_rpm:{token_hash}:{window_id}"
@@ -268,11 +269,13 @@ class TestIntegrationHeaders:
         salt = "test-salt"
         raw_key = test_app.state._test_key
         import hashlib
+
         token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
         repo = test_app.state._test_repo
         original_record = repo.records[token_hash]
 
-        from src.db.repositories import KeyRecord
+        from src.db.identity.key_repository import KeyRecord
+
         repo.records[token_hash] = KeyRecord(
             token=token_hash,
             team_id=original_record.team_id,
@@ -310,11 +313,13 @@ class TestIntegrationHeaders:
         salt = "test-salt"
         raw_key = test_app.state._test_key
         import hashlib
+
         token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
         repo = test_app.state._test_repo
         original_record = repo.records[token_hash]
 
-        from src.db.repositories import KeyRecord
+        from src.db.identity.key_repository import KeyRecord
+
         repo.records[token_hash] = KeyRecord(
             token=token_hash,
             team_id=original_record.team_id,

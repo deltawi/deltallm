@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.email_feedback import EmailSuppressionRecord
+from src.db.email.email_feedback import EmailSuppressionRecord
 from src.services.email_feedback_service import EmailFeedbackError, EmailFeedbackService
 
 
@@ -23,7 +23,9 @@ def _config(**overrides):
     return SimpleNamespace(general_settings=general_settings)
 
 
-def _signed_headers(*, secret: str, body: str, webhook_id: str = "evt-1", timestamp: int | None = None) -> dict[str, str]:
+def _signed_headers(
+    *, secret: str, body: str, webhook_id: str = "evt-1", timestamp: int | None = None
+) -> dict[str, str]:
     ts = timestamp if timestamp is not None else int(datetime.now(tz=UTC).timestamp())
     signing_key = secret[len("whsec_") :] if secret.startswith("whsec_") else secret
     signed_content = f"{webhook_id}.{ts}.{body}".encode("utf-8")
@@ -44,7 +46,9 @@ class FakeRepository:
         self.message_to_email_id: dict[str, str] = {"re_123": "email-1"}
         self.resolve_calls: list[tuple[str, str | None]] = []
 
-    async def resolve_email_id_by_provider_message_id(self, *, provider: str, provider_message_id: str | None) -> str | None:
+    async def resolve_email_id_by_provider_message_id(
+        self, *, provider: str, provider_message_id: str | None
+    ) -> str | None:
         self.resolve_calls.append((provider, provider_message_id))
         if provider_message_id is None:
             return None
@@ -104,7 +108,10 @@ async def test_handle_resend_bounce_webhook_suppresses_recipients() -> None:
 async def test_handle_resend_webhook_detects_duplicate_events() -> None:
     repository = FakeRepository()
     service = EmailFeedbackService(repository=repository, config_getter=lambda: _config())
-    payload = {"type": "email.complained", "data": {"email_id": "re_123", "to": ["user@example.com"]}}
+    payload = {
+        "type": "email.complained",
+        "data": {"email_id": "re_123", "to": ["user@example.com"]},
+    }
     body = json.dumps(payload, separators=(",", ":"))
     headers = _signed_headers(secret="whsec_testsecret", body=body, webhook_id="evt-dup")
 

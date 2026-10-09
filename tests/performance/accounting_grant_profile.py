@@ -46,9 +46,9 @@ from src.billing.accounting.accounting_protocol import (
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.permits.preissued_permits import PreissuedPermitBank
 from src.config import DatabaseConnectionSettings
-from src.db.accounting_pool import AccountingPostgresManager
-from src.db.accounting_protocol import AccountingProtocolRepository
-from src.db.accounting_calls import AccountingQueryClient
+from src.db.runtime.accounting_pool import AccountingPostgresManager
+from src.db.accounting.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting.accounting_calls import AccountingQueryClient
 from tests.accounting_adapters.permit_repository import AccountingPermitRepository
 from tests.performance.gateway_concurrency_dependencies import fixture_database_url
 
@@ -104,9 +104,9 @@ def _source_manifest() -> dict[str, object]:
     paths = (
         Path("src/billing/accounting/accounting_service.py"),
         Path("src/billing/accounting/durable_microbatch.py"),
-        Path("src/db/accounting_protocol.py"),
-        Path("src/db/accounting_pool.py"),
-        Path("src/db/accounting_calls.py"),
+        Path("src/db/accounting/accounting_protocol.py"),
+        Path("src/db/runtime/accounting_pool.py"),
+        Path("src/db/accounting/accounting_calls.py"),
         Path("tests/accounting_adapters/permit_repository.py"),
         Path("src/billing/accounting/accounting_protocol.py"),
         Path("src/billing/accounting/permits/preissued_permits.py"),

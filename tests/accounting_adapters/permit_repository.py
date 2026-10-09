@@ -12,9 +12,14 @@ from src.billing.accounting.accounting_protocol import (
     PreissuedPermitGrant,
     ReserveDecision,
 )
-from src.db.accounting_batches import batch_payload, one_generation, result_rows, with_recovery
-from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
-from src.db.accounting_permit_results import (
+from src.db.accounting.accounting_batches import (
+    batch_payload,
+    one_generation,
+    result_rows,
+    with_recovery,
+)
+from src.db.accounting.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
+from src.db.accounting.permits.accounting_permit_results import (
     PERMIT_ALLOCATION_FIELDS,
     allocation_result,
     claim_identity_matches,

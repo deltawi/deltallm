@@ -4,7 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from src.db.repositories import AuditRepository
+from src.db.audit.repository import AuditRepository
 
 logger = logging.getLogger(__name__)
 

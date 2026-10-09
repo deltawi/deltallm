@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.services.cache_invalidation import CacheInvalidationResult
 from src.services.tier_admin_errors import TierAdminUnavailableError
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.bootstrap.routing import init_routing_runtime, shutdown_routing_runtime
-from src.db.route_groups import RouteGroupRuntimeSnapshot
+from src.db.routing.route_groups import RouteGroupRuntimeSnapshot
 from src.services.route_groups import RouteGroupSnapshotLoadResult
 
 

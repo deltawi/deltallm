@@ -15,9 +15,9 @@ from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitReturn,
 )
 from src.billing.accounting.accounting_protocol import PreissuedPermitAllocation
-from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_local_leases import AccountingLocalLeaseRepository
-from src.db.accounting_local_lease_results import finalization_payload
+from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.permits.accounting_local_leases import AccountingLocalLeaseRepository
+from src.db.accounting.permits.accounting_local_lease_results import finalization_payload
 from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_accounting_local_lease_foundation_postgres import finalize as raw_finalize
