@@ -6,12 +6,12 @@ from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal, localcontext
 
-from src.billing.accounting_local_leases import (
+from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitFinalization,
     LocalPermitGrant,
     LocalPermitReturn,
 )
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     FinalizationReceipt,
     PreissuedPermitAllocation,
     ReserveDecision,

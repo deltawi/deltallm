@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.billing.money import money_string
-from src.billing.operation_reservation import BillingOperationUnavailable, SoftSelectorOperation
+from src.billing.charges.operation_reservation import (
+    BillingOperationUnavailable,
+    SoftSelectorOperation,
+)
 
 if TYPE_CHECKING:
     from prisma import Prisma

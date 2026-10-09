@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.billing.routing_costs import RoutingCostObservation, aggregate_routing_costs
+from src.billing.pricing.routing_costs import RoutingCostObservation, aggregate_routing_costs
 from src.db.routing_costs import routing_cost_query, routing_cost_observation
 from src.services.spend_visibility import SpendVisibility
 
@@ -97,7 +97,7 @@ def test_cost_aggregation_is_bounded():
 
 def test_savings_baseline_uses_only_frozen_server_pricing_with_reported_answer_tokens():
     from tests.test_operation_reservation import make_operation
-    from src.billing.selector_charge import SelectorTokenReceipt
+    from src.billing.charges.selector_charge import SelectorTokenReceipt
 
     price = make_operation().selector.pricing
     row = dict(
@@ -123,7 +123,7 @@ def test_savings_baseline_uses_only_frozen_server_pricing_with_reported_answer_t
 
 
 def test_pending_reconciliation_is_visible_separately_from_zero_cost():
-    from src.billing.operation_reservation import ComponentState
+    from src.billing.charges.operation_reservation import ComponentState
 
     report = aggregate_routing_costs(
         (

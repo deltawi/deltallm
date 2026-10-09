@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 from uuid import uuid5, NAMESPACE_URL
 
 from src.billing.money import money_string
-from src.billing.spend_operations import SpendOperationIntent, SpendPersistenceUnavailable
-from src.billing.spend_preparation import prepare_spend_event
-from src.billing.spend_reconciliation import SpendOperationResolution
+from src.billing.spend.spend_operations import SpendOperationIntent, SpendPersistenceUnavailable
+from src.billing.spend.spend_preparation import prepare_spend_event
+from src.billing.spend.spend_reconciliation import SpendOperationResolution
 from src.db.billing_operations import BillingOperationRepository
 from src.db.repositories import AuditEventRecord, AuditRepository
 

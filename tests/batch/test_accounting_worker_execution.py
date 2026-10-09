@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.batch.accounting_native import decode_checkpoint
-from src.billing.accounting_protocol import AccountingOutcome
+from src.billing.accounting.accounting_protocol import AccountingOutcome
 from src.router.router import Deployment
 from src.models.responses import UserAPIKeyAuth
 from tests.batch.test_accounting_native import native_batch as _native_batch

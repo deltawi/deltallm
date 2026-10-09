@@ -6,8 +6,12 @@ from functools import partial
 from uuid import UUID, uuid4
 from typing import Protocol
 
-from src.billing.operation_reservation import SoftSelectorOperation
-from src.billing.selector_charge import FrozenBillingContract, Identifier, SelectorChargeAttribution
+from src.billing.charges.operation_reservation import SoftSelectorOperation
+from src.billing.charges.selector_charge import (
+    FrozenBillingContract,
+    Identifier,
+    SelectorChargeAttribution,
+)
 from src.cache.execution_eligibility import ResponseCacheEligibility
 from src.models.requests import ChatCompletionRequest
 from src.router.selection.capacity import SelectorCapacityOwner

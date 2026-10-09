@@ -11,7 +11,7 @@ import sys
 from uuid import uuid4
 
 from scripts.benchmarks.ingestion_database import ingestion_database
-from src.billing.spend_operations import (
+from src.billing.spend.spend_operations import (
     OperationAttempt,
     OperationHandle,
     OperationPrincipal,

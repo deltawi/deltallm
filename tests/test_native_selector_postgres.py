@@ -7,15 +7,15 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_admission import (
+from src.billing.accounting.accounting_admission import (
     admit_accounting_reservation,
     reservation_audit_envelope,
 )
-from src.billing.accounting_finalization import accounting_audit_envelope
-from src.billing.accounting_protocol import AccountingAttempt, request_fingerprint
-from src.billing.accounting_terminal_preparation import prepare_accounting_charge
-from src.billing.operation_reservation import SoftSelectorOperation, token_price_allowance
-from src.billing.selector_native import NativeSelectorBilling
+from src.billing.accounting.accounting_finalization import accounting_audit_envelope
+from src.billing.accounting.accounting_protocol import AccountingAttempt, request_fingerprint
+from src.billing.accounting.journal.accounting_terminal_preparation import prepare_accounting_charge
+from src.billing.charges.operation_reservation import SoftSelectorOperation, token_price_allowance
+from src.billing.charges.selector_native import NativeSelectorBilling
 from src.db.routing_costs import routing_cost_query
 from src.services.spend_visibility import SpendVisibility
 from tests.test_accounting_local_leases_postgres import deadline

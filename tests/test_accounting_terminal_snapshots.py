@@ -8,14 +8,20 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_journal import journal_batch
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_local_terminal import LocalTerminalOwner
-from src.billing.accounting_local_wire import restore_wire_terminals, wire_local_terminals
-from src.billing.accounting_snapshots import finalization_bytes, reservation_bytes
-from src.billing.accounting_terminal_receipts import JournalReceipt
-from src.billing.accounting_terminal_snapshots import FrozenLocalTerminal, freeze_terminal_snapshots
-from src.billing.durable_microbatch import DurableBatchFull
+from src.billing.accounting.journal.accounting_journal import journal_batch
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
+from src.billing.accounting.transport.accounting_local_wire import (
+    restore_wire_terminals,
+    wire_local_terminals,
+)
+from src.billing.accounting.accounting_snapshots import finalization_bytes, reservation_bytes
+from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
+from src.billing.accounting.journal.accounting_terminal_snapshots import (
+    FrozenLocalTerminal,
+    freeze_terminal_snapshots,
+)
+from src.billing.accounting.durable_microbatch import DurableBatchFull
 from tests.test_accounting_local_leases import terminal
 from tests.test_accounting_local_terminal import Persistence
 from tests.test_accounting_rpc import deadline, remote, rpc_state

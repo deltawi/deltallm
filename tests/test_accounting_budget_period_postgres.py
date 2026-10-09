@@ -9,10 +9,10 @@ from uuid import uuid4
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.accounting_protocol import AccountingScope, ReserveDecision
-from src.billing.spend import SpendTrackingService
+from src.billing.accounting.accounting_protocol import AccountingScope, ReserveDecision
+from src.billing.spend.spend import SpendTrackingService
 from src.db.accounting_budget_reads import AccountingBudgetReadRepository
-from src.billing.accounting_recovery import RecoveryAction
+from src.billing.accounting.journal.accounting_recovery import RecoveryAction
 from src.db.accounting_recovery import AccountingRecoveryRepository
 from src.db.accounting_read_model import AccountingReadModelRepository
 from tests.test_accounting_budget_policy_history_postgres import _POLICIES, complete, owners

@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
+from src.billing.budgets.budget_notifications import (
+    BudgetNotificationProducer,
+    BudgetNotificationWorker,
+)
 from src.db.budget_notifications import BudgetNotification, BudgetThresholdScanUnavailable
 
 
@@ -167,7 +170,7 @@ async def test_failed_accounting_page_does_not_block_later_pages_or_accepted_del
         raise TimeoutError
 
     repo.enqueue_accounting_thresholds = AsyncMock(side_effect=scan)
-    monkeypatch.setattr("src.billing.budget_notifications.asyncio.wait_for", yield_cycle)
+    monkeypatch.setattr("src.billing.budgets.budget_notifications.asyncio.wait_for", yield_cycle)
     await worker.run()
     assert cursors == ["", "org-031", "org-063", ""]
     assert repo.claim.await_count == 4

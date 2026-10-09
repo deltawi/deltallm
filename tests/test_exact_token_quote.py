@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from src.billing.cost import ModelPricing
-from src.billing.tier_pricing import (
+from src.billing.pricing.cost import ModelPricing
+from src.billing.pricing.tier_pricing import (
     PricingResolution,
     resolve_exact_token_quote_pricing,
     resolve_token_quote_pricing,
 )
-from src.billing.token_quote_policy import ExactTokenRates
+from src.billing.pricing.token_quote_policy import ExactTokenRates
 
 
 def _resolution(info: dict[str, object], *, mode="batch") -> PricingResolution:
@@ -140,7 +140,7 @@ def test_exact_customer_and_provider_keep_distinct_frozen_sources():
 
 
 def test_frozen_catalog_never_reads_changed_catalog(monkeypatch):
-    import src.billing.tier_pricing as tier_pricing
+    import src.billing.pricing.tier_pricing as tier_pricing
 
     monkeypatch.setattr(tier_pricing, "get_model_pricing", lambda model: pytest.fail(model))
     resolution = replace(
@@ -198,7 +198,7 @@ def test_exact_receipt_rejects_invalid_token_counts(counts):
 
 
 def test_shared_quote_policy_has_one_bounded_typed_owner():
-    path = Path("src/billing/token_quote_policy.py")
+    path = Path("src/billing/pricing/token_quote_policy.py")
     tree = ast.parse(path.read_text())
     assert len(path.read_text().splitlines()) < 500
     for node in ast.walk(tree):
@@ -206,6 +206,6 @@ def test_shared_quote_policy_has_one_bounded_typed_owner():
             assert node.end_lineno - node.lineno + 1 <= 80, node.name
         if isinstance(node, ast.Name):
             assert node.id not in {"Any", "getattr", "hasattr"}
-    source = Path("src/billing/tier_pricing.py").read_text()
+    source = Path("src/billing/pricing/tier_pricing.py").read_text()
     assert "def select_regular_rate(" not in source
     assert "def select_cache_rate(" not in source

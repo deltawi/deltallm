@@ -5,7 +5,7 @@ import asyncio
 from decimal import Decimal
 from time import perf_counter
 from prisma import Prisma
-from src.billing.accounting_read_model_claims import READ_MODEL_PROJECTION
+from src.billing.accounting.reporting.accounting_read_model_claims import READ_MODEL_PROJECTION
 
 _STATE_SQL = """
 SELECT

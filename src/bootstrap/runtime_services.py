@@ -23,15 +23,18 @@ from src.deployment_capacity_settings import resolve_capacity_settings
 from src.redis_runtime import startup_setting as _runtime_setting
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.selector import configure_selector_execution
-from src.billing.alerts import AlertService
-from src.billing.budget import BudgetEnforcementService
-from src.billing.ledger import SpendLedgerService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.billing.spend import SpendTrackingService
-from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
+from src.billing.budgets.alerts import AlertService
+from src.billing.budgets.budget import BudgetEnforcementService
+from src.billing.spend.ledger import SpendLedgerService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.budgets.budget_notifications import (
+    BudgetNotificationProducer,
+    BudgetNotificationWorker,
+)
 from src.db.accounting_budget_reads import AccountingBudgetReadRepository
-from src.billing.accounting_projection import AccountingProjectionWorker
-from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting.reporting.accounting_projection import AccountingProjectionWorker
+from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.db.budget_notifications import BudgetNotificationRepository
 from src.callbacks import CallbackManager
 from src.guardrails.middleware import GuardrailMiddleware

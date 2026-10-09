@@ -23,7 +23,7 @@ from tests.conftest import FakeRedis
 from tests.performance.routing_cache_profile import queue_slope
 from tests.router.selection.provider_fixtures import bridge, response_body
 from tests.test_operation_reservation import make_operation
-from src.billing.operation_reservation import ComponentState, ReservedOperation
+from src.billing.charges.operation_reservation import ComponentState, ReservedOperation
 from src.cache.execution_eligibility import ResponseCacheEligibility, ResponseCacheOutcome
 from src.models.requests import ChatCompletionRequest
 from src.route_policy_contract import LLMTierSelectorPolicy, SelectorLane

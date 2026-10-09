@@ -3,8 +3,8 @@
 from collections.abc import Sequence
 from typing import Protocol
 
-from src.billing.accounting_terminal_snapshots import LocalTerminalValue
-from src.billing.accounting_terminal_receipts import JournalReceipt
+from src.billing.accounting.journal.accounting_terminal_snapshots import LocalTerminalValue
+from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
 
 
 class TerminalJournalPersistence(Protocol):

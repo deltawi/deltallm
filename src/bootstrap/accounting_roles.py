@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
-from src.billing.accounting_admission_monitor import AccountingAdmissionMonitor
-from src.billing.accounting_journal_runtime import JournalProcessingWorker
-from src.billing.accounting_lane_group import AccountingLaneGroup
-from src.billing.accounting_presence import ProjectionPresencePublisher
-from src.billing.accounting_read_model_runtime import ReadModelProcessingWorker
-from src.billing.accounting_recovery import AccountingRecoveryWorker
-from src.billing.accounting_rpc_service import AccountingRpcService
+from src.billing.accounting.health.accounting_admission_monitor import AccountingAdmissionMonitor
+from src.billing.accounting.journal.accounting_journal_runtime import JournalProcessingWorker
+from src.billing.accounting.accounting_lane_group import AccountingLaneGroup
+from src.billing.accounting.health.accounting_presence import ProjectionPresencePublisher
+from src.billing.accounting.reporting.accounting_read_model_runtime import ReadModelProcessingWorker
+from src.billing.accounting.journal.accounting_recovery import AccountingRecoveryWorker
+from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
 from src.process_lifecycle import ProcessLifecycle
 from src.telemetry.lifecycle import (
     WorkerHealth,

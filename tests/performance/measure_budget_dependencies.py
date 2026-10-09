@@ -17,7 +17,7 @@ from scripts.measure_gateway_load import (
     summarize,
     write_results,
 )
-from src.billing.budget import BudgetEnforcementService
+from src.billing.budgets.budget import BudgetEnforcementService
 from src.db.allocated_client import AllocatedPrisma, DatabaseOwner
 from src.db.allocation_config import DatabasePolicy
 from src.db.budgets import BudgetRepository

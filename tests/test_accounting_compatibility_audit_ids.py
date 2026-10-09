@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from src.billing.accounting_projection import (
+from src.billing.accounting.reporting.accounting_projection import (
     AccountingCompatibilityProjector,
     AccountingProjectionConfig,
 )

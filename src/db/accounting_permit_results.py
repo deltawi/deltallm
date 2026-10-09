@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     DispatchPermit,
     PreissuedPermitAllocation,
     PreissuedPermitClaim,

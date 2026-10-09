@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.spend import SpendTrackingService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.db.repositories import AuditRepository
 from src.services.audit_service import AuditEventInput, AuditIngestionConfig, AuditService
 

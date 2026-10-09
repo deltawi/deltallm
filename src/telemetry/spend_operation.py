@@ -11,35 +11,37 @@ from uuid import UUID, uuid4, uuid5
 
 from fastapi import Request
 
-from src.billing.accounting_admission import (
+from src.billing.accounting.accounting_admission import (
     ACCOUNTING_RECOVERY_LIFETIME,
     admit_accounting_reservation,
     reservation_audit_envelope as _reservation_audit_envelope,
 )
-from src.billing.accounting_pricing import accounting_pricing_snapshot as _pricing_snapshot
+from src.billing.accounting.accounting_pricing import (
+    accounting_pricing_snapshot as _pricing_snapshot,
+)
 
-from src.billing.frozen_pricing import freeze_operation_pricing
-from src.billing.accounting_protocol import (
+from src.billing.pricing.frozen_pricing import freeze_operation_pricing
+from src.billing.accounting.accounting_protocol import (
     AccountingAttempt,
     AccountingAttribution,
     AccountingOperationHandle,
     AccountingReservation,
     request_fingerprint,
 )
-from src.billing.accounting_service import AccountingProtocolService
-from src.billing.provider_allowance import (
+from src.billing.accounting.accounting_service import AccountingProtocolService
+from src.billing.charges.provider_allowance import (
     ProviderRequestBounds,
     conservative_provider_allowance,
 )
-from src.billing.spend_operations import (
+from src.billing.spend.spend_operations import (
     OperationAttempt,
     OperationHandle,
     OperationPrincipal,
     SpendOperationIntent,
     SpendPersistenceUnavailable,
 )
-from src.billing.spend_ingestion import SpendIngestionService
-from src.billing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
+from src.billing.spend.spend_ingestion import SpendIngestionService
+from src.billing.pricing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
 from src.providers.resolution import resolve_provider
 from src.models.responses import UserAPIKeyAuth
 from src.router.router import Deployment

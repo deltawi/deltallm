@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from src.billing.routing_costs import (
+from src.billing.pricing.routing_costs import (
     RoutingCostAggregate,
     RoutingCostObservation,
     aggregate_routing_costs,

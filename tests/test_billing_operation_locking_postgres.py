@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.operation_reservation import BillingOperationUnavailable, ComponentState
+from src.billing.charges.operation_reservation import BillingOperationUnavailable, ComponentState
 from src.db import billing_transaction
 from src.db.billing_operations import BillingOperationRepository
 from tests import billing_operation_fixtures as fixtures

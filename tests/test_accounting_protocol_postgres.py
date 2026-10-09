@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from prisma import Prisma
 import pytest
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     AccountingAttribution,
     AccountingFinalization,
     AccountingOutcome,

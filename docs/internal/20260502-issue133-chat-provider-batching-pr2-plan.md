@@ -245,7 +245,7 @@ If a provider returns aggregate-only usage, the adapter should reject microbatch
 
 Primary files:
 
-- `src/billing/cost.py`
+- `src/billing/pricing/cost.py`
 - `src/batch/worker_execution.py`
 - `src/batch/completion_outbox.py`
 

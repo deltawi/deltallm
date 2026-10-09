@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from uuid import uuid4
 
-from src.billing.accounting_journal_claims import JournalClaim, JournalFailure
+from src.billing.accounting.journal.accounting_journal_claims import JournalClaim, JournalFailure
 from src.db.accounting_calls import (
     AccountingDatabaseCalls,
     AccountingQueryClient,

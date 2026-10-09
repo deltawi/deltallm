@@ -7,11 +7,18 @@ from uuid import uuid4
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting_local_leases import LocalPermitFinalization, LocalPermitReturn
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_protocol import AccountingOutcome, AccountingScope, ReserveDecision
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalPermitFinalization,
+    LocalPermitReturn,
+)
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.accounting_protocol import (
+    AccountingOutcome,
+    AccountingScope,
+    ReserveDecision,
+)
 from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 from src.db.accounting_journal import AccountingJournalRepository
 from src.db.accounting_journal_worker import AccountingJournalWorkerRepository

@@ -6,8 +6,8 @@ import asyncio
 
 from fastapi import HTTPException, Request
 
-from src.billing.accounting_protocol import AccountingScope
-from src.billing.budget import BudgetStateUnavailable
+from src.billing.accounting.accounting_protocol import AccountingScope
+from src.billing.budgets.budget import BudgetStateUnavailable
 from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 
 _IDENTITIES = {

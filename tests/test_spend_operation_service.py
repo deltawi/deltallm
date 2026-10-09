@@ -2,14 +2,14 @@
 
 from unittest.mock import AsyncMock, patch
 
-from src.billing.spend_operation_service import SpendOperationService
+from src.billing.spend.spend_operation_service import SpendOperationService
 
 
 async def test_recovery_observes_unknown_backlog_at_most_once_per_ten_seconds():
     service = SpendOperationService(admission=None, settlement=None, worker=None)
     service.worker.recover_expired = AsyncMock(return_value=2)
     service.worker.unknown_count = AsyncMock(return_value=5)
-    with patch("src.billing.spend_operation_service.observe_unknown_operations") as observe:
+    with patch("src.billing.spend.spend_operation_service.observe_unknown_operations") as observe:
         await service.recover()
         await service.recover()
     assert service.worker.recover_expired.await_count == 2
@@ -22,8 +22,10 @@ async def test_recovery_failure_preserves_last_observation_and_returns_to_worker
     service.worker.recover_expired = AsyncMock(side_effect=TimeoutError)
     service.worker.unknown_count = AsyncMock()
     with (
-        patch("src.billing.spend_operation_service.observe_unknown_operations") as observe,
-        patch("src.billing.spend_operation_service.increment_spend_ingestion_failure") as failure,
+        patch("src.billing.spend.spend_operation_service.observe_unknown_operations") as observe,
+        patch(
+            "src.billing.spend.spend_operation_service.increment_spend_ingestion_failure"
+        ) as failure,
     ):
         await service.recover()
     service.worker.unknown_count.assert_not_awaited()

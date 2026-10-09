@@ -4,8 +4,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime
 
-from src.billing.routing_costs import RoutingCostAggregate, aggregate_routing_costs
-from src.billing.selector_charge import FrozenBillingContract
+from src.billing.pricing.routing_costs import RoutingCostAggregate, aggregate_routing_costs
+from src.billing.charges.selector_charge import FrozenBillingContract
 from src.db.reporting import ReportingDatabase, _run_reporting_query
 from src.db.routing_costs import RoutingCostQuery, routing_cost_observation
 from src.services.spend_reporting_cache import SpendReportingCache

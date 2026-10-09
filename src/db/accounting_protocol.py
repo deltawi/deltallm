@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     AccountingFinalization,
     AccountingOutcome,
     AccountingReservation,

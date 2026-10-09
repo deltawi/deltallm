@@ -8,14 +8,14 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     DispatchPermit,
     PreissuedPermitGrant,
     ReserveDecision,
     request_fingerprint,
 )
-from src.billing.durable_microbatch import DurableBatchClosed, DurableMicrobatcher
-from src.billing.preissued_permits import PreissuedPermitBank
+from src.billing.accounting.durable_microbatch import DurableBatchClosed, DurableMicrobatcher
+from src.billing.accounting.permits.preissued_permits import PreissuedPermitBank
 from src.metrics.prometheus import get_prometheus_registry
 from tests.test_accounting_protocol import reservation
 

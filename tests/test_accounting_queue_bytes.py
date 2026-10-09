@@ -7,9 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from src.billing.accounting_protocol import DispatchPermit, FinalizationReceipt, ReserveDecision
-from src.billing.accounting_service import AccountingProtocolService
-from src.billing.durable_microbatch import DurableBatchFull
+from src.billing.accounting.accounting_protocol import (
+    DispatchPermit,
+    FinalizationReceipt,
+    ReserveDecision,
+)
+from src.billing.accounting.accounting_service import AccountingProtocolService
+from src.billing.accounting.durable_microbatch import DurableBatchFull
 from tests.test_accounting_protocol import finalization, reservation
 from tests.test_preissued_permit_bytes import retained_object_bytes
 

@@ -6,8 +6,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_protocol import DispatchPermit, ReserveDecision
-from src.billing.durable_microbatch import DurableBatchFull
+from src.billing.accounting.accounting_protocol import DispatchPermit, ReserveDecision
+from src.billing.accounting.durable_microbatch import DurableBatchFull
 from tests.test_accounting_local_cursors import value
 from tests.test_accounting_local_issue import deadline, owners, receipt
 
@@ -100,7 +100,7 @@ async def test_mixed_reply_has_one_shared_256_result_limit():
 
 
 async def test_output_preparation_failure_does_not_consume_a_warm_prefix(monkeypatch):
-    from src.billing import accounting_local_issue as module
+    from src.billing.accounting.permits import accounting_local_issue as module
 
     subject, grant = value()
     cursors, retained, issue = owners()

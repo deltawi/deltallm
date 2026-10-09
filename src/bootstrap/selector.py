@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from starlette.datastructures import State
-from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.charges.operation_reservation import BillingOperationUnavailable
 
-from src.billing.spend_ingestion import SpendIngestionService
-from src.billing.selector_native import NativeSelectorBilling
+from src.billing.spend.spend_ingestion import SpendIngestionService
+from src.billing.charges.selector_native import NativeSelectorBilling
 from src.db.billing_operation_recovery import BillingOperationRecovery
 from src.db.billing_operations import BillingOperationRepository
 from src.router.runtime_generation import require_routing_runtime_generation

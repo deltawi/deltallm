@@ -36,7 +36,7 @@ NEW_MODULES = (
     "batch/chat_lease_lifecycle.py",
     "batch/public_errors.py",
     "router/attempt_capacity.py",
-    "billing/selector_native.py",
+    "billing/charges/selector_native.py",
 )
 
 

@@ -44,13 +44,22 @@ def test_anthropic_messages_to_chat_request_round_trips_tool_use_and_result() ->
                     "role": "assistant",
                     "content": [
                         {"type": "text", "text": "Let me check."},
-                        {"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {"query": "delta"}},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "docs.search",
+                            "input": {"query": "delta"},
+                        },
                     ],
                 },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "delta docs result"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "delta docs result",
+                        },
                     ],
                 },
             ],
@@ -111,7 +120,9 @@ def test_anthropic_tool_choice_any_maps_to_required() -> None:
         ({"type": "none"}, "none"),
     ],
 )
-def test_anthropic_tool_choice_modes_map_to_chat(tool_choice: dict[str, str], expected: str) -> None:
+def test_anthropic_tool_choice_modes_map_to_chat(
+    tool_choice: dict[str, str], expected: str
+) -> None:
     payload = AnthropicMessagesRequest.model_validate(
         {
             "model": "claude-sonnet-4-6",
@@ -169,7 +180,10 @@ def test_chat_response_to_anthropic_response_maps_text_and_tool_calls() -> None:
                         {
                             "id": "call_1",
                             "type": "function",
-                            "function": {"name": "docs.search", "arguments": jsonlib.dumps({"query": "delta"})},
+                            "function": {
+                                "name": "docs.search",
+                                "arguments": jsonlib.dumps({"query": "delta"}),
+                            },
                         }
                     ],
                 },
@@ -221,7 +235,11 @@ def test_anthropic_stream_translator_emits_message_lifecycle_events() -> None:
     fourth = translator.translate_line("data: [DONE]")
 
     assert first is not None and "event: message_start" in first
-    assert second is not None and "event: content_block_start" in second and "event: content_block_delta" in second
+    assert (
+        second is not None
+        and "event: content_block_start" in second
+        and "event: content_block_delta" in second
+    )
     assert third is None
     assert fourth is not None
     assert "event: content_block_stop" in fourth
@@ -330,7 +348,10 @@ async def test_messages_tool_use_round_trip(client, test_app):
                             {
                                 "id": "call_docs_search",
                                 "type": "function",
-                                "function": {"name": "docs.search", "arguments": jsonlib.dumps({"query": "delta"})},
+                                "function": {
+                                    "name": "docs.search",
+                                    "arguments": jsonlib.dumps({"query": "delta"}),
+                                },
                             }
                         ],
                     },
@@ -350,11 +371,24 @@ async def test_messages_tool_use_round_trip(client, test_app):
             {"role": "user", "content": "search docs for delta"},
             {
                 "role": "assistant",
-                "content": [{"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {"query": "delta"}}],
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "docs.search",
+                        "input": {"query": "delta"},
+                    }
+                ],
             },
             {
                 "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "delta docs result"}],
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": "delta docs result",
+                    }
+                ],
             },
         ],
     }
@@ -365,7 +399,12 @@ async def test_messages_tool_use_round_trip(client, test_app):
     payload = response.json()
     assert payload["stop_reason"] == "tool_use"
     assert payload["content"] == [
-        {"type": "tool_use", "id": "call_docs_search", "name": "docs.search", "input": {"query": "delta"}}
+        {
+            "type": "tool_use",
+            "id": "call_docs_search",
+            "name": "docs.search",
+            "input": {"query": "delta"},
+        }
     ]
 
 
@@ -412,7 +451,10 @@ def test_anthropic_messages_rejects_unsupported_content_blocks() -> None:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "what is in this image?"},
-                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}},
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": "aGk="},
+                        },
                     ],
                 }
             ],
@@ -452,7 +494,9 @@ def test_anthropic_messages_rejects_cache_control_on_content_block() -> None:
             "messages": [
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+                    "content": [
+                        {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+                    ],
                 }
             ],
         }
@@ -471,7 +515,9 @@ def test_anthropic_messages_rejects_citations_on_content_block() -> None:
         {
             "model": "claude-sonnet-4-6",
             "max_tokens": 128,
-            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi", "citations": []}]}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi", "citations": []}]}
+            ],
         }
     )
 
@@ -489,12 +535,19 @@ def test_anthropic_messages_forwards_tool_result_is_error() -> None:
             "messages": [
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {}}],
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {}}
+                    ],
                 },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "boom", "is_error": True}
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "boom",
+                            "is_error": True,
+                        }
                     ],
                 },
             ],
@@ -534,7 +587,12 @@ async def test_messages_unsupported_block_returns_anthropic_error_envelope(clien
         "messages": [
             {
                 "role": "user",
-                "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}],
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": "aGk="},
+                    }
+                ],
             }
         ],
     }
@@ -569,7 +627,7 @@ async def test_messages_top_k_returns_anthropic_error_envelope(client, test_app)
 
 @pytest.mark.asyncio
 async def test_messages_budget_exceeded_returns_429(client, test_app):
-    from src.billing.budget import BudgetExceeded
+    from src.billing.budgets.budget import BudgetExceeded
 
     class _AlwaysBudgetExceeded:
         async def check_budgets(self, **kwargs):
@@ -578,7 +636,11 @@ async def test_messages_budget_exceeded_returns_429(client, test_app):
 
     test_app.state.budget_service = _AlwaysBudgetExceeded()
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    body = {"model": "gpt-4o-mini", "max_tokens": 128, "messages": [{"role": "user", "content": "hello"}]}
+    body = {
+        "model": "gpt-4o-mini",
+        "max_tokens": 128,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
 
     response = await client.post("/v1/messages", headers=headers, json=body)
 

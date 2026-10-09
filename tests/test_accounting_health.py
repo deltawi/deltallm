@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.billing.accounting_health import (
+from src.billing.accounting.health.accounting_health import (
     MAX_RETAINED_BACKLOG_BYTES,
     AccountingBacklogPolicy,
     AccountingBacklogProbe,

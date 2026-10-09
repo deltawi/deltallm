@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.spend import SpendTrackingService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.billing.spend_operations import SpendPersistenceUnavailable
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
 
 
@@ -137,7 +137,7 @@ async def test_pricing_change_during_provider_io_does_not_reprice_receipt(client
 async def test_catalog_change_during_provider_io_does_not_reprice_receipt(
     client, test_app, monkeypatch
 ):
-    from src.billing.cost import DEFAULT_MODEL_COST_MAP, ModelPricing
+    from src.billing.pricing.cost import DEFAULT_MODEL_COST_MAP, ModelPricing
 
     operations = install(test_app)
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]

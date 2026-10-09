@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from src.billing.accounting_local_leases import (
+from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitFinalization,
     LocalPermitReceipt,
     LocalPermitReturn,

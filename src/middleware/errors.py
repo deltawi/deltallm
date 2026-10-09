@@ -23,7 +23,7 @@ from src.middleware.error_responses import (
     anthropic_error_payload as anthropic_error_payload,
     anthropic_error_response as anthropic_error_response,
 )
-from src.billing.spend_operations import SpendPersistenceUnavailable
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import (
     maybe_log_proxy_error,
     maybe_log_request_validation_failure,

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from src.billing.accounting_journal import JournalReceipt, TerminalJournalBatch, journal_batch
-from src.billing.accounting_terminal_snapshots import LocalTerminalValue
+from src.billing.accounting.journal.accounting_journal import (
+    JournalReceipt,
+    TerminalJournalBatch,
+    journal_batch,
+)
+from src.billing.accounting.journal.accounting_terminal_snapshots import LocalTerminalValue
 from src.db.accounting_batches import result_rows, with_recovery
 from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
 from src.db.accounting_permit_results import invalid_result

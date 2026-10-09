@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from src.billing.operation_reservation import (
+from src.billing.charges.operation_reservation import (
     BoundedTokenQuote,
     OperationReservation,
     ProviderEnforcedSelectorCeiling,

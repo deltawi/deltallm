@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.billing.routing_costs import aggregate_routing_costs
+from src.billing.pricing.routing_costs import aggregate_routing_costs
 from src.db.routing_costs import routing_cost_observation, routing_cost_query
 from src.services.spend_visibility import SpendVisibility
 from tests.test_accounting_protocol_postgres import accounting_db as _accounting_db

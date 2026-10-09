@@ -10,7 +10,7 @@ import pytest
 
 from src.accounting_settings import AccountingProtocolSettings
 from src.api.internal_accounting import accounting_rpc_router
-from src.billing.accounting_http import AccountingHttpTransport
+from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
 from src.bootstrap.accounting_local import build_api_accounting_runtime
 from src.bootstrap.accounting_role_builders import (
     build_accounting_projection_runtime,

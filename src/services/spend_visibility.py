@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 
 from src.auth.roles import Permission
-from src.billing.spend_read import SpendReadSource
+from src.billing.spend.spend_read import SpendReadSource
 
 
 SPEND_VISIBILITY_PERMISSIONS = (
@@ -38,10 +38,7 @@ class SpendVisibility:
             views.append("organization")
         if self.team_ids:
             views.append("team")
-        if (
-            self.owner_account_id
-            and (self.self_organization_ids or self.self_team_ids)
-        ):
+        if self.owner_account_id and (self.self_organization_ids or self.self_team_ids):
             views.append("self")
         return tuple(views)
 
@@ -111,11 +108,13 @@ class SpendVisibility:
         elif self.view == "team":
             payload["team_ids"] = list(self.team_ids)
         elif self.view == "self":
-            payload.update({
-                "owner_account_id": self.owner_account_id,
-                "organization_ids": list(self.self_organization_ids),
-                "team_ids": list(self.self_team_ids),
-            })
+            payload.update(
+                {
+                    "owner_account_id": self.owner_account_id,
+                    "organization_ids": list(self.self_organization_ids),
+                    "team_ids": list(self.self_team_ids),
+                }
+            )
         return payload
 
     def capabilities(self, *, user_identity_labels: bool) -> dict[str, Any]:
@@ -146,26 +145,36 @@ def resolve_spend_visibility(
     team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
     effective_permissions = set(getattr(scope, "effective_permissions", set()) or set())
 
-    organization_ids = tuple(sorted(
-        str(organization_id)
-        for organization_id, permissions in org_permissions.items()
-        if organization_id and Permission.SPEND_READ in permissions
-    ))
-    team_ids = tuple(sorted(
-        str(team_id)
-        for team_id, permissions in team_permissions.items()
-        if scoped_views_enabled and team_id and Permission.SPEND_READ_TEAM in permissions
-    ))
-    self_organization_ids = tuple(sorted(
-        str(organization_id)
-        for organization_id, permissions in org_permissions.items()
-        if scoped_views_enabled and organization_id and Permission.SPEND_READ_SELF in permissions
-    ))
-    self_team_ids = tuple(sorted(
-        str(team_id)
-        for team_id, permissions in team_permissions.items()
-        if scoped_views_enabled and team_id and Permission.SPEND_READ_SELF in permissions
-    ))
+    organization_ids = tuple(
+        sorted(
+            str(organization_id)
+            for organization_id, permissions in org_permissions.items()
+            if organization_id and Permission.SPEND_READ in permissions
+        )
+    )
+    team_ids = tuple(
+        sorted(
+            str(team_id)
+            for team_id, permissions in team_permissions.items()
+            if scoped_views_enabled and team_id and Permission.SPEND_READ_TEAM in permissions
+        )
+    )
+    self_organization_ids = tuple(
+        sorted(
+            str(organization_id)
+            for organization_id, permissions in org_permissions.items()
+            if scoped_views_enabled
+            and organization_id
+            and Permission.SPEND_READ_SELF in permissions
+        )
+    )
+    self_team_ids = tuple(
+        sorted(
+            str(team_id)
+            for team_id, permissions in team_permissions.items()
+            if scoped_views_enabled and team_id and Permission.SPEND_READ_SELF in permissions
+        )
+    )
 
     # Compatibility for tests and legacy integrations that construct an
     # AuthScope with already-authorized IDs but without permission maps.
@@ -202,10 +211,7 @@ def _append_in_predicate(
 ) -> None:
     if not values:
         return
-    placeholders = ", ".join(
-        f"${len(params) + index + 1}"
-        for index in range(len(values))
-    )
+    placeholders = ", ".join(f"${len(params) + index + 1}" for index in range(len(values)))
     params.extend(values)
     predicates.append(f"{column} IN ({placeholders})")
 
@@ -245,7 +251,11 @@ def apply_spend_visibility(
         clauses.append(predicates[0] if predicates else "1 = 0")
         return
 
-    if visibility.view != "self" or not visibility.owner_account_id or not source.owner_account_column:
+    if (
+        visibility.view != "self"
+        or not visibility.owner_account_id
+        or not source.owner_account_column
+    ):
         clauses.append("1 = 0")
         return
 

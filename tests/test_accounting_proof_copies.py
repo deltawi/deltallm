@@ -6,12 +6,15 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_local_leases import LocalAccountingHandle, LocalDispatchPermit
-from src.billing.accounting_local_receipts import RetainedLocalReceipt
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_snapshots import reservation_bytes
-from src.billing.spend_operations import SpendPersistenceUnavailable
-from src.billing.accounting_terminal_snapshots import FrozenLocalTerminal
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalAccountingHandle,
+    LocalDispatchPermit,
+)
+from src.billing.accounting.permits.accounting_local_receipts import RetainedLocalReceipt
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.accounting_snapshots import reservation_bytes
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+from src.billing.accounting.journal.accounting_terminal_snapshots import FrozenLocalTerminal
 from tests.test_accounting_local_leases import terminal
 from src.telemetry.spend_operation import _reuse_accounting_allowance
 from tests.test_accounting_local_handles import values
@@ -130,7 +133,7 @@ async def test_frozen_identity_cannot_be_reinitialized():
 
 
 async def test_retry_checks_only_the_new_attempt_and_keeps_the_original_proof(monkeypatch):
-    from src.billing import accounting_local_leases
+    from src.billing.accounting.permits import accounting_local_leases
 
     _, _, fields = values()
     operation = LocalAccountingHandle(**fields)

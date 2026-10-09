@@ -9,8 +9,8 @@ from uuid import UUID, uuid4
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.accounting_protocol import PreissuedPermitAllocation, ReserveDecision
-from src.billing.preissued_permits import PreissuedPermitBank
+from src.billing.accounting.accounting_protocol import PreissuedPermitAllocation, ReserveDecision
+from src.billing.accounting.permits.preissued_permits import PreissuedPermitBank
 from tests.accounting_adapters.permit_repository import AccountingPermitRepository
 from src.db.accounting_local_leases import AccountingLocalLeaseRepository
 from src.db.accounting_protocol import AccountingProtocolUnavailable

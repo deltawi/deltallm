@@ -4,9 +4,9 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.realtime_charge import RealtimeAttribution, RealtimeChargeContext
-from src.billing.realtime_pricing import RealtimePrices
-from src.billing.realtime_usage import RealtimeTokenUsage, RealtimeUsageReceipt
+from src.billing.charges.realtime_charge import RealtimeAttribution, RealtimeChargeContext
+from src.billing.charges.realtime_pricing import RealtimePrices
+from src.billing.charges.realtime_usage import RealtimeTokenUsage, RealtimeUsageReceipt
 
 
 def charge_context(identity="owner"):
@@ -39,7 +39,7 @@ def charge_context(identity="owner"):
 
 
 def receipt(session_id):
-    from src.billing.realtime_usage import realtime_usage_receipt
+    from src.billing.charges.realtime_usage import realtime_usage_receipt
 
     return realtime_usage_receipt(
         session_id,

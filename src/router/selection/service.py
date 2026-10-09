@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.metrics.selector import (
     SelectorTermination,
     observe_selector_decision,
