@@ -92,7 +92,9 @@ async def test_stream_close_releases_pool_and_pool_timeout_keeps_request():
     async with httpx.AsyncClient(transport=transport) as client:
         async with client.stream("GET", "http://provider.example/held") as response:
             with pytest.raises(httpx.PoolTimeout) as caught:
-                await client.get("http://provider.example/queued", timeout=httpx.Timeout(1, pool=0.01))
+                await client.get(
+                    "http://provider.example/queued", timeout=httpx.Timeout(1, pool=0.01)
+                )
             assert caught.value.request.url.path == "/queued"
             assert len(backend.streams) == 1
             assert len(transport._pool._requests) == 1
@@ -109,8 +111,12 @@ async def test_keepalive_limit_counts_idle_not_active_connections():
     )
     transport._pool._network_backend = backend
     async with httpx.AsyncClient(transport=transport) as client:
-        first = await client.send(client.build_request("GET", "http://provider.example/a"), stream=True)
-        second = await client.send(client.build_request("GET", "http://provider.example/b"), stream=True)
+        first = await client.send(
+            client.build_request("GET", "http://provider.example/a"), stream=True
+        )
+        second = await client.send(
+            client.build_request("GET", "http://provider.example/b"), stream=True
+        )
         await first.aread()
         await first.aclose()
         assert len(transport._pool.connections) == 2
@@ -153,9 +159,20 @@ async def test_cancellation_releases_waiter_or_active_connection(cancel_active):
 @pytest.mark.parametrize(
     "name",
     [
-        "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException",
-        "ConnectError", "ReadError", "WriteError", "NetworkError", "ProxyError",
-        "UnsupportedProtocol", "LocalProtocolError", "RemoteProtocolError", "ProtocolError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "TimeoutException",
+        "ConnectError",
+        "ReadError",
+        "WriteError",
+        "NetworkError",
+        "ProxyError",
+        "UnsupportedProtocol",
+        "LocalProtocolError",
+        "RemoteProtocolError",
+        "ProtocolError",
     ],
 )
 async def test_keeps_specific_httpx_failure_contract(name, monkeypatch):
@@ -206,11 +223,15 @@ async def test_preserves_proxy_mounts_and_capacity(monkeypatch):
         backend = RecordingBackend()
         proxied._pool._network_backend = backend
         # A plain HTTP forward proxy exercises wire headers, not just construction.
-        response = await proxied.handle_async_request(httpx.Request("GET", "http://provider.example/"))
+        response = await proxied.handle_async_request(
+            httpx.Request("GET", "http://provider.example/")
+        )
         await response.aread()
         await response.aclose()
         assert backend.addresses == [("proxy.example", 8080)]
-        assert b"Proxy-Authorization: Basic dXNlcjpwYXNzd29yZA==" in b"".join(backend.streams[0].writes)
+        assert b"Proxy-Authorization: Basic dXNlcjpwYXNzd29yZA==" in b"".join(
+            backend.streams[0].writes
+        )
 
 
 async def test_factory_error_hook_still_bounds_provider_error_body(monkeypatch):

@@ -3,6 +3,75 @@
 Use this guide with the [results report](issue-320-rps-report.md).
 The stored evidence is local. Do not assume that raw bundles are included in a PR.
 
+PR target: `main`. The source branch is `codex/issue-320-main-integration`.
+Current main has unresolved integration conflicts. Do not use these earlier
+measurements as evidence that the combined source is qualified.
+
+## Latest provider-pool source
+
+The 8 October revised-adapter bundle is `artifacts/http-pool-20261008/`.
+Its `README.md` and `reproduction.json` retain all baseline and candidate results,
+including failures. Use `current_source` for the revised adapter; the top-level
+source fields describe the first adapter.
+
+The bundle is stored under the primary repository's local artifact directory,
+not inside every worktree. Choose its absolute path and a new checkout:
+
+```sh
+task_pool_bundle=/absolute/path/to/artifacts/http-pool-20261008
+task_pool_checkout=/absolute/path/to/new/issue320-pool-reproduction
+shasum -a 256 -c "$task_pool_bundle/source-checksums.sha256"
+git bundle verify "$task_pool_bundle/source-thin.bundle"
+git clone "$task_pool_bundle/source-thin.bundle" "$task_pool_checkout"
+git -C "$task_pool_checkout" rev-parse HEAD
+cd "$task_pool_checkout"
+uv sync --frozen --extra dev --python 3.11
+uv run --frozen prisma generate --schema=prisma/schema.prisma
+```
+
+Expected HEAD is `90e72985a4d8115f0b602c72373716e17a0b44ed`.
+The checksum file records the original absolute artifact paths; if the bundle
+moves to another computer, verify the four named files against the same recorded
+SHA-256 values at their new paths. Do not change the expected checksums.
+
+Build from the repository Dockerfile with a source revision label and run
+`scripts/check_lifecycle_image.py` before load tests. Rebuilt image digests can
+differ; retain the new build identity. The recorded runtime source hash is
+`2d6832d719666d22f4c49b09458f6f6a84bb5ba0848c9300bc35c72c5a491031`.
+It covers Python runtime, dependency declarations, lock and Prisma schema, not
+migration SQL or the Dockerfile. The source bundle retains those inputs too.
+
+Use an idle, dedicated Linux arm64 Docker VM with six CPUs and 12 GiB RAM,
+kind v0.31.0, and unchanged fixture resources and acceptance limits:
+
+```sh
+uv run --frozen python -m tests.performance.run_native_qualification \
+  --image your-source-matched-image \
+  --output /absolute/path/to/new-500rps-evidence \
+  --kind /absolute/path/to/kind-v0.31.0 \
+  --short-seconds 30 --diagnostic-rates 500
+```
+
+For the sampled 1,000 RPS diagnosis, use the saved read-only probe with profiling
+disabled and a new output path:
+
+```sh
+RPS_DIAGNOSTIC_CPU_PROFILING=0 PYTHONPATH=. uv run --frozen python \
+  "$task_pool_bundle/probe.py" \
+  --image your-source-matched-image \
+  --output /absolute/path/to/new-1000rps-evidence \
+  --kind /absolute/path/to/kind-v0.31.0 \
+  --short-seconds 30 --diagnostic-rates 1000
+```
+
+The first revised 500 RPS run failed its growth check; its confirmation passed.
+The revised 1,000 RPS diagnostic failed. Keep both passing and failed attempts,
+their raw arrivals, metrics, financial snapshots and nonzero exit results.
+Neither command is ten-minute release qualification. The normal qualification
+command below still applies, with the newly built source-matched image.
+
+## Earlier evidence
+
 ## Saved files
 
 The review bundle is `artifacts/issue320-evidence-20261007/`. It contains:

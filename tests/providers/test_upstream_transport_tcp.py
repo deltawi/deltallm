@@ -30,7 +30,9 @@ async def loopback_provider():
                 if path == b"/slow":
                     await release.wait()
                 if path == b"/stream":
-                    writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n")
+                    writer.write(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n"
+                    )
                     await writer.drain()
                     await release.wait()
                     writer.write(b"3\r\ntwo\r\n0\r\n\r\n")

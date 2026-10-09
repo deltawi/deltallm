@@ -35,9 +35,7 @@ def benchmark(iterations: int) -> dict[str, object]:
     rows = []
     for library in (httpcore, httpcore2):
         for size in (10, 50, 100):
-            pool = library.AsyncConnectionPool(
-                max_connections=500, max_keepalive_connections=100
-            )
+            pool = library.AsyncConnectionPool(max_connections=500, max_keepalive_connections=100)
             # Isolated fresh library objects only; never mutate application pools.
             pool._connections = [IdleConnection() for _ in range(size)]
             started = process_time()
@@ -46,8 +44,10 @@ def benchmark(iterations: int) -> dict[str, object]:
             elapsed = process_time() - started
             rows.append(
                 {
-                    "library": library.__name__, "version": library.__version__,
-                    "idle_connections": size, "iterations": iterations,
+                    "library": library.__name__,
+                    "version": library.__version__,
+                    "idle_connections": size,
+                    "iterations": iterations,
                     "cpu_seconds": elapsed,
                     "mean_cpu_microseconds": elapsed / iterations * 1e6,
                 }
