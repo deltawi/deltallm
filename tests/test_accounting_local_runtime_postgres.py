@@ -6,7 +6,10 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.journal.accounting_journal_runtime import JournalProcessingWorker, JournalWorkerConfig
+from src.billing.accounting.journal.accounting_journal_runtime import (
+    JournalProcessingWorker,
+    JournalWorkerConfig,
+)
 from tests.accounting_adapters.journal_terminal import JournalTerminalPersistence
 from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
 from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
