@@ -24,6 +24,7 @@ class LogicalModelRecord:
     display_name: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    created_by_user_id: str | None = None
 
 
 class LogicalModelRepository:
@@ -98,10 +99,11 @@ class LogicalModelRepository:
             placeholders = ", ".join(f"${index}" for index in range(1, len(batch) + 1))
             rows = await self.prisma.query_raw(
                 f"""
-                SELECT model_id, model_name, display_name, managed_asset_id,
-                       created_at, updated_at
-                FROM deltallm_model
-                WHERE model_name IN ({placeholders})
+                SELECT model.model_id, model.model_name, model.display_name, model.managed_asset_id,
+                       model.created_at, model.updated_at, asset.created_by_account_id AS created_by_user_id
+                FROM deltallm_model model
+                LEFT JOIN deltallm_managedasset asset ON asset.asset_id = model.managed_asset_id
+                WHERE model.model_name IN ({placeholders})
                 """,
                 *batch,
             )
@@ -250,4 +252,7 @@ class LogicalModelRepository:
             ),
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
+            created_by_user_id=str(row["created_by_user_id"])
+            if row.get("created_by_user_id")
+            else None,
         )

@@ -35,12 +35,20 @@ from src.api.admin.endpoints.route_groups_by_id import router as route_groups_by
 from src.api.admin.endpoints.route_group_selectors import router as route_group_selectors_router
 from src.api.admin.endpoints.selector_evaluations import router as selector_evaluations_router
 from src.api.admin.endpoints.routing_costs import router as routing_costs_router
+from src.api.admin.endpoints.external_auth import router as external_auth_admin_router
+from src.api.admin.endpoints.external_auth import (
+    diagnostics_router as external_auth_diagnostics_router,
+)
+from src.api.admin.endpoints.key_revocations import router as key_revocations_router
 from src.ui.routes import ui_router as legacy_ui_router
 
 admin_router = APIRouter()
 
 # Keep explicit order for predictable route registration.
 admin_router.include_router(auth_ui_router)
+admin_router.include_router(external_auth_admin_router)
+admin_router.include_router(external_auth_diagnostics_router)
+admin_router.include_router(key_revocations_router)
 admin_router.include_router(email_router)
 admin_router.include_router(email_feedback_router)
 admin_router.include_router(invitations_router)

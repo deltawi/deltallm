@@ -1,6 +1,12 @@
+import { useScopedMutation } from '../lib/useScopedMutation';
+import ModelOutputTpmEditor from '../components/admin/ModelOutputTpmEditor';
+import { modelOutputRows, modelOutputPayload, type ModelOutputRow } from '../lib/modelOutputTpm';
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
+import type { TeamRecord } from '../lib/api';
 import { teams, organizations } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
@@ -84,11 +90,11 @@ export default function Teams() {
     () => teams.list({ search, limit: pageSize, offset: pageOffset, organization_id: orgFilter || undefined }),
     [search, pageOffset, orgFilter],
   );
-  const items = useMemo<any[]>(() => result?.data || [], [result?.data]);
+  const items = useMemo(() => result?.data || [], [result?.data]);
   const pagination = result?.pagination;
 
   const { data: orgResult } = useApi(() => organizations.list({ limit: 500 }), []);
-  const orgList = useMemo<any[]>(() => orgResult?.data || [], [orgResult?.data]);
+  const orgList = useMemo(() => orgResult?.data || [], [orgResult?.data]);
 
   /* org name lookup */
   const orgNameMap = useMemo(() => {
@@ -120,13 +126,14 @@ export default function Teams() {
   const hasPrev = pageOffset > 0;
   const hasNext = pagination?.has_more ?? false;
   /* ── create / edit modal ── */
-  const [editItem, setEditItem] = useState<any>(null);
+  const [editItem, setEditItem] = useState<TeamRecord | null>(null);
   const [form, setForm] = useState({
     team_alias: '',
     organization_id: '',
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '', model_output_tpm_limit: [] as ModelOutputRow[],
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -143,8 +150,10 @@ export default function Teams() {
   const accessGroupPageSize = 50;
 
   const resetForm = () => {
+    outputMutation.cancel();
+    setSaving(false);
     setForm({
-      team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '',
+      team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', output_tpm_limit: '', model_output_tpm_limit: [] as ModelOutputRow[], rph_limit: '', rpd_limit: '', tpd_limit: '',
       asset_access_mode: 'inherit', selected_callable_keys: [], selected_access_group_keys: [],
     });
     setAssetSearchInput('');
@@ -264,6 +273,8 @@ export default function Teams() {
     ? assetAccessLoadErrorMessage(editAssetAccessError || activeAssetAccessError)
     : null;
 
+  const outputMutation = useScopedMutation(editItem?.team_id || '');
+
   const handleSave = async () => {
     if (!editItem) return;
     if (assetAccessLoadError) {
@@ -274,6 +285,8 @@ export default function Teams() {
       setError('Wait for asset access options to finish loading before saving the team.');
       return;
     }
+    const pending = outputMutation.begin();
+    if (!pending) return;
     setError(null);
     setSaving(true);
     try {
@@ -283,28 +296,42 @@ export default function Teams() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
+        model_output_tpm_limit: modelOutputPayload(form.model_output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
       };
-      await teams.update(editItem.team_id, payload);
-      await teams.updateAssetAccess(editItem.team_id, {
-        mode: form.asset_access_mode,
-        selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
-        selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
-      });
-      setPageError(null);
+      await teams.update(editItem.team_id, payload, pending.signal);
+      if (!pending.current()) return;
+      let assetAccessError: string | null = null;
+      try {
+        await teams.updateAssetAccess(editItem.team_id, {
+          mode: form.asset_access_mode,
+          selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
+          selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
+        }, pending.signal);
+      } catch (err: unknown) {
+        if (!pending.current()) return;
+        assetAccessError = `Team limits saved. Asset access could not be saved: ${err instanceof Error ? err.message : 'Try again.'}`;
+      }
+      if (!pending.current()) return;
+      setPageError(assetAccessError);
       setEditItem(null);
       resetForm();
       refetch();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save team');
+    } catch (err: unknown) {
+      if (!pending.current()) return;
+      setError(err instanceof Error ? err.message : 'Failed to save team');
     } finally {
-      setSaving(false);
+      if (pending.current()) setSaving(false);
+      pending.finish();
     }
   };
 
-  const openEdit = (row: any) => {
+  const openEdit = (row: TeamRecord) => {
+    outputMutation.cancel();
+    setSaving(false);
     setPageError(null);
     setForm({
       team_alias: row.team_alias || '',
@@ -312,6 +339,8 @@ export default function Teams() {
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
+      output_tpm_limit: row.output_tpm_limit != null ? String(row.output_tpm_limit) : '',
+      model_output_tpm_limit: modelOutputRows(row.model_output_tpm_limit),
       rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
       rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
       tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
@@ -325,18 +354,18 @@ export default function Teams() {
     setEditItem(row);
   };
 
-  const handleDelete = async (row: any) => {
+  const handleDelete = async (row: TeamRecord) => {
     if (!confirm(`Delete team "${row.team_alias || row.team_id}"? All members will be unassigned.`)) return;
     try {
       await teams.delete(row.team_id);
       refetch();
-    } catch (err: any) {
-      alert(err?.message || 'Failed to delete team');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete team');
     }
   };
 
   /* ── members modal ── */
-  const [selectedTeam, setSelectedTeam] = useState<any>(null);
+  const [selectedTeam, setSelectedTeam] = useState<TeamRecord | null>(null);
   const [memberSearch, setMemberSearch] = useState('');
   const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'team_viewer' });
 
@@ -399,7 +428,7 @@ export default function Teams() {
               className="h-8 appearance-none rounded-lg border border-gray-300 bg-white pl-8 pr-7 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="">All organizations</option>
-              {orgList.map((o: any) => (
+              {orgList.map((o) => (
                 <option key={o.organization_id} value={o.organization_id}>
                   {o.organization_name || o.organization_id}
                 </option>
@@ -493,7 +522,7 @@ export default function Teams() {
                   </td>
                 </tr>
               ) : (
-                filteredItems.map((t: any, i: number) => (
+                filteredItems.map((t, i: number) => (
                   <tr
                     key={t.team_id}
                     onClick={() => navigate(`/teams/${t.team_id}`)}
@@ -529,7 +558,7 @@ export default function Teams() {
                           onClick={(e) => { e.stopPropagation(); if (t.organization_id) navigate(`/organizations/${t.organization_id}`); }}
                           className="cursor-pointer text-xs font-medium text-brand-primary-ink hover:underline"
                         >
-                          {orgNameMap[t.organization_id] || t.organization_id || '—'}
+                          {(t.organization_id ? orgNameMap[t.organization_id] : null) || t.organization_id || '—'}
                         </span>
                       </div>
                     </td>
@@ -541,7 +570,7 @@ export default function Teams() {
 
                     {/* Budget */}
                     <td className="px-4 py-2.5">
-                      <MiniBar spend={t.spend || 0} budget={t.max_budget} />
+                      <MiniBar spend={t.spend || 0} budget={t.max_budget ?? null} />
                     </td>
 
                     {/* Rate limits */}
@@ -549,6 +578,7 @@ export default function Teams() {
                       <RateLimitSummary
                         rpm_limit={t.rpm_limit}
                         tpm_limit={t.tpm_limit}
+                        output_tpm_limit={t.output_tpm_limit}
                         rph_limit={t.rph_limit}
                         rpd_limit={t.rpd_limit}
                         tpd_limit={t.tpd_limit}
@@ -654,7 +684,7 @@ export default function Teams() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white"
               >
                 <option value="">Select an organization</option>
-                {orgList.map((o: any) => (
+                {orgList.map((o) => (
                   <option key={o.organization_id} value={o.organization_id}>
                     {o.organization_name || o.organization_id}
                   </option>
@@ -694,6 +724,8 @@ export default function Teams() {
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per minute</p>
             </div>
+              <OutputTpmField value={form.output_tpm_limit} onChange={(value) => setForm({ ...form, output_tpm_limit: value })} />
+              <ModelOutputTpmEditor rows={form.model_output_tpm_limit} onChange={(rows) => setForm({ ...form, model_output_tpm_limit: rows })} disabled={saving} />
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
               <input
@@ -787,10 +819,10 @@ export default function Teams() {
             <UserSearchSelect
               search={memberSearch}
               onSearchChange={setMemberSearch}
-              options={(memberCandidates || []) as any[]}
+              options={memberCandidates || []}
               loading={memberCandidatesLoading}
               selectedAccountId={memberForm.user_id}
-              onSelect={(a: any) => setMemberForm({ ...memberForm, user_id: a.account_id, user_email: a.email || '' })}
+              onSelect={(a) => setMemberForm({ ...memberForm, user_id: a.account_id, user_email: a.email || '' })}
               searchPlaceholder="Search by email or account ID"
               helperText="Results include users that already belong to this team's organization."
               emptyText="No organization members match your search."
@@ -825,10 +857,10 @@ export default function Teams() {
                 </tr>
               </thead>
               <tbody>
-                {!members || (members as any[]).length === 0 ? (
+                {!members || members.length === 0 ? (
                   <tr><td colSpan={3} className="px-4 py-8 text-center text-sm text-gray-400">No members in this team</td></tr>
                 ) : (
-                  (members as any[]).map((m: any) => (
+                  members.map((m) => (
                     <tr key={m.user_id} className="border-b border-gray-100 last:border-b-0">
                       <td className="px-4 py-3">
                         <div className="font-medium text-sm text-gray-900">{m.user_id}</div>

@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.models.output_limits import OutputTokenLimit
 from src.models.organization_lifecycle import OrganizationLifecycleState
 
 
@@ -35,6 +36,7 @@ class OrganizationResponse(BaseModel):
     budget_reset_at: str | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    output_tpm_limit: OutputTokenLimit | None = None
     rph_limit: int | None = None
     rpd_limit: int | None = None
     tpd_limit: int | None = None

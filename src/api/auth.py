@@ -18,16 +18,15 @@ from src.db.email_feedback import EmailFeedbackRepository
 from src.middleware.platform_auth import (
     SESSION_COOKIE_NAME,
     get_configured_master_key,
-    get_master_session_status,
     get_platform_auth_context,
+    requires_mfa_verification,
 )
 from src.models.errors import RateLimitError
-from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole, TeamRole
+from src.auth.roles import PlatformRole, TeamRole
 from src.auth.sso_identity import SSOIdentityAssertion, SSOIdentityOwnershipError
 from src.db.email_tokens import EmailTokenRepository
 from src.models.platform_auth import (
     ChangePasswordRequest,
-    CurrentSessionResponse,
     ForgotPasswordRequest,
     InternalLoginRequest,
     InternalLoginResponse,
@@ -41,15 +40,18 @@ from src.models.platform_auth import (
     ResetPasswordTokenResponse,
 )
 from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
-from src.services.ui_authorization import build_ui_access, effective_permissions_for_context
+from src.api.auth_sessions import (
+    auth_me as auth_me,
+    router as session_router,
+)  # Compatibility export.
 from src.services.sso_state_store import SSOStateStoreError
 from src.services.master_session_service import (
     MASTER_SESSION_COOKIE_NAME,
-    MasterSessionStatus,
     MasterSessionStoreUnavailable,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+router.include_router(session_router, prefix="")
 logger = logging.getLogger(__name__)
 _AUTH_INTERNAL_LOGIN_IP_LIMIT_PER_MINUTE = 20
 _AUTH_INTERNAL_LOGIN_EMAIL_LIMIT_PER_MINUTE = 10
@@ -96,7 +98,9 @@ def _set_auth_cookie(
     response.headers["Cache-Control"] = "no-store"
 
 
-def _set_session_cookie(request: Request, response: Response, token: str, max_age_seconds: int) -> None:
+def _set_session_cookie(
+    request: Request, response: Response, token: str, max_age_seconds: int
+) -> None:
     _set_auth_cookie(
         request,
         response,
@@ -142,6 +146,17 @@ def _safe_return_to(value: str | None) -> str:
 
 
 def _client_ip(request: Request) -> str:
+    context = get_platform_auth_context(request)
+    if context is not None and context.external_workspace is not None:
+        runtime = getattr(request.app.state, "external_auth_runtime", None)
+        if runtime is None or request.client is None:
+            raise HTTPException(status_code=503, detail="Auth service unavailable")
+        try:
+            return runtime.client_resolver.resolve(
+                request.client.host, request.headers.get("x-forwarded-for")
+            ).address
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid forwarding data") from exc
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
         first_hop = forwarded_for.split(",", 1)[0].strip()
@@ -505,7 +520,9 @@ async def _enforce_auth_rate_limit(
     try:
         await limiter.check_rate_limit(scope=scope, entity_id=entity_id, limit=limit_per_minute)
     except RateLimitError as exc:
-        headers = {"Retry-After": str(exc.retry_after)} if getattr(exc, "retry_after", None) else None
+        headers = (
+            {"Retry-After": str(exc.retry_after)} if getattr(exc, "retry_after", None) else None
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=detail,
@@ -536,13 +553,21 @@ async def internal_login(request: Request, payload: InternalLoginRequest) -> Res
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
 
-        login = await service.login_internal(email=payload.email, password=payload.password, mfa_code=payload.mfa_code)
+        login = await service.login_internal(
+            email=payload.email, password=payload.password, mfa_code=payload.mfa_code
+        )
         if login is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials or MFA code")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials or MFA code"
+            )
 
-        ttl_hours = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+        ttl_hours = getattr(
+            getattr(request.app.state, "app_config", None), "general_settings", None
+        )
         ttl = int(getattr(ttl_hours, "auth_session_ttl_hours", 12) * 3600)
 
         response = JSONResponse(
@@ -600,15 +625,23 @@ async def master_key_login(request: Request, payload: MasterKeyLoginRequest) -> 
         configured = get_configured_master_key(request)
         provided = payload.master_key.strip()
         if not configured:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Master key not configured")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Master key not configured"
+            )
         if not provided or not hmac.compare_digest(provided, configured):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key"
+            )
 
-        general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+        general_settings = getattr(
+            getattr(request.app.state, "app_config", None), "general_settings", None
+        )
         ttl = int(getattr(general_settings, "auth_session_ttl_hours", 12) * 3600)
         salt = str(getattr(request.app.state, "salt_key", "") or "")
         if not salt:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
 
         service = _master_session_service(request)
         try:
@@ -622,7 +655,9 @@ async def master_key_login(request: Request, payload: MasterKeyLoginRequest) -> 
                 detail="Authentication service unavailable",
                 headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
             ) from exc
-        response = JSONResponse({"authenticated": True, "auth_mode": "master_key", "role": PlatformRole.ADMIN})
+        response = JSONResponse(
+            {"authenticated": True, "auth_mode": "master_key", "role": PlatformRole.ADMIN}
+        )
         _set_auth_cookie(
             request,
             response,
@@ -687,7 +722,9 @@ async def internal_logout(request: Request) -> Response:
             action=AuditAction.AUTH_INTERNAL_LOGOUT,
             status="success",
             actor_type="master_key" if master_session_token else "platform_account",
-            actor_id="master_key" if master_session_token else (context.account_id if context is not None else None),
+            actor_id="master_key"
+            if master_session_token
+            else (context.account_id if context is not None else None),
             resource_type="session",
             response_payload={"logged_out": True},
             critical=True,
@@ -700,72 +737,14 @@ async def internal_logout(request: Request) -> Response:
             action=AuditAction.AUTH_INTERNAL_LOGOUT,
             status="error",
             actor_type="master_key" if master_session_token else "platform_account",
-            actor_id="master_key" if master_session_token else (context.account_id if context is not None else None),
+            actor_id="master_key"
+            if master_session_token
+            else (context.account_id if context is not None else None),
             resource_type="session",
             error=exc,
             critical=True,
         )
         raise
-
-
-@router.get("/me", response_model=CurrentSessionResponse)
-async def auth_me(request: Request, response: Response) -> CurrentSessionResponse:
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["Vary"] = "Cookie"
-    master_session_status = get_master_session_status(request)
-    if master_session_status == MasterSessionStatus.INVALID:
-        response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
-    if master_session_status == MasterSessionStatus.ACTIVE:
-        effective_permissions = sorted(PLATFORM_ROLE_PERMISSIONS.get(PlatformRole.ADMIN, set()))
-        return CurrentSessionResponse(
-            authenticated=True,
-            auth_mode="master_key",
-            role=PlatformRole.ADMIN,
-            effective_permissions=effective_permissions,
-            ui_access=build_ui_access(
-                authenticated=True,
-                effective_permissions=effective_permissions,
-                organization_memberships=[],
-            ),
-        )
-
-    context = get_platform_auth_context(request)
-    if context is None:
-        if master_session_status == MasterSessionStatus.UNAVAILABLE:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Authentication service unavailable",
-                headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
-            )
-        return CurrentSessionResponse(authenticated=False)
-
-    effective_permissions = effective_permissions_for_context(context)
-    organization_memberships = [dict(item) for item in (context.organization_memberships or [])]
-    team_memberships = [dict(item) for item in (context.team_memberships or [])]
-    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
-    spend_reporting_v2_enabled = bool(
-        getattr(general_settings, "spend_reporting_v2_enabled", False)
-    )
-    return CurrentSessionResponse(
-        authenticated=True,
-        auth_mode="session",
-        account_id=context.account_id,
-        email=context.email,
-        role=context.role,
-        effective_permissions=effective_permissions,
-        ui_access=build_ui_access(
-            authenticated=True,
-            effective_permissions=effective_permissions,
-            organization_memberships=organization_memberships,
-            spend_reporting_v2_enabled=spend_reporting_v2_enabled,
-        ),
-        organization_memberships=organization_memberships,
-        team_memberships=team_memberships,
-        mfa_enabled=context.mfa_enabled,
-        mfa_verified=context.mfa_verified,
-        mfa_prompt=not context.mfa_enabled,
-        force_password_change=context.force_password_change,
-    )
 
 
 @router.post("/mfa/enroll/start", response_model=MFAStartResponse)
@@ -774,15 +753,24 @@ async def mfa_enroll_start(request: Request) -> MFAStartResponse:
     context = get_platform_auth_context(request)
     try:
         if context is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
+
+        if context.external_workspace is not None:
+            raise HTTPException(status_code=403, detail="MFA enrollment is managed by the Console")
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
 
         enrollment = await service.start_mfa_enrollment(context.account_id)
         if enrollment is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to start MFA enrollment")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to start MFA enrollment"
+            )
 
         secret, otpauth_url = enrollment
         await emit_control_audit_event(
@@ -816,11 +804,18 @@ async def mfa_enroll_confirm(request: Request, payload: MFAVerifyRequest) -> dic
     context = get_platform_auth_context(request)
     try:
         if context is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
+
+        if context.external_workspace is not None:
+            raise HTTPException(status_code=403, detail="MFA enrollment is managed by the Console")
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
 
         ok = await service.confirm_mfa_enrollment(context.account_id, payload.code)
         if not ok:
@@ -867,19 +862,28 @@ async def mfa_verify(request: Request, payload: MFAVerifyRequest) -> dict[str, b
             detail="Too many MFA verification attempts; please try again later",
         )
         if context is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
         if not context.mfa_enabled:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA is not enabled for this account")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA is not enabled for this account",
+            )
         if context.mfa_verified:
             return {"mfa_verified": True}
 
         session_token = request.cookies.get(SESSION_COOKIE_NAME)
         if not session_token:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
 
         ok = await service.verify_mfa_for_session(session_token=session_token, code=payload.code)
         if not ok:
@@ -911,16 +915,24 @@ async def mfa_verify(request: Request, payload: MFAVerifyRequest) -> dict[str, b
 
 
 @router.post("/internal/change-password")
-async def internal_change_password(request: Request, payload: ChangePasswordRequest) -> dict[str, bool]:
+async def internal_change_password(
+    request: Request, payload: ChangePasswordRequest
+) -> dict[str, bool]:
     request_start = perf_counter()
     context = get_platform_auth_context(request)
     try:
         if context is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+            )
+        if context.external_workspace is not None and requires_mfa_verification(context):
+            raise HTTPException(status_code=403, detail="MFA verification required")
 
         service = getattr(request.app.state, "platform_identity_service", None)
         if service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
         try:
             service.validate_password_policy(payload.new_password)
         except ValueError as exc:
@@ -930,9 +942,12 @@ async def internal_change_password(request: Request, payload: ChangePasswordRequ
             account_id=context.account_id,
             current_password=payload.current_password,
             new_password=payload.new_password,
+            require_existing_password=context.external_workspace is not None,
         )
         if not ok:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid current password")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid current password"
+            )
         response = {"changed": True}
         await emit_control_audit_event(
             request=request,
@@ -971,7 +986,9 @@ async def get_invitation_token(request: Request, token: str) -> InvitationTokenR
     )
     service = getattr(request.app.state, "invitation_service", None)
     if service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable"
+        )
     invitation = await service.describe_invitation_token(token)
     if invitation is None:
         return InvitationTokenResponse(valid=False)
@@ -1001,16 +1018,25 @@ async def accept_invitation(request: Request, payload: InvitationAcceptRequest) 
         )
         service = getattr(request.app.state, "invitation_service", None)
         if service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Invitation service unavailable",
+            )
 
         try:
-            login = await service.accept_invitation(raw_token=payload.token, password=payload.password)
+            login = await service.accept_invitation(
+                raw_token=payload.token, password=payload.password
+            )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         if login is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation is invalid or expired")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation is invalid or expired"
+            )
 
-        ttl_hours = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+        ttl_hours = getattr(
+            getattr(request.app.state, "app_config", None), "general_settings", None
+        )
         ttl = int(getattr(ttl_hours, "auth_session_ttl_hours", 12) * 3600)
         response_payload = InvitationAcceptResponse(
             accepted=True,
@@ -1035,7 +1061,11 @@ async def accept_invitation(request: Request, payload: InvitationAcceptRequest) 
             status="success",
             actor_id=login.account_id,
             resource_type="invitation",
-            response_payload={"accepted": True, "session_established": login.session_established, "next_step": login.next_step},
+            response_payload={
+                "accepted": True,
+                "session_established": login.session_established,
+                "next_step": login.next_step,
+            },
             critical=True,
         )
         return response
@@ -1078,7 +1108,9 @@ async def forgot_password(request: Request, payload: ForgotPasswordRequest) -> d
         token_service = getattr(request.app.state, "email_token_service", None)
         outbox_service = getattr(request.app.state, "email_outbox_service", None)
         if identity_service is None or token_service is None or outbox_service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
         app_config = getattr(request.app.state, "app_config", None)
         general_settings = getattr(app_config, "general_settings", None)
         instance_name = str(getattr(general_settings, "instance_name", "DeltaLLM") or "DeltaLLM")
@@ -1101,12 +1133,16 @@ async def forgot_password(request: Request, payload: ForgotPasswordRequest) -> d
                             to_addresses=(normalized_email,),
                             payload_json={
                                 "instance_name": instance_name,
-                                "reset_url": tx_token_service.build_action_url(path="/reset-password", raw_token=token_issue.raw_token),
+                                "reset_url": tx_token_service.build_action_url(
+                                    path="/reset-password", raw_token=token_issue.raw_token
+                                ),
                             },
                             kind="transactional",
                         )
                         if queued.status != "queued":
-                            raise ValueError("password reset email cannot be delivered to the requested recipient")
+                            raise ValueError(
+                                "password reset email cannot be delivered to the requested recipient"
+                            )
                         await tx_token_service.invalidate_active_tokens(
                             purpose="password_reset",
                             account_id=account_id,
@@ -1123,12 +1159,16 @@ async def forgot_password(request: Request, payload: ForgotPasswordRequest) -> d
                             to_addresses=(normalized_email,),
                             payload_json={
                                 "instance_name": instance_name,
-                                "reset_url": token_service.build_action_url(path="/reset-password", raw_token=token_issue.raw_token),
+                                "reset_url": token_service.build_action_url(
+                                    path="/reset-password", raw_token=token_issue.raw_token
+                                ),
                             },
                             kind="transactional",
                         )
                         if queued.status != "queued":
-                            raise ValueError("password reset email cannot be delivered to the requested recipient")
+                            raise ValueError(
+                                "password reset email cannot be delivered to the requested recipient"
+                            )
                     except Exception:
                         await token_service.consume_token(token_id=token_issue.record.token_id)
                         raise
@@ -1180,7 +1220,9 @@ async def get_reset_password_token(request: Request, token: str) -> ResetPasswor
     token_service = getattr(request.app.state, "email_token_service", None)
     identity_service = getattr(request.app.state, "platform_identity_service", None)
     if token_service is None or identity_service is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+        )
     token_record = await token_service.validate_token(purpose="password_reset", raw_token=token)
     if token_record is None:
         return ResetPasswordTokenResponse(valid=False)
@@ -1206,7 +1248,9 @@ async def reset_password(request: Request, payload: ResetPasswordRequest) -> dic
         token_service = getattr(request.app.state, "email_token_service", None)
         identity_service = getattr(request.app.state, "platform_identity_service", None)
         if token_service is None or identity_service is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable"
+            )
         try:
             identity_service.validate_password_policy(payload.new_password)
         except ValueError as exc:
@@ -1217,20 +1261,34 @@ async def reset_password(request: Request, payload: ResetPasswordRequest) -> dic
             async with db.tx() as tx:
                 tx_token_service = _token_service_for_db(token_service, tx)
                 tx_identity_service = _identity_service_for_db(identity_service, tx)
-                token_record = await tx_token_service.claim_token(purpose="password_reset", raw_token=payload.token)
+                token_record = await tx_token_service.claim_token(
+                    purpose="password_reset", raw_token=payload.token
+                )
                 if token_record is None:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reset token is invalid or expired")
-                await tx_identity_service.set_password(account_id=token_record.account_id, new_password=payload.new_password)
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Reset token is invalid or expired",
+                    )
+                await tx_identity_service.set_password(
+                    account_id=token_record.account_id, new_password=payload.new_password
+                )
                 await tx_token_service.invalidate_active_tokens(
                     purpose="password_reset",
                     account_id=token_record.account_id,
                 )
                 await tx_identity_service.revoke_all_sessions_for_account(token_record.account_id)
         else:
-            token_record = await token_service.claim_token(purpose="password_reset", raw_token=payload.token)
+            token_record = await token_service.claim_token(
+                purpose="password_reset", raw_token=payload.token
+            )
             if token_record is None:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reset token is invalid or expired")
-            await identity_service.set_password(account_id=token_record.account_id, new_password=payload.new_password)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Reset token is invalid or expired",
+                )
+            await identity_service.set_password(
+                account_id=token_record.account_id, new_password=payload.new_password
+            )
             await token_service.invalidate_active_tokens(
                 purpose="password_reset",
                 account_id=token_record.account_id,

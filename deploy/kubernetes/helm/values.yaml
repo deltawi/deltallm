@@ -1,3 +1,9 @@
+# Certify these values before external auth is enabled. Include all other clients.
+externalAuthCapacity:
+  maximumApiPods: 15
+  otherReservedConnections: 0
+  postgresConnectionBudget: 0
+
 nameOverride: ""
 fullnameOverride: ""
 
@@ -318,6 +324,19 @@ config:
     callback_settings: {}
     turn_off_message_logging: false
   general_settings:
+    external_auth:
+      enabled: false
+      deployment_protocol: null
+      integrations: []
+      allowed_origins: []
+      trusted_proxy_cidrs: []
+      cleanup_batch_size: 1000
+      cleanup_interval_seconds: 5
+    ui_mount:
+      mount_path: ""
+      external_console: false
+    api_key_auth_cache_ttl_seconds: 300
+    db_pool_size: 20
     # Opt-in manual OpenAI Realtime sessions; requires spend outbox + Redis.
     realtime:
       enabled: false

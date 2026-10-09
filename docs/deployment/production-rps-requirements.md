@@ -21,8 +21,9 @@ accounting. It does not represent long model replies, large bodies or streaming.
 | 1,000 RPS | Latest 30-second diagnostic failed | Resolve or isolate CPU saturation, then repeat the diagnostic and sustained tests |
 
 These results do not form one unchanged-image qualification. There is no verified
-production hardware minimum for each tier. The draft upgrade must also be
-integrated with current main and pass its auth, output-token and migration checks.
+production hardware minimum for each tier. Main revision `14cf7871` is integrated.
+The draft upgrade must pass the combined auth, output-token, migration and release
+checks. Earlier RPS results do not qualify the merged image.
 
 ## Measured reference topology
 

@@ -14,6 +14,12 @@ from src.api.admin.endpoints.common import (
     get_auth_scope,
     validate_runtime_user_scope,
 )
+from src.api.admin.output_policy import (
+    invalidate_output_policy_now,
+    output_policy_change,
+    schedule_output_policy_invalidation,
+)
+from src.db.output_policy import persist_output_policy
 from src.api.admin.organization_mutations import require_active_organization_mutation
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
@@ -91,12 +97,13 @@ async def get_user(
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT user_id, team_id, organization_id, max_budget, spend,
-               rpm_limit, tpm_limit, max_parallel_requests,
-               rph_limit, rpd_limit, tpd_limit,
-               blocked, created_at, updated_at
-        FROM deltallm_usertable
-        WHERE user_id = $1
+        SELECT u.user_id, u.team_id, t.organization_id, u.max_budget, u.spend,
+               u.rpm_limit, u.tpm_limit, u.output_tpm_limit, u.max_parallel_requests,
+               u.rph_limit, u.rpd_limit, u.tpd_limit,
+               u.blocked, u.created_at, u.updated_at
+        FROM deltallm_usertable u
+        LEFT JOIN deltallm_teamtable t ON t.team_id = u.team_id
+        WHERE u.user_id = $1
         LIMIT 1
         """,
         user_id,
@@ -132,12 +139,13 @@ async def update_user(
 
     existing_rows = await db.query_raw(
         """
-        SELECT user_id, team_id, organization_id, max_budget, spend,
-               rpm_limit, tpm_limit, max_parallel_requests,
-               rph_limit, rpd_limit, tpd_limit,
-               blocked, created_at, updated_at
-        FROM deltallm_usertable
-        WHERE user_id = $1
+        SELECT u.user_id, u.team_id, t.organization_id, u.max_budget, u.spend,
+               u.rpm_limit, u.tpm_limit, u.output_tpm_limit, u.max_parallel_requests,
+               u.rph_limit, u.rpd_limit, u.tpd_limit,
+               u.blocked, u.created_at, u.updated_at
+        FROM deltallm_usertable u
+        LEFT JOIN deltallm_teamtable t ON t.team_id = u.team_id
+        WHERE u.user_id = $1
         LIMIT 1
         """,
         user_id,
@@ -148,6 +156,7 @@ async def update_user(
 
     rpm_limit = _optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
     tpm_limit = _optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+    output_change = output_policy_change(request, payload, scope="user")
     max_parallel_requests = _optional_int(
         payload.get("max_parallel_requests", existing.get("max_parallel_requests")),
         "max_parallel_requests",
@@ -214,21 +223,28 @@ async def update_user(
             blocked,
         )
 
+        await persist_output_policy(tx, scope="user", identity=user_id, change=output_change)
+        await schedule_output_policy_invalidation(
+            tx, request=request, scope="user", identity=user_id, change=output_change
+        )
         updated_rows = await tx.query_raw(
             """
-            SELECT user_id, team_id, organization_id, max_budget, spend,
-                   rpm_limit, tpm_limit, max_parallel_requests,
-                   rph_limit, rpd_limit, tpd_limit,
-                   blocked, created_at, updated_at
-            FROM deltallm_usertable
-            WHERE user_id = $1
+            SELECT u.user_id, u.team_id, t.organization_id, u.max_budget, u.spend,
+                   u.rpm_limit, u.tpm_limit, u.output_tpm_limit, u.max_parallel_requests,
+                   u.rph_limit, u.rpd_limit, u.tpd_limit,
+                   u.blocked, u.created_at, u.updated_at
+            FROM deltallm_usertable u
+            LEFT JOIN deltallm_teamtable t ON t.team_id = u.team_id
+            WHERE u.user_id = $1
             LIMIT 1
             """,
             user_id,
         )
 
     key_service = getattr(request.app.state, "key_service", None)
-    if key_service:
+    if output_change.present:
+        await invalidate_output_policy_now(request, scope="user", identity=user_id)
+    elif key_service:
         await key_service.invalidate_keys_for_user(user_id)
 
     result = dict(updated_rows[0]) if updated_rows else {}

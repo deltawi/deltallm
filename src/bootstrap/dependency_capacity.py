@@ -16,6 +16,7 @@ from src.redis_runtime import RedisLimits, startup_setting
 from src.bootstrap.capacity_contract import DeploymentCapacityContract
 from src.bootstrap.accounting_config import read_accounting_settings
 from src.accounting_settings import AccountingProtocolSettings
+from src.auth.external_config import ExternalAuthSettings
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class DependencyAllocationSnapshot:
     telemetry_worker_connections: int
     spend_operations: SpendOperationAllocation
     accounting: AccountingProtocolSettings
+    external_auth_connections: int = 0
     deployment: DeploymentCapacityContract | None = None
 
     @classmethod
@@ -83,12 +85,23 @@ class DependencyAllocationSnapshot:
                 general, settings, telemetry_connections=telemetry.pool_size if telemetry else 0
             ),
             accounting=accounting,
+            external_auth_connections=(
+                4
+                if startup_setting(
+                    general, settings, "external_auth", ExternalAuthSettings()
+                ).enabled
+                else 0
+            ),
             deployment=DeploymentCapacityContract.load(config, settings),
         )
 
     def validate_deployment(self, config: AppConfig, settings: Settings) -> None:
         if self.deployment is not None:
-            database = self.control_connections + self.database.db_foreground_pool_size
+            database = (
+                self.control_connections
+                + self.database.db_foreground_pool_size
+                + self.external_auth_connections
+            )
             if self.telemetry_connections:
                 database += self.telemetry_connections + self.telemetry_worker_connections
             self.deployment.validate(

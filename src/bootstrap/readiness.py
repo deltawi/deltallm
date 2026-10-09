@@ -44,6 +44,9 @@ def dependency_probes(state: State) -> dict[str, Probe]:
         return False if client is None else await client.ping()
 
     probes: dict[str, Probe] = {"redis": redis}
+    external = getattr(state, "external_auth_runtime", None)
+    if external is not None:
+        probes["external_auth"] = external.check_ready
     databases = {
         "database": "prisma_manager",
         "foreground_database": "foreground_prisma_manager",
@@ -234,6 +237,15 @@ def _policy_inventory(state: State, general: GeneralSettings) -> tuple[WorkerChe
 def worker_inventory(state: State, cfg: AppConfig) -> tuple[WorkerCheck, ...]:
     general = cfg.general_settings
     inventory = [*_service_inventory(state, general), *_policy_inventory(state, general)]
+    external = getattr(state, "external_auth_runtime", None)
+    if external is not None:
+        inventory.append(
+            WorkerCheck(
+                "external_auth_worker",
+                True,
+                lambda: HealthCheck(external.ready, "ready" if external.ready else "unavailable"),
+            )
+        )
     realtime = startup_setting(general, state.settings, "realtime", RealtimeSettings())
     if realtime.enabled:
         inventory.append(WorkerCheck("realtime", True, lambda: realtime_check(state)))

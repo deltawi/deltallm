@@ -52,10 +52,20 @@ async def test_init_and_shutdown_infrastructure_runtime(
     telemetry_worker_required = durable or operations
 
     class FakeDynamicConfigManager:
-        def __init__(self, *, db_client, redis_client, file_config, defer_updates) -> None:  # noqa: ANN001
+        def __init__(
+            self,
+            *,
+            db_client,
+            redis_client,
+            file_config,
+            defer_updates,
+            output_policy_degraded_mode,
+            runtime_settings,
+        ) -> None:  # noqa: ANN001
             self.db_client = db_client
             self.redis_client = redis_client
             self.file_config = file_config
+            self.runtime_settings = runtime_settings
             self.closed = False
             created["dynamic"] = self
             self.subscribers = []
@@ -235,6 +245,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
         "src.startup_config.get_settings",
         lambda: Settings(
             app_env="test",
+            redis_degraded_mode="fail_open",
             config_path="config.yaml",
             database_url="postgresql://env-user:env-pass@env-host:5432/env-db",
             db_pool_size=25,
@@ -390,6 +401,7 @@ async def test_init_and_shutdown_infrastructure_runtime(
     )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
     assert app.state.telemetry_worker_database_required is telemetry_worker_required
+    assert runtime.dynamic_config_manager.runtime_settings is app.state.settings
     assert app.state.ui_branding_asset_service.db_client == "db-client"
     assert app.state.ui_branding_asset_service.initialized_with is app.state.app_config
     assert app.state.dynamic_config_manager.subscribers == [

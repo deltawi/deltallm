@@ -6,6 +6,7 @@ import json
 import pytest
 
 from scripts.measure_gateway_load import run_simultaneous_wave
+from src.route_policy_contract import MAX_SELECTOR_TIMEOUT_MS
 from tests.performance import batch_selector_profile
 from tests.performance.batch_selector_profile import CASES, measure
 
@@ -34,7 +35,15 @@ def serial_slices(monkeypatch):
 async def test_batch_profile_covers_multiple_slices_without_hiding_failures(
     tmp_path, case, serial_slices
 ):
-    report = await measure(tmp_path, case=case, duration_seconds=3, rate=1)
+    report = await measure(
+        tmp_path,
+        case=case,
+        duration_seconds=3,
+        rate=1,
+        # This is a correctness test, not a selector latency test. Keep a busy
+        # shared runner from turning a valid classifier call into the fallback path.
+        selector_timeout_ms=MAX_SELECTOR_TIMEOUT_MS,
+    )
     assert report["target_count"] == report["success_count"] == 3
     assert report["generator_dropped_count"] == 0
     assert report["item_count"] == 24

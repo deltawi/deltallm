@@ -1,6 +1,66 @@
 {
   "components": {
     "schemas": {
+      "AdminListResponse_GroupListItem_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/GroupListItem"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ListPagination"
+          }
+        },
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "title": "AdminListResponse[GroupListItem]",
+        "type": "object"
+      },
+      "AdminListResponse_ModelListItem_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ModelListItem"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ListPagination"
+          }
+        },
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "title": "AdminListResponse[ModelListItem]",
+        "type": "object"
+      },
+      "AdminListResponse_PromptListItem_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PromptListItem"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ListPagination"
+          }
+        },
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "title": "AdminListResponse[PromptListItem]",
+        "type": "object"
+      },
       "AssetSubjectType": {
         "enum": [
           "team",
@@ -313,6 +373,19 @@
             ],
             "default": 0,
             "title": "Frequency Penalty"
+          },
+          "max_completion_tokens": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Completion Tokens"
           },
           "max_tokens": {
             "anyOf": [
@@ -795,6 +868,18 @@
             ],
             "title": "Email"
           },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "force_password_change": {
             "default": false,
             "title": "Force Password Change",
@@ -834,6 +919,21 @@
             ],
             "title": "Role"
           },
+          "session_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "operator",
+                  "external_customer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Source"
+          },
           "team_memberships": {
             "items": {
               "additionalProperties": true,
@@ -844,6 +944,16 @@
           },
           "ui_access": {
             "$ref": "#/components/schemas/UIAccessResponse"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExternalWorkspaceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1019,6 +1129,429 @@
         "title": "EvaluationCosts",
         "type": "object"
       },
+      "ExternalAuthDiagnostics": {
+        "properties": {
+          "active_mutations": {
+            "title": "Active Mutations",
+            "type": "integer"
+          },
+          "active_validations": {
+            "title": "Active Validations",
+            "type": "integer"
+          },
+          "cache_worker_ready": {
+            "title": "Cache Worker Ready",
+            "type": "boolean"
+          },
+          "cleanup_healthy": {
+            "title": "Cleanup Healthy",
+            "type": "boolean"
+          },
+          "crypto_ready": {
+            "title": "Crypto Ready",
+            "type": "boolean"
+          },
+          "protocol": {
+            "const": "external_customer_v1",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "queued_mutations": {
+            "title": "Queued Mutations",
+            "type": "integer"
+          },
+          "queued_validations": {
+            "title": "Queued Validations",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "disabled",
+              "degraded",
+              "ready"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol",
+          "state",
+          "cleanup_healthy",
+          "crypto_ready",
+          "cache_worker_ready",
+          "active_mutations",
+          "queued_mutations",
+          "active_validations",
+          "queued_validations"
+        ],
+        "title": "ExternalAuthDiagnostics",
+        "type": "object"
+      },
+      "ExternalBindingRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "binding_id": {
+            "title": "Binding Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "external_customer_id": {
+            "title": "External Customer Id",
+            "type": "string"
+          },
+          "integration_id": {
+            "title": "Integration Id",
+            "type": "string"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "profile": {
+            "const": "customer_v1",
+            "title": "Profile",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "suspended"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created_at",
+          "updated_at",
+          "binding_id",
+          "integration_id",
+          "external_customer_id",
+          "organization_id",
+          "team_id",
+          "profile",
+          "state",
+          "epoch",
+          "version"
+        ],
+        "title": "ExternalBindingRecord",
+        "type": "object"
+      },
+      "ExternalExchangeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "title": "Binding Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "inference_user_id": {
+            "title": "Inference User Id",
+            "type": "string"
+          },
+          "mfa_required": {
+            "title": "Mfa Required",
+            "type": "boolean"
+          },
+          "next_step": {
+            "enum": [
+              "ready",
+              "mfa_verify",
+              "password_change"
+            ],
+            "title": "Next Step",
+            "type": "string"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "refresh_after_seconds": {
+            "title": "Refresh After Seconds",
+            "type": "integer"
+          },
+          "session_generation": {
+            "title": "Session Generation",
+            "type": "integer"
+          },
+          "session_token": {
+            "title": "Session Token",
+            "type": "string"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_token",
+          "session_generation",
+          "account_id",
+          "organization_id",
+          "team_id",
+          "inference_user_id",
+          "binding_id",
+          "expires_at",
+          "refresh_after_seconds",
+          "next_step",
+          "mfa_required"
+        ],
+        "title": "ExternalExchangeResponse",
+        "type": "object"
+      },
+      "ExternalInferenceKeyResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "inference_user_id": {
+            "title": "Inference User Id",
+            "type": "string"
+          },
+          "key_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Name"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "inference_user_id",
+          "team_id"
+        ],
+        "title": "ExternalInferenceKeyResponse",
+        "type": "object"
+      },
+      "ExternalIntegrationRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "integration_id": {
+            "title": "Integration Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created_at",
+          "updated_at",
+          "integration_id",
+          "enabled",
+          "epoch",
+          "version"
+        ],
+        "title": "ExternalIntegrationRecord",
+        "type": "object"
+      },
+      "ExternalSubjectRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "binding_id": {
+            "title": "Binding Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "identity_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Id"
+          },
+          "identity_issuer": {
+            "title": "Identity Issuer",
+            "type": "string"
+          },
+          "integration_id": {
+            "title": "Integration Id",
+            "type": "string"
+          },
+          "runtime_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime User Id"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "active",
+              "suspended"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created_at",
+          "updated_at",
+          "subject_id",
+          "integration_id",
+          "binding_id",
+          "identity_issuer",
+          "subject",
+          "state",
+          "epoch",
+          "version",
+          "account_id",
+          "identity_id",
+          "runtime_user_id"
+        ],
+        "title": "ExternalSubjectRecord",
+        "type": "object"
+      },
+      "ExternalWorkspaceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "binding_id": {
+            "title": "Binding Id",
+            "type": "string"
+          },
+          "inference_user_id": {
+            "title": "Inference User Id",
+            "type": "string"
+          },
+          "integration_id": {
+            "title": "Integration Id",
+            "type": "string"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "integration_id",
+          "binding_id",
+          "organization_id",
+          "team_id",
+          "inference_user_id"
+        ],
+        "title": "ExternalWorkspaceResponse",
+        "type": "object"
+      },
       "FallbackEventResponse": {
         "properties": {
           "attempt": {
@@ -1133,6 +1666,151 @@
           "function"
         ],
         "title": "FunctionToolDefinition",
+        "type": "object"
+      },
+      "GroupListItem": {
+        "additionalProperties": true,
+        "properties": {
+          "active_member_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Member Count"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By User Id"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "group_key": {
+            "title": "Group Key",
+            "type": "string"
+          },
+          "health_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "healthy",
+                  "degraded",
+                  "unhealthy",
+                  "unknown",
+                  "paused",
+                  "empty"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status"
+          },
+          "healthy_member_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healthy Member Count"
+          },
+          "member_count": {
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "route_group_id": {
+            "title": "Route Group Id",
+            "type": "string"
+          },
+          "routing_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Routing Strategy"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          }
+        },
+        "required": [
+          "route_group_id",
+          "group_key",
+          "name",
+          "mode",
+          "routing_strategy",
+          "enabled",
+          "member_count"
+        ],
+        "title": "GroupListItem",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1503,6 +2181,33 @@
         "type": "object"
       },
       "JsonValue": {},
+      "KeyRevocationStatus": {
+        "properties": {
+          "enforcement": {
+            "enum": [
+              "enforced",
+              "pending"
+            ],
+            "title": "Enforcement",
+            "type": "string"
+          },
+          "invalidation_id": {
+            "title": "Invalidation Id",
+            "type": "string"
+          },
+          "maximum_enforcement_delay_seconds": {
+            "title": "Maximum Enforcement Delay Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "invalidation_id",
+          "enforcement",
+          "maximum_enforcement_delay_seconds"
+        ],
+        "title": "KeyRevocationStatus",
+        "type": "object"
+      },
       "LLMTierSelectorPolicy": {
         "additionalProperties": false,
         "description": "Durable v1 contract for an LLM-backed lane classifier.",
@@ -1638,6 +2343,34 @@
           "recall"
         ],
         "title": "LaneEvaluation",
+        "type": "object"
+      },
+      "ListPagination": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "title": "ListPagination",
         "type": "object"
       },
       "MCPToolDefinition": {
@@ -1783,6 +2516,97 @@
           "deleted"
         ],
         "title": "ModelDeleteResponse",
+        "type": "object"
+      },
+      "ModelListItem": {
+        "additionalProperties": true,
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By User Id"
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "health_status": {
+            "enum": [
+              "healthy",
+              "unhealthy",
+              "unknown"
+            ],
+            "title": "Health Status",
+            "type": "string"
+          },
+          "healthy": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healthy"
+          },
+          "model_name": {
+            "title": "Model Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "model_name",
+          "provider",
+          "health_status"
+        ],
+        "title": "ModelListItem",
         "type": "object"
       },
       "ModelMutationResponse": {
@@ -2888,6 +3712,19 @@
             ],
             "title": "Organization Name"
           },
+          "output_tpm_limit": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tpm Limit"
+          },
           "rpd_limit": {
             "anyOf": [
               {
@@ -3222,6 +4059,19 @@
             ],
             "title": "Organization Name"
           },
+          "output_tpm_limit": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tpm Limit"
+          },
           "rpd_limit": {
             "anyOf": [
               {
@@ -3522,6 +4372,103 @@
           }
         },
         "title": "OrganizationTierAssignmentPatchRequest",
+        "type": "object"
+      },
+      "PromptListItem": {
+        "additionalProperties": true,
+        "properties": {
+          "binding_count": {
+            "title": "Binding Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By User Id"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "label_count": {
+            "title": "Label Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "prompt_template_id": {
+            "title": "Prompt Template Id",
+            "type": "string"
+          },
+          "template_key": {
+            "title": "Template Key",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version_count": {
+            "title": "Version Count",
+            "type": "integer"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          }
+        },
+        "required": [
+          "prompt_template_id",
+          "template_key",
+          "name",
+          "description",
+          "version_count",
+          "label_count",
+          "binding_count"
+        ],
+        "title": "PromptListItem",
         "type": "object"
       },
       "ProviderModelDiscoveryRequest": {
@@ -6802,6 +7749,19 @@
             "title": "Expected Revision",
             "type": "integer"
           },
+          "output_tpm_limit": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tpm Limit"
+          },
           "policy_ids": {
             "anyOf": [
               {
@@ -6939,6 +7899,19 @@
               }
             ],
             "title": "Metadata"
+          },
+          "output_tpm_limit": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tpm Limit"
           },
           "pricing": {
             "anyOf": [
@@ -7113,6 +8086,19 @@
               }
             ],
             "title": "Metadata"
+          },
+          "output_tpm_limit": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tpm Limit"
           },
           "pricing": {
             "anyOf": [
@@ -7829,6 +8815,181 @@
         ]
       }
     },
+    "/auth/external/exchange": {
+      "post": {
+        "operationId": "exchange_auth_external_exchange_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "assertion": {
+                    "format": "password",
+                    "maxLength": 8192,
+                    "minLength": 1,
+                    "title": "Assertion",
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "assertion"
+                ],
+                "title": "ExternalAssertionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalExchangeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Exchange",
+        "tags": [
+          "external-auth"
+        ]
+      }
+    },
+    "/auth/external/inference-key": {
+      "post": {
+        "operationId": "select_inference_key_auth_external_inference_key_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "api_key": {
+                    "format": "password",
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Api Key",
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "api_key"
+                ],
+                "title": "ExternalInferenceKeyRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalInferenceKeyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Inference Key",
+        "tags": [
+          "external-auth"
+        ]
+      }
+    },
+    "/auth/external/revoke": {
+      "post": {
+        "operationId": "revoke_auth_external_revoke_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "assertion": {
+                    "format": "password",
+                    "maxLength": 8192,
+                    "minLength": 1,
+                    "title": "Assertion",
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "assertion"
+                ],
+                "title": "ExternalAssertionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Revoke",
+        "tags": [
+          "external-auth"
+        ]
+      }
+    },
     "/auth/internal/change-password": {
       "post": {
         "operationId": "internal_change_password_auth_internal_change_password_post",
@@ -8257,6 +9418,7 @@
         },
         "summary": "Auth Me",
         "tags": [
+          "auth",
           "auth"
         ]
       }
@@ -9356,25 +10518,6 @@
         "summary": "Get Spend Logs",
         "tags": [
           "Spend"
-        ]
-      }
-    },
-    "/ui": {
-      "get": {
-        "operationId": "serve_ui_root_ui_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Serve Ui Root",
-        "tags": [
-          "UI"
         ]
       }
     },
@@ -15282,6 +16425,1001 @@
         ]
       }
     },
+    "/ui/api/external-auth/bindings/{binding_id}/resume": {
+      "post": {
+        "operationId": "resume_binding_ui_api_external_auth_bindings__binding_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason"
+                ],
+                "title": "ExternalVersionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalBindingRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Binding",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/bindings/{binding_id}/suspend": {
+      "post": {
+        "operationId": "suspend_binding_ui_api_external_auth_bindings__binding_id__suspend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason"
+                ],
+                "title": "ExternalVersionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalBindingRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suspend Binding",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/integrations/{integration_id}": {
+      "put": {
+        "operationId": "update_integration_ui_api_external_auth_integrations__integration_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "title": "Enabled",
+                    "type": "boolean"
+                  },
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason",
+                  "enabled"
+                ],
+                "title": "ExternalIntegrationRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalIntegrationRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Integration",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/integrations/{integration_id}/bindings": {
+      "get": {
+        "operationId": "list_bindings_ui_api_external_auth_integrations__integration_id__bindings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(active|suspended)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "customer",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Customer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Bindings Ui Api External Auth Integrations  Integration Id  Bindings Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Bindings",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/integrations/{integration_id}/bindings/{customer_id}": {
+      "put": {
+        "operationId": "register_binding_ui_api_external_auth_integrations__integration_id__bindings__customer_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "customer_id",
+            "required": true,
+            "schema": {
+              "title": "Customer Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "organization_id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Organization Id",
+                    "type": "string"
+                  },
+                  "team_id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Team Id",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "organization_id",
+                  "team_id"
+                ],
+                "title": "ExternalBindingRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalBindingRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Binding",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/status": {
+      "get": {
+        "operationId": "external_auth_diagnostics_ui_api_external_auth_status_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalAuthDiagnostics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Auth Diagnostics",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/subjects/link": {
+      "post": {
+        "operationId": "link_account_ui_api_external_auth_subjects_link_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "account_id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Account Id",
+                    "type": "string"
+                  },
+                  "approval_reference": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Approval Reference",
+                    "type": "string"
+                  },
+                  "assertion": {
+                    "format": "password",
+                    "maxLength": 8192,
+                    "minLength": 1,
+                    "title": "Assertion",
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "binding_id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Binding Id",
+                    "type": "string"
+                  },
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  },
+                  "runtime_user_id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Runtime User Id",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "assertion",
+                  "account_id",
+                  "runtime_user_id",
+                  "binding_id",
+                  "expected_version",
+                  "approval_reference",
+                  "reason"
+                ],
+                "title": "ExternalLinkRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalSubjectRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Link Account",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/subjects/runtime-user-binding": {
+      "post": {
+        "operationId": "bind_runtime_ui_api_external_auth_subjects_runtime_user_binding_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "approval_reference": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Approval Reference",
+                    "type": "string"
+                  },
+                  "assertion": {
+                    "format": "password",
+                    "maxLength": 8192,
+                    "minLength": 1,
+                    "title": "Assertion",
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "binding_id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Binding Id",
+                    "type": "string"
+                  },
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  },
+                  "runtime_user_id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Runtime User Id",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "assertion",
+                  "runtime_user_id",
+                  "binding_id",
+                  "expected_version",
+                  "approval_reference",
+                  "reason"
+                ],
+                "title": "ExternalRuntimeBindingRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalSubjectRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Runtime",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
+    "/ui/api/external-auth/subjects/{subject_id}/resume": {
+      "post": {
+        "operationId": "resume_subject_ui_api_external_auth_subjects__subject_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subject_id",
+            "required": true,
+            "schema": {
+              "title": "Subject Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Master-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Master-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_version": {
+                    "maximum": 2147483646,
+                    "minimum": 0,
+                    "title": "Expected Version",
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "title": "Reason",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_version",
+                  "reason"
+                ],
+                "title": "ExternalVersionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalSubjectRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Subject",
+        "tags": [
+          "external-auth-admin"
+        ]
+      }
+    },
     "/ui/api/guardrails": {
       "get": {
         "operationId": "get_guardrails_ui_api_guardrails_get",
@@ -16299,6 +18437,48 @@
         ]
       }
     },
+    "/ui/api/key-revocations/{invalidation_id}": {
+      "get": {
+        "operationId": "revocation_status_ui_api_key_revocations__invalidation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invalidation_id",
+            "required": true,
+            "schema": {
+              "title": "Invalidation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRevocationStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revocation Status",
+        "tags": [
+          "keys"
+        ]
+      }
+    },
     "/ui/api/keys": {
       "get": {
         "operationId": "list_keys_ui_api_keys_get",
@@ -16559,9 +18739,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
+                  "additionalProperties": true,
                   "title": "Response Delete Key Ui Api Keys  Token Hash  Delete",
                   "type": "object"
                 }
@@ -17135,9 +19313,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
+                  "additionalProperties": true,
                   "title": "Response Revoke Key Ui Api Keys  Token Hash  Revoke Post",
                   "type": "object"
                 }
@@ -19845,6 +22021,45 @@
             }
           },
           {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "name",
+                    "mode",
+                    "provider",
+                    "health",
+                    "created_by",
+                    "updated_at",
+                    "visibility"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort By"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_direction",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Direction",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -19882,9 +22097,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Models Ui Api Models Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/AdminListResponse_ModelListItem_"
                 }
               }
             },
@@ -24682,6 +26895,45 @@
             }
           },
           {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "name",
+                    "versions",
+                    "labels",
+                    "bindings",
+                    "created_by",
+                    "updated_at",
+                    "visibility"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort By"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_direction",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Direction",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -24719,9 +26971,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Prompt Templates Ui Api Prompt Registry Templates Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/AdminListResponse_PromptListItem_"
                 }
               }
             },
@@ -27167,6 +29417,45 @@
             }
           },
           {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "name",
+                    "routing",
+                    "members",
+                    "health",
+                    "created_by",
+                    "updated_at",
+                    "visibility"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort By"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_direction",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "title": "Sort Direction",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -27204,9 +29493,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Route Groups Ui Api Route Groups Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/AdminListResponse_GroupListItem_"
                 }
               }
             },
@@ -36719,46 +39006,6 @@
         "summary": "Get User Asset Visibility",
         "tags": [
           "Admin Users"
-        ]
-      }
-    },
-    "/ui/{path}": {
-      "get": {
-        "operationId": "serve_ui_ui__path__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Serve Ui",
-        "tags": [
-          "UI"
         ]
       }
     },

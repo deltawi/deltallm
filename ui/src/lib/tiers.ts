@@ -1,3 +1,4 @@
+import { parseOutputTpm } from './outputTpm';
 import type {
   Tier,
   TierCapacityPool,
@@ -48,6 +49,7 @@ export type TierModelPolicyForm = {
   pricing_profile: TierPricingProfile;
   rpm_limit: string;
   tpm_limit: string;
+  output_tpm_limit: string;
   rph_limit: string;
   rpd_limit: string;
   tpd_limit: string;
@@ -221,6 +223,7 @@ export function emptyModelPolicyForm(pricingProfile: TierPricingProfile = 'token
     pricing_profile: pricingProfile,
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '',
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -261,6 +264,7 @@ export function modelPolicyToForm(
     pricing_profile: resolvedPricingProfile,
     rpm_limit: numberToInput(policy?.rpm_limit),
     tpm_limit: numberToInput(policy?.tpm_limit),
+    output_tpm_limit: numberToInput(policy?.output_tpm_limit),
     rph_limit: numberToInput(policy?.rph_limit),
     rpd_limit: numberToInput(policy?.rpd_limit),
     tpd_limit: numberToInput(policy?.tpd_limit),
@@ -298,6 +302,7 @@ export function modelPolicyFormToPayload(
     access_mode: form.access_mode,
     rpm_limit: parseOptionalPositiveInt(form.rpm_limit, 'RPM'),
     tpm_limit: parseOptionalPositiveInt(form.tpm_limit, 'TPM'),
+    output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
     rph_limit: parseOptionalPositiveInt(form.rph_limit, 'RPH'),
     rpd_limit: parseOptionalPositiveInt(form.rpd_limit, 'RPD'),
     tpd_limit: parseOptionalPositiveInt(form.tpd_limit, 'TPD'),

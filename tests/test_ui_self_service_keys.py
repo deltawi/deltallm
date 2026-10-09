@@ -269,7 +269,7 @@ class _FakeKeyDB:
             return [dict(row)] if row is not None else []
 
         if normalized.startswith(
-            "select rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit from deltallm_teamtable"
+            "select rpm_limit, tpm_limit, output_tpm_limit, rph_limit, rpd_limit, tpd_limit from deltallm_teamtable"
         ):
             team_id = token_hash
             row = self.teams.get(team_id)
@@ -1549,13 +1549,15 @@ async def test_self_service_key_creation_enforces_expiry_policy(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["rpm_limit", "output_tpm_limit"])
 async def test_self_service_key_creation_rejects_limits_above_team_limits(
-    client, test_app, monkeypatch: pytest.MonkeyPatch
+    client, test_app, monkeypatch: pytest.MonkeyPatch, field
 ):
+    test_app.state.limit_counter.degraded_mode = "fail_closed"
     _install_key_db(
         test_app,
         {},
-        teams={"team-sandbox": _self_service_team(rpm_limit=10)},
+        teams={"team-sandbox": _self_service_team(**{field: 10})},
         users={"acct-dev": {"user_id": "acct-dev", "team_id": "team-sandbox"}},
     )
     _set_auth_context(
@@ -1572,13 +1574,13 @@ async def test_self_service_key_creation_rejects_limits_above_team_limits(
             "key_name": "limit-policy-key",
             "team_id": "team-sandbox",
             "max_budget": 1,
-            "rpm_limit": 11,
+            field: 11,
             "expires": (datetime.now(tz=UTC) + timedelta(days=1)).isoformat(),
         },
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "rpm_limit (11) cannot exceed team limit (10)"
+    assert response.json()["detail"] == f"{field} (11) cannot exceed team limit (10)"
 
 
 @pytest.mark.asyncio

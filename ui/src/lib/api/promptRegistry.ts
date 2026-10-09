@@ -14,6 +14,8 @@ export interface PromptTemplate {
   binding_count: number;
   created_at?: string | null;
   updated_at?: string | null;
+  created_by_user_id?: string | null;
+  visibility?: string | null;
   managed_asset_id?: string | null;
   access?: ManagedAssetAccess | null;
 }
@@ -73,8 +75,10 @@ export interface PromptResolutionCandidate {
   [key: string]: unknown;
 }
 
+export type PromptListSortKey = 'name' | 'versions' | 'labels' | 'bindings' | 'created_by' | 'updated_at' | 'visibility';
+
 export const promptRegistry = {
-  listTemplates: (params?: { search?: string; limit?: number; offset?: number }, signal?: AbortSignal) =>
+  listTemplates: (params?: { search?: string; limit?: number; offset?: number; sort_by?: PromptListSortKey; sort_direction?: 'asc' | 'desc' }, signal?: AbortSignal) =>
     apiFetch<Paginated<PromptTemplate>>(withQuery('/ui/api/prompt-registry/templates', params), { signal }),
   getTemplate: (templateKey: string, signal?: AbortSignal) =>
     apiFetch<{ template: PromptTemplate; versions: PromptVersion[]; labels: PromptLabel[]; bindings: PromptBinding[] }>(

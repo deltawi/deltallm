@@ -72,7 +72,11 @@ class ChatItemExecutionMixin:
             request_context,
             RequestTokenDemand(
                 input_tokens=preflight.context_input_tokens,
-                requested_output_tokens=chat_request.max_tokens,
+                requested_output_tokens=(
+                    chat_request.max_completion_tokens
+                    if chat_request.max_completion_tokens is not None
+                    else chat_request.max_tokens
+                ),
             ),
         )
         app_router = routing_generation.router

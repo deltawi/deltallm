@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
+from src.api.admin.auth_scope import scope_for_permissions
 from src.api.admin.endpoints.common import (
     AuthScope,
     emit_admin_mutation_audit,
@@ -198,13 +199,8 @@ async def list_mcp_servers(
 ) -> dict[str, Any]:
     registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key)
-    legacy_scope = get_auth_scope(
-        request,
-        authorization,
-        x_master_key,
-        required_permission=Permission.KEY_READ,
-    )
-    manage_scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    legacy_scope = scope_for_permissions(scope, [Permission.KEY_READ])
+    manage_scope = scope_for_permissions(scope, [Permission.ORG_UPDATE])
     principal = asset_principal_for_request(request)
     access_repository = _access_repository(request)
     policies = (
@@ -514,13 +510,8 @@ async def get_mcp_server(
 ) -> dict[str, Any]:
     registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key)
-    legacy_scope = get_auth_scope(
-        request,
-        authorization,
-        x_master_key,
-        required_permission=Permission.KEY_READ,
-    )
-    manage_scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    legacy_scope = scope_for_permissions(scope, [Permission.KEY_READ])
+    manage_scope = scope_for_permissions(scope, [Permission.ORG_UPDATE])
     server = await _load_server_or_404(request, server_id)
     principal, policy, managed_authority = await _authorize_server(
         request,
@@ -584,12 +575,7 @@ async def get_mcp_server_operations(
 ) -> dict[str, Any]:
     db = _db_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key)
-    legacy_scope = get_auth_scope(
-        request,
-        authorization,
-        x_master_key,
-        required_permission=Permission.KEY_READ,
-    )
+    legacy_scope = scope_for_permissions(scope, [Permission.KEY_READ])
     server = await _load_server_or_404(request, server_id)
     await _authorize_server(request, server, legacy_scope)
 
@@ -712,12 +698,7 @@ async def update_mcp_server(
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key)
-    legacy_scope = get_auth_scope(
-        request,
-        authorization,
-        x_master_key,
-        required_permission=Permission.ORG_UPDATE,
-    )
+    legacy_scope = scope_for_permissions(scope, [Permission.ORG_UPDATE])
 
     existing = await _load_server_or_404(request, server_id)
     principal, policy, managed_authority = await _authorize_server(
@@ -794,12 +775,7 @@ async def delete_mcp_server(
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key)
-    legacy_scope = get_auth_scope(
-        request,
-        authorization,
-        x_master_key,
-        required_permission=Permission.ORG_UPDATE,
-    )
+    legacy_scope = scope_for_permissions(scope, [Permission.ORG_UPDATE])
 
     server = await _load_server_or_404(request, server_id)
     await _authorize_server(request, server, legacy_scope, delete=True)
@@ -848,12 +824,7 @@ async def refresh_mcp_server_capabilities(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
-    legacy_scope = get_auth_scope(
-        request,
-        authorization,
-        x_master_key,
-        required_permission=Permission.ORG_UPDATE,
-    )
+    legacy_scope = scope_for_permissions(scope, [Permission.ORG_UPDATE])
     server = await _load_server_or_404(request, server_id)
     principal, policy, managed_authority = await _authorize_server(
         request,
@@ -902,12 +873,7 @@ async def health_check_mcp_server(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
-    legacy_scope = get_auth_scope(
-        request,
-        authorization,
-        x_master_key,
-        required_permission=Permission.ORG_UPDATE,
-    )
+    legacy_scope = scope_for_permissions(scope, [Permission.ORG_UPDATE])
     server = await _load_server_or_404(request, server_id)
     principal, policy, managed_authority = await _authorize_server(
         request,

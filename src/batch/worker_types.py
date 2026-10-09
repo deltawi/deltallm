@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
+from src.services.output_token_context import OutputTokenContext
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.router.runtime_generation import RoutingRuntimeGenerationStore
 from src.router.router import Router
@@ -174,8 +175,14 @@ class BatchWorkerConfig:
 
 
 @dataclass
+class _BatchRequestState:
+    output_token_context: OutputTokenContext | None = None
+
+
+@dataclass
 class _RequestShim:
     app: Any
+    state: _BatchRequestState = field(default_factory=_BatchRequestState)
 
 
 @dataclass(slots=True)

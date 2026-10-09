@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import TextIO
 
 from src.migration_process import MigrationOutputLimitError, run_migration_process
@@ -15,6 +16,10 @@ DEFAULT_PRISMA_BOOTSTRAP_ATTEMPTS = 30
 DEFAULT_PRISMA_BOOTSTRAP_SLEEP_SECONDS = 2.0
 DEFAULT_PRISMA_BOOTSTRAP_TIMEOUT_SECONDS = 300.0
 DEFAULT_PRISMA_SCHEMA_PATH = "./prisma/schema.prisma"
+MODEL_API_IDENTITY_MIGRATION = "20260927150000_model_api_identity"
+MODEL_API_IDENTITY_RECOVERY_SQL = (
+    Path(__file__).resolve().parent / "migration_recovery" / f"{MODEL_API_IDENTITY_MIGRATION}.sql"
+)
 
 _RETRYABLE_CONNECTIVITY_MARKERS = (
     "p1001",
@@ -56,6 +61,97 @@ def _emit_command_output(*, stdout: str, stderr: str, out: TextIO, err: TextIO) 
         print(stderr, file=err, end="" if stderr.endswith("\n") else "\n")
 
 
+def run_model_api_identity_recovery(
+    *,
+    schema_path: str = DEFAULT_PRISMA_SCHEMA_PATH,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = run_migration_process,
+    timeout_seconds: float = DEFAULT_PRISMA_BOOTSTRAP_TIMEOUT_SECONDS,
+    environment: Mapping[str, str] | None = None,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+) -> None:
+    """Repair the one known v0.1.48 migration failure before normal deployment.
+
+    This path is deliberately opt-in. The SQL preflight proves that Prisma recorded
+    the expected missing-pgcrypto failure and that PostgreSQL rolled back every
+    schema step before migration history is changed through ``migrate resolve``.
+    """
+
+    out_stream = stdout if stdout is not None else sys.stdout
+    err_stream = stderr if stderr is not None else sys.stderr
+    if not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 600:
+        raise ValueError("migration timeout must be finite and between 0 and 600 seconds")
+    deadline = (
+        min(clock() + timeout_seconds, deadline)
+        if deadline is not None
+        else clock() + timeout_seconds
+    )
+    commands = (
+        (
+            [
+                "prisma",
+                "db",
+                "execute",
+                "--schema",
+                schema_path,
+                "--file",
+                str(MODEL_API_IDENTITY_RECOVERY_SQL),
+            ],
+            "Model API identity recovery preflight failed",
+        ),
+        (
+            [
+                "prisma",
+                "migrate",
+                "resolve",
+                "--rolled-back",
+                MODEL_API_IDENTITY_MIGRATION,
+                "--schema",
+                schema_path,
+            ],
+            "Prisma could not mark the model API identity migration as rolled back",
+        ),
+    )
+    for command, failure_message in commands:
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise PrismaBootstrapError(
+                "Prisma migration wall-time budget exhausted", retryable=False
+            )
+        try:
+            result = runner(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=remaining,
+                env=environment,
+            )
+        except subprocess.TimeoutExpired:
+            raise PrismaBootstrapError(
+                "Prisma migration wall-time budget exhausted", retryable=False
+            ) from None
+        except MigrationOutputLimitError:
+            raise PrismaBootstrapError(
+                "Prisma migration output exceeded its bound", retryable=False
+            ) from None
+        except OSError:
+            raise PrismaBootstrapError(
+                "Failed to execute model API identity recovery command",
+                retryable=False,
+            ) from None
+        _emit_command_output(
+            stdout=result.stdout,
+            stderr=result.stderr,
+            out=out_stream,
+            err=err_stream,
+        )
+        if result.returncode != 0:
+            raise PrismaBootstrapError(failure_message, retryable=False)
+
+
 def run_prisma_bootstrap(
     *,
     schema_path: str = DEFAULT_PRISMA_SCHEMA_PATH,
@@ -68,6 +164,7 @@ def run_prisma_bootstrap(
     sleeper: Callable[[float], None] = time.sleep,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
+    recover_model_api_identity: bool = False,
 ) -> None:
     if not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 600:
         raise ValueError("migration timeout must be finite and between 0 and 600 seconds")
@@ -77,6 +174,18 @@ def run_prisma_bootstrap(
     delay = max(0.0, float(sleep_seconds))
     out_stream = stdout if stdout is not None else sys.stdout
     err_stream = stderr if stderr is not None else sys.stderr
+
+    if recover_model_api_identity:
+        run_model_api_identity_recovery(
+            schema_path=schema_path,
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+            deadline=deadline,
+            environment=environment,
+            clock=clock,
+            stdout=out_stream,
+            stderr=err_stream,
+        )
 
     for attempt in range(1, attempts + 1):
         remaining = deadline - clock()
@@ -150,6 +259,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout-seconds", type=float, default=DEFAULT_PRISMA_BOOTSTRAP_TIMEOUT_SECONDS
     )
+    parser.add_argument(
+        "--recover-model-api-identity",
+        action="store_true",
+        help=(
+            "Recover only the known failed v0.1.48 model API identity migration, "
+            "then run the normal migration deployment"
+        ),
+    )
     return parser
 
 
@@ -161,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
             max_attempts=args.max_attempts,
             sleep_seconds=args.sleep_seconds,
             timeout_seconds=args.timeout_seconds,
+            recover_model_api_identity=args.recover_model_api_identity,
         )
     except PrismaBootstrapError as exc:
         print(str(exc), file=sys.stderr)

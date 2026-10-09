@@ -13,6 +13,7 @@ from src.models.errors import (
     ModelNotFoundError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
     PermissionDeniedError,
+    ProxyError,
     RateLimitError,
     ServiceUnavailableError,
     TimeoutError,
@@ -93,7 +94,11 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
             return BatchRetryDecision(
                 retryable=True, category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS
             )
-        return BatchRetryDecision(retryable=True, category=BatchRetryCategory.SERVICE_UNAVAILABLE)
+        return BatchRetryDecision(
+            retryable=True,
+            category=BatchRetryCategory.SERVICE_UNAVAILABLE,
+            retry_after_seconds=_proxy_retry_after(exc),
+        )
 
     if isinstance(exc, BudgetExceededError):
         return BatchRetryDecision(
@@ -184,7 +189,7 @@ def _classify_http_status_error(exc: httpx.HTTPStatusError) -> BatchRetryDecisio
     )
 
 
-def _proxy_retry_after(exc: RateLimitError) -> int | None:
+def _proxy_retry_after(exc: ProxyError) -> int | None:
     retry_after = getattr(exc, "retry_after", None)
     if retry_after is None:
         return None

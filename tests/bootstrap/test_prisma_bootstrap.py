@@ -86,6 +86,145 @@ def test_run_prisma_bootstrap_retries_retryable_connectivity_errors_then_succeed
     assert "Prisma migrate deploy completed" in captured.out
 
 
+def test_run_prisma_bootstrap_recovers_known_model_identity_failure_before_deploy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _prisma_bootstrap_module()
+    calls: list[list[str]] = []
+    results = iter(
+        [
+            _completed_process(returncode=0, stdout="Recovery preflight completed"),
+            _completed_process(returncode=0, stdout="Migration marked as rolled back"),
+            _completed_process(returncode=0, stdout="Prisma migrate deploy completed"),
+        ]
+    )
+
+    def fake_runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return next(results)
+
+    module.run_prisma_bootstrap(
+        schema_path="./prisma/schema.prisma",
+        recover_model_api_identity=True,
+        runner=fake_runner,
+    )
+
+    captured = capsys.readouterr()
+    assert calls == [
+        [
+            "prisma",
+            "db",
+            "execute",
+            "--schema",
+            "./prisma/schema.prisma",
+            "--file",
+            str(module.MODEL_API_IDENTITY_RECOVERY_SQL),
+        ],
+        [
+            "prisma",
+            "migrate",
+            "resolve",
+            "--rolled-back",
+            module.MODEL_API_IDENTITY_MIGRATION,
+            "--schema",
+            "./prisma/schema.prisma",
+        ],
+        ["prisma", "migrate", "deploy", "--schema", "./prisma/schema.prisma"],
+    ]
+    assert "Recovery preflight completed" in captured.out
+    assert "Migration marked as rolled back" in captured.out
+    assert "Prisma migrate deploy completed" in captured.out
+
+
+def test_model_identity_recovery_stops_before_resolve_when_preflight_fails(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _prisma_bootstrap_module()
+    calls: list[list[str]] = []
+
+    def fake_runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return _completed_process(returncode=1, stderr="unexpected migration state")
+
+    with pytest.raises(module.PrismaBootstrapError, match="recovery preflight failed"):
+        module.run_prisma_bootstrap(
+            recover_model_api_identity=True,
+            runner=fake_runner,
+        )
+
+    captured = capsys.readouterr()
+    assert len(calls) == 1
+    assert calls[0][:3] == ["prisma", "db", "execute"]
+    assert "unexpected migration state" in captured.err
+
+
+def test_model_identity_recovery_stops_before_deploy_when_resolve_fails() -> None:
+    module = _prisma_bootstrap_module()
+    calls: list[list[str]] = []
+    results = iter(
+        [
+            _completed_process(returncode=0),
+            _completed_process(returncode=1, stderr="migration is not failed"),
+        ]
+    )
+
+    def fake_runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return next(results)
+
+    with pytest.raises(module.PrismaBootstrapError, match="could not mark"):
+        module.run_prisma_bootstrap(
+            recover_model_api_identity=True,
+            runner=fake_runner,
+        )
+
+    assert len(calls) == 2
+    assert calls[1][:3] == ["prisma", "migrate", "resolve"]
+
+
+def test_recovery_and_deploy_share_one_timeout_and_environment() -> None:
+    module = _prisma_bootstrap_module()
+    now = [0.0]
+    calls = []
+    environment = {"DATABASE_URL": "postgresql://fixture"}
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        now[0] += 40
+        return _completed_process(returncode=0)
+
+    module.run_prisma_bootstrap(
+        recover_model_api_identity=True,
+        timeout_seconds=120,
+        clock=lambda: now[0],
+        runner=runner,
+        environment=environment,
+    )
+    assert [kwargs["timeout"] for _, kwargs in calls] == [120, 80, 40]
+    assert all(kwargs["env"] is environment for _, kwargs in calls)
+
+
+def test_recovery_cannot_start_deploy_after_the_shared_timeout() -> None:
+    module = _prisma_bootstrap_module()
+    now = [0.0]
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        now[0] += 5
+        return _completed_process(returncode=0)
+
+    with pytest.raises(module.PrismaBootstrapError, match="wall-time budget"):
+        module.run_prisma_bootstrap(
+            recover_model_api_identity=True,
+            timeout_seconds=10,
+            clock=lambda: now[0],
+            runner=runner,
+        )
+    assert len(calls) == 2
+    assert calls[-1][:3] == ["prisma", "migrate", "resolve"]
+
+
 def test_run_prisma_bootstrap_raises_immediately_on_fatal_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

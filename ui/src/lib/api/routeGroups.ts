@@ -13,6 +13,11 @@ export interface RouteGroup {
   default_prompt?: { template_key: string; label?: string | null } | null;
   created_at?: string | null;
   updated_at?: string | null;
+  created_by_user_id?: string | null;
+  visibility?: string | null;
+  health_status?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown' | 'paused' | 'empty' | null;
+  active_member_count?: number | null;
+  healthy_member_count?: number | null;
   access?: ManagedAssetAccess | null;
 }
 
@@ -261,13 +266,15 @@ export interface SelectorOptionsPage {
   has_more: boolean;
 }
 
+export type RouteGroupListSortKey = 'name' | 'routing' | 'members' | 'health' | 'created_by' | 'updated_at' | 'visibility';
+
 export const routeGroups = {
   selectorOptions: (routeGroupId: string, params: SelectorOptionsQuery, signal?: AbortSignal) =>
     apiFetch<SelectorOptionsPage>(withQuery(
       `/ui/api/route-groups/by-id/${encodeURIComponent(routeGroupId)}/selector-options`, params,
     ), { signal }),
   list: (
-    params?: { search?: string; limit?: number; offset?: number },
+    params?: { search?: string; limit?: number; offset?: number; sort_by?: RouteGroupListSortKey; sort_direction?: 'asc' | 'desc' },
     signal?: AbortSignal,
   ) => apiFetch<RouteGroupListResponse>(withQuery('/ui/api/route-groups', params), { signal }),
   resolveKey: (groupKey: string, signal?: AbortSignal) =>

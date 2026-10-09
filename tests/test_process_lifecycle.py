@@ -71,7 +71,7 @@ def test_reload_rejects_lifecycle_changes_including_field_presence():
         DynamicConfigRestartRequiredError,
     )
 
-    manager = SimpleNamespace(_config=AppConfig())
+    manager = SimpleNamespace(_config=AppConfig(), runtime_settings=None)
     candidate = AppConfig(general_settings=GeneralSettings(lifecycle_shutdown_seconds=80))
     with pytest.raises(DynamicConfigRestartRequiredError, match="lifecycle_shutdown_seconds"):
         DynamicConfigManager._reject_startup_only_changes(manager, candidate)

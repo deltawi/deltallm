@@ -29,6 +29,7 @@ GROUP_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "platform_",
             "mfa_",
             "self_registration",
+            "external_auth",
         ),
     ),
     (
@@ -141,6 +142,10 @@ def _handling(name: str, annotation: object) -> str:
         "_signing_secret",
         "_webhook_url",
     )
+    if name == "external_auth":
+        return "Startup trust; excluded from settings API"
+    if name == "ui_mount":
+        return "Startup only; non-secret UI configuration"
     if "SecretStr" in annotation_text or name in {"master_key", "salt_key"}:
         return "Secret"
     if name.endswith(secret_suffixes):

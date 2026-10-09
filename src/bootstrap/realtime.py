@@ -6,7 +6,6 @@ from starlette.datastructures import State
 
 from src.billing.spend_ingestion import SpendIngestionService
 from src.billing.realtime_native import NativeRealtimeBilling
-from src.bootstrap.runtime_services import _runtime_setting
 from src.config import AppConfig
 from src.db.realtime_billing import RealtimeBillingRepository
 from src.db.realtime_recovery import RealtimeBillingRecovery
@@ -17,11 +16,12 @@ from src.realtime.config import RealtimeSettings
 from src.realtime.routing import RealtimeRouting
 from src.realtime.runtime import RealtimeRuntime
 from src.services.limit_counter import LimitCounter
+from src.runtime_settings import resolve_general_setting
 
 
 async def init_realtime_runtime(state: State, cfg: AppConfig) -> RealtimeRuntime | None:
     """Compose the production owner from existing services; no extra pool or worker."""
-    settings = _runtime_setting(
+    settings = resolve_general_setting(
         cfg.general_settings, state.settings, "realtime", RealtimeSettings()
     )
     state.realtime_settings = settings
@@ -64,7 +64,7 @@ async def init_realtime_runtime(state: State, cfg: AppConfig) -> RealtimeRuntime
         state.callable_target_grant_service,
         state.tier_policy_service,
         default_transcription_model=settings.default_transcription_model,
-        policy_mode=_runtime_setting(
+        policy_mode=resolve_general_setting(
             cfg.general_settings, state.settings, "callable_target_scope_policy_mode", "enforce"
         ),
         tier_policy_mode=str(state.tier_policy_service.mode),
@@ -75,7 +75,7 @@ async def init_realtime_runtime(state: State, cfg: AppConfig) -> RealtimeRuntime
         LimitCounter(state.redis, degraded_mode="fail_closed"),
         routing,
         settings,
-        fair_share_enabled=_runtime_setting(
+        fair_share_enabled=resolve_general_setting(
             cfg.general_settings, state.settings, "tier_capacity_fair_share_enabled", False
         ),
     )

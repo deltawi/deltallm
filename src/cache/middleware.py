@@ -50,7 +50,7 @@ from .metrics import CacheMetricsProtocol, NoopCacheMetrics
 from .pricing import has_cache_hit_only_pricing, provider_cache_miss_usage
 
 logger = logging.getLogger(__name__)
-_CACHE_SCHEMA_VERSION = "v5"
+_CACHE_SCHEMA_VERSION = "v6"
 
 
 class CacheControl(str, Enum):
@@ -216,6 +216,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                         metrics.hit(endpoint=endpoint, model=model)
                         request.state.cache_context.hit = True
                         request.state.cache_hit = True
+                        context = getattr(request.state, "output_token_context", None)
+                        if context is not None:
+                            await context.finish(0)
                         await self._record_cache_hit_accounting(
                             request, endpoint, model, cache_key, cached
                         )
@@ -254,6 +257,9 @@ class CacheMiddleware(BaseHTTPMiddleware):
                     metrics.hit(endpoint=endpoint, model=model)
                     request.state.cache_context.hit = True
                     request.state.cache_hit = True
+                    context = getattr(request.state, "output_token_context", None)
+                    if context is not None:
+                        await context.finish(0)
                     await self._record_cache_hit_accounting(
                         request, endpoint, model, cache_key, cached_entry
                     )

@@ -13,6 +13,11 @@ def apply_default_params(
     model_info: dict[str, Any],
 ) -> dict[str, Any]:
     for key, value in provider_request_defaults(model_info).items():
+        # An explicit cap also takes precedence over its other accepted name.
+        if key == "max_tokens" and upstream_payload.get("max_completion_tokens") is not None:
+            continue
+        if key == "max_completion_tokens" and upstream_payload.get("max_tokens") is not None:
+            continue
         if key not in upstream_payload:
             upstream_payload[key] = value
     return upstream_payload

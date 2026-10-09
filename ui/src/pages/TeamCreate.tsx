@@ -1,3 +1,8 @@
+import { useScopedMutation } from '../lib/useScopedMutation';
+import ModelOutputTpmEditor from '../components/admin/ModelOutputTpmEditor';
+import { modelOutputPayload, type ModelOutputRow } from '../lib/modelOutputTpm';
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
@@ -152,6 +157,8 @@ export default function TeamCreate() {
   const [budgetValue, setBudgetValue] = useState('');
   const [rpmValue, setRpmValue] = useState('');
   const [tpmValue, setTpmValue] = useState('');
+  const [outputTpm, setOutputTpm] = useState('');
+  const [modelOutput, setModelOutput] = useState<ModelOutputRow[]>([]);
   const [rphEnabled, setRphEnabled] = useState(false);
   const [rpdEnabled, setRpdEnabled] = useState(false);
   const [tpdEnabled, setTpdEnabled] = useState(false);
@@ -179,6 +186,8 @@ export default function TeamCreate() {
 
   /* reset asset access when org changes */
   const handleOrgChange = (orgId: string) => {
+    outputMutation.cancel();
+    setSaving(false);
     setSelectedOrgId(orgId);
     setAssetMode('inherit');
     setSelectedKeys([]);
@@ -245,6 +254,8 @@ export default function TeamCreate() {
     setSelfServiceMaxExpiryDays('');
   };
 
+  const outputMutation = useScopedMutation(selectedOrgId);
+
   const handleCreate = async () => {
     if (!teamName.trim()) { setNameError(true); return; }
     if (!selectedOrgId) { setError('Please select an organization.'); return; }
@@ -260,6 +271,8 @@ export default function TeamCreate() {
       setError(assetAccessLoadError);
       return;
     }
+    const pending = outputMutation.begin();
+    if (!pending) return;
     setError(null);
     setSaving(true);
     try {
@@ -269,6 +282,8 @@ export default function TeamCreate() {
         max_budget: budgetEnabled && budgetValue ? Number(budgetValue) : undefined,
         rpm_limit: rpmEnabled && rpmValue ? Number(rpmValue) : undefined,
         tpm_limit: tpmEnabled && tpmValue ? Number(tpmValue) : undefined,
+        output_tpm_limit: parseOutputTpm(outputTpm),
+        model_output_tpm_limit: modelOutputPayload(modelOutput),
         rph_limit: rphEnabled && rphValue ? Number(rphValue) : undefined,
         rpd_limit: rpdEnabled && rpdValue ? Number(rpdValue) : undefined,
         tpd_limit: tpdEnabled && tpdValue ? Number(tpdValue) : undefined,
@@ -284,12 +299,19 @@ export default function TeamCreate() {
             : undefined,
       };
 
-      const created = await teams.create(payload);
+      const created = await teams.create(payload, pending.signal);
+      if (!pending.current()) return;
       let pageWarning: string | null = null;
 
       /* block if requested (best-effort patch) */
       if (blocked) {
-        try { await teams.update(created.team_id, { blocked: true }); } catch { /* non-fatal */ }
+        try {
+          await teams.update(created.team_id, { blocked: true }, pending.signal);
+        } catch {
+          if (!pending.current()) return;
+          pageWarning = 'Team created. Blocking could not be saved. Check its settings before use.';
+        }
+        if (!pending.current()) return;
       }
 
       /* apply restrict asset access if selected */
@@ -299,11 +321,14 @@ export default function TeamCreate() {
             mode: 'restrict',
             selected_callable_keys: selectedKeys,
             selected_access_group_keys: selectedAccessGroupKeys,
-          });
+          }, pending.signal);
+          if (!pending.current()) return;
         } catch (err: unknown) {
-          pageWarning = err instanceof Error && err.message
+          if (!pending.current()) return;
+          const assetWarning = err instanceof Error && err.message
             ? err.message
             : 'Team created, but restricted asset access could not be applied.';
+          pageWarning = [pageWarning, assetWarning].filter(Boolean).join(' ');
         }
       }
 
@@ -311,13 +336,18 @@ export default function TeamCreate() {
         state: pageWarning ? { pageWarning } : undefined,
       });
     } catch (err: unknown) {
+      if (!pending.current()) return;
       setError(err instanceof Error && err.message ? err.message : 'Failed to create team');
     } finally {
-      setSaving(false);
+      if (pending.current()) setSaving(false);
+      pending.finish();
     }
   };
 
-  const handleCancel = () => navigate(returnTo || '/teams');
+  const handleCancel = () => {
+    outputMutation.cancel();
+    navigate(returnTo || '/teams');
+  };
 
   /* ─────────────── render ─────────────── */
   if (!uiAccess.team_create) {
@@ -569,6 +599,9 @@ export default function TeamCreate() {
                   </div>
                 )}
               </div>
+
+              <OutputTpmField value={outputTpm} onChange={setOutputTpm} />
+              <ModelOutputTpmEditor rows={modelOutput} onChange={setModelOutput} disabled={saving} />
 
               {/* RPH */}
               <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">

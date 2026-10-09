@@ -420,7 +420,19 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "general_settings": {"$ref": "#/properties/config/properties/general_settings"}
+            "general_settings": {
+              "$ref": "#/properties/config/properties/general_settings",
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "external_auth": {
+                  "$ref": "#/properties/config/properties/general_settings/properties/external_auth"
+                },
+                "ui_mount": {
+                  "$ref": "#/properties/config/properties/general_settings/properties/ui_mount"
+                }
+              }
+            }
           }
         }
       }
@@ -497,7 +509,19 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "general_settings": {"$ref": "#/properties/config/properties/general_settings"}
+            "general_settings": {
+              "$ref": "#/properties/config/properties/general_settings",
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "external_auth": {
+                  "$ref": "#/properties/config/properties/general_settings/properties/external_auth"
+                },
+                "ui_mount": {
+                  "$ref": "#/properties/config/properties/general_settings/properties/ui_mount"
+                }
+              }
+            }
           }
         }
       }
@@ -1121,6 +1145,153 @@
                 "accountingWorker",
                 "accountingRequest"
               ]
+            },
+            "external_auth": {
+              "additionalProperties": false,
+              "description": "Startup trust and capacity. PostgreSQL owns live enablement.",
+              "properties": {
+                "enabled": {
+                  "default": false,
+                  "title": "Enabled",
+                  "type": "boolean"
+                },
+                "deployment_protocol": {
+                  "anyOf": [
+                    {
+                      "const": "external_customer_v1",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Deployment Protocol"
+                },
+                "integrations": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/definitions/ExternalAuthIntegrationSettings"
+                  },
+                  "maxItems": 8,
+                  "title": "Integrations",
+                  "type": "array"
+                },
+                "assertion_lifetime_seconds": {
+                  "default": 60,
+                  "maximum": 60,
+                  "minimum": 1,
+                  "title": "Assertion Lifetime Seconds",
+                  "type": "integer"
+                },
+                "clock_allowance_seconds": {
+                  "default": 10,
+                  "maximum": 10,
+                  "minimum": 0,
+                  "title": "Clock Allowance Seconds",
+                  "type": "integer"
+                },
+                "child_lifetime_seconds": {
+                  "default": 300,
+                  "maximum": 300,
+                  "minimum": 60,
+                  "title": "Child Lifetime Seconds",
+                  "type": "integer"
+                },
+                "parent_lifetime_seconds": {
+                  "default": 43200,
+                  "maximum": 43200,
+                  "minimum": 300,
+                  "title": "Parent Lifetime Seconds",
+                  "type": "integer"
+                },
+                "previous_overlap_seconds": {
+                  "default": 30,
+                  "maximum": 30,
+                  "minimum": 0,
+                  "title": "Previous Overlap Seconds",
+                  "type": "integer"
+                },
+                "subject_exchanges_per_minute": {
+                  "default": 12,
+                  "maximum": 60,
+                  "minimum": 1,
+                  "title": "Subject Exchanges Per Minute",
+                  "type": "integer"
+                },
+                "binding_exchanges_per_minute": {
+                  "default": 60,
+                  "maximum": 600,
+                  "minimum": 1,
+                  "title": "Binding Exchanges Per Minute",
+                  "type": "integer"
+                },
+                "integration_exchanges_per_minute": {
+                  "default": 1200,
+                  "maximum": 1200,
+                  "minimum": 1,
+                  "title": "Integration Exchanges Per Minute",
+                  "type": "integer"
+                },
+                "cleanup_batch_size": {
+                  "default": 1000,
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "title": "Cleanup Batch Size",
+                  "type": "integer"
+                },
+                "cleanup_interval_seconds": {
+                  "default": 5,
+                  "maximum": 60,
+                  "minimum": 1,
+                  "title": "Cleanup Interval Seconds",
+                  "type": "integer"
+                },
+                "allowed_origins": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 16,
+                  "title": "Allowed Origins",
+                  "type": "array"
+                },
+                "trusted_proxy_cidrs": {
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 16,
+                  "title": "Trusted Proxy Cidrs",
+                  "type": "array"
+                }
+              },
+              "title": "ExternalAuthSettings",
+              "type": "object"
+            },
+            "ui_mount": {
+              "additionalProperties": false,
+              "properties": {
+                "mount_path": {
+                  "default": "",
+                  "maxLength": 128,
+                  "pattern": "^(/[A-Za-z0-9_-]+)*$",
+                  "title": "Mount Path",
+                  "type": "string"
+                },
+                "external_console": {
+                  "default": false,
+                  "title": "External Console",
+                  "type": "boolean"
+                }
+              },
+              "title": "UIMountSettings",
+              "type": "object"
+            },
+            "api_key_auth_cache_ttl_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
             }
           }
         }
@@ -1207,6 +1378,103 @@
         "timeoutSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 600}
       }
     },
-    "managedLifecycle": {"type": "object", "additionalProperties": false, "required": ["enabled", "production", "exitMarginSeconds"], "properties": {"enabled": {"type": "boolean"}, "production": {"type": "boolean"}, "exitMarginSeconds": {"type": "integer", "minimum": 1, "maximum": 60}}}
+    "managedLifecycle": {"type": "object", "additionalProperties": false, "required": ["enabled", "production", "exitMarginSeconds"], "properties": {"enabled": {"type": "boolean"}, "production": {"type": "boolean"}, "exitMarginSeconds": {"type": "integer", "minimum": 1, "maximum": 60}}},
+    "externalAuthCapacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximumApiPods",
+        "otherReservedConnections",
+        "postgresConnectionBudget"
+      ],
+      "properties": {
+        "maximumApiPods": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "otherReservedConnections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "postgresConnectionBudget": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ExternalAuthIntegrationSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "integration_id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "title": "Integration Id",
+          "type": "string"
+        },
+        "issuer": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Issuer",
+          "type": "string"
+        },
+        "audience": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Audience",
+          "type": "string"
+        },
+        "identity_issuer": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Identity Issuer",
+          "type": "string"
+        },
+        "keys": {
+          "items": {
+            "$ref": "#/definitions/ExternalVerificationKey"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Keys",
+          "type": "array"
+        }
+      },
+      "required": [
+        "integration_id",
+        "issuer",
+        "audience",
+        "identity_issuer",
+        "keys"
+      ],
+      "title": "ExternalAuthIntegrationSettings",
+      "type": "object"
+    },
+    "ExternalVerificationKey": {
+      "additionalProperties": false,
+      "properties": {
+        "kid": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "title": "Kid",
+          "type": "string"
+        },
+        "public_key": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Public Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kid",
+        "public_key"
+      ],
+      "title": "ExternalVerificationKey",
+      "type": "object"
+    }
   }
 }

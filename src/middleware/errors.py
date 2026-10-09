@@ -18,6 +18,7 @@ from src.models.errors import (
     InvalidRequestError,
     ProxyError,
     RateLimitError,
+    ServiceUnavailableError,
 )
 from src.middleware.error_responses import (
     anthropic_error_payload as anthropic_error_payload,
@@ -55,7 +56,7 @@ def proxy_error_response(exc: ProxyError) -> JSONResponse:
     headers = {}
     retry_after = getattr(exc, "retry_after", None)
     if (
-        isinstance(exc, (RateLimitError, AuthenticationUnavailableError))
+        isinstance(exc, (RateLimitError, AuthenticationUnavailableError, ServiceUnavailableError))
         and retry_after is not None
     ):
         headers["Retry-After"] = str(retry_after)
@@ -68,7 +69,7 @@ def anthropic_proxy_error_response(exc: ProxyError) -> JSONResponse:
     headers = {}
     retry_after = getattr(exc, "retry_after", None)
     if (
-        isinstance(exc, (RateLimitError, AuthenticationUnavailableError))
+        isinstance(exc, (RateLimitError, AuthenticationUnavailableError, ServiceUnavailableError))
         and retry_after is not None
     ):
         headers["Retry-After"] = str(retry_after)

@@ -1,8 +1,14 @@
+import type { TeamRecord, TeamMemberRecord, TeamMemberCandidate } from './api/teamContracts';
+export type { TeamRecord, TeamMemberRecord, TeamMemberCandidate } from './api/teamContracts';
+export type * from './api/tierContracts';
+import type { OrganizationTierPolicyPreview, TierPolicySimulation, TierPolicySimulationPayload } from './api/tierContracts';
+import type { KeyRemovalResult } from './api/keyRevocations';
 import type { Paginated, Pagination } from './api/pagination';
 import type { BatchItemError } from './api/batchContracts';
 import type { ManagedAssetAccess, ManagedAssetAccessInput } from './api/managedAssets';
 export type { Paginated, Pagination } from './api/pagination';
 import { apiFetch, withQuery } from './api/transport';
+import { updateRuntimeOutputTpm } from './api/runtimeUsers';
 import {
   organizationRecordsApi,
   type OrganizationTierAssignment,
@@ -350,12 +356,14 @@ export interface ApiKey {
   max_budget: number | null;
   rpm_limit: number | null;
   tpm_limit: number | null;
+  output_tpm_limit?: number | null;
   rph_limit: number | null;
   rpd_limit: number | null;
   tpd_limit: number | null;
   expires: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  model_output_tpm_limit?: Record<string, number> | null;
 }
 
 export interface BatchCapabilities {
@@ -860,508 +868,6 @@ export type {
 
 export * from './api/promptRegistry';
 
-export interface Tier {
-  tier_id: string;
-  tier_key: string;
-  name: string;
-  description?: string | null;
-  enabled: boolean;
-  metadata?: Record<string, unknown> | null;
-  active_version_id?: string | null;
-  active_version?: TierCatalogVersionSummary | null;
-  latest_draft_version?: TierCatalogVersionSummary | null;
-  draft_count?: number;
-  version_count: number;
-  assignment_count: number;
-  live_assignment_count?: number;
-  organization_count?: number;
-  last_activity_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface TierCatalogVersionSummary {
-  tier_version_id: string;
-  version_number: number;
-  configuration_revision: number;
-  model_policy_count: number;
-  capacity_pool_count: number;
-  created_by_account_id?: string | null;
-  created_by_kind: 'account' | 'master_key' | 'system' | 'unknown' | string;
-  created_by_email?: string | null;
-  source_tier_version_id?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface TierCreatePayload {
-  tier_key: string;
-  name: string;
-  description?: string | null;
-  enabled?: boolean;
-  metadata?: Record<string, unknown> | null;
-}
-
-export type TierUpdatePayload = Partial<TierCreatePayload>;
-
-export interface TierVersion {
-  tier_version_id: string;
-  tier_id: string;
-  version_number: number;
-  status: 'draft' | 'active' | 'archived' | string;
-  configuration_revision: number;
-  published_at?: string | null;
-  published_by_account_id?: string | null;
-  created_by_account_id?: string | null;
-  created_by_kind: 'account' | 'master_key' | 'system' | 'unknown' | string;
-  created_by_email?: string | null;
-  source_tier_version_id?: string | null;
-  metadata?: Record<string, unknown> | null;
-  model_policy_count: number;
-  capacity_pool_count: number;
-  assignment_count: number;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface TierVersionCreatePayload {
-  version_number?: number | null;
-  metadata?: Record<string, unknown> | null;
-}
-
-export interface TierModelPolicy {
-  tier_model_policy_id?: string;
-  tier_version_id?: string;
-  callable_key: string;
-  enabled: boolean;
-  access_mode: 'allow' | 'deny' | string;
-  rpm_limit?: number | null;
-  tpm_limit?: number | null;
-  rph_limit?: number | null;
-  rpd_limit?: number | null;
-  tpd_limit?: number | null;
-  max_parallel_requests?: number | null;
-  batch_rpm_limit?: number | null;
-  batch_tpm_limit?: number | null;
-  pricing?: Record<string, number> | null;
-  capacity_pool_key?: string | null;
-  priority: number;
-  metadata?: Record<string, unknown> | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface TierModelPolicyPayload {
-  callable_key: string;
-  enabled: boolean;
-  access_mode: string;
-  rpm_limit?: number | null;
-  tpm_limit?: number | null;
-  rph_limit?: number | null;
-  rpd_limit?: number | null;
-  tpd_limit?: number | null;
-  max_parallel_requests?: number | null;
-  batch_rpm_limit?: number | null;
-  batch_tpm_limit?: number | null;
-  pricing?: Record<string, number> | null;
-  capacity_pool_key?: string | null;
-  priority: number;
-  metadata?: Record<string, unknown> | null;
-}
-
-export type TierModelPolicyCreatePayload = TierModelPolicyPayload & {
-  expected_revision: number;
-};
-
-export type TierModelPolicyPatchPayload = Partial<
-  Omit<TierModelPolicyPayload, 'callable_key'>
-> & {
-  expected_revision: number;
-};
-
-export interface TierModelPolicyBulkLimitsPayload {
-  expected_revision: number;
-  rpm_limit?: number | null;
-  tpm_limit?: number | null;
-  policy_ids?: string[];
-  all_filtered?: boolean;
-  search?: string;
-  enabled?: boolean;
-  access_mode?: string;
-  capacity_pool_key?: string;
-}
-
-export interface TierCapacityPool {
-  tier_capacity_pool_id?: string;
-  tier_version_id?: string;
-  pool_key: string;
-  callable_key: string;
-  rpm_capacity?: number | null;
-  tpm_capacity?: number | null;
-  max_parallel_requests?: number | null;
-  strategy: string;
-  saturation_threshold?: number | null;
-  burst_multiplier?: number | null;
-  metadata?: Record<string, unknown> | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface TierCapacityPoolPayload {
-  pool_key: string;
-  callable_key: string;
-  rpm_capacity?: number | null;
-  tpm_capacity?: number | null;
-  max_parallel_requests?: number | null;
-  strategy: string;
-  saturation_threshold?: number | null;
-  burst_multiplier?: number | null;
-  metadata?: Record<string, unknown> | null;
-}
-
-export type TierCapacityPoolCreatePayload = TierCapacityPoolPayload & {
-  expected_revision: number;
-};
-
-export type TierCapacityPoolPatchPayload = Partial<
-  Omit<TierCapacityPoolPayload, 'pool_key' | 'callable_key'>
-> & {
-  expected_revision: number;
-};
-
-export interface TierDetail {
-  tier: Tier;
-  versions: TierVersion[];
-}
-
-export interface TierVersionDetail {
-  tier_version: TierVersion;
-  model_policies: TierModelPolicy[];
-  capacity_pools: TierCapacityPool[];
-}
-
-export interface TierBootstrapResponse {
-  tier: Tier;
-  initial_version: TierVersion;
-  idempotency_resolution: 'created' | 'replayed';
-}
-
-export interface TierConfigurationPage<T> extends Paginated<T> {
-  configuration_revision: number;
-  version_updated_at?: string | null;
-}
-
-export interface TierConfigurationMutationResult<T> {
-  data: T;
-  configuration_revision: number;
-  version_updated_at?: string | null;
-}
-
-export interface TierConfigurationDeleteResult {
-  deleted: boolean;
-  configuration_revision: number;
-  version_updated_at?: string | null;
-}
-
-export interface TierActivationChangeGroup {
-  count: number;
-  items: string[];
-  truncated: boolean;
-}
-
-export interface TierActivationNotice {
-  code: string;
-  message: string;
-  assignment_count?: number;
-}
-
-export interface TierActivationPreview {
-  draft: TierVersion;
-  draft_configuration_revision: number;
-  current_active_version?: TierVersion | null;
-  expected_active_version_id: string | null;
-  affected_assignment_count: number;
-  affected_organization_count: number;
-  pinned_assignment_count: number;
-  changes: {
-    policy_added: TierActivationChangeGroup;
-    policy_removed: TierActivationChangeGroup;
-    policy_changed: TierActivationChangeGroup;
-    pool_added: TierActivationChangeGroup;
-    pool_removed: TierActivationChangeGroup;
-    pool_changed: TierActivationChangeGroup;
-  };
-  warnings: TierActivationNotice[];
-  blockers: TierActivationNotice[];
-  can_activate: boolean;
-}
-
-export interface TeamRecord {
-  team_id: string;
-  team_alias?: string | null;
-  organization_id?: string | null;
-  organization_name?: string | null;
-  organization_lifecycle_state?: string | null;
-  max_budget?: number | null;
-  spend?: number | null;
-  rpm_limit?: number | null;
-  tpm_limit?: number | null;
-  rph_limit?: number | null;
-  rpd_limit?: number | null;
-  tpd_limit?: number | null;
-  blocked?: boolean;
-  member_count?: number;
-  self_service_keys_enabled?: boolean;
-  self_service_max_keys_per_user?: number | null;
-  self_service_budget_ceiling?: number | null;
-  self_service_require_expiry?: boolean;
-  self_service_max_expiry_days?: number | null;
-  capabilities?: Record<string, boolean>;
-  created_at?: string | null;
-  updated_at?: string | null;
-  [key: string]: unknown;
-}
-
-export interface TierPolicySnapshotInfo {
-  etag: string;
-  generated_at: string;
-  org_count: number;
-  assignment_count: number;
-  model_policy_count: number;
-  capacity_pool_count: number;
-  next_transition_at?: string | null;
-  mode: string;
-  snapshot_stale: boolean;
-  last_reload_failed: boolean;
-  last_reload_error_at?: string | null;
-}
-
-export interface TierRateLimitDescriptor {
-  scope: string;
-  entity_id: string;
-  limit: number;
-  amount_kind: 'requests' | 'tokens' | string;
-  window_seconds: number;
-  mode: string;
-}
-
-export interface TierCompiledModelPolicy {
-  organization_id: string;
-  callable_key: string;
-  access_mode: string;
-  source: Record<string, unknown>;
-  limits: Record<string, number | null>;
-  pricing: Record<string, number>;
-  capacity_pool_key?: string | null;
-  metadata?: Record<string, unknown> | null;
-}
-
-export interface TierCompiledPricingPolicy {
-  organization_id: string;
-  callable_key: string;
-  mode: string;
-  pricing: Record<string, number>;
-  source: Record<string, unknown>;
-}
-
-export interface TierCompiledCapacityPool {
-  pool_key: string;
-  callable_key: string;
-  rpm_capacity?: number | null;
-  tpm_capacity?: number | null;
-  max_parallel_requests?: number | null;
-  strategy: string;
-  saturation_threshold?: number | null;
-  burst_multiplier?: number | null;
-  source_tier_version_ids: string[];
-  source_pool_ids: string[];
-  metadata?: Record<string, unknown> | null;
-  rate_limit_descriptors: TierRateLimitDescriptor[];
-}
-
-export interface OrganizationTierPolicyPreview {
-  organization_id: string;
-  snapshot: TierPolicySnapshotInfo;
-  explicit_policy: boolean;
-  tier_keys: string[];
-  assignments: OrganizationTierAssignment[];
-  allowed_callable_keys: string[];
-  model_policies: TierCompiledModelPolicy[];
-  pricing_policies: TierCompiledPricingPolicy[];
-  rate_limits: TierRateLimitDescriptor[];
-  organization_hard_caps: Partial<Record<
-    'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit' | 'model_rpm_limit' | 'model_tpm_limit',
-    number | Record<string, number>
-  >>;
-  organization_rate_limits: TierRateLimitDescriptor[];
-  capacity_pools: TierCompiledCapacityPool[];
-}
-
-export type TierSimulationBillingMode =
-  | 'chat'
-  | 'embedding'
-  | 'rerank'
-  | 'image_generation'
-  | 'audio_speech'
-  | 'audio_transcription';
-
-export interface TierPolicySimulation {
-  organization_id: string;
-  callable_key: string;
-  mode: string;
-  request: {
-    request_count: number;
-    prompt_tokens: number;
-    completion_tokens: number;
-    tokens_per_request: number;
-    aggregate_tokens: number;
-    billing_mode: TierSimulationBillingMode | null;
-    usage: Record<string, number>;
-  };
-  access: {
-    allowed: boolean;
-    reason: string;
-    explicit_policy: boolean;
-    tier_keys: string[];
-  };
-  decision: {
-    allowed: boolean;
-    reason: string;
-    primary_limiting_scope: string | null;
-    limiting_scopes: string[];
-    basis: 'empty_window_static';
-    live_capacity_evaluated: false;
-  };
-  model_policy: TierCompiledModelPolicy | null;
-  pricing: TierCompiledPricingPolicy | null;
-  calculated_price: {
-    status: 'available' | 'partial' | 'unavailable';
-    reason: string | null;
-    currency: string;
-    kind: 'exact' | 'range' | null;
-    amount: number | null;
-    minimum_amount: number | null;
-    maximum_amount: number | null;
-    request_count: number;
-    amount_scope: 'aggregate';
-    per_request_amount: number | null;
-    per_request_minimum_amount: number | null;
-    per_request_maximum_amount: number | null;
-    billing_mode: TierSimulationBillingMode | null;
-    usage_snapshot: Record<string, number>;
-    configured_candidate_count: number;
-    priced_candidate_count: number;
-    unpriced_candidate_count: number;
-    unevaluated_candidate_count: number;
-    unpriced_reasons: string[];
-    pricing_sources: string[];
-    basis: 'configured_routes';
-  };
-  rate_limits: TierRateLimitDescriptor[];
-  organization_hard_caps: OrganizationTierPolicyPreview['organization_hard_caps'];
-  organization_rate_limits: TierRateLimitDescriptor[];
-  capacity_pool: TierCompiledCapacityPool | null;
-  capacity_pool_rate_limits: TierRateLimitDescriptor[];
-  static_limit_checks: Array<TierRateLimitDescriptor & {
-    amount: number;
-    would_exceed_limit: boolean;
-    remaining_after_amount: number;
-  }>;
-  snapshot: TierPolicySnapshotInfo;
-}
-
-export interface TierPolicySimulationPayload {
-  callable_key: string;
-  mode?: string;
-  billing_mode?: TierSimulationBillingMode;
-  request_count?: number;
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  input_images?: number;
-  output_images?: number;
-  input_characters?: number;
-  output_characters?: number;
-  input_audio_tokens?: number;
-  output_audio_tokens?: number;
-  duration_seconds?: number;
-}
-
-export interface TierCapacityDashboardOrgUsage {
-  organization_id: string;
-  rpm_used: number;
-  tpm_used: number;
-  total_usage: number;
-}
-
-export interface TierCapacityDashboardBoost {
-  organization_id: string;
-  weight_multiplier: number;
-  reason?: string | null;
-  expires_at?: string | null;
-}
-
-export interface TierCapacityDashboardPool {
-  pool_key: string;
-  callable_key: string;
-  strategy: string;
-  advanced_fair_share: boolean;
-  rpm_capacity?: number | null;
-  tpm_capacity?: number | null;
-  rpm_used: number | null;
-  tpm_used: number | null;
-  rpm_saturation?: number | null;
-  tpm_saturation?: number | null;
-  saturation_threshold?: number | null;
-  burst_multiplier?: number | null;
-  member_count: number;
-  active_org_count: number | null;
-  top_orgs: TierCapacityDashboardOrgUsage[];
-  active_boosts: TierCapacityDashboardBoost[];
-  active_boost_count: number | null;
-  cleanup_lagged?: boolean | null;
-}
-
-export interface TierCapacityLimitHit {
-  pool_key: string;
-  callable_key: string;
-  organization_id?: string | null;
-  scope: string;
-  tier_key?: string | null;
-  count: number;
-}
-
-export interface TierCapacityDashboard {
-  snapshot: TierPolicySnapshotInfo;
-  window_seconds: number;
-  window_id: number;
-  generated_at: string;
-  pools: TierCapacityDashboardPool[];
-  total_pool_count: number;
-  scanned_pool_count: number;
-  pool_scan_limit: number;
-  pool_scan_truncated: boolean;
-  advanced_pool_count: number;
-  saturated_pool_count: number | null;
-  pool_limit: number;
-  truncated: boolean;
-  limit_hit_count: number | null;
-  limit_hit_heatmap: TierCapacityLimitHit[];
-  live_data: {
-    status: 'healthy' | 'partial' | 'unavailable';
-    redis_available: boolean;
-    failed_sections: string[];
-  };
-}
-
-export interface TierCapacityBoostPayload {
-  organization_id: string;
-  pool_key: string;
-  callable_key: string;
-  weight_multiplier?: number;
-  ttl_seconds?: number;
-  reason?: string | null;
-}
-
 export interface SettingsResponse {
   router_settings?: {
     routing_strategy?: string;
@@ -1432,177 +938,7 @@ export const branding = {
   ),
 };
 
-export const tierCapacity = {
-  dashboard: (params?: { top_org_limit?: number; pool_limit?: number }) =>
-    apiFetch<TierCapacityDashboard>(withQuery('/ui/api/tier-capacity/dashboard', params)),
-  upsertBoost: (payload: TierCapacityBoostPayload) =>
-    apiFetch<TierCapacityDashboardBoost & {
-      pool_key: string;
-      callable_key: string;
-      ttl_seconds: number;
-    }>('/ui/api/tier-capacity/boosts', { method: 'POST', json: payload }),
-  deleteBoost: (params: { organization_id: string; pool_key: string; callable_key: string }) =>
-    apiFetch<{ deleted: boolean; organization_id: string; pool_key: string; callable_key: string }>(
-      withQuery('/ui/api/tier-capacity/boosts', params),
-      { method: 'DELETE' },
-    ),
-};
-
-export const tiers = {
-  list: (params?: { search?: string; enabled?: boolean | string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<Tier>>(withQuery('/ui/api/tiers', params)),
-  listAll: async (params?: { search?: string; enabled?: boolean | string }) => {
-    const limit = 200;
-    let offset = 0;
-    let items: Tier[] = [];
-    while (true) {
-      const page = await apiFetch<Paginated<Tier>>(
-        withQuery('/ui/api/tiers', { ...(params || {}), limit, offset }),
-      );
-      items = items.concat(page.data || []);
-      if (!page.pagination?.has_more) {
-        break;
-      }
-      offset += limit;
-    }
-    return items;
-  },
-  get: (tierId: string, params?: { include_versions?: boolean }) =>
-    apiFetch<TierDetail>(withQuery(`/ui/api/tiers/${encodeURIComponent(tierId)}`, params)),
-  create: (payload: TierCreatePayload) =>
-    apiFetch<Tier>('/ui/api/tiers', { method: 'POST', json: payload }),
-  bootstrap: (payload: TierCreatePayload, idempotencyKey: string) =>
-    apiFetch<TierBootstrapResponse>('/ui/api/tiers/bootstrap', {
-      method: 'POST',
-      headers: { 'Idempotency-Key': idempotencyKey },
-      json: payload,
-    }),
-  update: (tierId: string, payload: TierUpdatePayload) =>
-    apiFetch<Tier>(`/ui/api/tiers/${encodeURIComponent(tierId)}`, { method: 'PATCH', json: payload }),
-  delete: (tierId: string) =>
-    apiFetch<{ deleted: boolean; tier_id: string }>(`/ui/api/tiers/${encodeURIComponent(tierId)}`, { method: 'DELETE' }),
-  createVersion: (tierId: string, payload: TierVersionCreatePayload = {}) =>
-    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions`, { method: 'POST', json: payload }),
-  listVersions: (tierId: string, params?: { status?: string | string[]; limit?: number; offset?: number }) => {
-    const query = new URLSearchParams();
-    const statuses = Array.isArray(params?.status) ? params.status : params?.status ? [params.status] : [];
-    for (const status of statuses) {
-      if (status.trim()) query.append('status', status.trim());
-    }
-    if (params?.limit !== undefined) query.set('limit', String(params.limit));
-    if (params?.offset !== undefined) query.set('offset', String(params.offset));
-    const suffix = query.toString();
-    const path = `/ui/api/tiers/${encodeURIComponent(tierId)}/versions${suffix ? `?${suffix}` : ''}`;
-    return apiFetch<Paginated<TierVersion>>(path);
-  },
-  cloneVersion: (tierId: string, sourceVersionId: string) =>
-    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(sourceVersionId)}/clone`, { method: 'POST' }),
-  getVersion: (tierId: string, versionId: string) =>
-    apiFetch<TierVersionDetail>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}`),
-  listModelPolicies: (
-    tierId: string,
-    versionId: string,
-    params?: {
-      search?: string;
-      enabled?: boolean;
-      access_mode?: string;
-      capacity_pool_key?: string;
-      sort?: 'callable_key' | 'priority' | 'updated_at';
-      order?: 'asc' | 'desc';
-      limit?: number;
-      offset?: number;
-    },
-  ) => apiFetch<TierConfigurationPage<TierModelPolicy>>(
-    withQuery(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies`, params),
-  ),
-  createModelPolicy: (
-    tierId: string,
-    versionId: string,
-    payload: TierModelPolicyCreatePayload,
-  ) => apiFetch<TierConfigurationMutationResult<TierModelPolicy>>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies`,
-    { method: 'POST', json: payload },
-  ),
-  updateModelPolicy: (
-    tierId: string,
-    versionId: string,
-    policyId: string,
-    payload: TierModelPolicyPatchPayload,
-  ) => apiFetch<TierConfigurationMutationResult<TierModelPolicy>>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies/${encodeURIComponent(policyId)}`,
-    { method: 'PATCH', json: payload },
-  ),
-  deleteModelPolicy: (
-    tierId: string,
-    versionId: string,
-    policyId: string,
-    expectedRevision: number,
-  ) => apiFetch<TierConfigurationDeleteResult>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies/${encodeURIComponent(policyId)}`,
-    { method: 'DELETE', json: { expected_revision: expectedRevision } },
-  ),
-  bulkUpdateModelPolicyLimits: (
-    tierId: string,
-    versionId: string,
-    payload: TierModelPolicyBulkLimitsPayload,
-  ) => apiFetch<Omit<TierConfigurationDeleteResult, 'deleted'> & { affected_count: number }>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies/bulk-limits`,
-    { method: 'POST', json: payload },
-  ),
-  listCapacityPools: (
-    tierId: string,
-    versionId: string,
-    params?: {
-      search?: string;
-      callable_key?: string;
-      strategy?: string;
-      sort?: 'pool_key' | 'callable_key' | 'updated_at';
-      order?: 'asc' | 'desc';
-      limit?: number;
-      offset?: number;
-    },
-  ) => apiFetch<TierConfigurationPage<TierCapacityPool>>(
-    withQuery(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools`, params),
-  ),
-  createCapacityPool: (
-    tierId: string,
-    versionId: string,
-    payload: TierCapacityPoolCreatePayload,
-  ) => apiFetch<TierConfigurationMutationResult<TierCapacityPool>>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools`,
-    { method: 'POST', json: payload },
-  ),
-  updateCapacityPool: (
-    tierId: string,
-    versionId: string,
-    poolId: string,
-    payload: TierCapacityPoolPatchPayload,
-  ) => apiFetch<TierConfigurationMutationResult<TierCapacityPool>>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools/${encodeURIComponent(poolId)}`,
-    { method: 'PATCH', json: payload },
-  ),
-  deleteCapacityPool: (
-    tierId: string,
-    versionId: string,
-    poolId: string,
-    expectedRevision: number,
-  ) => apiFetch<TierConfigurationDeleteResult>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools/${encodeURIComponent(poolId)}`,
-    { method: 'DELETE', json: { expected_revision: expectedRevision } },
-  ),
-  activationPreview: (tierId: string, versionId: string) =>
-    apiFetch<TierActivationPreview>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/activation-preview`),
-  activateVersion: (
-    tierId: string,
-    versionId: string,
-    payload: { expected_revision: number; expected_active_version_id: string | null },
-  ) => apiFetch<TierVersion>(
-    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/activate`,
-    { method: 'POST', json: payload },
-  ),
-  archiveVersion: (tierId: string, versionId: string) =>
-    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/archive`, { method: 'POST' }),
-};
+export { tiers, tierCapacity } from './api/tiers';
 
 export const organizations = {
   ...organizationRecordsApi,
@@ -1694,12 +1030,12 @@ export const teams = {
       self_service_max_expiry_days: t.self_service_max_expiry_days ?? null,
     };
   },
-  create: (payload: object) => apiFetch<TeamRecord>('/ui/api/teams', { method: 'POST', json: payload }),
-  update: (teamId: string, payload: object) => apiFetch<TeamRecord>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'PUT', json: payload }),
+  create: (payload: object, signal?: AbortSignal) => apiFetch<TeamRecord>('/ui/api/teams', { method: 'POST', json: payload, signal }),
+  update: (teamId: string, payload: object, signal?: AbortSignal) => apiFetch<TeamRecord>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'PUT', json: payload, signal }),
   delete: (teamId: string) => apiFetch<{ deleted: boolean }>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'DELETE' }),
-  members: (teamId: string) => apiFetch<Record<string, unknown>[]>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`),
+  members: (teamId: string) => apiFetch<TeamMemberRecord[]>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`),
   memberCandidates: (teamId: string, params?: { search?: string; limit?: number }) =>
-    apiFetch<Record<string, unknown>[]>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/member-candidates`, params)),
+    apiFetch<TeamMemberCandidate[]>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/member-candidates`, params)),
   addMember: (teamId: string, payload: object) => apiFetch<Record<string, unknown>>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`, { method: 'POST', json: payload }),
   removeMember: (teamId: string, userId: string) =>
     apiFetch<{ deleted: boolean }>(`/ui/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
@@ -1707,8 +1043,8 @@ export const teams = {
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-visibility`, params)),
   assetAccess: (teamId: string, params?: ScopedAssetAccessParams) =>
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, params)),
-  updateAssetAccess: (teamId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
-    apiFetch<ScopedAssetAccess>(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, { method: 'PUT', json: payload }),
+  updateAssetAccess: (teamId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }, signal?: AbortSignal) =>
+    apiFetch<ScopedAssetAccess>(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, { method: 'PUT', json: payload, signal }),
 };
 
 export const serviceAccounts = {
@@ -1759,21 +1095,22 @@ export const mcpServers = {
 export const keys = {
   list: (params?: { search?: string; team_id?: string; my_keys?: boolean; limit?: number; offset?: number }) =>
     apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params)),
-  create: (payload: object) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload }),
-  update: (tokenHash: string, payload: object) =>
-    apiFetch<ApiKey>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'PUT', json: payload }),
+  create: (payload: object, signal?: AbortSignal) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload, signal }),
+  update: (tokenHash: string, payload: object, signal?: AbortSignal) =>
+    apiFetch<ApiKey>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'PUT', json: payload, signal }),
   regenerate: (tokenHash: string) => apiFetch<{ token: string; raw_key: string }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/regenerate`, { method: 'POST' }),
-  revoke: (tokenHash: string) => apiFetch<{ revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
-  delete: (tokenHash: string) => apiFetch<{ deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
+  revoke: (tokenHash: string) => apiFetch<KeyRemovalResult & { revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
+  delete: (tokenHash: string) => apiFetch<KeyRemovalResult & { deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
   assetVisibility: (tokenHash: string, params?: AssetVisibilityParams) =>
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-visibility`, params)),
   assetAccess: (tokenHash: string, params?: ScopedAssetAccessParams) =>
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, params)),
-  updateAssetAccess: (tokenHash: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
-    apiFetch<ScopedAssetAccess>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, { method: 'PUT', json: payload }),
+  updateAssetAccess: (tokenHash: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }, signal?: AbortSignal) =>
+    apiFetch<ScopedAssetAccess>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, { method: 'PUT', json: payload, signal }),
 };
 
 export const users = {
+  updateOutputTpm: updateRuntimeOutputTpm,
   assetVisibility: (userId: string, params?: Omit<AssetVisibilityParams, 'user_id'>) =>
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-visibility`, params)),
   assetAccess: (userId: string, params?: ScopedAssetAccessParams) =>
@@ -1956,6 +1293,7 @@ export interface RuntimeUserProfile {
   spend?: number | null;
   rpm_limit?: number | null;
   tpm_limit?: number | null;
+  output_tpm_limit?: number | null;
   rph_limit?: number | null;
   rpd_limit?: number | null;
   tpd_limit?: number | null;
@@ -2075,41 +1413,5 @@ export const invitations = {
     apiFetch<{ cancelled: boolean; invitation_id: string }>(`/ui/api/invitations/${encodeURIComponent(invitationId)}/cancel`, { method: 'POST' }),
 };
 
-export interface SelfRegistrationPublicConfig {
-  enabled: boolean;
-  mode: string | null;
-  sandbox_access_enabled: boolean;
-}
-
-export interface AuthSsoConfig {
-  sso_enabled: boolean;
-  provider?: string;
-  self_registration?: SelfRegistrationPublicConfig;
-}
-
-export const auth = {
-  me: () => apiFetch<unknown>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
-  internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
-    apiFetch<unknown>('/auth/internal/login', { method: 'POST', json: payload }),
-  masterLogin: (masterKey: string) =>
-    apiFetch<unknown>('/auth/master/login', { method: 'POST', json: { master_key: masterKey } }),
-  internalLogout: () => apiFetch<unknown>('/auth/internal/logout', { method: 'POST' }),
-  changePassword: (current_password: string | null, new_password: string) =>
-    apiFetch<unknown>('/auth/internal/change-password', { method: 'POST', json: { current_password, new_password } }),
-  invitation: (token: string) => apiFetch<unknown>(`/auth/invitations/${encodeURIComponent(token)}`),
-  acceptInvitation: (payload: { token: string; password?: string | null }) =>
-    apiFetch<InvitationAcceptResult>('/auth/invitations/accept', { method: 'POST', json: payload }),
-  forgotPassword: (email: string) =>
-    apiFetch<{ requested: boolean }>('/auth/internal/forgot-password', { method: 'POST', json: { email } }),
-  validateResetPasswordToken: (token: string) =>
-    apiFetch<{ valid: boolean; email?: string }>(`/auth/internal/reset-password/${encodeURIComponent(token)}`),
-  resetPassword: (token: string, new_password: string) =>
-    apiFetch<{ changed: boolean }>('/auth/internal/reset-password', { method: 'POST', json: { token, new_password } }),
-  ssoConfig: () => apiFetch<AuthSsoConfig>('/auth/sso-config'),
-  ssoLogin: (state: string, returnTo = '/') => apiFetch<{ authorize_url: string }>(
-    `/auth/login?state=${encodeURIComponent(state)}&return_to=${encodeURIComponent(returnTo)}`,
-  ),
-  mfaEnrollStart: () => apiFetch<{ secret: string; otpauth_url: string }>('/auth/mfa/enroll/start', { method: 'POST' }),
-  mfaEnrollConfirm: (code: string) => apiFetch<{ mfa_enabled: boolean }>('/auth/mfa/enroll/confirm', { method: 'POST', json: { code } }),
-  mfaVerify: (code: string) => apiFetch<{ mfa_verified: boolean }>('/auth/mfa/verify', { method: 'POST', json: { code } }),
-};
+export { auth } from './api/auth';
+export type { AuthSsoConfig, SelfRegistrationPublicConfig } from './api/auth';

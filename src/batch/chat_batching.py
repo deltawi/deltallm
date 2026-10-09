@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 import json
 import operator
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, TYPE_CHECKING
 
 import httpx
 from pydantic import ValidationError
@@ -19,6 +19,18 @@ from src.providers.base import (
     sanitize_provider_proxy_error,
 )
 from src.providers.resolution import resolve_provider
+
+if TYPE_CHECKING:
+    from src.batch.worker_types import _PreparedChatItem
+
+
+def has_chat_microbatch_output_policy(items: Sequence[_PreparedChatItem]) -> bool:
+    return any(
+        item.policy_lease is not None
+        and item.policy_lease.rate_limit_lease.output_context is not None
+        for item in items
+    )
+
 
 ChatBatchingMode = Literal["disabled", "concurrent", "sync_microbatch"]
 DEFAULT_CHAT_BATCHING_MODE: ChatBatchingMode = "concurrent"

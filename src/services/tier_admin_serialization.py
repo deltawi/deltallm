@@ -82,6 +82,7 @@ def serialize_model_policy(record: TierModelPolicyRecord) -> dict[str, Any]:
         "access_mode": record.access_mode,
         "rpm_limit": record.rpm_limit,
         "tpm_limit": record.tpm_limit,
+        "output_tpm_limit": record.output_tpm_limit,
         "rph_limit": record.rph_limit,
         "rpd_limit": record.rpd_limit,
         "tpd_limit": record.tpd_limit,

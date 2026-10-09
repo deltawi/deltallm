@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.shutdown import BoundedExitStack
 import asyncio
+from src.startup_settings import startup_setting
 from dataclasses import dataclass
 from typing import Any
 
@@ -87,12 +88,7 @@ class InfrastructureRuntime:
 
 
 def _startup_setting(general_settings: Any, settings: Any, field_name: str, default: Any) -> Any:
-    fields_set = getattr(general_settings, "model_fields_set", None)
-    if fields_set is None or field_name in fields_set:
-        value = getattr(general_settings, field_name, None)
-        if value is not None:
-            return value
-    return getattr(settings, field_name, default)
+    return startup_setting(general_settings, settings, field_name, default)
 
 
 async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
@@ -113,6 +109,11 @@ async def _init_infrastructure_runtime(
         app.state.process_lifecycle = ProcessLifecycle(startup.lifecycle)
     settings, file_config, cfg = startup.settings, startup.file_config, startup.app_config
 
+    from src.ui.config import UIMountSettings
+
+    app.state.ui_mount = UIMountSettings.model_validate(
+        _startup_setting(cfg.general_settings, settings, "ui_mount", UIMountSettings())
+    )
     app.state.settings = settings
     app.state.app_config = cfg
     redis_endpoint_settings = cfg.general_settings
@@ -144,6 +145,8 @@ async def _init_infrastructure_runtime(
         redis_client=None,
         file_config=file_config,
         defer_updates=True,
+        output_policy_degraded_mode=settings.redis_degraded_mode,
+        runtime_settings=settings,
     )
     cleanup.push_async_callback(dynamic_config_manager.close)
     await dynamic_config_manager.initialize()

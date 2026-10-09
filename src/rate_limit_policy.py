@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from contextlib import suppress
+
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
@@ -14,6 +15,9 @@ from src.metrics import (
     set_tier_capacity_pool_saturation,
 )
 from src.models.errors import RateLimitError
+from src.services.output_limit_types import OutputPolicy
+from src.services.output_token_context import OutputTokenContext
+from src.services.rate_limit_lease import RateLimitLease, RateLimitState
 from src.services.limit_counter import (
     LegacyParallelLease,
     LimitCounter,
@@ -61,68 +65,6 @@ def _model_limit(limits: dict[str, int] | None, model: str | None) -> int | None
     return best_match[1] if best_match[0] >= 0 else None
 
 
-@dataclass
-class RateLimitState:
-    rpm_limit: int = 0
-    rpm_remaining: int = 0
-    rpm_reset: int = 0
-    rpm_scope: str = ""
-    tpm_limit: int = 0
-    tpm_remaining: int = 0
-    tpm_reset: int = 0
-    tpm_scope: str = ""
-    warning: str | None = None
-
-
-@dataclass(slots=True)
-class RateLimitLease:
-    legacy_parallel_lease: LegacyParallelLease | None = None
-    parallel_leases: tuple[ParallelLimitLease, ...] = ()
-    _pending_parallel_leases: list[ParallelLimitLease] = field(init=False, repr=False)
-    _legacy_parallel_pending: bool = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self._pending_parallel_leases = list(self.parallel_leases)
-        self._legacy_parallel_pending = self.legacy_parallel_lease is not None
-
-    @property
-    def pending_parallel_acquisitions(self) -> tuple[ParallelLimitCheck, ...]:
-        checks = []
-        if self._legacy_parallel_pending and self.legacy_parallel_lease is not None:
-            checks.append(self.legacy_parallel_lease.check)
-        checks.extend(lease.check for lease in self._pending_parallel_leases)
-        return tuple(checks)
-
-    @property
-    def pending_parallel_leases(self) -> tuple[ParallelLimitLease, ...]:
-        return tuple(self._pending_parallel_leases)
-
-    @property
-    def pending_legacy_parallel_lease(self) -> LegacyParallelLease | None:
-        if not self._legacy_parallel_pending:
-            return None
-        return self.legacy_parallel_lease
-
-    @property
-    def refreshable_parallel_leases(self) -> tuple[ParallelLimitLease, ...]:
-        return tuple(lease for lease in self._pending_parallel_leases if lease.backend == "redis")
-
-    @property
-    def refreshable_legacy_parallel_lease(self) -> LegacyParallelLease | None:
-        if not self._legacy_parallel_pending:
-            return None
-        if self.legacy_parallel_lease is None or self.legacy_parallel_lease.backend != "redis":
-            return None
-        return self.legacy_parallel_lease
-
-    def mark_parallel_released(self, lease: ParallelLimitLease) -> None:
-        with suppress(ValueError):
-            self._pending_parallel_leases.remove(lease)
-
-    def mark_legacy_parallel_released(self) -> None:
-        self._legacy_parallel_pending = False
-
-
 @dataclass(frozen=True, slots=True)
 class _StaticTierCapacityObservation:
     pool_key: str
@@ -146,6 +88,7 @@ def compute_rate_limit_state(
 
     best_rpm_ratio = -1.0
     best_tpm_ratio = -1.0
+    best_output_ratio = -1.0
     max_usage_ratio = 0.0
 
     for i, check in enumerate(result.checks):
@@ -157,6 +100,15 @@ def compute_rate_limit_state(
 
         if ratio > max_usage_ratio:
             max_usage_ratio = ratio
+
+        if check.dimension == "output_tokens":
+            if ratio > best_output_ratio:
+                best_output_ratio = ratio
+                state.output_tpm_limit = check.limit
+                state.output_tpm_remaining = remaining
+                state.output_tpm_reset = result.window_resets[i]
+                state.output_tpm_scope = check.scope
+            continue
 
         is_rpm = (
             check.scope.endswith("_rpm")
@@ -355,6 +307,7 @@ async def acquire_rate_limit_controls(
     tier_capacity_fair_share_active_ttl_seconds: int = 10,
     mode: RateLimitMode | str = "sync",
     preacquired_parallel_lease: RateLimitLease | None = None,
+    output: OutputPolicy | None = None,
 ) -> tuple[RateLimitLease, RateLimitState]:
     checks = _build_standard_rate_limit_checks(auth=auth, tokens=tokens, model=model)
     tier_controls = build_tier_limit_controls(
@@ -393,6 +346,7 @@ async def acquire_rate_limit_controls(
                 list(tier_controls.fair_share_checks),
                 capacity_rate_checks=list(tier_controls.capacity_rate_checks),
                 active_ttl_seconds=tier_capacity_fair_share_active_ttl_seconds,
+                output=output,
                 legacy_parallel_check=(None if parallel_preacquired else legacy_parallel_check),
                 parallel_checks=(
                     [] if parallel_preacquired else list(tier_controls.parallel_checks)
@@ -467,16 +421,29 @@ async def acquire_rate_limit_controls(
             legacy_parallel_lease=admission.legacy_parallel_lease,
             parallel_leases=admission.parallel_leases,
         )
-        return lease, compute_rate_limit_state(admission.rate_result, checks)
+        state = compute_rate_limit_state(admission.rate_result, checks)
+        if admission.rate_result.output_snapshot is not None:
+            lease.output_context = OutputTokenContext(
+                limiter, admission.rate_result.output_snapshot, state
+            )
+        return lease, state
 
     try:
-        result = await limiter.check_rate_limits_atomic(checks)
+        result = (
+            await limiter.check_rate_limits_atomic(checks, output=output)
+            if output
+            else await limiter.check_rate_limits_atomic(checks)
+        )
     except RateLimitError as exc:
         _annotate_rate_limit_error(exc, checks=checks)
         raise
     rate_limit_state = compute_rate_limit_state(result, checks)
 
     if parallel_preacquired:
+        if result.output_snapshot is not None:
+            preacquired_parallel_lease.output_context = OutputTokenContext(
+                limiter, result.output_snapshot, rate_limit_state
+            )
         return preacquired_parallel_lease, rate_limit_state
 
     acquired_legacy_parallel_lease = None
@@ -504,6 +471,11 @@ async def acquire_rate_limit_controls(
     return RateLimitLease(
         legacy_parallel_lease=acquired_legacy_parallel_lease,
         parallel_leases=tuple(tier_parallel_leases),
+        output_context=(
+            OutputTokenContext(limiter, result.output_snapshot, rate_limit_state)
+            if result.output_snapshot is not None
+            else None
+        ),
     ), rate_limit_state
 
 
@@ -705,6 +677,16 @@ def _record_static_tier_capacity_observation(
 
 
 async def release_rate_limit_controls(*, limiter: LimitCounter, lease: RateLimitLease) -> None:
+    try:
+        await _release_parallel_rate_limit_controls(limiter=limiter, lease=lease)
+    finally:
+        if lease.output_context is not None:
+            await lease.output_context.finish()
+
+
+async def _release_parallel_rate_limit_controls(
+    *, limiter: LimitCounter, lease: RateLimitLease
+) -> None:
     pending = list(reversed(lease.pending_parallel_leases))
     legacy_lease = lease.pending_legacy_parallel_lease
     if not pending and legacy_lease is None:
@@ -826,7 +808,8 @@ def _annotate_rate_limit_error(
     checks: list[RateLimitCheck],
     state: RateLimitState | None = None,
 ) -> None:
-    setattr(exc, "rate_limit_checks", list(checks))
+    if not getattr(exc, "rate_limit_checks", None):
+        setattr(exc, "rate_limit_checks", list(checks))
     if state is not None:
         setattr(exc, "rate_limit_state", state)
 

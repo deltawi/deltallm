@@ -12,6 +12,9 @@ class RedisLuaScript:
         self._sha: str | None = None
         self._load_lock = asyncio.Lock()
 
+    async def load(self, redis_client: Any) -> None:
+        await self._load(redis_client)
+
     async def eval(self, redis_client: Any, numkeys: int, *args: Any) -> Any:
         if not _supports_evalsha(redis_client):
             return await redis_client.eval(self.script, numkeys, *args)
@@ -36,7 +39,9 @@ class RedisLuaScript:
 
 
 def _supports_evalsha(redis_client: Any) -> bool:
-    return callable(getattr(redis_client, "script_load", None)) and callable(getattr(redis_client, "evalsha", None))
+    return callable(getattr(redis_client, "script_load", None)) and callable(
+        getattr(redis_client, "evalsha", None)
+    )
 
 
 def _is_no_script_error(exc: Exception) -> bool:

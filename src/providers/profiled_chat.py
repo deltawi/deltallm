@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 
 import httpx
 
@@ -113,11 +113,17 @@ class ProfiledChatAdapter(OpenAIAdapter):
         )
 
     async def translate_stream(
-        self, provider_stream: AsyncIterator[str], *, model_name: str | None = None
+        self,
+        provider_stream: AsyncIterator[str],
+        *,
+        model_name: str | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> AsyncIterator[str]:
         async for line in translate_openai_compatible_stream(
             provider_stream,
             classify_failure=self._classify_failure,
             normalize_usage=normalize_chat_usage,
+            output_observer=output_observer,
+            output_count=self.complete_output_count,
         ):
             yield line

@@ -109,7 +109,7 @@ def _command_keys(args: tuple[object, ...]) -> tuple[str, ...]:
 
 def _key_owner(key: str) -> str:
     normalized = key.lower()
-    if normalized.startswith("key:v4:"):
+    if normalized.startswith(("key:v4:", "key:v5:", "key:v6:", "key:v7:")):
         return "authentication"
     if normalized.startswith(("parallel:", "parallel_lease:")):
         return "concurrency"

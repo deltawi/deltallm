@@ -18,6 +18,21 @@ class SSOAccountMatch(str, Enum):
     CREATED = "created"
 
 
+class SSOAccountResolutionPolicy(str, Enum):
+    OPERATOR_SSO = "operator_sso"
+    EXTERNAL_CUSTOMER = "external_customer"
+
+
+class SSOAccountLinkRequiredError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("Account link approval is required")
+
+
+class SSOAccountEligibilityError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("Account is not eligible for external sign-in")
+
+
 class SSOIdentityOwnershipError(ValueError):
     def __init__(self) -> None:
         super().__init__("SSO email is not verified")

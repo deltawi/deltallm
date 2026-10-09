@@ -70,18 +70,33 @@ class FixedMicrobatch:
         ]
 
 
-async def measure(output_dir, *, case, duration_seconds=10, rate=2, independent=False):
+async def measure(
+    output_dir,
+    *,
+    case,
+    duration_seconds=10,
+    rate=2,
+    independent=False,
+    selector_timeout_ms=None,
+):
     app = await app_fixture.__wrapped__()
     with pytest.MonkeyPatch.context() as patch:
         fixture = selected_batch_harness(app, patch, independent=independent)
         h = await anext(fixture)
         try:
-            return await _measure(h, output_dir, case, duration_seconds, rate)
+            return await _measure(
+                h,
+                output_dir,
+                case,
+                duration_seconds,
+                rate,
+                selector_timeout_ms=selector_timeout_ms,
+            )
         finally:
             await fixture.aclose()
 
 
-async def _measure(h, output_dir, case, duration_seconds, rate):
+async def _measure(h, output_dir, case, duration_seconds, rate, *, selector_timeout_ms=None):
     if case not in CASES:
         raise ValueError("unknown Batch profile")
     selected = case.startswith("selector_")
@@ -92,6 +107,8 @@ async def _measure(h, output_dir, case, duration_seconds, rate):
     }.get(case, 3)
     if case == "selector_safe_default":
         h.selector_reply = "invalid result"
+    if selector_timeout_ms is not None:
+        h.policy["selector"]["timeout_ms"] = selector_timeout_ms
     batching = "concurrent" if case == "baseline_concurrent" else "sync_microbatch"
     h.worker.config.worker_concurrency = 4
     for record in h.app.state._test_repo.records.values():

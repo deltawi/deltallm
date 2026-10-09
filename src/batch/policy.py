@@ -14,6 +14,8 @@ from src.batch.worker_types import BatchRoutingRuntime
 from src.billing.accounting_service import AccountingProtocolService
 from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.callbacks import CallbackManager
+from src.services.output_admission import prepare_output_policy
+from src.models.requests import ChatCompletionRequest
 from src.rate_limit_policy import (
     RateLimitLease,
     acquire_rate_limit_controls,
@@ -207,6 +209,17 @@ async def acquire_batch_policy_lease(
     if limiter is None:
         return None
     data = dump_request_for_preflight(payload)
+    output = (
+        prepare_output_policy(
+            auth,
+            model=str(getattr(payload, "model", "") or ""),
+            tier_policy_service=getattr(app.state, "tier_policy_service", None),
+            tier_policy_mode=get_tier_policy_mode_from_app(app),
+            tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
+        )
+        if isinstance(payload, ChatCompletionRequest)
+        else None
+    )
     lease, _state = await acquire_rate_limit_controls(
         limiter=limiter,
         auth=auth,
@@ -220,14 +233,13 @@ async def acquire_batch_policy_lease(
             app
         ),
         mode="batch",
+        **({"output": output} if output is not None else {}),
     )
     return BatchPolicyLease(rate_limit_lease=lease)
 
 
 async def release_batch_policy_lease(*, app: Any, lease: BatchPolicyLease | None) -> bool:
     if lease is None:
-        return True
-    if not lease.rate_limit_lease.pending_parallel_acquisitions:
         return True
     limiter = getattr(app.state, "limit_counter", None)
     if limiter is None:

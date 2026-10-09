@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from src.api.admin.accounting_budget import apply_accounting_balances
 from src.billing.accounting_protocol import AccountingScope
 from src.auth.roles import OrganizationRole, Permission, validate_organization_role
+from src.api.admin.auth_scope import require_organization_directory_access
 from src.audit.actions import AuditAction
 from src.services.asset_binding_mirror import (
     callable_catalog,
@@ -35,6 +36,12 @@ from src.api.admin.endpoints.organization_schemas import (
     OrganizationListResponse,
     OrganizationResponse,
 )
+from src.api.admin.output_policy import (
+    invalidate_output_policy_now,
+    output_policy_change,
+    schedule_output_policy_invalidation,
+)
+from src.db.output_policy import persist_output_policy
 from src.api.admin.organization_mutations import require_active_organization_mutation
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
@@ -43,6 +50,7 @@ from src.db.organization_admin import (
     OrganizationPersistenceValues,
 )
 from src.db.route_groups import RouteGroupRepository
+from src.db.team_directory import TeamDirectoryRepository
 from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
 from src.middleware.admin import require_admin_permission
 from src.services.asset_visibility_preview import (
@@ -104,6 +112,7 @@ def _organization_response_payload(
 
 
 _ORGANIZATION_HARD_CAP_FIELDS = (
+    "output_tpm_limit",
     "rpm_limit",
     "tpm_limit",
     "rph_limit",
@@ -1050,7 +1059,7 @@ async def list_organizations(
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-    select_cols = """o.organization_id, o.organization_name, o.max_budget, o.soft_budget, o.spend, o.budget_duration, o.budget_reset_at, o.rpm_limit, o.tpm_limit,
+    select_cols = """o.organization_id, o.organization_name, o.max_budget, o.soft_budget, o.spend, o.budget_duration, o.budget_reset_at, o.rpm_limit, o.tpm_limit, o.output_tpm_limit,
                    o.rph_limit, o.rpd_limit, o.tpd_limit,
                    o.model_rpm_limit, o.model_tpm_limit,
                    o.audit_content_storage_enabled, o.metadata,
@@ -1121,7 +1130,7 @@ async def get_organization(
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, lifecycle_state, deletion_requested_at, deletion_not_before_at, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, output_tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, lifecycle_state, deletion_requested_at, deletion_not_before_at, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -1429,6 +1438,7 @@ async def create_organization(
     budget_reset_at_storage = _budget_reset_storage_value(budget_reset_at)
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
+    output_change = output_policy_change(request, payload, scope="organization")
     rph_limit = optional_int(payload.get("rph_limit"), "rph_limit")
     rpd_limit = optional_int(payload.get("rpd_limit"), "rpd_limit")
     tpd_limit = optional_int(payload.get("tpd_limit"), "tpd_limit")
@@ -1523,6 +1533,18 @@ async def create_organization(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
             )
+        await persist_output_policy(
+            db_client, scope="organization", identity=organization_id, change=output_change
+        )
+        await schedule_output_policy_invalidation(
+            db_client,
+            request=request,
+            scope="organization",
+            identity=organization_id,
+            change=output_change,
+        )
+        if output_change.present:
+            persisted_organization["output_tpm_limit"] = output_change.value
         response_payload = _organization_response_payload(dict(persisted_organization))
         assignment = None
         scheduled_cache_invalidation = None
@@ -1626,6 +1648,8 @@ async def create_organization(
                 raise _tier_assignment_http_error(mapped_error) from exc
         raise
 
+    if output_change.present:
+        await invalidate_output_policy_now(request, scope="organization", identity=organization_id)
     if route_group_bindings or callable_target_bindings or shadow_access_mirrored:
         await reload_callable_target_grants(request)
     response["service_policy"] = _organization_service_policy_payload(
@@ -1712,7 +1736,7 @@ async def update_organization(
     )
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, lifecycle_state, deletion_requested_at, deletion_not_before_at, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, output_tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, lifecycle_state, deletion_requested_at, deletion_not_before_at, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -1749,6 +1773,7 @@ async def update_organization(
     budget_reset_at_storage = _budget_reset_storage_value(budget_reset_at)
     rpm_limit = optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+    output_change = output_policy_change(request, payload, scope="organization")
     rph_limit = optional_int(payload.get("rph_limit", existing.get("rph_limit")), "rph_limit")
     rpd_limit = optional_int(payload.get("rpd_limit", existing.get("rpd_limit")), "rpd_limit")
     tpd_limit = optional_int(payload.get("tpd_limit", existing.get("tpd_limit")), "tpd_limit")
@@ -1856,6 +1881,18 @@ async def update_organization(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
             )
+        await persist_output_policy(
+            db_client, scope="organization", identity=organization_id, change=output_change
+        )
+        await schedule_output_policy_invalidation(
+            db_client,
+            request=request,
+            scope="organization",
+            identity=organization_id,
+            change=output_change,
+        )
+        if output_change.present:
+            updated_organization["output_tpm_limit"] = output_change.value
         updated_payload = _organization_response_payload(
             dict(updated_organization),
             capabilities=build_organization_capabilities(scope, updated_organization),
@@ -1919,7 +1956,9 @@ async def update_organization(
             ),
         )
     key_service = getattr(request.app.state, "key_service", None)
-    if key_service is not None:
+    if output_change.present:
+        await invalidate_output_policy_now(request, scope="organization", identity=organization_id)
+    elif key_service is not None:
         try:
             await key_service.invalidate_keys_for_org(organization_id)
         except Exception:
@@ -1945,7 +1984,16 @@ async def update_organization(
     "/ui/api/organizations/{organization_id}/members",
     dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
 )
-async def list_organization_members(request: Request, organization_id: str) -> list[dict[str, Any]]:
+async def list_organization_members(
+    request: Request,
+    organization_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_READ
+    )
+    require_organization_directory_access(scope, organization_id)
     db = db_or_503(request)
     rows = await db.query_raw(
         """
@@ -1994,11 +2042,8 @@ async def list_organization_member_candidates(
     scope = get_auth_scope(
         request, authorization, x_master_key, required_permission=Permission.ORG_READ
     )
+    require_organization_directory_access(scope, organization_id)
     db = db_or_503(request)
-    if not scope.is_platform_admin and organization_id not in scope.org_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
-        )
 
     # Privacy-by-default: do not return broad account listings.
     # Callers must provide an exact user identifier (case-insensitive).
@@ -2195,17 +2240,24 @@ async def remove_organization_member(
     "/ui/api/organizations/{organization_id}/teams",
     dependencies=[Depends(require_admin_permission(Permission.ORG_READ))],
 )
-async def list_organization_teams(request: Request, organization_id: str) -> list[dict[str, Any]]:
+async def list_organization_teams(
+    request: Request,
+    organization_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.ORG_READ
+    )
+    if not scope.is_platform_admin and organization_id not in scope.org_ids:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    workspace = scope.external_workspace
+    if workspace is not None and Permission.TEAM_READ not in scope.effective_permissions:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     db = db_or_503(request)
-    rows = await db.query_raw(
-        """
-        SELECT t.team_id, t.team_alias, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.blocked, t.created_at, t.updated_at,
-               (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count
-        FROM deltallm_teamtable t
-        WHERE t.organization_id = $1
-        ORDER BY t.created_at DESC
-        """,
+    rows = await TeamDirectoryRepository(db).list_for_organization(
         organization_id,
+        bound_team_id=workspace.team_id if workspace is not None else None,
     )
     teams = [dict(row) for row in rows]
     await apply_accounting_balances(request, teams, AccountingScope.TEAM)

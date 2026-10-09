@@ -42,6 +42,9 @@
 {{- end -}}
 {{- end -}}
 {{- $db := add $g.db_pool_size $g.db_foreground_pool_size -}}
+{{- if (default (dict) (get $g "external_auth")).enabled -}}
+{{- $db = add $db 4 -}}
+{{- end -}}
 {{- if or (eq $g.audit_ingestion_mode "outbox") (eq $g.spend_ingestion_mode "outbox") (and $g.accounting_protocol_enabled (not $native)) -}}
 {{- $db = add $db $g.telemetry_db_pool_size -}}
 {{- $spendWorker := and (eq $g.spend_ingestion_mode "outbox") $g.spend_ingestion_worker_enabled -}}

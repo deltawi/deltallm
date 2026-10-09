@@ -6,6 +6,12 @@ These endpoints back the Admin UI, but you can also use them directly for automa
 
 ## Quick Success Path
 
+Caller policies accept `output_tpm_limit` on key and team create/update endpoints, organization create/update endpoints, and runtime-user updates (`PUT /ui/api/users/{user_id}`). Reads and lists return the stored value. Use a strict integer from 1 through 2,147,483,647, or `null`. Omitted updates preserve the policy; `null` clears it. Self-service key creation cannot exceed a configured team output limit. See [Output TPM requirements](../features/rate-limiting.md#output-tokens-per-minute).
+
+Teams and keys also accept nullable `model_output_tpm_limit` maps on create/update. Use exact callable IDs with positive integer values, at most 64 entries and 256 UTF-8 bytes per ID. Omit to preserve; `null` or `{}` clears the map. Reads and lists return it. Parent limits still apply independently.
+
+Tier model-policy create, patch, clone, and bulk-limit operations accept nullable `output_tpm_limit`. Activation includes the value in its immutable policy revision. In enforce mode, each assigned organization gets its own counter for that model. Tier output policies require fail-closed Redis and tier snapshot behavior. The organization preview returns the effective model limit and its tier source. The simulator returns an empty-minute completion projection separately from admission.
+
 Most operators use the admin API in this order:
 
 1. Log in with the master key or an authenticated admin session
@@ -56,6 +62,30 @@ These endpoints back browser login, invitation acceptance, password recovery, MF
 - MCP binding and tool-policy listing endpoints return **enabled** rows by default. Platform admins can opt in to disabled rows with `include_disabled=true`.
 
 ## Runtime Configuration
+
+### Asset List Controls
+
+These list endpoints accept `search`, `limit`, `offset`, `sort_by`, and `sort_direction`.
+Use `asc` or `desc` for the direction. The server applies access checks and filters before sorting and pagination.
+Equal values use a stable asset key as the final sort key. Missing values appear last.
+
+| Endpoint | Allowed `sort_by` values |
+| --- | --- |
+| `/ui/api/models` | `name`, `mode`, `provider`, `health`, `created_by`, `updated_at`, `visibility` |
+| `/ui/api/route-groups` | `name`, `routing`, `members`, `health`, `created_by`, `updated_at`, `visibility` |
+| `/ui/api/prompt-registry/templates` | `name`, `versions`, `labels`, `bindings`, `created_by`, `updated_at`, `visibility` |
+
+The UI requests `sort_by=updated_at&sort_direction=desc` initially.
+If you omit `sort_by`, the existing API order applies.
+List items include `created_by_user_id`, `created_at`, `updated_at`, and `visibility`.
+The creator ID is the stored account ID for all roles, including platform administrators. Creator email addresses are not added to the response.
+Old records can have null creator IDs or timestamps.
+
+Model list items include `health_status`: `healthy`, `unhealthy`, or `unknown`.
+The `healthy` field is null when health data is unavailable. Cooldowns make a deployment unavailable.
+Group list items also include `degraded`, `paused`, and `empty` states, with enabled and available member counts.
+For health sorting, ascending order puts unhealthy and degraded items first.
+Unknown groups have a null available member count.
 
 ### Models
 

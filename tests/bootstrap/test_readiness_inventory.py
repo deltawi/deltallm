@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.bootstrap.readiness import collect_workers, worker_inventory
+from src.bootstrap.readiness import collect_workers, dependency_probes, worker_inventory
 from src.bootstrap.asset_readiness import AUTHORIZATION_OWNERS
 from src.config import AppConfig, GeneralSettings, Settings
 from src.services.managed_asset_reconciliation import ManagedAssetReconciliationHealth
@@ -81,6 +81,26 @@ def test_disabled_optional_workers_are_distinct_from_missing_required_ones():
     assert all(check.ready for check in required.values())
     assert optional["audit_ingestion_worker"].state == "disabled"
     assert optional["email_outbox_worker"].state == "disabled"
+
+
+async def test_external_auth_joins_the_bounded_dependency_and_worker_inventory():
+    state, cfg = base()
+
+    async def check_ready():
+        return True
+
+    state.external_auth_runtime = SimpleNamespace(ready=True, check_ready=check_ready)
+    probes = dependency_probes(state)
+    assert await probes["external_auth"]()
+    inventory = worker_inventory(state, cfg)
+    assert collect_workers(inventory)[0]["external_auth_worker"].ready
+    state.external_auth_runtime.ready = False
+    assert not collect_workers(inventory)[0]["external_auth_worker"].ready
+
+
+def test_disabled_external_auth_has_no_dependency_probe():
+    state, _ = base()
+    assert "external_auth" not in dependency_probes(state)
 
 
 def test_worker_must_acknowledge_startup_and_still_be_alive():

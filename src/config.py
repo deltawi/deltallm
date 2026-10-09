@@ -28,6 +28,8 @@ from src.spend_operation_settings import SpendOperationSettings
 from src.request_work_settings import MAX_GUARDRAILS, RequestWorkSettings
 from src.lifecycle_settings import LifecycleSettings
 from src.deployment_capacity_settings import DeploymentCapacitySettings
+from src.auth.external_config import ExternalAuthSettings
+from src.ui.config import UIMountSettings
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
@@ -557,6 +559,8 @@ class GeneralSettings(
     model_config = ConfigDict(hide_input_in_errors=True)
 
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
+    external_auth: ExternalAuthSettings = Field(default_factory=ExternalAuthSettings)
+    ui_mount: UIMountSettings = Field(default_factory=UIMountSettings)
 
     instance_name: str = Field(default=DEFAULT_UI_INSTANCE_NAME, min_length=1, max_length=80)
     ui_branding: UIBrandingSettings = Field(default_factory=UIBrandingSettings)
@@ -1052,6 +1056,16 @@ class GeneralSettings(
         return normalized
 
     @model_validator(mode="after")
+    def validate_external_auth_deployment(self) -> "GeneralSettings":
+        self.external_auth.require_deployment(
+            audit_mode=self.audit_ingestion_mode,
+            audit_worker_enabled=self.audit_ingestion_worker_enabled,
+            cache_worker_enabled=self.cache_invalidation_worker_enabled,
+            cache_ttl_seconds=self.api_key_auth_cache_ttl_seconds,
+        )
+        return self
+
+    @model_validator(mode="after")
     def validate_upstream_http_pool(self) -> "GeneralSettings":
         if self.upstream_http_max_keepalive_connections > self.upstream_http_max_connections:
             raise ValueError(
@@ -1179,6 +1193,9 @@ class Settings(
     model_config = SettingsConfigDict(
         env_prefix="DELTALLM_", extra="ignore", hide_input_in_errors=True
     )
+
+    external_auth: ExternalAuthSettings = Field(default_factory=ExternalAuthSettings)
+    ui_mount: UIMountSettings = Field(default_factory=UIMountSettings)
 
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
     app_name: str = "DeltaLLM Core API"
@@ -1363,6 +1380,19 @@ def resolve_database_settings(
         ),
         pool_size=pool_size,
         pool_timeout=pool_timeout,
+    )
+
+
+def resolve_external_auth_database_settings(
+    config: AppConfig, settings: Settings
+) -> DatabaseConnectionSettings | None:
+    primary = resolve_database_settings(config, settings)
+    if primary is None:
+        return None
+    return DatabaseConnectionSettings(
+        url=_apply_database_pool_settings(primary.url, pool_size=4, pool_timeout=1),
+        pool_size=4,
+        pool_timeout=1,
     )
 
 

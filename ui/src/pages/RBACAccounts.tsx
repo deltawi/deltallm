@@ -1,3 +1,5 @@
+import RuntimeOutputTpmEditor from '../components/admin/RuntimeOutputTpmEditor';
+import { reconcileRuntimeOutputTpm } from '../lib/outputTpm';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { invitations, organizations, rbac, teams, users, type Invitation, type Principal, type PrincipalSummary, type ScopedAssetAccess } from '../lib/api';
@@ -8,26 +10,9 @@ import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import InvitationPanel from '../components/admin/InvitationPanel';
 import ProvisionPersonModal from '../components/admin/ProvisionPersonModal';
+import AccountEditorDialog from '../components/people/AccountEditorDialog';
+import { ORGANIZATION_ROLES as ORG_ROLES, TEAM_ROLES, type OrganizationOption, type TeamOption } from '../lib/peopleForm';
 import { useToast } from '../components/ToastProvider';
-
-const PLATFORM_ROLES = [
-  { value: 'platform_admin', label: 'Platform Admin' },
-  { value: 'org_user', label: 'Organization User' },
-];
-
-const ORG_ROLES = [
-  { value: 'org_member', label: 'Member' },
-  { value: 'org_owner', label: 'Owner' },
-  { value: 'org_admin', label: 'Admin' },
-  { value: 'org_billing', label: 'Billing' },
-  { value: 'org_auditor', label: 'Auditor' },
-];
-
-const TEAM_ROLES = [
-  { value: 'team_admin', label: 'Admin' },
-  { value: 'team_developer', label: 'Developer' },
-  { value: 'team_viewer', label: 'Viewer' },
-];
 
 function formatDate(d: string | null) {
   if (!d) return 'Never';
@@ -81,7 +66,7 @@ function LimitStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function RuntimeAccessSummary({ account }: { account: Principal }) {
+function RuntimeAccessSummary({ account, onOutputSaved }: { account: Principal; onOutputSaved: (limit: number | null) => void }) {
   const runtime = account.runtime_user;
   if (!runtime) return null;
 
@@ -111,10 +96,13 @@ function RuntimeAccessSummary({ account }: { account: Principal }) {
         <LimitStat label="Spend" value={formatOptionalBudget(runtime.spend)} />
         <LimitStat label="RPM" value={formatOptionalLimit(runtime.rpm_limit)} />
         <LimitStat label="TPM" value={formatOptionalLimit(runtime.tpm_limit)} />
+        <LimitStat label="Output TPM" value={formatOptionalLimit(runtime.output_tpm_limit)} />
         <LimitStat label="RPH" value={formatOptionalLimit(runtime.rph_limit)} />
         <LimitStat label="RPD" value={formatOptionalLimit(runtime.rpd_limit)} />
         <LimitStat label="TPD" value={formatOptionalLimit(runtime.tpd_limit)} />
       </div>
+
+      <RuntimeOutputTpmEditor key={runtime.user_id} user={runtime} onSaved={onOutputSaved} />
 
       {policy ? (
         <div className="mt-4 rounded-lg border border-gray-200 bg-white px-3 py-3">
@@ -177,20 +165,15 @@ export default function RBACAccounts() {
   const [invitationSearchTerm, setInvitationSearchTerm] = useState('');
   const [invitationStatusFilter, setInvitationStatusFilter] = useState<InvitationStatusFilter>('active');
   const [invitationPageOffset, setInvitationPageOffset] = useState(0);
-  const [orgList, setOrgList] = useState<any[]>([]);
-  const [teamList, setTeamList] = useState<any[]>([]);
+  const [orgList, setOrgList] = useState<OrganizationOption[]>([]);
+  const [teamList, setTeamList] = useState<TeamOption[]>([]);
   const [referenceLoading, setReferenceLoading] = useState(true);
   const pageSize = 20;
   const inviteOrganizationId = searchParams.get('invite_org_id');
   const inviteTeamId = searchParams.get('invite_team_id');
 
   const [showProvisionModal, setShowProvisionModal] = useState(false);
-  const [showAccountModal, setShowAccountModal] = useState(false);
   const [editAccount, setEditAccount] = useState<Principal | null>(null);
-  const [formEmail, setFormEmail] = useState('');
-  const [formRole, setFormRole] = useState('org_user');
-  const [formPassword, setFormPassword] = useState('');
-  const [formActive, setFormActive] = useState(true);
 
   const [selectedAccount, setSelectedAccount] = useState<Principal | null>(null);
 
@@ -229,8 +212,8 @@ export default function RBACAccounts() {
         organizations.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
         teams.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
       ]);
-      setOrgList(orgs?.data || orgs || []);
-      setTeamList(tms?.data || tms || []);
+      setOrgList(orgs.data);
+      setTeamList(tms.data);
     } finally {
       setReferenceLoading(false);
     }
@@ -249,8 +232,10 @@ export default function RBACAccounts() {
       if (summary) {
         setPrincipalSummary(summary);
       }
-    } catch (err: any) {
-      setPrincipalError(err?.message || 'Failed to load accounts');
+      return true;
+    } catch (err: unknown) {
+      setPrincipalError(err instanceof Error ? err.message : 'Failed to load accounts');
+      return false;
     } finally {
       setPrincipalLoading(false);
     }
@@ -268,8 +253,10 @@ export default function RBACAccounts() {
       });
       setInvitationItems(response?.data || []);
       setInvitationPagination(response?.pagination || { ...EMPTY_PAGINATION, limit: pageSize, offset: invitationPageOffset });
-    } catch (err: any) {
-      setInvitationError(err?.message || 'Failed to load invitations');
+      return true;
+    } catch (err: unknown) {
+      setInvitationError(err instanceof Error ? err.message : 'Failed to load invitations');
+      return false;
     } finally {
       setInvitationLoading(false);
     }
@@ -378,29 +365,7 @@ export default function RBACAccounts() {
 
   const openEditAccount = (acct: Principal) => {
     setEditAccount(acct);
-    setFormEmail(acct.email);
-    setFormRole(acct.role);
-    setFormPassword('');
-    setFormActive(acct.is_active);
     setError('');
-    setShowAccountModal(true);
-  };
-
-  const saveAccount = async () => {
-    if (!formEmail.trim()) { setError('Email is required'); return; }
-    setSaving(true);
-    setError('');
-    try {
-      const data: any = { email: formEmail.trim(), role: formRole, is_active: formActive };
-      if (formPassword.trim()) data.password = formPassword.trim();
-      await rbac.accounts.upsert(data);
-      setShowAccountModal(false);
-      await loadPrincipals();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save account');
-    } finally {
-      setSaving(false);
-    }
   };
 
   const openAddOrgMembership = (accountId: string) => {
@@ -423,8 +388,8 @@ export default function RBACAccounts() {
       });
       setShowOrgMembershipModal(false);
       await loadPrincipals();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save membership');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save membership');
     } finally {
       setSaving(false);
     }
@@ -450,8 +415,8 @@ export default function RBACAccounts() {
       });
       setShowTeamMembershipModal(false);
       await loadPrincipals();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save membership');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save membership');
     } finally {
       setSaving(false);
     }
@@ -467,8 +432,8 @@ export default function RBACAccounts() {
         setSelectedAccount(null);
       }
       await loadPrincipals();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to delete account');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete account');
     } finally {
       setSaving(false);
     }
@@ -481,8 +446,8 @@ export default function RBACAccounts() {
     try {
       await rbac.orgMemberships.delete(membershipId);
       await loadPrincipals();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to delete organization membership');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete organization membership');
     } finally {
       setSaving(false);
     }
@@ -495,8 +460,8 @@ export default function RBACAccounts() {
     try {
       await rbac.teamMemberships.delete(membershipId);
       await loadPrincipals();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to delete team membership');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete team membership');
     } finally {
       setSaving(false);
     }
@@ -547,8 +512,8 @@ export default function RBACAccounts() {
       setUserAssetSelectedAccessGroupKeys(response.selected_access_group_keys || []);
       userAssetSelectionInitializedRef.current = true;
       setShowUserAccessModal(false);
-    } catch (err: any) {
-      setUserAssetError(err?.message || 'Failed to update runtime user asset access');
+    } catch (err: unknown) {
+      setUserAssetError(err instanceof Error ? err.message : 'Failed to update runtime user asset access');
     } finally {
       setSaving(false);
     }
@@ -571,8 +536,8 @@ export default function RBACAccounts() {
       await invitations.resend(invitationId);
       pushToast({ tone: 'success', message: 'Invitation resent.' });
       await loadInvitations();
-    } catch (err: any) {
-      setInvitationError(err?.message || 'Failed to resend invitation');
+    } catch (err: unknown) {
+      setInvitationError(err instanceof Error ? err.message : 'Failed to resend invitation');
     } finally {
       setInvitationSaving(false);
     }
@@ -586,8 +551,8 @@ export default function RBACAccounts() {
       await invitations.cancel(invitationId);
       pushToast({ tone: 'success', message: 'Invitation cancelled.' });
       await loadInvitations();
-    } catch (err: any) {
-      setInvitationError(err?.message || 'Failed to cancel invitation');
+    } catch (err: unknown) {
+      setInvitationError(err instanceof Error ? err.message : 'Failed to cancel invitation');
     } finally {
       setInvitationSaving(false);
     }
@@ -605,7 +570,7 @@ export default function RBACAccounts() {
     !!principalError &&
     !showProvisionModal &&
     !selectedAccount &&
-    !showAccountModal &&
+    !editAccount &&
     !showOrgMembershipModal &&
     !showTeamMembershipModal &&
     !showUserAccessModal;
@@ -918,7 +883,7 @@ export default function RBACAccounts() {
               </div>
             </div>
 
-            <RuntimeAccessSummary account={selectedAccount} />
+            <RuntimeAccessSummary account={selectedAccount} onOutputSaved={(limit) => setSelectedAccount((current) => reconcileRuntimeOutputTpm(current, selectedAccount.account_id, selectedAccount.runtime_user!.user_id, limit))} />
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <div>
@@ -1017,11 +982,12 @@ export default function RBACAccounts() {
         }}
         onSuccess={async (result) => {
           clearInvitePrefill();
-          const refreshTasks: Promise<unknown>[] = [loadPrincipals()];
+          const refreshTasks = [loadPrincipals()];
           if (result.mode === 'invite_email' || viewTab === 'invitations') {
             refreshTasks.push(loadInvitations());
           }
-          await Promise.all(refreshTasks);
+          const refreshed = await Promise.all(refreshTasks);
+          if (refreshed.some((success) => !success)) throw new Error('Failed to refresh the access lists.');
         }}
         orgList={orgList}
         teamList={teamList}
@@ -1029,74 +995,14 @@ export default function RBACAccounts() {
         initialTeamId={inviteTeamId}
       />
 
-      <Modal open={showAccountModal} onClose={() => setShowAccountModal(false)} title="Edit Account">
-        <div className="space-y-4">
-          {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>
-            <input
-              type="email"
-              value={formEmail}
-              onChange={(e) => setFormEmail(e.target.value)}
-              placeholder="user@example.com"
-              disabled={!!editAccount}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent disabled:bg-gray-100"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Platform Role</label>
-            <select
-              value={formRole}
-              onChange={(e) => setFormRole(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
-            >
-              {PLATFORM_ROLES.map(r => (
-                <option key={r.value} value={r.value}>{r.label}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              New Password (leave blank to keep current)
-            </label>
-            <input
-              type="password"
-              value={formPassword}
-              onChange={(e) => setFormPassword(e.target.value)}
-              placeholder="Leave blank to keep current"
-              autoComplete="new-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="account-active"
-              checked={formActive}
-              onChange={(e) => setFormActive(e.target.checked)}
-              className="rounded border-gray-300"
-            />
-            <label htmlFor="account-active" className="text-sm text-gray-700">Account active</label>
-          </div>
-          <div className="flex gap-3 pt-2">
-            <button
-              onClick={() => setShowAccountModal(false)}
-              className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={saveAccount}
-              disabled={saving}
-              className="flex-1 bg-brand-primary text-brand-on-primary py-2 rounded-lg text-sm font-medium hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Update Account'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+      {editAccount && <AccountEditorDialog
+        key={editAccount.account_id}
+        account={editAccount}
+        onClose={() => setEditAccount(null)}
+        onSuccess={async () => {
+          if (!(await loadPrincipals())) throw new Error('Failed to refresh accounts.');
+        }}
+      />}
 
       <Modal
         open={showUserAccessModal}

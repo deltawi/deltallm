@@ -20,12 +20,42 @@ short stages passed. The latest provider-pool image passed a 30-second 500 RPS
 confirmation. Its 1,000 RPS diagnostic failed. These results use different source
 images and do not form one unchanged-image release certificate.
 
-Current main is `b97f241d` (`v0.1.50`). It adds output-token limits, external
-customer sign-in and model identity migration recovery. An integration attempt
-found 30 conflicted files, including authentication, request handling, startup,
-deployment configuration and migration verification. That attempt was restored
-to the saved upgrade commit; none of main's new features was removed or replaced.
-The PR is a draft until those contracts are combined and verified.
+Main revision `14cf7871` is integrated. The merge keeps output-token limits,
+external customer sign-in, model identity migration recovery and the newer admin
+UI. It also keeps the upgrade's bounded admission, native accounting and owned
+client lifecycles. Authentication uses the revocation-safe cache with one bounded
+fallback owner. The shared capacity report includes the external-auth database
+pool and engine. Applied migration files remain unchanged.
+The PR remains a draft until the release checks and unchanged-image qualification
+are complete. No RPS test was rerun for this merge.
+
+## Current-main integration checks
+
+Checks used Python 3.11.13, PostgreSQL 15 and Redis 7 on isolated test services.
+The collection contains 9,940 tests in five dependency lanes.
+
+- Isolated tests: 6,586 passed. Application tests: 1,685 passed.
+- Redis: 255 passed in the full lane. The separate memory-isolation test passed
+  with two dedicated Redis servers. Helm: 275 passed.
+- PostgreSQL: the first full lane had 1,112 passes, 24 skips, one failed auth
+  error-mapping check and one query-engine startup error. After the mapping fix,
+  all affected allocation and checkpoint tests passed. All 24 skipped cases
+  passed with Redis, the pinned official Realtime client and the opt-in external
+  auth profile configured. All 1,138 PostgreSQL cases are covered across these runs.
+- Fresh install, last-release upgrade, shared-feature upgrade and the known model
+  identity recovery path passed. Migration history matches all 165 source migrations.
+- UI: 357 unit tests and the production build passed. The changed UI files pass
+  lint. Full UI lint reports 65 errors and three warnings in files that are
+  byte-identical to main; those findings are not fixed by this merge.
+- Ruff, changed-file formatting, configuration reference, structure checks,
+  strict documentation build and public-artifact checks passed.
+
+The container build could not complete because the local Docker VM could not
+resolve the package download hosts. Non-root image startup, image health and image
+termination checks remain pending. The merge diff also retains two whitespace
+findings from unchanged main files, including one applied SQL migration. No applied
+migration was rewritten to remove whitespace. CI and exact-image qualification
+must pass before release.
 
 ## Earlier fixed-image 50–500 RPS results
 
@@ -156,8 +186,8 @@ results or change acceptance limits.
 
 See the [reproduction guide](issue-320-rps-reproduction.md) for source restore,
 image checks and load commands. New results must record their own exact source and
-image identities. Before release, integrate current main, verify its new auth and
-output-token contracts, pass database and migration checks, then run all four rates
+image identities. Before release, verify the combined auth and output-token
+contracts, pass database and migration checks, then run all four rates
 on one unchanged image under the normal qualification schedule.
 
 ## PR scope cleanup

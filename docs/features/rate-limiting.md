@@ -33,19 +33,21 @@ Add team or organization limits only when you need a shared cap across multiple 
 
 ### System 1 — Identity limits (Org → Team → User → API Key)
 
-This runs **before any routing happens**, as a middleware check on every endpoint. It enforces limits on the caller's identity across four levels:
+Text requests pass caller admission after pre-call policy processing and before provider dispatch. Other proxy endpoints use their existing admission path. Caller limits apply across four levels:
 
 ```
 Organization → Team → User → API Key
 ```
 
-Each level supports six rate limit dimensions across three time windows:
+Each level supports these rate limit dimensions:
 
 | Window | Request limit | Token limit |
 | --- | --- | --- |
 | Per minute | `rpm_limit` | `tpm_limit` |
 | Per hour | `rph_limit` | _(not applicable)_ |
 | Per day | `rpd_limit` | `tpd_limit` |
+
+Text requests also support a separate `output_tpm_limit` per admission minute.
 
 A request must pass every configured scope and window. If **any single check** is over its limit, the request is rejected immediately with a `429` and no counters are modified.
 
@@ -158,18 +160,98 @@ The `Retry-After` header gives the reset time for the exceeded window.
 An hourly violation can give up to 3600 seconds.
 A minute-window violation can give up to 60 seconds.
 
-### Limits are global, not per-model
+### Scope and model limits
 
-A critical constraint: **identity limits apply to the entire scope, not to specific models**. An org with `rpm_limit = 100` shares that 100 RPM budget across all models and all API keys in that org. There is no built-in way to express "this team gets 50 RPM on GPT-4 but 200 RPM on a cheaper model."
-
-The workaround is to issue separate API keys for different use cases, each with its own `key_rpm_limit`, and rely on key-level limits for per-model budgeting.
+Scalar identity limits apply across models. An organization with `rpm_limit = 100` shares that allowance across its keys and models. Key, user, team, and organization policies also have existing `model_rpm_limit` and `model_tpm_limit` maps. Tier policies can add per-model limits. `output_tpm_limit` on an identity is a total across models. Tier model policies and team/key maps add output TPM limits for individual models.
 
 ### Cache invalidation
 
-An admin API change to key, team, or organization rate limits automatically invalidates the key validation cache.
-The next request uses the new limits immediately, with no stale-cache interval.
+Admin rate-limit changes invalidate the affected key validation cache. Output-policy updates for keys, runtime users, teams, and organizations queue invalidation in the same database transaction. This includes explicit clears and organization POST upserts that update an existing organization. If the queue write fails, the policy update rolls back and returns `503`. Omitted output policies do not queue output-policy invalidation.
+
+After commit, the gateway attempts immediate invalidation with a bounded timeout. If it fails, the existing cache-invalidation worker retries the durable record. Cached authentication can retain the previous policy until invalidation completes or the cache entry expires. Keep `cache_invalidation_worker_enabled` enabled and monitor its pending and failed records when you use output policies. Team and organization invalidation use the same team relationship as authentication: the key team, then the runtime-user team, then the service-account team.
 
 ---
+
+## Output tokens per minute
+
+Set `output_tpm_limit` on an API key, runtime user, team, or organization. The value must be an integer from 1 through 2,147,483,647, or `null`. The admin API rejects strings, booleans, fractions, zero, and negative values. Omit the field on an update to preserve it. Send `null` to clear it. A child policy cannot remove an ancestor limit.
+
+Use the **Output TPM** field in the corresponding admin form. For a runtime user, use the account's runtime access details. Leave the field blank for no limit at that scope.
+
+Output TPM is independent of the existing estimated TPM limit. It counts provider output, including reasoning and tool output, across models. Local batch items and synchronous text requests share the same counters. Embedding, image, speech, and rerank tokens do not enter this output counter. Master-key requests keep their existing exemption. Selector classifiers keep their existing billing and routing controls and do not enter caller output TPM.
+
+### Output limits for individual models
+
+Set **Output TPM** beside RPM and TPM on a tier model policy. Each organization assigned to that tier gets its own allowance for that callable model. Organizations do not share this counter. The existing tier compiler selects the effective policy: override, add-on, then primary, with the existing deny rules. The organization preview shows the effective source and version. Use a custom tier or an override assignment for an organization-specific allowance.
+
+Team and API-key create/update endpoints accept `model_output_tpm_limit`. For example:
+
+```json
+{"model_output_tpm_limit": {"gpt-4o-mini": 20000, "gpt-4o": 5000}}
+```
+
+Use exact caller-facing callable IDs, including route-group IDs where applicable. Each map permits at most 64 entries, 256 UTF-8 bytes per ID, and 32 KiB of stored JSON. Wildcards, control characters, and spaces at the ends are invalid. Values use the same strict positive integer range as scalar output limits. Omit the field to preserve it. Send `null` or `{}` to clear the map. Remove one model from the submitted map to clear only that model. The admin forms provide a model/output-limit row editor.
+
+All configured scopes apply independently. A tier allowance of 100,000 for a model is shared by that organization's teams and keys. A team allowance of 20,000 is shared by that team's keys. A key allowance of 5,000 applies to that key. Scalar output limits still apply across all models. Clearing a child limit cannot remove a parent limit. A request checks at most seven output counters in the existing admission operation.
+
+The final caller-facing model after request hooks selects the counter. Provider retries and fallbacks charge that same callable model. A tier version change or limit edit keeps recorded usage because the counter identity contains the organization and model, without a version or limit value. Tier output limits enforce only in `tier_policy_mode: enforce`; team and key maps apply in all tier modes. The simulator shows completion usage projected from an empty minute separately from admission.
+
+Tier output limits require `tier_policy_missing_service_mode: fail_closed` in enforce mode. A missing or stale tier snapshot then closes admission. The checks use explicit general settings first, then environment values for omitted fields. Both tier modes are startup-only. The admin settings API returns `409 restart_required` if a dynamic update changes their effective values. Change the deployment configuration and restart to apply a new mode. Rejected reloads keep the last valid runtime configuration. Shared capacity-pool output limits and deployment output limits are outside this feature.
+
+The simulator resolves the deployment's model type when `billing_mode` is omitted. Output TPM projections apply to text generation; image, audio, embedding, and rerank requests have no output TPM projection.
+
+### Generation parameters and providers
+
+Output caps remain generation parameters: Chat Completions accepts `max_tokens` or `max_completion_tokens`, Completions and Messages accept `max_tokens`, and Responses accepts `max_output_tokens`. Supply one Chat cap when needed. Output TPM does not require a cap, add one, or change the request cap or choice count.
+
+The policy applies to all existing text adapters, including OpenAI, Azure, Groq, vLLM, custom OpenAI-compatible endpoints, profiled compatible providers, Anthropic, Gemini JSON, and Bedrock Converse. Usage reporting must be complete. Groq streams can report top-level usage or `x_groq.usage`; matching copies count once. vLLM streams need final usage reporting enabled. Existing provider parameter and endpoint support still applies; native Gemini streaming remains unsupported.
+
+Realtime and provider-native asynchronous batch submission remain unsupported under an output policy. Local batch uses individual governed calls because aggregate microbatches lack per-caller output attribution. Embeddings, images, speech, transcription, and rerank retain their existing controls.
+
+### Completion minute and accounting
+
+Output TPM is a soft usage rate limit. Before a caller request, Redis checks recorded output at every configured scope. Usage equal to or above the limit rejects the new request with `429`. There is no reservation. An admitted request, its bounded retries, and its MCP phases can finish after a scope crosses the limit.
+
+For example, a scope with a 1,000-token limit and 900 recorded tokens admits a call that produces 300 tokens. That call completes and records 1,200. Subsequent calls receive `429`. Concurrent admitted calls can exceed the limit further. This control does not replace provider limits, concurrency limits, or hard spending budgets.
+
+Redis time selects fixed UTC completion accounting minutes. A call admitted at 12:00:59 that records output at 12:01:10 charges the 12:01 minute. All output from one attempt belongs to its accounting minute. This is neither a rolling 60-second window nor a measurement of tokens emitted in each minute.
+
+Each provider attempt records complete raw output once, including reasoning and choices in its output aggregate. It does not add input tokens, cached input, billing estimates, or reasoning details already included in that aggregate. Positive counts and unknown usage each need one final Redis operation. Zero output, cache hits, and failures before dispatch need no accounting write. Stream frames have no quota Redis or SQL calls. Admission stays in the existing atomic rate-limit transaction and occurs before cache lookup.
+
+When dispatched work ends without complete output evidence, the gateway marks all captured scopes as unknown for the accounting minute. New calls at an affected scope receive `503` with `output_tpm_usage_unknown` and `Retry-After` until reset. Already admitted calls finish. One uncertain call can thus pause a shared team or organization. Known charges do not clear unknown state in the same minute. A valid answer with missing usage is still delivered; existing malformed-response validation remains active.
+
+Bedrock streaming retains a valid raw `outputTokens` count after `messageStop`, even if missing or invalid input or total usage causes response validation to fail. The existing response error remains in effect. Missing or invalid output counts remain unknown; explicit zero requires no accounting write.
+
+Cancellation, a partial stream, and an ambiguous timeout are unknown usage. An upstream connection-pool timeout is known zero output because no connection was acquired. It does not mark scopes unknown. Complete usage still counts if translation or delivery then fails. Final accounting failure preserves the answer, omits unknown remaining capacity, and records an operational failure. Some usage can be lost after process death or an unrecorded Redis write. This is a soft control, not a durable billing ledger.
+
+### Output headers and failures
+
+| Header | Meaning |
+| --- | --- |
+| `x-ratelimit-limit-output-tokens` | Limit of the configured output scope with highest utilization |
+| `x-ratelimit-remaining-output-tokens` | Recorded remaining capacity, clamped to zero; omitted when unknown |
+| `x-ratelimit-reset-output-tokens` | Unix timestamp at the next UTC minute |
+| `x-deltallm-ratelimit-output-scope` | A scalar scope, or `org_model_output_tpm`, `team_model_output_tpm`, or `key_model_output_tpm` |
+
+JSON headers reflect final accounting. Cache and zero-output responses retain the admission snapshot. Streaming headers retain the admission snapshot because headers precede usage. Requests without output policies have no output headers. Numeric exhaustion returns the scope in `error.param` and `error.code`, with `Retry-After`. Unknown usage returns `output_tpm_usage_unknown`; unavailable or corrupt coordination returns `output_tpm_unavailable`. Both use `503` without provider cooldown.
+
+### Redis and authentication requirements
+
+Output policies require Redis and `general_settings.redis_degraded_mode: fail_closed`. There is no process-local fallback. Admin writes reject unsupported settings. Startup and configuration reload reject active policies with incompatible settings. Shared user, team, and organization output policies require stored API-key authentication; they cannot coexist with enabled JWT or custom authentication. Per-key policies still apply to stored keys when those auth modes are enabled.
+
+Use a protected standalone Redis primary with `maxmemory-policy noeviction` and sufficient memory for all quota state. Redis Cluster is not supported by this transaction. Buckets expire 30 seconds after minute reset. Final receipts expire 120 seconds after accounting. Keys are at most 512 bytes and receipts at most 4 KiB. Counters saturate at 2,147,483,647, not at the current policy limit. Receipt capacity is final events per second times 120; reserve memory headroom for receipts and active scopes. Redis state is authoritative while it is retained. The counter is a throughput control and does not provide durable accounting across state loss.
+
+After a Redis flush, state-changing restart, restore, or failover that can lose acknowledged writes, pause governed ingress until the next UTC minute. Resume on the healthy primary after that boundary. An application restart with retained Redis state needs no pause. See [Redis replication guarantees](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/).
+
+Apply the additive database migration before upgrading the gateway. Upgrade or drain all old gateway and batch-worker replicas before enabling output policies, including model-only policies. New pods use auth cache version 7 and invalidate allow records in versions 4, 5, 6, and 7. Policy invalidation preserves revocation records.
+
+Each v7 allow entry has a matching v5 compatibility entry with the same random guard and expiry. The v5 entry contains the primary auth fields used by the older Console binary; output policy fields remain in v7. A missing or changed guard discards the v7 allow and requires a bounded primary read. This prevents an older Console revocation from leaving a usable v7 allow even if its shorter tombstone expires before a new pod sees it. Existing unpaired v7 allows require one primary read to refill. Revocation publishes v5 and v7 tombstones and clears exact v4 and v6 entries in one Redis operation. Warm auth still uses one Redis operation and no SQL.
+
+Old pods cannot enforce model output limits. Use one version across all API replicas and workers. Drain the reservation build before enabling v2 completion accounting. Do not mix versions with active limits or merge old reservation state. Start with one key and provider headroom, then add shared scopes. Before rollback, clear the new policies, wait for cache invalidation or expiry, and drain admitted attempts. Stop and drain old key-auth readers before exact-hash reconciliation; an old binary can fill its own cache format after a cache delete. Do not drop the additive columns on rollback.
+
+Response cache version 6 includes `max_completion_tokens` in its default key fields. The upgrade causes one cold response-cache fill for each request key. Previous entries expire through their normal TTL.
+
+Fixed-label `deltallm_output_tpm_events_total` counters record admission, denial, unavailable coordination, accounting, unknown usage, accounting failure, and saturation. An accounting failure does not cause a provider retry.
 
 ## Deployment Limit Enforcement in Detail
 
@@ -236,7 +318,7 @@ curl -X POST http://localhost:8000/ui/api/keys \
 ### Identity limits on a team
 
 ```bash
-curl -X PATCH http://localhost:8000/ui/api/teams/{team_id} \
+curl -X PUT http://localhost:8000/ui/api/teams/{team_id} \
   -H "Authorization: Bearer YOUR_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -251,7 +333,7 @@ curl -X PATCH http://localhost:8000/ui/api/teams/{team_id} \
 ### Identity limits on an organization
 
 ```bash
-curl -X PATCH http://localhost:8000/ui/api/organizations/{org_id} \
+curl -X PUT http://localhost:8000/ui/api/organizations/{org_id} \
   -H "Authorization: Bearer YOUR_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -277,12 +359,13 @@ router_settings:
 | --- | --- | --- | --- |
 | `rpm_limit` | integer or null | Per minute | Key, team, org, user |
 | `tpm_limit` | integer or null | Per minute | Key, team, org, user |
+| `output_tpm_limit` | strict positive integer or null | Admission minute | Key, team, org, runtime user |
 | `rph_limit` | integer or null | Per hour | Key, team, org, user |
 | `rpd_limit` | integer or null | Per day | Key, team, org, user |
 | `tpd_limit` | integer or null | Per day | Key, team, org, user |
 | `max_parallel_requests` | integer or null | Concurrent | Key only |
 
-Setting any field to `null` (or omitting it) disables that check. Only configured limits are enforced.
+Set a field to `null` to disable that scope's check. Omitted updates preserve existing values. Only configured limits are enforced.
 
 ---
 

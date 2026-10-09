@@ -1,17 +1,40 @@
 from __future__ import annotations
 
+from src.api.admin.key_mutations import (
+    _notification_record as _notification_record,
+    _get_key_notification_row as _get_key_notification_row,
+    _notify_key_lifecycle as _notify_key_lifecycle,
+    _get_key_scope_row as _get_key_scope_row,
+    _lock_key_organization_for_mutation as _lock_key_organization_for_mutation,
+    _require_key_access as _require_key_access,
+)
+
 import hashlib
 import logging
 import math
 import secrets
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.api.admin.accounting_budget import apply_accounting_balances
 from src.billing.accounting_protocol import AccountingScope
+from src.api.admin.key_removal import (
+    remove_key_with_required_audit as _remove_key_with_required_audit,
+)
+from src.api.admin.key_access_policy import (
+    _append_in_predicate as _append_in_predicate,
+    _append_key_list_scope_clause as _append_key_list_scope_clause,
+    _is_self_service_only as _is_self_service_only,
+    _ordered_unique_scope_ids as _ordered_unique_scope_ids,
+    _resolve_key_access_mode as _resolve_key_access_mode,
+    _resolve_key_read_access_mode as _resolve_key_read_access_mode,
+    _scope_has_permission as _scope_has_permission,
+    _scope_ids_with_any_permission as _scope_ids_with_any_permission,
+    _target_scope_permission_sets as _target_scope_permission_sets,
+)
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import (
@@ -21,6 +44,12 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     validate_runtime_user_scope,
 )
+from src.api.admin.output_policy import (
+    invalidate_output_policy_now,
+    output_policy_change,
+    schedule_output_policy_invalidation,
+)
+from src.db.output_policy import persist_output_policy
 from src.api.admin.organization_mutations import require_active_organization_mutation
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
@@ -36,10 +65,14 @@ logger = logging.getLogger(__name__)
 _INT64_SIGN_BIT = 1 << 63
 _UINT64_MODULUS = 1 << 64
 _SELF_SERVICE_KEY_CREATE_LOCK_NAMESPACE = "self_service_key_create"
-_SELF_SERVICE_RATE_LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "rph_limit", "rpd_limit", "tpd_limit")
-_ADMIN_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_UPDATE, Permission.KEY_REVOKE})
-_READ_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_READ})
-_OWNER_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_CREATE_SELF})
+_SELF_SERVICE_RATE_LIMIT_FIELDS = (
+    "rpm_limit",
+    "tpm_limit",
+    "output_tpm_limit",
+    "rph_limit",
+    "rpd_limit",
+    "tpd_limit",
+)
 
 
 def _transaction_repository(
@@ -158,68 +191,6 @@ def _parse_self_service_expiry(expires: str | None) -> datetime | None:
     return exp_dt.astimezone(UTC)
 
 
-def _notification_record(row: dict[str, Any]) -> Any:
-    from src.services.key_notifications import KeyNotificationRecord
-
-    return KeyNotificationRecord(
-        token_hash=str(row.get("token") or ""),
-        key_name=str(row.get("key_name") or ""),
-        team_id=str(row.get("team_id") or "").strip() or None,
-        team_alias=str(row.get("team_alias") or "").strip() or None,
-        organization_id=str(row.get("organization_id") or "").strip() or None,
-        owner_account_id=str(row.get("owner_account_id") or "").strip() or None,
-        owner_service_account_id=str(row.get("owner_service_account_id") or "").strip() or None,
-        owner_service_account_name=str(row.get("owner_service_account_name") or "").strip() or None,
-    )
-
-
-async def _get_key_notification_row(db: Any, token_hash: str) -> dict[str, Any] | None:
-    rows = await db.query_raw(
-        """
-        SELECT
-            vt.token,
-            vt.key_name,
-            vt.team_id,
-            t.team_alias,
-            t.organization_id,
-            vt.owner_account_id,
-            vt.owner_service_account_id,
-            sa.name AS owner_service_account_name
-        FROM deltallm_verificationtoken vt
-        LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
-        LEFT JOIN deltallm_serviceaccount sa ON vt.owner_service_account_id = sa.service_account_id
-        WHERE vt.token = $1
-        LIMIT 1
-        """,
-        token_hash,
-    )
-    if not rows:
-        return None
-    return dict(rows[0])
-
-
-async def _notify_key_lifecycle(
-    request: Request,
-    *,
-    event_kind: str,
-    actor_account_id: str | None,
-    record: Any,
-) -> None:
-    service = getattr(request.app.state, "key_notification_service", None)
-    if service is None:
-        return
-    try:
-        await service.notify_lifecycle(
-            event_kind=event_kind,
-            actor_account_id=actor_account_id,
-            record=record,
-        )
-    except Exception:  # pragma: no cover - defensive guard
-        logger.exception(
-            "failed to enqueue key lifecycle notification", extra={"notification_kind": event_kind}
-        )
-
-
 async def _get_self_service_policy(db: Any, team_id: str) -> dict[str, Any]:
     rows = await db.query_raw(
         """
@@ -328,7 +299,7 @@ async def _validate_self_service_constraints(
         for limit_field in _SELF_SERVICE_RATE_LIMIT_FIELDS
     }
     team_rows = await db.query_raw(
-        "SELECT rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
+        "SELECT rpm_limit, tpm_limit, output_tpm_limit, rph_limit, rpd_limit, tpd_limit FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
         team_id,
     )
     if team_rows:
@@ -401,218 +372,6 @@ async def _resolve_required_self_service_runtime_user_id(
     return user_id
 
 
-def _is_self_service_only(scope: Any) -> bool:
-    if scope.is_platform_admin:
-        return False
-    effective_permissions = set(getattr(scope, "effective_permissions", set()) or set())
-    return (
-        Permission.KEY_CREATE_SELF in effective_permissions
-        and Permission.KEY_UPDATE not in effective_permissions
-        and Permission.KEY_REVOKE not in effective_permissions
-    )
-
-
-def _scope_has_permission(
-    scope: Any,
-    *,
-    organization_id: str | None,
-    team_id: str | None,
-    permission: str,
-) -> bool:
-    if scope.is_platform_admin:
-        return True
-
-    team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
-    if team_id and permission in set(team_permissions.get(team_id) or set()):
-        return True
-
-    org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
-    if organization_id and permission in set(org_permissions.get(organization_id) or set()):
-        return True
-
-    return False
-
-
-def _target_scope_permission_sets(
-    scope: Any,
-    *,
-    organization_id: str | None,
-    team_id: str | None,
-) -> list[set[str]]:
-    permission_sets: list[set[str]] = []
-    team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
-    if team_id:
-        permission_sets.append(set(team_permissions.get(team_id) or set()))
-
-    org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
-    if organization_id:
-        permission_sets.append(set(org_permissions.get(organization_id) or set()))
-    return permission_sets
-
-
-def _resolve_key_read_access_mode(
-    scope: Any,
-    *,
-    organization_id: str | None,
-    team_id: str | None,
-) -> Literal["admin", "self_service"]:
-    if scope.is_platform_admin:
-        return "admin"
-
-    owner_only_read = False
-    for permissions in _target_scope_permission_sets(
-        scope, organization_id=organization_id, team_id=team_id
-    ):
-        if permissions.intersection(_ADMIN_KEY_LIST_PERMISSIONS):
-            return "admin"
-        if Permission.KEY_READ in permissions and Permission.KEY_CREATE_SELF not in permissions:
-            return "admin"
-        if Permission.KEY_READ in permissions and Permission.KEY_CREATE_SELF in permissions:
-            owner_only_read = True
-
-    if owner_only_read:
-        return "self_service"
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
-
-
-def _resolve_key_access_mode(
-    scope: Any,
-    *,
-    organization_id: str | None,
-    team_id: str | None,
-    admin_permission: str,
-    allow_self_service: bool = False,
-) -> Literal["admin", "self_service"]:
-    if _scope_has_permission(
-        scope,
-        organization_id=organization_id,
-        team_id=team_id,
-        permission=admin_permission,
-    ):
-        return "admin"
-
-    if allow_self_service and _scope_has_permission(
-        scope,
-        organization_id=organization_id,
-        team_id=team_id,
-        permission=Permission.KEY_CREATE_SELF,
-    ):
-        return "self_service"
-
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
-
-
-def _scope_ids_with_any_permission(
-    permissions_by_id: dict[str, set[str]],
-    required_permissions: frozenset[str],
-) -> list[str]:
-    scope_ids: list[str] = []
-    for scope_id, permissions in permissions_by_id.items():
-        normalized_scope_id = str(scope_id or "").strip()
-        if normalized_scope_id and required_permissions.intersection(set(permissions or set())):
-            scope_ids.append(normalized_scope_id)
-    return scope_ids
-
-
-def _append_in_predicate(column: str, values: list[str], params: list[Any]) -> str | None:
-    normalized_values = [str(value or "").strip() for value in values if str(value or "").strip()]
-    if not normalized_values:
-        return None
-    start = len(params) + 1
-    params.extend(normalized_values)
-    placeholders = ", ".join(f"${idx}" for idx in range(start, start + len(normalized_values)))
-    return f"{column} IN ({placeholders})"
-
-
-def _ordered_unique_scope_ids(*groups: list[str]) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for group in groups:
-        for scope_id in group:
-            if scope_id not in seen:
-                seen.add(scope_id)
-                ordered.append(scope_id)
-    return ordered
-
-
-def _append_key_list_scope_clause(
-    scope: Any, clauses: list[str], params: list[Any], *, my_keys: bool
-) -> bool:
-    owner_account_id = str(getattr(scope, "account_id", "") or "").strip() or None
-    owner_param_index: int | None = None
-    if my_keys:
-        if owner_account_id is None:
-            return False
-        params.append(owner_account_id)
-        owner_param_index = len(params)
-        clauses.append(f"vt.owner_account_id = ${owner_param_index}")
-
-    if scope.is_platform_admin:
-        return True
-
-    org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
-    team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
-
-    admin_org_ids = _scope_ids_with_any_permission(org_permissions, _ADMIN_KEY_LIST_PERMISSIONS)
-    admin_team_ids = _scope_ids_with_any_permission(team_permissions, _ADMIN_KEY_LIST_PERMISSIONS)
-    admin_org_id_set = set(admin_org_ids)
-    admin_team_id_set = set(admin_team_ids)
-    owner_org_ids = [
-        scope_id
-        for scope_id in _scope_ids_with_any_permission(org_permissions, _OWNER_KEY_LIST_PERMISSIONS)
-        if scope_id not in admin_org_id_set
-    ]
-    owner_team_ids = [
-        scope_id
-        for scope_id in _scope_ids_with_any_permission(
-            team_permissions, _OWNER_KEY_LIST_PERMISSIONS
-        )
-        if scope_id not in admin_team_id_set
-    ]
-    owner_org_id_set = set(owner_org_ids)
-    owner_team_id_set = set(owner_team_ids)
-    read_org_ids = [
-        scope_id
-        for scope_id in _scope_ids_with_any_permission(org_permissions, _READ_KEY_LIST_PERMISSIONS)
-        if scope_id not in owner_org_id_set
-    ]
-    read_team_ids = [
-        scope_id
-        for scope_id in _scope_ids_with_any_permission(team_permissions, _READ_KEY_LIST_PERMISSIONS)
-        if scope_id not in owner_team_id_set
-    ]
-    full_org_ids = _ordered_unique_scope_ids(admin_org_ids, read_org_ids)
-    full_team_ids = _ordered_unique_scope_ids(admin_team_ids, read_team_ids)
-
-    scope_parts: list[str] = []
-    full_org_predicate = _append_in_predicate("t.organization_id", full_org_ids, params)
-    if full_org_predicate is not None:
-        scope_parts.append(full_org_predicate)
-    full_team_predicate = _append_in_predicate("vt.team_id", full_team_ids, params)
-    if full_team_predicate is not None:
-        scope_parts.append(full_team_predicate)
-
-    if owner_account_id is not None and (owner_org_ids or owner_team_ids):
-        if owner_param_index is None:
-            params.append(owner_account_id)
-            owner_param_index = len(params)
-        owner_org_predicate = _append_in_predicate("t.organization_id", owner_org_ids, params)
-        if owner_org_predicate is not None:
-            scope_parts.append(
-                f"({owner_org_predicate} AND vt.owner_account_id = ${owner_param_index})"
-            )
-        owner_team_predicate = _append_in_predicate("vt.team_id", owner_team_ids, params)
-        if owner_team_predicate is not None:
-            scope_parts.append(
-                f"({owner_team_predicate} AND vt.owner_account_id = ${owner_param_index})"
-            )
-
-    if not scope_parts:
-        return False
-    clauses.append(f"({' OR '.join(scope_parts)})")
-    return True
-
-
 def _key_response_payload(row: dict[str, Any]) -> dict[str, Any]:
     payload = to_json_value(dict(row))
     if isinstance(payload, dict):
@@ -663,59 +422,6 @@ async def _lock_team_organization_for_key_mutation(
     if organization_id:
         await require_active_organization_mutation(db, organization_id)
     return team
-
-
-async def _get_key_scope_row(db: Any, token_hash: str) -> dict[str, Any]:
-    rows = await db.query_raw(
-        """
-        SELECT
-            vt.token,
-            vt.user_id,
-            COALESCE(vt.team_id, u.team_id) AS team_id,
-            t.organization_id
-        FROM deltallm_verificationtoken vt
-        LEFT JOIN deltallm_usertable u ON u.user_id = vt.user_id
-        LEFT JOIN deltallm_teamtable t ON t.team_id = COALESCE(vt.team_id, u.team_id)
-        WHERE vt.token = $1
-        LIMIT 1
-        """,
-        token_hash,
-    )
-    if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
-    return dict(rows[0])
-
-
-async def _lock_key_organization_for_mutation(
-    db: Any,
-    token_hash: str,
-) -> dict[str, Any]:
-    rows = await db.query_raw(
-        """
-        SELECT
-            vt.token,
-            vt.user_id,
-            COALESCE(vt.team_id, u.team_id, sa.team_id) AS team_id,
-            t.organization_id
-        FROM deltallm_verificationtoken vt
-        LEFT JOIN deltallm_usertable u ON u.user_id = vt.user_id
-        LEFT JOIN deltallm_serviceaccount sa
-          ON sa.service_account_id = vt.owner_service_account_id
-        LEFT JOIN deltallm_teamtable t
-          ON t.team_id = COALESCE(vt.team_id, u.team_id, sa.team_id)
-        WHERE vt.token = $1
-        LIMIT 1
-        FOR UPDATE OF vt
-        """,
-        token_hash,
-    )
-    if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
-    row = dict(rows[0])
-    organization_id = str(row.get("organization_id") or "").strip()
-    if organization_id:
-        await require_active_organization_mutation(db, organization_id)
-    return row
 
 
 async def _validate_runtime_user(db: Any, user_id: str, team_id: str | None) -> None:
@@ -896,7 +602,7 @@ async def list_keys(
             vt.spend,
             vt.max_budget,
             vt.rpm_limit,
-            vt.tpm_limit,
+            vt.tpm_limit, vt.output_tpm_limit, vt.model_output_tpm_limit,
             vt.rph_limit,
             vt.rpd_limit,
             vt.tpd_limit,
@@ -950,6 +656,7 @@ async def create_key(
     max_budget = payload.get("max_budget")
     rpm_limit = payload.get("rpm_limit")
     tpm_limit = payload.get("tpm_limit")
+    output_change = output_policy_change(request, payload, scope="key")
     rph_limit = payload.get("rph_limit")
     rpd_limit = payload.get("rpd_limit")
     tpd_limit = payload.get("tpd_limit")
@@ -1043,16 +750,21 @@ async def create_key(
                     expires=expires,
                     rpm_limit=rpm_limit,
                     tpm_limit=tpm_limit,
+                    output_tpm_limit=output_change.value,
                     rph_limit=rph_limit,
                     rpd_limit=rpd_limit,
                     tpd_limit=tpd_limit,
                 )
-                user_id = await _resolve_required_self_service_runtime_user_id(
-                    tx,
-                    team_id=team_id,
-                    account_id=scope.account_id,
-                    email=account_email,
-                )
+                if scope.external_workspace is not None:
+                    user_id = scope.external_workspace.inference_user_id
+                    await _validate_runtime_user(tx, user_id, team_id)
+                else:
+                    user_id = await _resolve_required_self_service_runtime_user_id(
+                        tx,
+                        team_id=team_id,
+                        account_id=scope.account_id,
+                        email=account_email,
+                    )
                 max_budget = normalized_self_service_values["max_budget"]
                 expires = normalized_self_service_values["expires"]
                 rpm_limit = normalized_self_service_values["rpm_limit"]
@@ -1094,6 +806,8 @@ async def create_key(
                     expires=expires,
                 )
 
+            await persist_output_policy(tx, scope="key", identity=token_hash, change=output_change)
+
         response = {
             "token": token_hash,
             "raw_key": raw_key,
@@ -1106,6 +820,8 @@ async def create_key(
             "max_budget": max_budget,
             "rpm_limit": rpm_limit,
             "tpm_limit": tpm_limit,
+            "output_tpm_limit": output_change.value,
+            "model_output_tpm_limit": output_change.model_value,
             "rph_limit": rph_limit,
             "rpd_limit": rpd_limit,
             "tpd_limit": tpd_limit,
@@ -1177,7 +893,7 @@ async def update_key(
     await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     rows = await db.query_raw(
         """
-        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
+        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, output_tpm_limit, model_output_tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
         FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
@@ -1209,6 +925,7 @@ async def update_key(
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = payload.get("rpm_limit", existing.get("rpm_limit"))
     tpm_limit = payload.get("tpm_limit", existing.get("tpm_limit"))
+    output_change = output_policy_change(request, payload, scope="key")
     rph_limit = payload.get("rph_limit", existing.get("rph_limit"))
     rpd_limit = payload.get("rpd_limit", existing.get("rpd_limit"))
     tpd_limit = payload.get("tpd_limit", existing.get("tpd_limit"))
@@ -1286,6 +1003,7 @@ async def update_key(
                 token_hash,
             )
 
+            await persist_output_policy(tx, scope="key", identity=token_hash, change=output_change)
             updated_rows = await tx.query_raw(
                 """
                 SELECT
@@ -1301,7 +1019,7 @@ async def update_key(
                     vt.spend,
                     vt.max_budget,
                     vt.rpm_limit,
-                    vt.tpm_limit,
+                    vt.tpm_limit, vt.output_tpm_limit, vt.model_output_tpm_limit,
                     vt.rph_limit,
                     vt.rpd_limit,
                     vt.tpd_limit,
@@ -1321,9 +1039,14 @@ async def update_key(
             if not updated_rows:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
             updated = _key_response_payload(dict(updated_rows[0]))
+            await schedule_output_policy_invalidation(
+                tx, request=request, scope="key", identity=token_hash, change=output_change
+            )
 
         key_service = getattr(request.app.state, "key_service", None)
-        if key_service:
+        if output_change.changed:
+            await invalidate_output_policy_now(request, scope="key", identity=token_hash)
+        elif key_service:
             await key_service.invalidate_key_cache_by_hash(token_hash)
         await emit_admin_mutation_audit(
             request=request,
@@ -1351,44 +1074,6 @@ async def update_key(
             error=exc,
         )
         raise
-
-
-async def _require_key_access(
-    scope,
-    db,
-    token_hash: str,
-    *,
-    admin_permission: str,
-    allow_self_service: bool = False,
-) -> Literal["admin", "self_service"]:
-    row = await _get_key_scope_row(db, token_hash)
-    organization_id = str(row.get("organization_id") or "").strip() or None
-    team_id = str(row.get("team_id") or "").strip() or None
-    if admin_permission == Permission.KEY_READ:
-        access_mode = _resolve_key_read_access_mode(
-            scope, organization_id=organization_id, team_id=team_id
-        )
-    else:
-        access_mode = _resolve_key_access_mode(
-            scope,
-            organization_id=organization_id,
-            team_id=team_id,
-            admin_permission=admin_permission,
-            allow_self_service=allow_self_service,
-        )
-
-    if access_mode == "self_service":
-        owner_rows = await db.query_raw(
-            "SELECT owner_account_id FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1",
-            token_hash,
-        )
-        if owner_rows and str(owner_rows[0].get("owner_account_id") or "") == scope.account_id:
-            return access_mode
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage your own keys"
-        )
-
-    return access_mode
 
 
 @router.get("/ui/api/keys/{token_hash}/asset-visibility")
@@ -1595,6 +1280,10 @@ async def regenerate_key(
         x_master_key,
         any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF],
     )
+    if scope.external_workspace is not None:
+        raise HTTPException(
+            status_code=403, detail="Key rotation is not available for this session"
+        )
     db = db_or_503(request)
     tx_factory = getattr(db, "tx", None)
     if not callable(tx_factory):
@@ -1658,7 +1347,7 @@ async def revoke_key(
     token_hash: str,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
-) -> dict[str, bool]:
+) -> dict[str, object]:
     request_start = perf_counter()
     scope = get_auth_scope(
         request,
@@ -1666,6 +1355,9 @@ async def revoke_key(
         x_master_key,
         any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF],
     )
+    runtime = getattr(request.app.state, "external_auth_runtime", None)
+    if runtime is not None:
+        return await _remove_key_with_required_audit(request, scope, token_hash, deleted=False)
     db = db_or_503(request)
     if not hasattr(db, "tx"):
         raise HTTPException(
@@ -1721,7 +1413,7 @@ async def delete_key(
     token_hash: str,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
-) -> dict[str, bool]:
+) -> dict[str, object]:
     request_start = perf_counter()
     scope = get_auth_scope(
         request,
@@ -1729,6 +1421,9 @@ async def delete_key(
         x_master_key,
         any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF],
     )
+    runtime = getattr(request.app.state, "external_auth_runtime", None)
+    if runtime is not None:
+        return await _remove_key_with_required_audit(request, scope, token_hash, deleted=True)
     db = db_or_503(request)
     if not hasattr(db, "tx"):
         raise HTTPException(

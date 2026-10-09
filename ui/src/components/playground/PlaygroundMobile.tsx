@@ -1,3 +1,4 @@
+import { uiMount } from '../../lib/uiMount';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
   Activity,
@@ -34,6 +35,7 @@ import type { ChatEngine } from './useChatEngine';
 import type { TTSEngine } from './useTTSEngine';
 import type { STTEngine } from './useSTTEngine';
 import { useBranding } from '../../lib/brandingContext';
+import PlaygroundModelStatus from './PlaygroundModelStatus';
 
 interface SharedProps {
   mode: PlaygroundMode;
@@ -908,11 +910,7 @@ export default function PlaygroundMobile({
           aria-haspopup="dialog"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <span
-              className={`block w-2 h-2 rounded-full flex-none ${
-                selectedModel ? (selectedModel.status === 'online' ? 'bg-green-500' : 'bg-yellow-500') : 'bg-gray-300'
-              }`}
-            />
+            {selectedModel ? <PlaygroundModelStatus status={selectedModel.status} className="flex-none" /> : <span className="block h-2 w-2 flex-none rounded-full bg-gray-300" />}
             <div className="flex flex-col min-w-0">
               <span className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">Model</span>
               <span className="text-sm font-medium text-gray-900 truncate">{modelLabel}</span>
@@ -922,6 +920,7 @@ export default function PlaygroundMobile({
         </button>
 
         <div className="flex items-center gap-2">
+          {!uiMount().external_console && (
           <div className="relative flex-1 min-w-0">
             <Key className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
             <input
@@ -940,6 +939,7 @@ export default function PlaygroundMobile({
               {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             </button>
           </div>
+          )}
           {mode === 'chat' && (
             <button
               ref={paramsBtnRef}
@@ -1260,9 +1260,7 @@ export default function PlaygroundMobile({
                   }`}
                   type="button"
                 >
-                  <span
-                    className={`flex-none w-2 h-2 rounded-full ${m.status === 'online' ? 'bg-green-500' : 'bg-yellow-500'}`}
-                  />
+                  <PlaygroundModelStatus status={m.status} className="flex-none" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-gray-900 truncate">{m.name}</div>
                     <div className="text-[11px] text-gray-500 truncate">{m.provider}</div>

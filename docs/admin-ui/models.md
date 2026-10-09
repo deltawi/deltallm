@@ -13,9 +13,26 @@ Each deployment defines:
 
 ![Models](images/models-list.png)
 
-**Access:** any authenticated account can view the Models page; only platform admins can create,
-edit, or delete deployments. See [Access requirements](access-requirements.md), [model deployment
+**Access:** authenticated accounts see permitted models. Platform administrators manage deployments; eligible creator accounts, including [external customer sessions](../configuration/external-customer-auth.md), can create and manage their own private models and permitted workspace grants. External grants stay within the registered customer organization/team. See [Access requirements](access-requirements.md), [model deployment
 configuration](../configuration/models.md), and [provider capabilities](../providers/capabilities.md).
+
+## List controls
+
+Models, Model Groups, and Prompt Registry use the same list controls.
+Select a column heading or use **Sort list** to change the order.
+The server sorts all permitted results before it selects a page.
+The initial order is **Updated at**, newest first. Search resets the page.
+
+**Created by** shows the creator account ID, including platform administrator IDs.
+Select the copy control to copy the full ID. The list does not show creator email addresses.
+**Updated at** shows the stored update time in your local time zone.
+If an old record has no creator ID or update time, the cell shows **Not recorded**.
+**Visibility** is the last column. On small screens, each row becomes a card with the same fields.
+
+You can sort by name, type, provider, health, creator ID, update time, or visibility.
+The provider column uses the existing provider icons. The type column uses the existing type pills.
+Credential settings remain on the model detail and edit pages.
+If health data is unavailable, the list shows **Unknown**.
 
 ## Quick Success Workflow
 

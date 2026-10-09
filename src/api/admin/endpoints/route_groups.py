@@ -47,6 +47,9 @@ from src.db.prompt_registry import PromptRegistryRepository
 from src.db.managed_assets import ManagedAssetAccessRepository
 from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.db.route_groups import RouteGroupRepository
+from src.db.admin_asset_lists import GroupSortKey, ListDirection
+from src.api.admin.list_contracts import AdminListResponse, GroupListItem
+from src.services.admin_list_health import list_health_refs, list_health_snapshot
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_admin_permission, require_authenticated
 from src.router.policy_validation import (
@@ -731,13 +734,17 @@ async def _publish_route_group_policy_response(
 
 
 @router.get(
-    "/ui/api/route-groups", dependencies=[Depends(require_authenticated)]
+    "/ui/api/route-groups",
+    dependencies=[Depends(require_authenticated)],
+    response_model=AdminListResponse[GroupListItem],
 )
 async def list_route_groups(
     request: Request,
     search: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    sort_by: GroupSortKey | None = Query(default=None),
+    sort_direction: ListDirection = Query(default="desc"),
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
     principal = asset_principal_for_request(request)
@@ -752,11 +759,22 @@ async def list_route_groups(
             principal,
         )
     policy_by_id = {policy.asset.asset_id: policy for policy in policies}
+    entries = model_entries(request.app)
+    health = await list_health_snapshot(
+        getattr(request.app.state, "router_state_backend", None),
+        list_health_refs(
+            getattr(getattr(request.app.state, "router", None), "deployment_registry", None),
+            [str(entry["deployment_id"]) for entry in entries],
+        ),
+    )
     if principal.is_platform_admin:
         groups, total = await repository.list_groups(
             search=search,
             limit=limit,
             offset=offset,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            health=health,
         )
     else:
         groups, total = await repository.list_groups(
@@ -764,6 +782,9 @@ async def list_route_groups(
             limit=limit,
             offset=offset,
             managed_asset_ids=list(policy_by_id),
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            health=health,
         )
     data = [
         _group_response_payload(
@@ -808,9 +829,7 @@ async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
         ),
         "members": await _serialize_group_members(request, members),
         "policy": (
-            _policy_response_payload(published_policy)
-            if published_policy is not None
-            else None
+            _policy_response_payload(published_policy) if published_policy is not None else None
         ),
         "bindings": [_binding_response_payload(binding) for binding in bindings],
     }
@@ -855,8 +874,12 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
         existing_metadata=None,
         raw_metadata=payload.get("metadata"),
         raw_default_prompt=payload.get("default_prompt", ...),
-        raw_owner_scope_type=(payload.get("owner_scope_type", ...) if principal.is_platform_admin else "global"),
-        raw_owner_scope_id=(payload.get("owner_scope_id", ...) if principal.is_platform_admin else None),
+        raw_owner_scope_type=(
+            payload.get("owner_scope_type", ...) if principal.is_platform_admin else "global"
+        ),
+        raw_owner_scope_id=(
+            payload.get("owner_scope_id", ...) if principal.is_platform_admin else None
+        ),
         principal=principal,
     )
 
