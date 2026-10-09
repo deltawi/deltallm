@@ -29,6 +29,7 @@ class RecoveryAction(StrEnum):
     EXPIRED_GRANTS = "expired_grants"
     EXPIRED_OPERATIONS = "expired_operations"
     SETTLE_GRANTS = "settle_grants"
+    ROLL_WINDOWS = "roll_windows"
 
 
 class RecoveryConfig(FrozenBillingContract):

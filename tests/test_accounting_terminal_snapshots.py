@@ -26,6 +26,7 @@ async def test_snapshot_has_the_existing_exact_canonical_documents():
     value = terminal()
     snapshot = FrozenLocalTerminal(value, generation=7)
     assert snapshot.reservation_json == reservation_bytes(value.receipt.reservation)
+    assert snapshot.retained_receipt.reservation_json is snapshot.reservation_json
     assert snapshot.finalization_json == finalization_bytes(value.finalization)
     identity = json.loads(snapshot.journal_identity_json)
     assert identity["reservation_sha256"] == hashlib.sha256(snapshot.reservation_json).hexdigest()

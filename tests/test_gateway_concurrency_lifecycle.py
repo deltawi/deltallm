@@ -17,6 +17,32 @@ from tests.performance import run_gateway_concurrency as workload
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "rate,duration,diagnostic",
+    [(1000, 60, False), (1000, 61, True), (1500, 60, True), (1000, 4, True)],
+)
+async def test_thousand_rps_requires_explicit_bounded_diagnostic(rate, duration, diagnostic):
+    with pytest.raises(ValueError, match="explicit diagnostic mode"):
+        await workload.measure(
+            SimpleNamespace(rate=rate, duration=duration),
+            allow_1000_rps_diagnostic=diagnostic,
+        )
+
+
+@pytest.mark.asyncio
+async def test_thousand_rps_diagnostic_reaches_the_unchanged_measurement_checks(monkeypatch):
+    def manifest_check(path):
+        raise RuntimeError("manifest validation reached")
+
+    monkeypatch.setattr(workload, "read_manifest", manifest_check)
+    with pytest.raises(RuntimeError, match="manifest validation reached"):
+        await workload.measure(
+            SimpleNamespace(rate=1000, duration=60, server_manifest="fixture"),
+            allow_1000_rps_diagnostic=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "status,payload", [(403, {"error": {"message": "private"}}), (200, {"invalid": True})]
 )
 async def test_invalid_workload_precheck_closes_clients_without_recording_load(

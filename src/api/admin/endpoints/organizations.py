@@ -9,6 +9,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
+from src.api.admin.accounting_budget import apply_accounting_balances
+from src.billing.accounting_protocol import AccountingScope
 from src.auth.roles import OrganizationRole, Permission, validate_organization_role
 from src.audit.actions import AuditAction
 from src.services.asset_binding_mirror import (
@@ -1077,6 +1079,7 @@ async def list_organizations(
     )
 
     organizations = [dict(row) for row in rows]
+    await apply_accounting_balances(request, organizations, AccountingScope.ORGANIZATION)
     service_policies = await _load_organization_service_policies(
         db,
         organizations,
@@ -1128,6 +1131,7 @@ async def get_organization(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     organization = dict(rows[0])
+    await apply_accounting_balances(request, [organization], AccountingScope.ORGANIZATION)
     service_policies = await _load_organization_service_policies(
         db,
         [organization],
@@ -2203,4 +2207,6 @@ async def list_organization_teams(request: Request, organization_id: str) -> lis
         """,
         organization_id,
     )
-    return [to_json_value(dict(row)) for row in rows]
+    teams = [dict(row) for row in rows]
+    await apply_accounting_balances(request, teams, AccountingScope.TEAM)
+    return [to_json_value(row) for row in teams]

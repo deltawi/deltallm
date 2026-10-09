@@ -63,11 +63,11 @@ def worker(persistence, **kwargs):
     )
 
 
-async def test_tick_has_three_separate_actions_and_one_probe_with_one_deadline():
+async def test_tick_has_four_separate_actions_and_one_probe_with_one_deadline():
     persistence = Persistence()
     runtime = worker(persistence)
     end = deadline()
-    assert await runtime.run_once(expires_at=end) == 3
+    assert await runtime.run_once(expires_at=end) == 4
     assert [action for action, _ in persistence.calls] == list(RecoveryAction)
     assert all(
         values == {"generation": 7, "limit": 128, "expires_at": end}
@@ -100,6 +100,22 @@ async def test_bad_count_cannot_continue_or_sample_health(value):
     assert len(persistence.calls) == 1 and not persistence.snapshots
 
 
+async def test_rollover_failure_cannot_publish_a_healthy_backlog():
+    class FailedRollover(Persistence):
+        async def recover(self, action, **kwargs):
+            count = await super().recover(action, **kwargs)
+            if action is RecoveryAction.ROLL_WINDOWS:
+                raise invalid_result()
+            return count
+
+    persistence = FailedRollover()
+    runtime = worker(persistence)
+    with pytest.raises(AccountingProtocolUnavailable):
+        await runtime.run_once(expires_at=deadline())
+    assert len(persistence.calls) == 4 and not persistence.snapshots
+    assert not runtime.dependencies_checked and not runtime.worker_health.ready
+
+
 async def test_overlap_rejects_without_a_waiter_or_extra_query():
     persistence = Persistence()
     persistence.resume = asyncio.Event()
@@ -110,7 +126,7 @@ async def test_overlap_rejects_without_a_waiter_or_extra_query():
         await runtime.run_once(expires_at=deadline())
     assert len(persistence.calls) == 1
     persistence.resume.set()
-    assert await task == 3
+    assert await task == 4
 
 
 @pytest.mark.parametrize("phase", ["cancel", "timeout"])
@@ -126,7 +142,7 @@ async def test_interruption_stops_the_cycle_and_releases_its_gate(phase):
         await task
     assert len(persistence.calls) == 1 and not persistence.snapshots
     persistence.resume = None
-    assert await runtime.run_once(expires_at=deadline()) == 3
+    assert await runtime.run_once(expires_at=deadline()) == 4
 
 
 async def test_start_waits_for_a_real_cycle_and_close_does_not_prove_global_drain():

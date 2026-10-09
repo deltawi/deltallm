@@ -23,7 +23,7 @@ from src.billing.accounting_protocol import (
     PreissuedPermitGrant,
     ReserveDecision,
 )
-from src.billing.accounting_snapshots import reservation_bytes
+from src.billing.accounting_snapshots import reservation_snapshot
 from src.billing.accounting_terminal_snapshots import LocalTerminalValue, freeze_terminal_snapshots
 from src.billing.selector_charge import FrozenBillingContract
 
@@ -135,7 +135,7 @@ def expand_compact_local_permits(
         raise ValueError("compact local reply has the wrong entry count")
     result = []
     for wire, reservation in zip(values, reservations, strict=True):
-        item = AccountingReservation.model_validate_json(reservation_bytes(reservation))
+        item, _ = reservation_snapshot(reservation)
         if (
             wire.operation_id != item.operation_id
             or wire.protocol_generation != item.protocol_generation

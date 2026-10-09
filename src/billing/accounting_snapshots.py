@@ -8,7 +8,17 @@ from src.billing.accounting_protocol import AccountingFinalization, AccountingRe
 
 
 def reservation_bytes(item: AccountingReservation) -> bytes:
-    return _encoded(AccountingReservation.model_validate(item.model_dump()))
+    return reservation_snapshot(item)[1]
+
+
+def reservation_snapshot(item: AccountingReservation) -> tuple[AccountingReservation, bytes]:
+    """Check the full graph and return its detached model and canonical bytes.
+
+    Use the model only in the synchronous prepare phase. Retain the bytes, not
+    mutable request dictionaries, when ownership moves to a queue or store.
+    """
+    copy = AccountingReservation.model_validate(item.model_dump())
+    return copy, _encoded(copy)
 
 
 def finalization_bytes(item: AccountingFinalization) -> bytes:

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
-from src.db.budget_notifications import BudgetNotification
+from src.db.budget_notifications import BudgetNotification, BudgetThresholdScanUnavailable
 
 
 def record():
@@ -124,3 +124,52 @@ async def test_failed_probe_does_not_start_an_unowned_worker():
     with pytest.raises(RuntimeError):
         await worker.start()
     assert worker.task is None
+
+
+@pytest.mark.parametrize("failed_scan", [False, True])
+async def test_accounting_threshold_scan_uses_owned_worker_and_never_blocks_accepted_delivery(
+    failed_scan,
+):
+    repo, alerts = dependencies()
+    repo.enqueue_accounting_thresholds = AsyncMock(return_value="next-org")
+    if failed_scan:
+        repo.enqueue_accounting_thresholds.side_effect = RuntimeError("report unavailable")
+    worker = BudgetNotificationWorker(
+        repo, alerts, scan_accounting_thresholds=True, alert_ttl_seconds=60
+    )
+    await worker.start()
+    await worker.shutdown()
+    repo.enqueue_accounting_thresholds.assert_awaited_once_with(after="", ttl_seconds=60)
+    repo.claim.assert_awaited_once()
+    repo.cleanup.assert_awaited_once()
+
+
+async def test_failed_accounting_page_does_not_block_later_pages_or_accepted_delivery(
+    monkeypatch,
+):
+    repo, alerts = dependencies()
+    cursors = []
+    worker = BudgetNotificationWorker(repo, alerts, scan_accounting_thresholds=True)
+
+    async def scan(*, after, ttl_seconds):
+        cursors.append(after)
+        if after == "":
+            raise BudgetThresholdScanUnavailable("org-031")
+        if after == "org-031":
+            return "org-063"
+        return ""
+
+    async def yield_cycle(waiter, *, timeout):
+        waiter.close()
+        if len(cursors) == 4:
+            worker.stop()
+            return True
+        raise TimeoutError
+
+    repo.enqueue_accounting_thresholds = AsyncMock(side_effect=scan)
+    monkeypatch.setattr("src.billing.budget_notifications.asyncio.wait_for", yield_cycle)
+    await worker.run()
+    assert cursors == ["", "org-031", "org-063", ""]
+    assert repo.claim.await_count == 4
+    assert repo.cleanup.await_count == 4
+    assert worker._state.value == "degraded"

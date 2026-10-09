@@ -11,25 +11,70 @@ from uuid import UUID
 from src.billing.accounting_local_leases import LocalPermitGrant, LocalPermitReceipt
 from src.billing.accounting_protocol import AccountingReservation
 from src.billing.accounting_terminal_receipts import TerminalReceipt
-from src.billing.accounting_snapshots import reservation_bytes
+from src.billing.accounting_snapshots import reservation_bytes, reservation_snapshot
 
 
-@dataclass(frozen=True, slots=True, repr=False)
+@dataclass(frozen=True, slots=True, init=False, repr=False)
 class RetainedLocalReceipt:
     grant: LocalPermitGrant
     permit_ordinal: int
     reservation_json: bytes
+    operation_id: UUID
+    generation: int
+
+    def __init__(
+        self, grant: LocalPermitGrant, permit_ordinal: int, reservation_json: bytes
+    ) -> None:
+        # Raw documents and models must pass all checks before metadata can be
+        # used without decoding. The issue owner normally enters through prepare.
+        if len(reservation_json) > 1_048_576:
+            raise ValueError("local receipt document exceeds its byte limit")
+        reservation = AccountingReservation.model_validate_json(reservation_json)
+        copy = LocalPermitReceipt(
+            grant=LocalPermitGrant.model_validate(grant.model_dump()),
+            permit_ordinal=permit_ordinal,
+            reservation=reservation,
+        )
+        if reservation_bytes(reservation) != reservation_json:
+            raise ValueError("local receipt document is not canonical")
+        self._set_owned(copy, reservation_json)
 
     @classmethod
     def freeze(cls, receipt: LocalPermitReceipt) -> RetainedLocalReceipt:
-        encoded = reservation_bytes(receipt.reservation)
+        retained, _ = cls.prepare(receipt)
+        return retained
+
+    @classmethod
+    def prepare(
+        cls, receipt: LocalPermitReceipt
+    ) -> tuple[RetainedLocalReceipt, LocalPermitReceipt]:
+        if (
+            not isinstance(receipt, LocalPermitReceipt)
+            or not isinstance(receipt.reservation, AccountingReservation)
+            or not isinstance(receipt.grant, LocalPermitGrant)
+        ):
+            raise ValueError("local receipt model has invalid fields")
+        reservation, encoded = reservation_snapshot(receipt.reservation)
         # Recheck nested dictionaries, which a frozen model does not freeze.
         copy = LocalPermitReceipt(
-            grant=LocalPermitGrant.model_validate_json(receipt.grant.model_dump_json()),
+            grant=LocalPermitGrant.model_validate(receipt.grant.model_dump()),
             permit_ordinal=receipt.permit_ordinal,
-            reservation=AccountingReservation.model_validate_json(encoded),
+            reservation=reservation,
         )
-        return cls(copy.grant, copy.permit_ordinal, encoded)
+        retained = object.__new__(cls)
+        retained._set_owned(copy, encoded)
+        return retained, copy
+
+    def _set_owned(self, copy: LocalPermitReceipt, encoded: bytes) -> None:
+        # Only a fully checked, detached graph enters this synchronous storage
+        # step. No mutable reservation model is retained after prepare returns.
+        if hasattr(self, "reservation_json"):
+            raise ValueError("local receipt snapshot is already set")
+        object.__setattr__(self, "grant", copy.grant)
+        object.__setattr__(self, "permit_ordinal", copy.permit_ordinal)
+        object.__setattr__(self, "reservation_json", encoded)
+        object.__setattr__(self, "operation_id", copy.reservation.operation_id)
+        object.__setattr__(self, "generation", copy.reservation.protocol_generation)
 
     @property
     def retained_bytes(self) -> int:
@@ -98,16 +143,15 @@ class LocalReceiptStore:
         )
 
     def retain(self, receipt: LocalPermitReceipt) -> bool:
-        item = receipt.reservation
         retained = RetainedLocalReceipt.freeze(receipt)
-        previous = self._values.get(item.operation_id)
+        previous = self._values.get(retained.operation_id)
         if previous is not None:
             if not previous.same_issue(retained):
                 raise ValueError("local issue identity cannot change")
             return True
         if not self.capacity_for(entries=1, retained_bytes=retained.retained_bytes):
             return False
-        self._values[item.operation_id] = retained
+        self._values[retained.operation_id] = retained
         self._bytes += retained.retained_bytes
         return True
 
@@ -118,7 +162,7 @@ class LocalReceiptStore:
     def prepare_issue(self, values: Sequence[RetainedLocalReceipt]) -> bool:
         if len(values) > 256:
             raise ValueError("local issue must contain at most 256 entries")
-        operation_ids = tuple(value.restore().reservation.operation_id for value in values)
+        operation_ids = tuple(value.operation_id for value in values)
         if len(set(operation_ids)) != len(operation_ids):
             raise ValueError("one local issue cannot repeat an operation")
         if any(operation_id in self._values for operation_id in operation_ids):

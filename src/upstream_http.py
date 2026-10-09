@@ -8,6 +8,7 @@ from httpx._utils import get_environment_proxies
 from src.request_deadline import current_request_deadline
 
 from src.providers.error_body import bound_provider_error_response_body
+from src.providers.http_transport import UpstreamHTTPTransport
 
 
 DEFAULT_UPSTREAM_HTTP_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -100,9 +101,19 @@ def environment_proxy_pool_count() -> int:
 
 
 def build_upstream_http_client(general_settings: Any) -> httpx.AsyncClient:
+    limits = build_upstream_http_limits(general_settings)
+    # An explicit transport disables HTTPX's automatic environment proxy mounts.
+    # Keep its existing parser and NO_PROXY rules, and keep the capacity contract
+    # of one bounded pool for each configured direct/proxy transport.
+    mounts = {
+        pattern: None if proxy is None else UpstreamHTTPTransport(limits=limits, proxy=proxy)
+        for pattern, proxy in get_environment_proxies().items()
+    }
     return httpx.AsyncClient(
         timeout=build_upstream_http_timeout(general_settings),
-        limits=build_upstream_http_limits(general_settings),
+        limits=limits,
+        transport=UpstreamHTTPTransport(limits=limits),
+        mounts=mounts,
         event_hooks={"response": [bound_provider_error_response_body]},
     )
 

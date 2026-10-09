@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
+from src.db.accounting_budget_reads import AccountingBudgetBalance, AccountingBudgetReadRepository
+from src.billing.accounting_protocol import AccountingScope
 
 
 class _OrganizationListDB:
@@ -131,3 +135,29 @@ async def test_list_organization_member_counts_remain_tenant_scoped(
         if "FROM deltallm_organizationtable o" in query and "ORDER BY" in query
     )
     assert "o.organization_id IN ($1)" in list_query
+
+
+async def test_native_spend_overlay_keeps_authorized_scope_and_admin_response_contract(
+    client, test_app, monkeypatch
+):
+    db = _OrganizationListDB()
+    _install_db(test_app, db)
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.organizations.get_auth_scope",
+        lambda *args, **kwargs: AuthScope(
+            is_platform_admin=False,
+            org_ids=["org-visible"],
+            org_permissions_by_id={"org-visible": {Permission.ORG_READ}},
+        ),
+    )
+    repository = AccountingBudgetReadRepository(db)
+    repository.balances = AsyncMock(
+        return_value={"org-visible": AccountingBudgetBalance("org-visible", Decimal("0.6"), None)}
+    )
+    test_app.state.accounting_budget_reads = repository
+    response = await client.get("/ui/api/organizations")
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert len(rows) == 1 and rows[0]["organization_id"] == "org-visible"
+    assert rows[0]["spend"] == 0.6
+    repository.balances.assert_awaited_once_with(AccountingScope.ORGANIZATION, ["org-visible"])

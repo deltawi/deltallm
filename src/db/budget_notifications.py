@@ -2,15 +2,35 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+import asyncio
+import json
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
+from collections.abc import Sequence
+from typing import TypedDict
 
 from src.billing.money import money_string
+from src.billing.accounting_protocol import AccountingScope
+from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
 
 EnqueueOutcome = Literal["queued", "throttled", "busy", "full", "inactive"]
+
+
+class BudgetThresholdScanUnavailable(RuntimeError):
+    """Retry a failed page on the next pass without blocking later pages."""
+
+    def __init__(self, next_cursor: str) -> None:
+        super().__init__("accounting budget threshold page unavailable")
+        self.next_cursor = next_cursor
+
+
+class BudgetThresholdPolicy(TypedDict):
+    organization_id: str
+    soft_budget: str
+    max_budget: str | None
 
 
 @dataclass(frozen=True)
@@ -31,6 +51,65 @@ class BudgetNotificationRepository:
 
     def __init__(self, db: Prisma) -> None:
         self.db = db
+
+    async def enqueue_accounting_thresholds(self, *, after: str, ttl_seconds: int) -> str:
+        """Check one fixed page on the control pool, not during admission."""
+        next_cursor: str | None = None
+        try:
+            async with asyncio.timeout(2):
+                rows = await self.db.query_raw(
+                    "SELECT organization_id,soft_budget::text,max_budget::text "
+                    "FROM deltallm_organizationtable WHERE organization_id>$1 "
+                    "AND soft_budget IS NOT NULL AND lifecycle_state='active' "
+                    "ORDER BY organization_id LIMIT 32",
+                    after,
+                )
+                if not rows:
+                    return ""
+                next_cursor = rows[-1]["organization_id"]
+                await self._enqueue_accounting_page(rows, ttl_seconds=ttl_seconds)
+                return next_cursor
+        except Exception:
+            if next_cursor is not None:
+                # Policy and balances remain durable. A full pass retries this
+                # page; no failed read is treated as a zero balance.
+                raise BudgetThresholdScanUnavailable(next_cursor) from None
+            raise
+
+    async def _enqueue_accounting_page(
+        self,
+        rows: Sequence[BudgetThresholdPolicy],
+        *,
+        ttl_seconds: int,
+    ) -> None:
+        balances = await AccountingBudgetReadRepository(self.db).balances(
+            AccountingScope.ORGANIZATION, [row["organization_id"] for row in rows]
+        )
+        intents = [
+            {
+                "organization_id": row["organization_id"],
+                "notification_id": str(uuid4()),
+                "spend": money_string(balances[row["organization_id"]].spend),
+                "soft": row["soft_budget"],
+                "hard": row["max_budget"],
+            }
+            for row in rows
+            if balances[row["organization_id"]].spend >= Decimal(row["soft_budget"])
+        ]
+        if intents:
+            outcomes = await self.db.query_raw(
+                "SELECT deltallm_enqueue_budget_notification(value->>'organization_id',"
+                "value->>'notification_id',(value->>'spend')::numeric,"
+                "(value->>'soft')::numeric,(value->>'hard')::numeric,$2::integer) AS outcome "
+                "FROM jsonb_array_elements($1::jsonb) value",
+                json.dumps(intents),
+                ttl_seconds,
+            )
+            if len(outcomes) != len(intents) or any(
+                row["outcome"] not in {"queued", "throttled", "busy", "full", "inactive"}
+                for row in outcomes
+            ):
+                raise RuntimeError("invalid budget notification acceptance result")
 
     async def enqueue(
         self,

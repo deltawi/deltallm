@@ -130,7 +130,7 @@ async def test_provider_retry_keeps_one_local_issue_and_terminal_contains_its_pr
         )
         reused = operation_handle(request)
         assert isinstance(reused, LocalAccountingHandle)
-        assert reused.proof == first.proof and len(reused.attempts) == 2
+        assert reused.proof is first.proof and len(reused.attempts) == 2
         assert len(funding.calls) == receipts.entries == 1
         await spend._finalize_accounting_spend(
             reused, event_id=str(reused.reservation.operation_id), payload={"cost_exact": "0.3"}

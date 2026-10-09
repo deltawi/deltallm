@@ -39,11 +39,11 @@ def recovery(db, generation, limit=4):
     ), counted
 
 
-async def test_empty_recovery_requires_four_native_calls_and_keeps_truth(accounting_db):
+async def test_empty_recovery_requires_five_native_calls_and_keeps_truth(accounting_db):
     clients, generation = accounting_db
     worker, counted = recovery(clients[0], generation)
     assert await worker.run_once(expires_at=deadline()) == 0
-    assert counted.calls == 4 and worker.probe.snapshot.sampled_drained
+    assert counted.calls == 5 and worker.probe.snapshot.sampled_drained
     assert await _outstanding(clients[0], generation) == 0
 
 
@@ -64,7 +64,7 @@ async def test_journal_acceptance_is_not_settlement_until_materialized(accountin
         assert await processing.close(expires_at=deadline())
     worker, counted = recovery(db, generation)
     assert await worker.run_once(expires_at=deadline()) == int(materialized)
-    assert counted.calls == 4
+    assert counted.calls == 5
     assert worker.probe.snapshot.sampled_drained is materialized
     expected = (
         (Decimal("0.6"), Decimal(0), Decimal(0))

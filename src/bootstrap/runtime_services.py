@@ -29,6 +29,7 @@ from src.billing.ledger import SpendLedgerService
 from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.billing.spend import SpendTrackingService
 from src.billing.budget_notifications import BudgetNotificationProducer, BudgetNotificationWorker
+from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 from src.billing.accounting_projection import AccountingProjectionWorker
 from src.billing.accounting_service import AccountingProtocolService
 from src.db.budget_notifications import BudgetNotificationRepository
@@ -403,6 +404,11 @@ async def _init_runtime_services(
         )
     runtime.accounting_protocol_service = accounting_service
     app.state.accounting_protocol_service = accounting_service
+    app.state.accounting_budget_reads = (
+        AccountingBudgetReadRepository(app.state.prisma_manager.client)
+        if accounting_config.accounting_execution_mode == "local_journal"
+        else None
+    )
     app.state.accounting_max_provider_attempts = accounting_config.accounting_max_provider_attempts
     if spend_ingestion_mode == "outbox" and telemetry_db_client is None:
         raise RuntimeError("spend outbox mode requires the dedicated telemetry database pool")
@@ -565,11 +571,15 @@ async def _init_runtime_services(
     app.state.accounting_projection_worker = projection_worker
     budget_notification_repository = BudgetNotificationRepository(app.state.prisma_manager.client)
     budget_notification_worker = None
-    notifications_enabled = bool(getattr(general_settings, "budget_notifications_enabled", False))
+    notifications_enabled = bool(
+        _runtime_setting(general_settings, settings, "budget_notifications_enabled", False)
+    )
     if notifications_enabled:
         budget_notification_worker = BudgetNotificationWorker(
             budget_notification_repository,
             app.state.alert_service,
+            scan_accounting_thresholds=accounting_config.accounting_protocol_enabled,
+            alert_ttl_seconds=budget_alert_ttl,
         )
         runtime.budget_notification_worker = budget_notification_worker
         app.state.budget_notification_worker = budget_notification_worker

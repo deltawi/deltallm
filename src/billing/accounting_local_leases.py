@@ -9,13 +9,12 @@ from pydantic import AwareDatetime, Field, model_validator
 from src.billing.accounting_protocol import (
     AccountingFinalization,
     AccountingOperationHandle,
-    AccountingReservation,
     DispatchPermit,
     PreissuedPermitClaim,
     PreissuedPermitGrant,
     ReserveDecision,
 )
-from src.billing.accounting_snapshots import reservation_bytes
+from src.billing.accounting_snapshots import reservation_snapshot
 from src.billing.selector_charge import FrozenBillingContract
 
 
@@ -88,14 +87,13 @@ class LocalAccountingHandle(AccountingOperationHandle):
     @model_validator(mode="after")
     def validate_issue(self) -> LocalAccountingHandle:
         proof, proof_document = _validated_issue_proof(self.proof)
-        reservation_document = reservation_bytes(self.reservation)
+        reservation, reservation_document = reservation_snapshot(self.reservation)
         if (
             proof_document != reservation_document
             or self.dispatch_token != proof.reservation.owner_token
             or self.accounting_partition != proof.grant.accounting_partition
         ):
             raise ValueError("local operation proof does not match its handle")
-        reservation = AccountingReservation.model_validate_json(reservation_document)
         object.__setattr__(self, "proof", proof)
         object.__setattr__(self, "reservation", reservation)
         return self
@@ -104,11 +102,11 @@ class LocalAccountingHandle(AccountingOperationHandle):
 def _validated_issue_proof(proof: LocalPermitReceipt) -> tuple[LocalPermitReceipt, bytes]:
     # Model copies can bypass scalar validation. Recheck the full graph before
     # dispatch and give each handle its own request dictionaries.
-    encoded = reservation_bytes(proof.reservation)
+    reservation, encoded = reservation_snapshot(proof.reservation)
     copy = LocalPermitReceipt(
         grant=LocalPermitGrant.model_validate(proof.grant.model_dump()),
         permit_ordinal=proof.permit_ordinal,
-        reservation=AccountingReservation.model_validate_json(encoded),
+        reservation=reservation,
     )
     return copy, encoded
 

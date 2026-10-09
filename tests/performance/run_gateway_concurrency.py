@@ -149,9 +149,16 @@ async def measure(
     *,
     resource_recorder: KubernetesResourceRecorder | None = None,
     workload_runner: Callable[[], Awaitable[RunResult]] | None = None,
+    allow_1000_rps_diagnostic: bool = False,
 ) -> dict[str, object]:
-    if not 0 < args.rate <= 500 or not 5 <= args.duration <= 600:
-        raise ValueError("Use rates up to 500 RPS and durations from 5 to 600 seconds")
+    supported_rate = 0 < args.rate <= 500 or (
+        allow_1000_rps_diagnostic and args.rate == 1000 and args.duration <= 60
+    )
+    if not supported_rate or not 5 <= args.duration <= 600:
+        raise ValueError(
+            "Use rates up to 500 RPS and durations from 5 to 600 seconds; "
+            "1,000 RPS needs explicit diagnostic mode and a duration up to 60 seconds"
+        )
     manifest = read_manifest(args.server_manifest)
     endpoint = require_local_url(args.url, schemes={"http"})
     api_urls = [require_local_url(url, schemes={"http"}) for url in args.metrics_url]

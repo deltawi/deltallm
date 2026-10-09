@@ -159,5 +159,81 @@ python3 "$task_bundle/tools/export_qualification_evidence.py" \
   --output artifacts/reproduction-review --verify
 ```
 
-No load test was repeated for this report. Reproduction results must get their
-own source, image, environment, and evidence identities.
+No 50–500 RPS load test was repeated for the 7 October report. Reproduction
+results must get their own source, image, environment, and evidence identities.
+
+## New reviewed-image 1,000 RPS diagnostic
+
+The 8 October diagnostic has a separate local bundle:
+`artifacts/native-reviewed-1000rps-6cpu-12g-60s-20261008/`.
+Its `reproduce.md` gives the complete restore, build, image-check, and test
+commands. Do not use the older `source-history.bundle` for this newer source.
+
+Restore `source-run2.bundle` into a fresh checkout and select
+`b6f3cab423fa13bcd7994790aa8db5225756dee1`. This includes the reviewed runtime
+and all additive migrations, plus the explicit short-only test harness option.
+Use kind v0.31.0 and a dedicated Linux arm64 Docker VM with 6 CPUs and 12 GiB
+RAM to match this run. The older report used 8 CPUs and 6 GiB RAM.
+
+After building and checking an image from that clean source, run:
+
+```sh
+uv run --frozen python -m tests.performance.run_native_qualification \
+  --image your-reviewed-image \
+  --output /absolute/path/to/fresh-1000rps-evidence \
+  --kind /absolute/path/to/kind-v0.31.0 \
+  --short-seconds 60 --diagnostic-rates 1000
+```
+
+This runs only a 60-second 1,000 RPS diagnostic. It retains all existing limits
+and gates and never becomes release-eligible. The recorded run failed; preserve
+its nonzero exit and all failed checks. `run/` retains a setup-only attempt and
+`run2/` retains the actual gateway stage. The application image was unchanged
+between attempts. The source bundles, build metadata, image checks, raw samples,
+resource counters, financial evidence, and environmental setup notes are saved
+with both attempts. All generated evidence is outside the clean source checkout.
+
+## Proof-copy comparison
+
+Use `artifacts/accounting-proof-20261008/` for the newer comparison. Check
+`source-archives.sha256`, then clone `source-before.bundle` and
+`source-after.bundle` into separate fresh directories. Their HEADs must match
+`c1a759db17cf217f4d10ef9aeb21614af9d47704` and
+`9cbd2a32dc36fe516c57da4621e01392a55e8f1f`. Keep generated evidence outside
+those clean source directories. Both bundles include all existing upgrade
+migrations; the proof-copy change itself adds no migration.
+
+Install the locked development dependencies and generate the Prisma client in
+each checkout. Run the same proof benchmark in each:
+
+```sh
+uv sync --frozen --extra dev
+uv run --frozen prisma generate --schema prisma/schema.prisma
+uv run --frozen python -m tests.performance.benchmark_accounting_proofs \
+  --iterations 100 --repeats 5
+```
+
+Build a distinct image from each clean source. Use a dedicated Docker VM with
+6 CPUs and 12 GiB RAM, kind v0.31.0, and no running unrelated containers. Run
+the same 30-second 500 RPS stage once per image. Then use the after image for
+the 1,000 RPS stage:
+
+```sh
+uv run --frozen python -m tests.performance.run_native_qualification \
+  --image your-source-matched-image \
+  --output /absolute/path/to/fresh-evidence \
+  --kind /absolute/path/to/kind-v0.31.0 \
+  --short-seconds 30 --diagnostic-rates 500
+```
+
+For the after-image 1,000 RPS diagnostic, use a new evidence path and replace
+`--diagnostic-rates 500` with `--diagnostic-rates 1000`. Do not change the resource
+profile, connection limits, timeouts, or gates. These selected short stages never
+become release-eligible. The saved before-500 and after-1000 runs exited nonzero;
+the after-500 run exited zero. Preserve all failed checks and financial snapshots.
+
+The test logs also record the full application and real-dependency checks.
+Use `tests/realtime/sdk-requirements.txt` in an isolated Python 3.11 environment
+and set `DELTALLM_REALTIME_SDK_PYTHON` to that interpreter for the four official
+SDK cases. The Redis eviction check needs two separate empty Redis servers,
+not two database numbers on one server. No user workloads were used as fixtures.

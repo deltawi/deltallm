@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
@@ -252,7 +253,18 @@ def _audit_event_id(event: AccountingProjectionEvent) -> str:
     try:
         return str(UUID(str(candidate)))
     except (ValueError, TypeError, AttributeError):
-        return str(uuid5(UUID(event.event_id), "accounting-audit:v1"))
+        pass
+    try:
+        namespace = UUID(event.event_id)
+    except ValueError:
+        # Recovery keys have suffixes, not UUID syntax. Match the native audit
+        # identity without changing already-issued UUID-source identities.
+        digest = hashlib.md5(
+            ("deltallm-accounting-audit:v2:" + event.event_id).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
+        return str(UUID(hex=digest))
+    return str(uuid5(namespace, "accounting-audit:v1"))
 
 
 def _restore_spend_datetimes(payload: dict[str, object]) -> dict[str, object]:

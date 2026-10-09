@@ -179,7 +179,12 @@ async def _reject(scope: Scope, receive: Receive, send: Send, status: int, code:
     allocation = ingress_class(get_route_path(scope), scope.get("method", ""))
     ingress_rejections.labels(allocation.value, code).inc()
     headers = {"Retry-After": "1"} if status == 503 else {}
-    if scope.get("http_version", "1.1").startswith("1."):
+    # An immediate close can erase an early response if upload bytes still arrive.
+    # For a valid retryable HTTP/1.1 request, the server parser discards that body
+    # under its existing idle deadline. Invalid framing and HTTP/1.0 still close.
+    if scope.get("http_version", "1.1").startswith("1.") and (
+        status != 503 or scope.get("http_version", "1.1") != "1.1"
+    ):
         headers["Connection"] = "close"
     response = JSONResponse(
         {

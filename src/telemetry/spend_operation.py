@@ -252,11 +252,17 @@ def _reuse_accounting_allowance(
         previous.reservation.attribution.api_key != auth.api_key
         or previous.reservation.attribution.model != model
         or previous.reservation.attribution.call_type != call_type
-        or len(previous.attempts) >= max_attempts
+        or len(previous.attempts) >= min(max_attempts, 128)
         or allowance > previous.reservation.allowance
     ):
         raise SpendPersistenceUnavailable()
-    return previous.model_copy(update={"attempts": (*previous.attempts, attempt)})
+    # A retry changes only the new attempt. Keep the accepted issue and its
+    # identity; fully check and detach mutable pricing facts for the new attempt.
+    try:
+        checked_attempt = AccountingAttempt.model_validate(attempt.model_dump())
+    except ValueError as exc:
+        raise SpendPersistenceUnavailable() from exc
+    return previous.model_copy(update={"attempts": (*previous.attempts, checked_attempt)})
 
 
 def _provider_reservation(

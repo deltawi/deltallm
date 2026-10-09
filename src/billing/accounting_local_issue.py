@@ -113,8 +113,7 @@ def _freeze(
     proofs, receipts = [], []
     size = 2
     for item in proposed:
-        proof = RetainedLocalReceipt.freeze(item)
-        receipt = proof.restore()
+        proof, receipt = RetainedLocalReceipt.prepare(item)
         size += len(
             json.dumps(
                 receipt.model_dump(mode="json"),

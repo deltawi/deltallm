@@ -3,14 +3,17 @@
 The ownership and trade-offs behind this runtime are recorded in the
 [accounting protocol v2 architecture decision](../design/accounting-protocol-v2.md).
 
-This clean-main integration is not ready for production activation. HTTP provider
-calls and charged cache hits have v2 adapters. Realtime, batch, and selector billing
-still need adapters to the same budget and recovery authority. Startup and Helm
-reject the unsupported combinations. Legacy mode keeps current main's features.
+This integration has shared accounting adapters for HTTP provider calls, charged
+cache hits, Realtime, batch, and selector calls. Legacy mode remains available.
+Production activation still requires the qualification and rollout checks below.
+Startup and Helm reject incompatible role combinations. Code changes after an
+accepted image require a new unchanged-image qualification before a release claim.
 
 Accounting v2 removes the per-request sequence of budget reads, operation writes,
 dispatch writes, spend writes, and audit writes from the gateway hot path. PostgreSQL
-remains the durable authority, but each request has only two required acknowledgements:
+remains the durable authority. The compatibility execution mode uses two required
+acknowledgements. Native execution uses the local permits and terminal journal
+described in the architecture decision.
 
 1. One short atomic admission transaction reuses or allocates a process-scoped,
    short-lived PostgreSQL grant, consumes it for the microbatch, records immutable
@@ -46,6 +49,46 @@ the durable event stream.
 - A failover deployment may run only if the first reservation covers its worst-case
   customer charge. Earlier attempts stay provisional until evidence resolves them.
 
+## Budget edits and native balances
+
+Adding a hard-budget scope while matching permits remain live returns admin HTTP `409`
+with code `budget_policy_requires_drain`. The requested budget does not commit.
+Pause inference for the affected scope, let accepted work settle,
+and let owners return unused permits. Retry when matching grants and direct
+reservations have drained. Other scopes can continue. Older live grants without
+scope data require a one-time drain of the active generation. Do not clear receipts,
+delete grants, or force counters to zero. This rule also applies to direct database
+policy writes. An edit to an
+existing budget window still checks all reserved and provisional money.
+
+Adding or restoring a cap retains charges from the current budget period, even
+before reporting completes. A cap below existing spend and holds returns `409`
+with code `budget_policy_below_debits`. Resolve uncertain operations and unreported
+grant capacity before a new hard-budget window is created. Do not use a cap change
+as a spend reset. Policy edits can read retained financial history on the control
+pool. If an edit times out, it rolls back; drain the affected scope and retry.
+Apply migration `20261007160000_accounting_budget_policy_history` before rollout.
+
+In native mode, organization, team, key, and user admin GET responses use native
+balances. Current finite budgets use committed window balances. Unlimited scopes
+use projected facts and retained legacy history for the current budget period.
+These values can lag until settlement or projection completes. A missing finite
+authority is an explicit `503`, not a zero-spend result. Mutation receipts remain
+independent from reporting; read the entity again for its current balance.
+
+When `budget_notifications_enabled` is true, the existing notification worker
+checks accounting thresholds in pages of 32 organizations. Enable the existing
+global notification policy and the required email or Slack configuration too.
+Discovery is asynchronous and uses the control-plane database pool. The worker
+keeps durable deduplication and fenced delivery. It does not add database or
+network calls to inference admission.
+If a known page fails, the scan continues to later pages and retries the failed
+page on the next full pass. Delivery of accepted intents continues. An unknown
+balance is never treated as zero.
+
+Native selector billing uses shared accounting health. It does not require a
+legacy spend worker on the same API process. Legacy selector billing still does.
+
 ## Compatibility projection
 
 `deltallm_accounting_events` is the source of truth. The dedicated accounting worker
@@ -57,6 +100,15 @@ The worker also rolls renewable budget windows. If a renewable window expires be
 its successor is ready, admission fails closed with 503; it never treats a missing
 window as unlimited. Hour, day, and calendar-month resets preserve the configured
 monthly anchor day.
+
+In native execution, the existing recovery owner performs window renewal after
+grant settlement. It uses the same batch limit and cycle deadline. Migration
+`20261007170000_accounting_budget_period_sync` and its corrective migration
+`20261007171000_accounting_monthly_reset_metadata` must be applied before the new
+worker image. The reset trigger also repairs an unchanged expired date when an operator
+edits a budget. Cap removal cancels pending renewal. Old-period spend is not copied
+into a restored cap, and current-period spend is kept exactly once. Explicit
+invalid reset dates still fail. No extra inference database call is added.
 
 Projection claims up to `accounting_projection_max_concurrent_partitions` partitions
 at once. Spend rows and required audit envelopes are written in sink batches, while
@@ -71,6 +123,52 @@ Cross-process work can wait for that idle interval plus bounded database time
 before discovery. Error backoff and required health checks do not change.
 
 ## Database preparation
+
+### Upgrade terminal publication ordering
+
+Migration `20261007173000_accounting_event_publication_order` orders terminal
+publication within each accounting partition. It also keeps grant-backed expiry
+out of the direct-reservation recovery owner. Existing migrations stay unchanged.
+Apply `20261008001000_accounting_event_publication_parent_locks` in the same
+stopped-writer upgrade. It orders the implicit parent locks for journal records
+that retain reservations. Do not deploy the publication change without this
+correction.
+
+Stop all accounting event writers and reporting workers before applying this
+migration. This includes API and batch writers, journal processing, expiry
+recovery, and operator reconciliation. First let accepted work finish under its
+current owner. Do not overlap old and new writer functions during this upgrade.
+
+If this database already used native reporting, reset only its native reporting
+checkpoint while the workers are stopped. This example uses generation `1`;
+use the generation that you have checked for your deployment:
+
+```sql
+UPDATE deltallm_accounting_projection_checkpoints
+SET last_sequence=0, lease_owner=NULL, lease_token=NULL,
+    lease_expires_at=NULL, last_error_code=NULL, updated_at=NOW()
+WHERE protocol_name='primary' AND generation=1
+  AND projection_name='accounting-read-model-v2';
+```
+
+This update changes at most 64 fixed checkpoint cells. It does not delete
+events, balances, usage facts, audit records, or rollups. The native projector
+can replay existing events without adding their effects twice. Do not reset
+the compatibility projector with this command.
+
+Restart the upgraded accounting workers first. Wait until native reporting has
+finished the replay and worker health is ready before restarting inference.
+Replay time depends on retained history. A conflicting fact stops replay; do
+not delete that fact to force progress. A new database needs no checkpoint reset.
+
+For a deployment that still uses the supported compatibility reporting owner,
+the new image also accepts expiry and reconciliation event keys. Existing audit
+UUIDs and UUID-source fallback identities remain unchanged. Recovery keys use
+the native stable audit identity. Restart the upgraded compatibility worker; its
+blocked checkpoint retries normally. Do not reset a checkpoint just to clear this
+ID error, and do not run native and compatibility reporting for the same generation.
+The native replay command above is not a compatibility replay procedure. Keep
+existing compatibility spend and audit deduplication rows intact.
 
 Apply the Prisma migrations first. Stop all legacy API and worker writers. Let
 accepted billing work settle. Then prepare a generation from exact legacy balances:
@@ -244,7 +342,7 @@ Before production activation, run:
   reconciliation, and reset rollover;
 - Helm schema, lint, and capacity tests;
 - shared realtime, batch, and selector adapters with recovery tests;
-- the 50/100/200 RPS workload with zero accounting 500/503 errors, no overspend,
+- the 50/100/200/500 RPS workload with zero accounting 500/503 errors, no overspend,
   bounded queues, recovered projection lag, and p95/p99 within the release SLO.
 
 PR 10 load qualification remains separate from this architectural implementation.

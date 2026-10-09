@@ -7,6 +7,8 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from src.api.admin.accounting_budget import apply_accounting_balances
+from src.billing.accounting_protocol import AccountingScope
 from src.auth.roles import (
     Permission,
     ORG_ROLE_PERMISSIONS,
@@ -295,13 +297,15 @@ async def list_teams(
         *params,
     )
 
+    teams = [dict(row) for row in rows]
+    await apply_accounting_balances(request, teams, AccountingScope.TEAM)
     return {
         "data": [
             _team_response_payload(
                 dict(row),
                 capabilities=build_team_capabilities(scope, dict(row)),
             )
-            for row in rows
+            for row in teams
         ],
         "pagination": {
             "total": total,
@@ -322,6 +326,7 @@ async def get_team(
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id)
+    await apply_accounting_balances(request, [team], AccountingScope.TEAM)
     return _team_response_payload(team, capabilities=build_team_capabilities(scope, team))
 
 

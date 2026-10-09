@@ -51,6 +51,42 @@ class BudgetAlert:
     hard_budget: Decimal | None
 
 
+@dataclass(frozen=True, slots=True)
+class BudgetReadPeriod:
+    starts_at: datetime | None
+    ends_at: datetime | None
+    legacy_current: bool
+
+
+def budget_read_period(
+    duration: str | None, reset_at: datetime | None, metadata: object, *, now: datetime
+) -> BudgetReadPeriod:
+    """Use the reset policy without writing a stale legacy counter."""
+    if duration is None:
+        return BudgetReadPeriod(None, None, True)
+    parsed = _parse_duration(duration)
+    if parsed is None or reset_at is None:
+        raise BudgetStateUnavailable()
+    amount, unit = parsed
+    anchor = _monthly_anchor_day(metadata) or reset_at.day
+    end = reset_at
+    try:
+        if end <= now:
+            end = _next_reset_after(
+                duration=duration, previous_reset_at=reset_at, now=now, monthly_anchor_day=anchor
+            )
+            if end is None:
+                raise BudgetStateUnavailable()
+        start = (
+            _add_months(end, -amount, anchor_day=anchor)
+            if unit == "mo"
+            else end - timedelta(**{"hours" if unit == "h" else "days": amount})
+        )
+    except (ValueError, OverflowError):
+        raise BudgetStateUnavailable() from None
+    return BudgetReadPeriod(start, end, reset_at > now)
+
+
 class BudgetAlertSink(Protocol):
     async def send_budget_alert(
         self,

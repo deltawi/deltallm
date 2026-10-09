@@ -187,6 +187,21 @@ deltallm_accounting_failures_total{queue="finalization",phase="database",reason=
     assert "private" not in repr(selected)
 
 
+def test_recovery_and_rollover_metrics_remain_in_the_qualification_evidence():
+    text = """
+deltallm_accounting_database_call_seconds_count{operation="recovery_roll_windows",outcome="error"} 1
+deltallm_accounting_projection_actions_total{action="roll_windows",outcome="success"} 2
+deltallm_accounting_projection_actions_total{action="expired_grants",outcome="success"} 3
+deltallm_accounting_projection_actions_total{action="expired_operations",outcome="success"} 4
+deltallm_accounting_projection_actions_total{action="settle_grants",outcome="success"} 5
+deltallm_accounting_projection_actions_total{action="recovery_tick",outcome="unavailable"} 6
+deltallm_accounting_projection_actions_total{action="private-scope",outcome="success"} 99
+"""
+    selected = metrics.select_metrics(text)
+    assert len(selected) == 6
+    assert "private" not in repr(selected)
+
+
 @pytest.mark.asyncio
 async def test_recorder_closes_and_records_failed_scrapes_without_urls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

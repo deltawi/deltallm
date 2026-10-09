@@ -416,7 +416,7 @@ async def test_budget_worker_start_failure_closes_initialized_runtime(monkeypatc
     cfg.general_settings.budget_notifications_enabled = True
 
     class FailingWorker:
-        def __init__(self, *args):
+        def __init__(self, *args, **kwargs):
             self.stopped = False
             created["budget_worker"] = self
 

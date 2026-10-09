@@ -183,6 +183,88 @@ migration is not supplied or verified by this change. Such a migration needs
 separate exact-scope reconciliation and writer fences before legacy admission
 can resume. Retain native facts, budget windows, receipts, and checkpoints.
 
+### Budget edits, admin reads, and alerts
+
+Migration `20261007150000_accounting_budget_policy_fence` closes the race between
+a new hard-budget scope and permits granted before that scope existed. A policy
+write takes an exclusive protocol-row lock. Refills and direct reservations hold
+the shared lock on that same row. Migration
+`20261007152000_accounting_scoped_budget_policy_fence` retains scope identity when
+a grant is funded. If a new scope has no current window and matching grants or
+direct reservations remain live, the policy write fails and its transaction rolls
+back. The admin API returns `409` with code `budget_policy_requires_drain`.
+Pause inference for the affected scope, drain its accepted work and unused permits,
+then retry. Other tenants can continue. Older live grants without scope identity
+require a one-time generation-wide drain. Existing windows still permit limit edits
+that cover all committed, reserved, and provisional debits. The fence adds no cache
+epoch or database read for a warm request. Accepted requests retain their original
+financial attribution. No previously applied migration changes.
+
+Migration `20261007160000_accounting_budget_policy_history` preserves current-period
+charges when a hard budget is added or restored. The policy transaction reads
+durable terminal events. It does not use delayed usage facts. Charges already
+copied to the legacy spend ledger are excluded because the legacy counter includes
+them. Hour, day, and month periods use UTC and the existing monthly anchor. A cap
+below existing debits returns `409` with code `budget_policy_below_debits`.
+New windows are rejected while matching operations have provisional debt or closed
+local grants have unreported capacity. Reconcile that usage before the policy edit.
+The existing protocol fence prevents concurrent funding during this check.
+
+These history reads run only during a control-plane policy edit, after the scope
+drains. They can scan retained history for that scope. Existing control-pool query
+and transaction deadlines bound the edit; a timeout rolls back the edit. There is
+no new history scan, counter write, index, pool, or worker on the inference path.
+Retain source events for budget reconstruction under the existing financial
+retention policy. Do not remove them based only on reporting progress.
+
+Native selectors use shared accounting health. The legacy spend worker is required
+only for legacy selector billing. No second selector recovery owner is created.
+
+Migration `20261007153000_accounting_team_model_policy_identity` preserves the
+existing colon-delimited team/model window identity, including IDs with delimiters.
+
+Migration `20261007154000_accounting_grant_policy_scope_bytes` allows the existing
+256-character identities to use Unicode and JSON escaping without rejection.
+The additive grant column retains at most 8 KiB of scope data for each funded grant.
+One partial index covers live grant scopes, not each provider request. Closing a
+grant removes its live index entry; normal grant retention still owns the row.
+There is no new per-request write or worker. Migration statements have a two-second
+lock timeout and a 30-second statement timeout; retry deployment after draining
+writers if those bounds prevent index creation. Existing grant row cleanup and
+vacuum ownership do not change.
+
+Native admin GET responses read committed balances from current hard-budget
+windows. Unlimited and soft-only scopes read projected native facts plus retained
+legacy period balances. Hour, day, and month periods use the existing reset policy
+and monthly anchor. An overdue legacy period does not carry its old balance into
+the current period. These are control-pool reads: at most 500 authorized identities
+per page, one or two database calls, and a two-second page deadline. Legacy nested
+team lists use bounded pages under one response deadline. A missing finite-budget
+authority returns `503`, not zero. The JSON spend field remains numeric. Native
+facts can lag until reporting completes, and window balances can lag until grant
+settlement. Mutation receipts do not depend on a reporting refresh; use the GET
+response to obtain the current balance.
+
+The existing budget notification worker owns threshold discovery when accounting
+v2 is enabled. It reads at most 32 active organizations per cycle on the control
+pool, then enqueues crossed thresholds in one bounded batch. Its cursor wraps to
+the first page. The existing intent table, dedupe window, delivery fences, and
+email/Slack delivery owners do not change. A failed threshold read marks this
+optional worker degraded but does not stop accepted intent delivery or inference.
+Once the organization page is known, a failed balance read or enqueue advances
+the cursor past that page. The next full pass retries it from durable policy and
+balances. Later pages can proceed. A failed organization-list read keeps the
+cursor because its next page boundary is unknown. Cancellation stops the scan.
+No threshold query, recipient lookup, or notification send runs during admission.
+The existing scope/time indexes serve balance reads; this change adds no usage-fact
+index or per-request counter write. Large reporting reads can time out explicitly;
+they must not use the inference pool as a fallback.
+
+Deploy these additive migrations before the application update. Old application
+versions also receive the database fence and funded-grant scope data. Rollback
+keeps this safety fence and native accounting enabled. Do not restore legacy spend
+reads as native authority.
+
 ## Compatibility removal
 
 The compatibility projector is intentionally one-way. Remove it only after reporting,
@@ -802,3 +884,152 @@ The migrations create new inactive tables and indexes, with 2-second lock and
 30-second statement limits. They do not rewrite existing financial history.
 Deployment migration ownership is unchanged. Rollback keeps the old runtime
 selector and journal data intact; it must not drop accepted financial work.
+
+### Native recurring-budget reset fixes
+
+The existing native recovery owner also renews expired budget windows. One cycle
+uses four separate maintenance calls: expired grants, expired operations, grant
+settlement, and window renewal. One backlog call follows these calls. Each call
+has the existing statement limit and shares the cycle deadline. The existing
+presence observer can add its normal observation calls. No new task, pool, queue,
+or inference call is added. Each renewal call creates at most 256 windows, or the
+smaller configured recovery batch limit.
+
+Migration `20261007170000_accounting_budget_period_sync` keeps recurring policy
+edits valid after a reset. Before an entity policy UPDATE, it advances an unchanged
+expired reset date and removes the expired compatibility balance. It keeps exact
+current-period charges that already reached the legacy spend sink. The existing
+AFTER trigger remains the policy owner. When it creates a native window, it adds
+only charges that did not reach that sink. Native windows remain the hard-budget
+authority. The control-plane reads use durable terminal events, not delayed native
+reporting. They can scan scoped history and remain inside the existing control
+statement deadline; they do not run in inference or automatic recovery.
+
+Unlimited admin and soft-budget reads exclude native facts already in a current
+legacy counter. If that counter has expired, they include all native facts in the
+current period. These reads still use at most two calls for 500 authorized entities.
+They do not count a charge twice while a cap is removed.
+
+The entity UPDATE already owns the row lock used by the compatibility spend sink.
+The reset trigger does not lock native windows. Renewal takes the shared protocol
+fence before window locks. A policy edit takes the existing exclusive protocol
+fence before window locks. This order prevents an edit and renewal from creating
+competing windows. Removing a cap also cancels its last pending renewal. A later
+cycle cannot restore the removed cap. Concurrent renewal owners still use window
+row locks, `SKIP LOCKED`, and the existing unique window identity.
+
+Hour, day, and month periods use UTC. Month resets keep the anchor day, including
+February and leap years. The corrective migration
+`20261007171000_accounting_monthly_reset_metadata` keeps this rule when old reset
+metadata is null or is not an object. Other metadata keys stay intact.
+Explicit invalid reset dates still fail. Old financial
+events and provisional balances stay intact. A failed renewal does not publish a
+healthy recovery observation. Admission still fails closed until a valid window
+exists. Legacy mode keeps its existing reset owner when no native protocol is active.
+
+This control-plane correction is used instead of a second background reset owner
+or an entity UPDATE from inside a window lock. A second owner would duplicate
+policy. An entity UPDATE inside that lock would reverse the policy lock order.
+Compatibility counters are retained only for the existing sink and migration
+baseline; this change does not add a requirement to enable that sink. A future
+removal must retain the legacy cutover baseline and its exact period attribution.
+
+Apply both additive migrations before the new worker image. Keep all applied
+migrations unchanged. No financial row is deleted or rewritten during deployment.
+Keep these migrations and accepted financial data during a runtime rollback. An older
+native recovery worker does not renew windows, so it is not a safe long-term
+rollback target for recurring budgets. Use a forward fix or the documented drained
+legacy cutover. Test fresh installation and both supported upgrade paths before release.
+
+## Terminal publication order
+
+The compatibility audit adapter accepts both UUID source keys and recovery keys
+such as `operation-id:expired:v2` and `operation-id:reconciled:v2`. Valid envelope
+UUIDs keep their identity. A UUID source keeps the original UUIDv5 fallback.
+A non-UUID recovery key uses the same namespaced MD5-derived identifier as native
+audit projection. This hash is a stable deduplication key, not a security primitive.
+It prevents a recovery record from blocking the compatibility checkpoint without
+changing existing sink identities. Real-database tests cover expiry, resolution,
+lost sink acknowledgements, and checkpoint replay with unchanged money and audit
+capacity. Native mode does not enable the compatibility worker.
+
+The review loop found that an event number is not a commit-order guarantee.
+A grant terminal or an operator reconciliation could allocate a lower number,
+remain uncommitted, and appear after a reporting checkpoint had passed it. The
+result was a permanent omission from spend and audit reports. Direct expiry
+could also select a grant-backed reservation and change its funded window
+outside the grant settlement owner.
+
+Migration `20261007173000_accounting_event_publication_order` fixes both defects.
+Terminal writers take one transaction-level publication lock for each affected
+generation and partition. They take these locks before event-number allocation
+and keep them until commit or rollback. They take all financial locks first,
+then publication locks in partition order. Recovery selects and locks its whole
+bounded page before publication. Direct expiry excludes grant-backed records.
+The existing grant owner still settles those records.
+
+Migration `20261008001000_accounting_event_publication_parent_locks` completes
+this lock order for native journal inserts. Non-compact receipts need a
+foreign-key lock on each parent window. The journal takes these shared key locks
+in window order before publication. Without this step, a journal terminal and
+an operator reconciliation for the same window could deadlock. Shared key locks
+do not serialize independent journal readers. Fully settled compact receipts
+skip this step and keep their existing query budget. The parent lookup uses
+only the bounded prepared grant keys, not a scan of retained window history.
+
+PostgreSQL remains the financial and event owner. The lock key contains only a
+generation and partition, not a tenant identity. A page has at most 256 records
+and 64 distinct partition locks. The locks add no database calls, pool, queue,
+task, or provider work. Existing statement and lock deadlines still apply. A
+timeout rolls back the complete statement; a retry keeps the existing event
+identity and financial replay checks.
+
+A global publication lock was rejected because it would serialize independent
+partitions. A reporting delay was rejected because a delay cannot prove commit
+order. An insert trigger alone was rejected because PostgreSQL evaluates the
+sequence default before a `BEFORE INSERT` trigger. The fixed writer functions
+are checked by a real-database test so a new terminal writer cannot omit the
+publication lock without a test failure.
+
+Stop the old writers before this migration. For a database that already used
+native reporting, a controlled replay can restore omitted records. Replay only
+the native reporting checkpoint; keep all source events, financial balances,
+facts, and rollups. The deployment guide gives the required sequence. Tests
+verify complete spend and audit effects, independent partitions, commit and
+rollback, native journal versus reconciliation, and idempotent checkpoint replay.
+Tests also use a three-connection barrier for uncertain terminals in the same
+window and check parent lookup plans with four planner settings and retained history.
+This review does not change the retained RPS qualification results.
+
+## Request-local proof preparation
+
+Proof preparation uses the existing reservation, receipt, and terminal owners.
+It does not add a cache, a second financial path, or a trusted-model flag.
+`reservation_snapshot` checks the complete mutable reservation and returns an
+owned model with its canonical bytes. The synchronous prepare phase can use
+that model without parsing the bytes it has just produced. Dispatch and handle
+checks still compare owner, generation, partition, and exact proof bytes. Equal
+money values with different canonical documents do not match.
+
+`RetainedLocalReceipt.prepare` checks the grant and the complete reservation.
+It returns the owned receipt for the issue prepare phase. The retained snapshot
+stores only scalar grant facts, canonical reservation bytes, operation identity,
+and generation. Its raw constructor checks the full document and canonical
+form. The store can check capacity and duplicate identity without decoding.
+Its fixed memory charge includes the new scalar metadata. No receipt is evicted.
+All preparation still occurs before the cursor and receipt stores commit.
+
+A provider retry keeps the accepted issue and checks only the new attempt.
+The new attempt owns its pricing containers. The protocol's 128-attempt limit
+still applies. A new typed terminal checks the complete receipt and finalization
+through their normal validators, then checks their shared identity. Received
+terminal documents still pass full document validation. Existing accepted
+terminal snapshots stay unchanged through queue, wire, and journal retries.
+The terminal and its retained receipt share the same reservation byte object.
+
+The canonical encoder, money rules, wire documents, database schema, queue
+limits, deadlines, and durable replay rules are unchanged. Roll back with the
+previous application image; no database migration is needed. The focused proof
+benchmark is `tests/performance/benchmark_accounting_proofs.py`. It measures
+small and wide payloads without network or database work. Gateway diagnostics
+use the unchanged disposable-kind fixture and record their own image identity.

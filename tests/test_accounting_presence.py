@@ -212,8 +212,8 @@ async def test_recovery_observes_after_all_actions_and_health_under_same_deadlin
         native, base.probe, RecoveryConfig(generation=7), observer=instance
     )
     end = deadline()
-    assert await worker.run_once(expires_at=end) == 3
-    assert len(native.calls) == 3 and len(native.snapshots) == 1
+    assert await worker.run_once(expires_at=end) == 4
+    assert len(native.calls) == 4 and len(native.snapshots) == 1
     assert persistence.calls[-1][2]["expires_at"] == end
     instance.generation = 8
     with pytest.raises(ValueError):

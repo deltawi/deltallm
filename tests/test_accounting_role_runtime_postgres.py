@@ -185,3 +185,30 @@ async def test_request_role_without_actual_projection_presence_cannot_start(acco
         assert runtime.monitor.worker_health.state is not WorkerState.READY
     finally:
         await runtime.close(expires_at=deadline())
+
+
+async def test_native_projection_role_renews_recurring_budget_before_admission(accounting_db):
+    clients, generation = accounting_db
+    projection, request, api, transport, _, _ = await graph(clients, generation, native_lanes=True)
+    window = str(uuid4())
+    await _create_window(clients[0], generation, window)
+    await clients[0].execute_raw(
+        "UPDATE deltallm_accounting_budget_windows SET window_starts_at=NOW()-INTERVAL '2 hours',"
+        "window_ends_at=NOW()-INTERVAL '1 hour',renewal_spec='1h' WHERE window_id=$1",
+        window,
+    )
+    try:
+        await projection.start(expires_at=deadline())
+        await request.start(expires_at=deadline())
+        await api.start(expires_at=deadline())
+        operation = handle(
+            await api.local.service.reserve(_reservation(generation, window, explicit_window=False))
+        )
+        await api.local.service.finalize_operation(operation, reporting_finalization(operation))
+        await api.close(expires_at=deadline())
+        assert api.local.worker_health.state is WorkerState.DISABLED
+    finally:
+        await api.close(expires_at=deadline())
+        await request.close(expires_at=deadline())
+        await projection.close(expires_at=deadline())
+        await transport.close()

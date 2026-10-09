@@ -8,6 +8,7 @@ from fastapi.exception_handlers import http_exception_handler as fastapi_http_ex
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from prisma.errors import RawQueryError
 
 from src.db.managed_assets import ManagedAssetAudienceNotFoundError
 from src.guardrails.exceptions import GuardrailViolationError
@@ -89,6 +90,38 @@ def _proxy_error_response_for_request(request: Request, exc: ProxyError) -> JSON
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(RawQueryError)
+    async def budget_policy_error_handler(request: Request, exc: RawQueryError) -> JSONResponse:
+        if (
+            isinstance(exc.meta, dict)
+            and exc.meta.get("code") == "55000"
+            and str(exc) == "accounting_budget_policy_requires_drain"
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": (
+                        "Pause affected inference and drain its permits before adding a new "
+                        "hard-budget scope. Resolve uncertain usage first. "
+                        "Older grants without scope data require a generation drain."
+                    ),
+                    "code": "budget_policy_requires_drain",
+                },
+            )
+        if (
+            isinstance(exc.meta, dict)
+            and exc.meta.get("code") == "P0001"
+            and str(exc) == "accounting_budget_policy_below_debits"
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": "The hard budget cannot be lower than its existing spend and holds.",
+                    "code": "budget_policy_below_debits",
+                },
+            )
+        return await unhandled_error_handler(request, exc)
+
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(request: Request, exc: StarletteHTTPException) -> Response:
         if _uses_anthropic_error_dialect(request):

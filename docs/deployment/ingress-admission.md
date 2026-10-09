@@ -99,8 +99,18 @@ header, and transport limits at the HTTP server and edge as well.
 
 The table lists OpenAI-style error codes. `/messages` and `/v1/messages` use the
 canonical Anthropic error envelope and status-based error type (for example,
-`overloaded_error` for 503). Capacity errors include `Retry-After: 1`. HTTP/1 rejection responses close the
-connection so an unread upload cannot be reused as another request. Client retries
+`overloaded_error` for 503). Capacity errors include `Retry-After: 1`.
+For a valid retryable HTTP/1.1 request, the server parser discards the remaining
+upload without application body reads or a new task. The existing server idle
+deadline closes an unfinished upload. An immediate close could erase the error
+response when more upload bytes arrive, as described in
+[HTTP/1.1 teardown](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6).
+Both supported server parsers keep the request boundary; upload bytes cannot
+become a second request. Invalid-body errors and HTTP/1.0 responses still close
+the connection. The managed shutdown deadline also remains unchanged. Transport
+buffers remain outside the application byte budget and need the headroom above.
+The [server behavior guide](https://www.uvicorn.org/server-behavior/)
+describes body discard and idle connection ownership. Client retries
 should respect the delay and add jitter. A local rejection does not call a provider
 or record a provider failure. Rejections before authentication do not invoke
 request-failure persistence. Required audit and accounting still apply to admitted

@@ -131,15 +131,15 @@ async def test_proof_encoding_runs_only_at_the_two_mutable_boundaries(monkeypatc
     from src.billing import accounting_local_leases
 
     _, permit, handle = values()
-    original = accounting_local_leases.reservation_bytes
+    original = accounting_local_leases.reservation_snapshot
     encoded = []
 
     def counted(value):
         result = original(value)
-        encoded.append(result)
+        encoded.append(result[1])
         return result
 
-    monkeypatch.setattr(accounting_local_leases, "reservation_bytes", counted)
+    monkeypatch.setattr(accounting_local_leases, "reservation_snapshot", counted)
     if kind == "permit":
         LocalDispatchPermit(**permit)
         assert len(encoded) == 1

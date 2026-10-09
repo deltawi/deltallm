@@ -76,12 +76,16 @@ def test_selector_cannot_start_without_durable_spend_worker(
     assert state.routing_runtime_generation_store.require_snapshot() is previous
 
 
-def test_v2_selector_uses_shared_accounting_and_never_creates_a_legacy_recovery_owner():
+@pytest.mark.parametrize("enabled,worker", [(False, False), (True, False), (True, True)])
+def test_v2_selector_uses_shared_accounting_and_never_creates_a_legacy_recovery_owner(
+    enabled,
+    worker,
+):
     accounting = SimpleNamespace(worker_health=SimpleNamespace(ready=True))
     spend = SimpleNamespace(
         accounting=accounting,
-        config=SimpleNamespace(enabled=True, worker_enabled=True),
-        worker_health=SimpleNamespace(ready=True),
+        config=SimpleNamespace(enabled=enabled, worker_enabled=worker),
+        worker_health=SimpleNamespace(ready=False),
     )
     state = State(
         {

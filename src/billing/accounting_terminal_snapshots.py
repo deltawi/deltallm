@@ -35,16 +35,23 @@ class FrozenLocalTerminal:
             if len(value) + 2 > MAX_TERMINAL_BATCH_BYTES:
                 raise DurableBatchFull("local terminal batch exceeds its byte limit")
             copy = LocalPermitFinalization.model_validate_json(value)
+            retained, _ = RetainedLocalReceipt.prepare(copy.receipt)
         else:
-            # Dump the entire graph so model_copy cannot bypass nested validation.
-            copy = LocalPermitFinalization.model_validate(value.model_dump())
+            if not isinstance(value.finalization, AccountingFinalization):
+                raise ValueError("local terminal model has invalid finalization fields")
+            # Check each mutable graph through its normal validator. prepare
+            # already checks the complete receipt, including scalar model_copy
+            # fields. Do not check and copy that same graph a second time.
+            retained, receipt = RetainedLocalReceipt.prepare(value.receipt)
+            finalization = AccountingFinalization.model_validate(value.finalization.model_dump())
+            copy = LocalPermitFinalization(receipt=receipt, finalization=finalization)
         if copy.finalization.protocol_generation != generation:
             raise ValueError("local terminal uses a stale generation")
         document = _json_bytes(copy.model_dump(mode="json"))
         if len(document) + 2 > MAX_TERMINAL_BATCH_BYTES:
             raise DurableBatchFull("local terminal batch exceeds its byte limit")
-        proof, finalization = copy.receipt, copy.finalization
-        reservation_json = _json_bytes(proof.reservation.model_dump(mode="json"))
+        finalization = copy.finalization
+        reservation_json = retained.reservation_json
         finalization_json = _json_bytes(finalization.model_dump(mode="json"))
         object.__setattr__(self, "document", document)
         object.__setattr__(self, "reservation_json", reservation_json)
@@ -57,7 +64,7 @@ class FrozenLocalTerminal:
         object.__setattr__(
             self,
             "retained_receipt",
-            RetainedLocalReceipt(proof.grant, proof.permit_ordinal, reservation_json),
+            retained,
         )
         object.__setattr__(self, "operation_id", finalization.operation_id)
         object.__setattr__(self, "generation", generation)

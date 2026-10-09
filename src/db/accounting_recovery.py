@@ -11,6 +11,7 @@ _QUERIES = {
     RecoveryAction.EXPIRED_GRANTS: "SELECT deltallm_accounting_reconcile_expired_grants($1,$2::integer) AS count",
     RecoveryAction.EXPIRED_OPERATIONS: "SELECT deltallm_accounting_reconcile_expired($1,$2::integer) AS count",
     RecoveryAction.SETTLE_GRANTS: "SELECT deltallm_accounting_reconcile_grants($1,$2::integer) AS count",
+    RecoveryAction.ROLL_WINDOWS: "SELECT deltallm_accounting_roll_windows($1,$2::integer) AS count",
 }
 
 

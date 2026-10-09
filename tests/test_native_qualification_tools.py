@@ -40,13 +40,21 @@ def test_upper_tier_diagnostic_never_repeats_lower_tiers_or_runs_long_stages():
     assert rates == (200, 500)
 
 
-@pytest.mark.parametrize("rates", [(), (500, 200), (200, 200), (1000,)])
+def test_thousand_rps_is_diagnostic_only_and_keeps_the_normal_schedule():
+    assert qualification_schedule(60, (1000,)) == ((("short", 60),), (1000,))
+    assert qualification_schedule(60, None) == (
+        (("short", 60), ("qualification", 600)),
+        (50, 100, 200, 500),
+    )
+
+
+@pytest.mark.parametrize("rates", [(), (500, 200), (200, 200), (1500,)])
 def test_selected_tiers_reject_missing_duplicate_unsorted_or_unsupported_rates(rates):
     with pytest.raises(ValueError):
         qualification_schedule(30, rates)
 
 
-@pytest.mark.parametrize("rates", [(200, 500), (50, 100, 200, 500)])
+@pytest.mark.parametrize("rates", [(200, 500), (50, 100, 200, 500), (1000,)])
 def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkeypatch, rates):
     output = tmp_path / "diagnostic"
 

@@ -56,6 +56,7 @@ from tests.performance.native_qualification_failures import (
 from tests.performance.qualification_image_archive import platform_manifest_digest
 
 RATES = (50, 100, 200, 500)
+DIAGNOSTIC_RATES = (*RATES, 1000)
 REQUEST_SELECTOR = (
     "app.kubernetes.io/instance=gateway,app.kubernetes.io/component=accounting-request"
 )
@@ -77,7 +78,7 @@ def qualification_schedule(
     if diagnostic_rates is not None and (
         not diagnostic_rates
         or diagnostic_rates != tuple(sorted(set(diagnostic_rates)))
-        or any(rate not in RATES for rate in diagnostic_rates)
+        or any(rate not in DIAGNOSTIC_RATES for rate in diagnostic_rates)
     ):
         raise ValueError("Diagnostic rates must be distinct supported tiers in increasing order")
     phases = (
@@ -390,6 +391,7 @@ async def run_stage(
             compress_samples=True,
         ),
         resource_recorder=resources,
+        allow_1000_rps_diagnostic=phase == "short" and rate == 1000,
         workload_runner=lambda: run_cluster_generator(
             cluster,
             image,
@@ -582,7 +584,7 @@ def main() -> None:
         "--diagnostic-rates",
         type=int,
         nargs="+",
-        choices=RATES,
+        choices=DIAGNOSTIC_RATES,
         help="Run only these short tiers; never mark this partial series release-eligible",
     )
     args = parser.parse_args()

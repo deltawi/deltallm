@@ -11,7 +11,11 @@ from collections.abc import Callable
 from decimal import Decimal
 
 from src.billing.alerts import AlertService
-from src.db.budget_notifications import BudgetNotification, BudgetNotificationRepository
+from src.db.budget_notifications import (
+    BudgetNotification,
+    BudgetNotificationRepository,
+    BudgetThresholdScanUnavailable,
+)
 from src.metrics import increment_notification_enqueue
 from src.telemetry.lifecycle import (
     WorkerHealth,
@@ -73,9 +77,25 @@ class BudgetNotificationWorker:
     delivery then belongs to the existing durable email outbox worker.
     """
 
-    def __init__(self, repository: BudgetNotificationRepository, alerts: AlertService) -> None:
+    def __init__(
+        self,
+        repository: BudgetNotificationRepository,
+        alerts: AlertService,
+        *,
+        scan_accounting_thresholds: bool = False,
+        alert_ttl_seconds: int = 3600,
+    ) -> None:
+        if (
+            type(scan_accounting_thresholds) is not bool
+            or type(alert_ttl_seconds) is not int
+            or not 60 <= alert_ttl_seconds <= 2147483647
+        ):
+            raise ValueError("invalid accounting budget notification policy")
         self.repository = repository
         self.alerts = alerts
+        self._scan_accounting_thresholds = scan_accounting_thresholds
+        self._alert_ttl_seconds = alert_ttl_seconds
+        self._threshold_cursor = ""
         self.task: asyncio.Task[None] | None = None
         self._started = asyncio.Event()
         self._stop = asyncio.Event()
@@ -121,13 +141,37 @@ class BudgetNotificationWorker:
         self._started.set()
         while not self._stop.is_set():
             try:
+                thresholds_ready = True
                 async with asyncio.timeout(15):
+                    if (
+                        self._scan_accounting_thresholds
+                        and self.alerts.budget_notifications_enabled()
+                    ):
+                        try:
+                            self._threshold_cursor = (
+                                await self.repository.enqueue_accounting_thresholds(
+                                    after=self._threshold_cursor,
+                                    ttl_seconds=self._alert_ttl_seconds,
+                                )
+                            )
+                        except Exception as exc:
+                            if isinstance(exc, BudgetThresholdScanUnavailable):
+                                self._threshold_cursor = exc.next_cursor
+                            # A reporting outage must not block delivery of
+                            # intents that already have durable acceptance.
+                            thresholds_ready = False
+                            logger.warning("accounting budget threshold scan unavailable")
+                            increment_notification_enqueue(
+                                kind="budget_threshold",
+                                channel="intent",
+                                status="worker_unavailable",
+                            )
                     record = await self.repository.claim()
                     if record is not None:
                         await self.process(record)
                     else:
                         await self.repository.cleanup()
-                self._state = WorkerState.READY
+                self._state = WorkerState.READY if thresholds_ready else WorkerState.DEGRADED
             except Exception:
                 self._state = WorkerState.DEGRADED
                 logger.warning("budget notification worker cycle unavailable")

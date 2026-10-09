@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
+from src.api.admin.accounting_budget import apply_accounting_balances
+from src.billing.accounting_protocol import AccountingScope
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import (
@@ -909,8 +911,10 @@ async def list_keys(
         *params,
     )
 
+    keys = [dict(row) for row in rows]
+    await apply_accounting_balances(request, keys, AccountingScope.API_KEY)
     return {
-        "data": [_key_response_payload(dict(row)) for row in rows],
+        "data": [_key_response_payload(row) for row in keys],
         "pagination": {
             "total": total,
             "limit": limit,
