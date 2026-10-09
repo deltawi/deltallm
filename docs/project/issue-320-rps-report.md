@@ -3,6 +3,9 @@
 Updated: 9 October 2026. PR target: `main`.
 Source branch: `codex/issue-320-main-integration`.
 
+For production sizing, provider quotas, role separation and required release
+checks, use [Production requirements for RPS targets](../deployment/production-rps-requirements.md).
+
 ## Status
 
 The upgrade includes bounded admission and dependency capacity, native financial

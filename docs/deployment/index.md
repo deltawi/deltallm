@@ -19,6 +19,8 @@ a production high-availability setup. Its services still share one machine.
 ## Before serving real traffic
 
 1. Work through the [production checklist](production-checklist.md).
+   Use [Production requirements for RPS targets](production-rps-requirements.md)
+   to size resources, concurrency, provider quotas and qualification.
 2. Keep secrets in environment variables or a secret manager.
 3. Use protected PostgreSQL and Redis services with backups and monitoring.
 4. Run database migrations once before starting new application replicas.
