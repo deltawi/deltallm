@@ -36,6 +36,24 @@ SSO default-team enrollment adds missing memberships. It keeps existing organiza
 Before the first SSO link to an existing account, the identity provider must verify the account's email.
 A known provider subject can continue to sign in with its stored permissions.
 
+## Account dialogs
+
+The **Add person** dialog has two tabs:
+
+- **Details** sets the email address and creation method. Select **Email invitation**
+  to send an access link. Select **Create manually** to set an initial password and active status.
+- **Access** sets the platform role and one initial organization or team membership.
+  Email invitations use the Organization User role and require a membership.
+  Manual creation can use the Platform Admin role without an initial membership.
+
+The footer shows the selected access and keeps the submit action available on both tabs.
+Organization and team selectors use search and pages when more results are available.
+
+The **Edit account** dialog keeps the email address fixed. You can change the platform role
+and active status. Open **Change password** to set a password with at least 12 characters.
+Leave the field blank to keep the current password. A new password ends all active sessions
+for the account. Select **Save changes** to apply the update.
+
 ## Invitations
 
 People & Access is the main invite-by-email surface.

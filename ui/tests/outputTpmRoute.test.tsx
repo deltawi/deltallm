@@ -48,6 +48,9 @@ for (const width of [375, 1024]) {
       await act(async () => create.click());
       const dialog = document.querySelector('[role="dialog"]');
       assert.ok(dialog);
+      const limits = [...dialog.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((tab) => tab.textContent === 'Limits');
+      assert.ok(limits);
+      await act(async () => limits.click());
       const label = [...dialog.querySelectorAll('label')].find((item) => item.textContent === 'Output TPM limit');
       assert.ok(label);
       const input = document.getElementById(label.htmlFor);

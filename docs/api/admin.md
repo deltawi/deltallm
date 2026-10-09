@@ -63,6 +63,30 @@ These endpoints back browser login, invitation acceptance, password recovery, MF
 
 ## Runtime Configuration
 
+### Asset List Controls
+
+These list endpoints accept `search`, `limit`, `offset`, `sort_by`, and `sort_direction`.
+Use `asc` or `desc` for the direction. The server applies access checks and filters before sorting and pagination.
+Equal values use a stable asset key as the final sort key. Missing values appear last.
+
+| Endpoint | Allowed `sort_by` values |
+| --- | --- |
+| `/ui/api/models` | `name`, `mode`, `provider`, `health`, `created_by`, `updated_at`, `visibility` |
+| `/ui/api/route-groups` | `name`, `routing`, `members`, `health`, `created_by`, `updated_at`, `visibility` |
+| `/ui/api/prompt-registry/templates` | `name`, `versions`, `labels`, `bindings`, `created_by`, `updated_at`, `visibility` |
+
+The UI requests `sort_by=updated_at&sort_direction=desc` initially.
+If you omit `sort_by`, the existing API order applies.
+List items include `created_by_user_id`, `created_at`, `updated_at`, and `visibility`.
+The creator ID is the stored account ID for all roles, including platform administrators. Creator email addresses are not added to the response.
+Old records can have null creator IDs or timestamps.
+
+Model list items include `health_status`: `healthy`, `unhealthy`, or `unknown`.
+The `healthy` field is null when health data is unavailable. Cooldowns make a deployment unavailable.
+Group list items also include `degraded`, `paused`, and `empty` states, with enabled and available member counts.
+For health sorting, ascending order puts unhealthy and degraded items first.
+Unknown groups have a null available member count.
+
 ### Models
 
 | Method | Endpoint | Purpose |

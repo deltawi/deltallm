@@ -51,6 +51,17 @@ export function routeGroupStrategyLabel(strategy: string | null | undefined): st
   return strategy ? ROUTE_GROUP_STRATEGY_LABELS[strategy] || strategy : 'Shuffle';
 }
 
+export function effectiveRouteGroupStrategy(
+  policy: Record<string, unknown> | null,
+  defaultStrategy: string | null | undefined,
+): string | null {
+  const { strategy, mode } = policy ?? {};
+  if (typeof strategy === 'string' && strategy) return strategy;
+  if (mode === 'fallback') return 'priority-based-routing';
+  if (mode === 'weighted') return 'weighted';
+  return defaultStrategy || null;
+}
+
 export const LEGACY_TAG_ROUTING_STRATEGY = 'tag-based-routing';
 
 export function routeGroupStrategyOptions(currentStrategy: string): string[] {
@@ -243,11 +254,7 @@ export function toGuidedPolicy(
   memberOptions: PolicyMemberOption[],
 ): PolicyGuidedValues {
   const rawMode = policy.mode;
-  const strategy = typeof policy.strategy === 'string'
-    ? policy.strategy
-    : rawMode === 'fallback'
-      ? 'priority-based-routing'
-      : GUIDED_POLICY_DEFAULTS.strategy;
+  const strategy = effectiveRouteGroupStrategy(policy, GUIDED_POLICY_DEFAULTS.strategy) ?? GUIDED_POLICY_DEFAULTS.strategy;
   const timeoutBlock = isObjectRecord(policy.timeouts) ? policy.timeouts : {};
   const retryBlock = isObjectRecord(policy.retry) ? policy.retry : {};
   const contextBlock = isObjectRecord(policy.context) ? policy.context : null;
@@ -259,6 +266,16 @@ export function toGuidedPolicy(
     if (deploymentId) entriesById.set(deploymentId, entry);
   }
   const selectedMembers = effectivePolicyMemberIds(policy, memberOptions);
+  if (strategy === 'priority-based-routing' && hasExplicitMembers) {
+    const ranks = new Map(selectedMembers.map((id, index) => {
+      const entry = entriesById.get(id);
+      const priority = isObjectRecord(entry) && typeof entry.priority === 'number' ? entry.priority : rawMode === 'fallback' ? index : memberOptions.find((member) => member.deployment_id === id)?.priority ?? null;
+      return [id, priority];
+    }));
+    if ([...ranks.values()].every((rank) => rank != null)) {
+      selectedMembers.sort((a, b) => (ranks.get(a) ?? 0) - (ranks.get(b) ?? 0));
+    }
+  }
   const memberWeights = Object.fromEntries(memberOptions.map((member) => {
     const policyWeight = memberWeight(entriesById.get(member.deployment_id));
     return [member.deployment_id, policyWeight];
@@ -447,4 +464,33 @@ export function buildPolicyFromGuided(
   }
 
   return applyGuidedSelector(policy, basePolicy, guided.selector);
+}
+
+export function orderedGuidedMemberIds(values: PolicyGuidedValues, members: PolicyMemberOption[]): string[] {
+  if (values.memberSelection === 'explicit') return values.memberIds;
+  const enabled = members.filter((member) => member.enabled);
+  if (values.strategy === 'priority-based-routing' && enabled.every((member) => member.priority != null)) {
+    enabled.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+  }
+  return enabled.map((member) => member.deployment_id);
+}
+
+export function moveGuidedPolicyMember(values: PolicyGuidedValues, members: PolicyMemberOption[], deploymentId: string, delta: -1 | 1): PolicyGuidedValues {
+  const memberIds = [...orderedGuidedMemberIds(values, members)];
+  const index = memberIds.indexOf(deploymentId);
+  const next = index + delta;
+  if (index < 0 || next < 0 || next >= memberIds.length) return values;
+  [memberIds[index], memberIds[next]] = [memberIds[next], memberIds[index]];
+  return { ...values, memberSelection: 'explicit', memberIds };
+}
+
+export function configuredWeightShares(values: PolicyGuidedValues, members: PolicyMemberOption[]): Record<string, number> | null {
+  const ids = orderedGuidedMemberIds(values, members);
+  const weights = ids.map((id) => {
+    const text = values.memberWeights[id];
+    return text ? parseIntegerString(text, 1) : members.find((member) => member.deployment_id === id)?.weight ?? null;
+  });
+  if (!ids.length || weights.some((weight) => weight == null || weight < 1)) return null;
+  const total = weights.reduce<number>((sum, weight) => sum + (weight ?? 0), 0);
+  return Object.fromEntries(ids.map((id, index) => [id, (weights[index] ?? 0) / total * 100]));
 }

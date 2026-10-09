@@ -28,7 +28,7 @@ interface CandidateDeployment {
   model_name?: string | null;
   provider?: string | null;
   mode?: string | null;
-  healthy?: boolean;
+  healthy?: boolean | null;
 }
 
 interface RouteGroupMembersCardProps {

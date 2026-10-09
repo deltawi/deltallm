@@ -150,7 +150,12 @@ export interface ModelDeploymentDetail {
     auth_header_name?: string | null;
     custom_auth_label?: string | null;
   };
-  healthy?: boolean;
+  healthy?: boolean | null;
+  health_status?: 'healthy' | 'unhealthy' | 'unknown';
+  created_by_user_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  visibility?: string | null;
   health?: DeploymentHealth;
   deltallm_params: ModelRuntimeParams;
   model_info: ModelInfo;
@@ -201,6 +206,8 @@ export interface ModelListResponse {
   };
 }
 
+export type ModelListSortKey = 'name' | 'mode' | 'provider' | 'health' | 'created_by' | 'updated_at' | 'visibility';
+
 export const models = {
   identity: (signal?: AbortSignal) =>
     apiFetch<ModelIdentityResponse>('/ui/api/models/identity', { signal }),
@@ -211,6 +218,8 @@ export const models = {
       mode?: string;
       limit?: number;
       offset?: number;
+      sort_by?: ModelListSortKey;
+      sort_direction?: 'asc' | 'desc';
     },
     signal?: AbortSignal,
   ) => apiFetch<ModelListResponse>(withQuery('/ui/api/models', params), { signal }),

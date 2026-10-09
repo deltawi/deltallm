@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
 import AcceptInvite from './pages/AcceptInvite';
@@ -10,11 +10,9 @@ import MFAEnrollment from './pages/MFAEnrollment';
 import MFAVerify from './pages/MFAVerify';
 import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
-import Models from './pages/Models';
 const Tiers = lazy(() => import('./pages/Tiers'));
 const TierDetail = lazy(() => import('./pages/TierDetail'));
 const Teams = lazy(() => import('./pages/Teams'));
-import UsersPage from './pages/UsersPage';
 import Usage from './pages/Usage';
 import Guardrails from './pages/Guardrails';
 import BatchJobs from './pages/BatchJobs';
@@ -23,8 +21,6 @@ const TeamDetail = lazy(() => import('./pages/TeamDetail'));
 import ModelDetail from './pages/ModelDetail';
 import NamedCredentials from './pages/NamedCredentials';
 import AuditLogs from './pages/AuditLogs';
-import PromptRegistry from './pages/PromptRegistry';
-import PromptTemplateDetail from './pages/PromptTemplateDetail';
 import MCPServers from './pages/MCPServers';
 import MCPServerDetail from './pages/MCPServerDetail';
 import MCPApprovalQueue from './pages/MCPApprovalQueue';
@@ -36,9 +32,10 @@ import { consoleSignInPath, uiMount } from './lib/uiMount';
 import { sessionPrincipal } from './lib/authTypes';
 import { loginPathFor, returnToFromSearch, safeReturnTo } from './lib/authRedirect';
 
+const ApiKeys = lazy(() => import('./pages/ApiKeys'));
+const UsersPage = lazy(() => import('./pages/UsersPage'));
 const Playground = lazy(() => import('./pages/Playground'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const ApiKeys = lazy(() => import('./pages/ApiKeys'));
 const Organizations = lazy(() => import('./pages/Organizations'));
 const OrganizationDetail = lazy(() => import('./pages/OrganizationDetail'));
 const OrganizationCreate = lazy(() => import('./pages/OrganizationCreate'));
@@ -47,6 +44,9 @@ const RouteGroupRoute = lazy(() => import('./pages/RouteGroupRoute'));
 const RouteGroups = lazy(() => import('./pages/RouteGroups'));
 const ModelCreate = lazy(() => import('./pages/ModelCreate'));
 const ModelEdit = lazy(() => import('./pages/ModelEdit'));
+const Models = lazy(() => import('./pages/Models'));
+const PromptRegistry = lazy(() => import('./pages/PromptRegistry'));
+const PromptTemplateDetail = lazy(() => import('./pages/PromptTemplateDetail'));
 
 class RouteChunkBoundary extends Component<
   { children: ReactNode },
@@ -202,7 +202,7 @@ function AppRoutes() {
     <Routes>
       <Route element={<Layout key={sessionPrincipal(session)} />}>
         <Route path="/" element={uiAccess.dashboard ? <Dashboard /> : <Navigate to={defaultRoute} replace />} />
-        <Route path="/models" element={uiAccess.models ? <Models /> : <Navigate to="/" replace />} />
+        <Route path="/models" element={uiAccess.models ? <ChunkedRoute><Models /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/models/new" element={uiAccess.model_admin ? <ChunkedRoute><ModelCreate /></ChunkedRoute> : <Navigate to="/models" replace />} />
         <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
         <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ChunkedRoute><ModelEdit /></ChunkedRoute> : <Navigate to="/models" replace />} />
@@ -212,8 +212,8 @@ function AppRoutes() {
         <Route path="/route-groups" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroups /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/route-groups/by-id/:routeGroupId" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/route-groups/*" element={uiAccess.route_groups ? <ChunkedRoute><RouteGroupRoute /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/prompts" element={uiAccess.prompts ? <PromptRegistry /> : <Navigate to="/" replace />} />
-        <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
+        <Route path="/prompts" element={uiAccess.prompts ? <ChunkedRoute><PromptRegistry /></ChunkedRoute> : <Navigate to="/" replace />} />
+        <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <ChunkedRoute><PromptTemplateDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <MCPServers /> : <Navigate to="/" replace />} />
         <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <MCPServerDetail /> : <Navigate to="/" replace />} />
         <Route path="/mcp-approvals" element={uiAccess.mcp_approvals ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
@@ -224,7 +224,7 @@ function AppRoutes() {
         <Route path="/teams" element={uiAccess.teams ? <ChunkedRoute><Teams /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/teams/new" element={uiAccess.team_create ? <ChunkedRoute><TeamCreate /></ChunkedRoute> : <Navigate to="/teams" replace />} />
         <Route path="/teams/:teamId" element={uiAccess.teams ? <ChunkedRoute><TeamDetail /></ChunkedRoute> : <Navigate to="/" replace />} />
-        <Route path="/users" element={uiAccess.people_access ? <UsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/users" element={uiAccess.people_access ? <ChunkedRoute><UsersPage /></ChunkedRoute> : <Navigate to="/" replace />} />
         <Route path="/audit" element={uiAccess.audit ? <AuditLogs /> : <Navigate to="/" replace />} />
         <Route path="/usage" element={uiAccess.usage ? <Usage /> : <Navigate to="/" replace />} />
         <Route path="/batches" element={uiAccess.batches ? <BatchJobs /> : <Navigate to="/" replace />} />
@@ -242,6 +242,7 @@ function AppRoutes() {
         <Route path="/forgot-password" element={<Navigate to={defaultRoute} replace />} />
         <Route path="/reset-password" element={<Navigate to={defaultRoute} replace />} />
         <Route path="/accept-invite" element={<Navigate to={defaultRoute} replace />} />
+        <Route path="*" element={<div className="p-6"><h1 className="text-xl font-semibold text-gray-900">Page not found</h1><p className="my-3 text-sm text-gray-500">Check the address or return to the home page.</p><Link to={defaultRoute} className="rounded text-sm text-brand-primary-ink underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-primary">Return to home</Link></div>} />
       </Route>
     </Routes>
   );
