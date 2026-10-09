@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from src.models.output_limits import ModelOutputTokenLimits, OutputTokenLimit
+
 from pydantic import BaseModel, Field
 
 from .requests import AssistantChatMessage
@@ -108,12 +110,18 @@ class UserAPIKeyAuth(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     key_tpm_limit: int | None = None
+    key_output_tpm_limit: OutputTokenLimit | None = None
+    key_model_output_tpm_limit: ModelOutputTokenLimits | None = None
     key_rpm_limit: int | None = None
     user_tpm_limit: int | None = None
+    user_output_tpm_limit: OutputTokenLimit | None = None
     user_rpm_limit: int | None = None
     team_tpm_limit: int | None = None
+    team_output_tpm_limit: OutputTokenLimit | None = None
+    team_model_output_tpm_limit: ModelOutputTokenLimits | None = None
     team_rpm_limit: int | None = None
     org_tpm_limit: int | None = None
+    org_output_tpm_limit: OutputTokenLimit | None = None
     org_rpm_limit: int | None = None
     team_model_rpm_limit: dict[str, int] | None = None
     team_model_tpm_limit: dict[str, int] | None = None

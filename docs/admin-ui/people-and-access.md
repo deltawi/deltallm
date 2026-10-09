@@ -24,6 +24,7 @@ and the [access/identity API](../api/admin.md#access-and-identity).
 - Expanding an account reveals its organization and team memberships
 - Self-registered sandbox users are marked with a sandbox access badge
 - Runtime user budgets, rate limits, and self-service key policy are visible from the account details drawer
+- With user-update permission, edit **Output TPM** in runtime access details. It applies across the runtime user's text models and keys. Blank clears that user limit. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
 - Modals let admins add accounts, attach memberships, or edit runtime user asset access without leaving the page
 
 Platform role changes persist across SSO sign-ins. The configured

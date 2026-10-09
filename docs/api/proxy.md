@@ -29,6 +29,8 @@ curl http://localhost:8000/v1/chat/completions \
 
 ## Endpoint Map
 
+Chat Completions accepts `max_tokens` or `max_completion_tokens`. Supply one. When a caller has an `output_tpm_limit`, the gateway checks recorded output before the request and counts actual output after each provider attempt. Admitted calls can exceed the remaining quota; subsequent calls are blocked until the fixed UTC minute resets. Output TPM does not require or change generation caps. See [Output TPM limits and headers](../features/rate-limiting.md#output-tokens-per-minute).
+
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /v1/chat/completions` | Chat completions, including streaming |

@@ -24,7 +24,9 @@ class TierPolicyRepositoryMixin:
 
     def _require_tier_policy_prisma(self) -> Any:
         if self.prisma is None:
-            raise TierPolicyRepositoryUnavailableError("tier policy repository database unavailable")
+            raise TierPolicyRepositoryUnavailableError(
+                "tier policy repository database unavailable"
+            )
         return self.prisma
 
     async def load_active_tier_policy_inputs(
@@ -187,6 +189,7 @@ class TierPolicyRepositoryMixin:
                 access_mode,
                 rpm_limit,
                 tpm_limit,
+                output_tpm_limit,
                 rph_limit,
                 rpd_limit,
                 tpd_limit,
@@ -228,6 +231,7 @@ class TierPolicyRepositoryMixin:
                 access_mode,
                 rpm_limit,
                 tpm_limit,
+                output_tpm_limit,
                 rph_limit,
                 rpd_limit,
                 tpd_limit,
@@ -310,6 +314,7 @@ class TierPolicyRepositoryMixin:
             *version_ids,
         )
         return [to_capacity_pool_record(row) for row in rows]
+
 
 def _timestamp_param(value: datetime | None) -> datetime:
     normalized = value or datetime.now(tz=UTC)

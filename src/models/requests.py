@@ -96,6 +96,7 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatRequestMessage]
     temperature: float | None = Field(default=1.0, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1)
+    max_completion_tokens: int | None = Field(default=None, ge=1, le=2**31 - 1, strict=True)
     top_p: float | None = Field(default=1.0, ge=0, le=1)
     n: int | None = Field(default=1, ge=1, le=10)
     stream: bool | None = False
@@ -108,6 +109,12 @@ class ChatCompletionRequest(BaseModel):
     response_format: ResponseFormat | None = None
     user: str | None = None
     metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_output_cap_names(self) -> ChatCompletionRequest:
+        if self.max_tokens is not None and self.max_completion_tokens is not None:
+            raise ValueError("Supply only one of max_tokens and max_completion_tokens")
+        return self
 
 
 class CompletionsRequest(BaseModel):

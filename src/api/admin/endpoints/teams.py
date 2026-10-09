@@ -23,6 +23,12 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     validate_runtime_user_scope,
 )
+from src.api.admin.output_policy import (
+    invalidate_output_policy_now,
+    output_policy_change,
+    schedule_output_policy_invalidation,
+)
+from src.db.output_policy import persist_output_policy
 from src.api.admin.organization_mutations import (
     require_active_organization_mutation,
     require_active_organization_mutations,
@@ -166,8 +172,8 @@ async def _require_team_access(
     rows = await db.query_raw(
         """
         SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
-               t.rpm_limit, t.tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
-               t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+               t.rpm_limit, t.tpm_limit, t.output_tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
+               t.model_rpm_limit, t.model_tpm_limit, t.model_output_tpm_limit, t.blocked,
                t.self_service_keys_enabled, t.self_service_max_keys_per_user,
                t.self_service_budget_ceiling, t.self_service_require_expiry,
                t.self_service_max_expiry_days, o.lifecycle_state AS organization_lifecycle_state,
@@ -480,6 +486,7 @@ async def create_team(
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
+    output_change = output_policy_change(request, payload, scope="team")
     rph_limit = optional_int(payload.get("rph_limit"), "rph_limit")
     rpd_limit = optional_int(payload.get("rpd_limit"), "rpd_limit")
     tpd_limit = optional_int(payload.get("tpd_limit"), "tpd_limit")
@@ -529,6 +536,7 @@ async def create_team(
             ss_max_expiry_days,
         )
 
+        await persist_output_policy(tx, scope="team", identity=team_id, change=output_change)
     response = {
         "team_id": team_id,
         "team_alias": team_alias,
@@ -536,6 +544,8 @@ async def create_team(
         "max_budget": max_budget,
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
+        "output_tpm_limit": output_change.value,
+        "model_output_tpm_limit": output_change.model_value,
         "rph_limit": rph_limit,
         "rpd_limit": rpd_limit,
         "tpd_limit": tpd_limit,
@@ -591,6 +601,7 @@ async def update_team(
     max_budget = payload.get("max_budget", existing_team.get("max_budget"))
     rpm_limit = optional_int(payload.get("rpm_limit", existing_team.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing_team.get("tpm_limit")), "tpm_limit")
+    output_change = output_policy_change(request, payload, scope="team")
     rph_limit = optional_int(payload.get("rph_limit", existing_team.get("rph_limit")), "rph_limit")
     rpd_limit = optional_int(payload.get("rpd_limit", existing_team.get("rpd_limit")), "rpd_limit")
     tpd_limit = optional_int(payload.get("tpd_limit", existing_team.get("tpd_limit")), "tpd_limit")
@@ -665,11 +676,12 @@ async def update_team(
             ss_max_expiry_days,
             team_id,
         )
+        await persist_output_policy(tx, scope="team", identity=team_id, change=output_change)
         updated_rows = await tx.query_raw(
             """
             SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
-                   t.rpm_limit, t.tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
-                   t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+                   t.rpm_limit, t.tpm_limit, t.output_tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
+                   t.model_rpm_limit, t.model_tpm_limit, t.model_output_tpm_limit, t.blocked,
                    t.self_service_keys_enabled, t.self_service_max_keys_per_user,
                    t.self_service_budget_ceiling, t.self_service_require_expiry,
                    t.self_service_max_expiry_days,
@@ -682,6 +694,9 @@ async def update_team(
             """,
             team_id,
         )
+        await schedule_output_policy_invalidation(
+            tx, request=request, scope="team", identity=team_id, change=output_change
+        )
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
     updated_team = dict(updated_rows[0])
@@ -690,7 +705,9 @@ async def update_team(
         capabilities=build_team_capabilities(scope, updated_team),
     )
     key_service = getattr(request.app.state, "key_service", None)
-    if key_service is not None:
+    if output_change.changed:
+        await invalidate_output_policy_now(request, scope="team", identity=team_id)
+    elif key_service is not None:
         try:
             await key_service.invalidate_keys_for_team(team_id)
         except Exception:

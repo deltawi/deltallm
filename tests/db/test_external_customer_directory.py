@@ -49,15 +49,24 @@ async def directory_customer(external_database, test_app, client):
 
 async def test_customer_lists_only_bound_team_in_shared_organization(directory_customer, client):
     fixture, _, peer_team, _ = directory_customer
+    await fixture.db.execute_raw(
+        "UPDATE deltallm_teamtable SET output_tpm_limit = 123, "
+        "model_output_tpm_limit = '{\"model\":456}'::jsonb WHERE team_id = $1",
+        fixture.team_id,
+    )
     for query in ("", "?organization_id=" + fixture.organization_id, "?search=" + peer_team):
         response = await client.get("/ui/api/teams" + query)
         assert response.status_code == 200
         expected = [] if "search=" in query else [fixture.team_id]
         assert [row["team_id"] for row in response.json()["data"]] == expected
         assert response.json()["pagination"]["total"] == len(expected)
+        if expected:
+            assert response.json()["data"][0]["output_tpm_limit"] == 123
+            assert response.json()["data"][0]["model_output_tpm_limit"] == {"model": 456}
     response = await client.get(f"/ui/api/organizations/{fixture.organization_id}/teams")
     assert response.status_code == 200
     assert [row["team_id"] for row in response.json()] == [fixture.team_id]
+    assert response.json()[0]["output_tpm_limit"] == 123
     own = await client.get(f"/ui/api/teams/{fixture.team_id}")
     assert own.status_code == 200
     assert own.json()["capabilities"]["edit"] is False

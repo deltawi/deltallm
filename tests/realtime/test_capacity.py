@@ -27,6 +27,8 @@ from src.services.tier_policy_service import TierPolicyService
         ("team_model_tpm_limit", {"voice": 100}),
         ("org_model_tpm_limit", {"voi*": 100}),
         ("max_parallel_requests", 1),
+        ("key_model_output_tpm_limit", {"voice": 100}),
+        ("team_model_output_tpm_limit", {"voice": 100}),
     ],
 )
 def test_unsupported_limit_profiles_are_detected_before_zero_token_handshake(field, value):

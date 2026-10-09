@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from src.db.tiers import TierCapacityPoolRecord, TierModelPolicyRecord, TierRecord
+from src.models.output_limits import validate_output_limit
+from src.models.errors import InvalidRequestError
 from src.services.tier_admin_errors import TierAdminValidationError
 from src.services.tiers import (
     float_gte_one_or_none,
@@ -95,6 +97,7 @@ def normalize_model_policy_records(
                 ),
                 rpm_limit=_positive_int_or_none(payload.get("rpm_limit"), f"{prefix}.rpm_limit"),
                 tpm_limit=_positive_int_or_none(payload.get("tpm_limit"), f"{prefix}.tpm_limit"),
+                output_tpm_limit=normalize_tier_output_limit(payload.get("output_tpm_limit")),
                 rph_limit=_positive_int_or_none(payload.get("rph_limit"), f"{prefix}.rph_limit"),
                 rpd_limit=_positive_int_or_none(payload.get("rpd_limit"), f"{prefix}.rpd_limit"),
                 tpd_limit=_positive_int_or_none(payload.get("tpd_limit"), f"{prefix}.tpd_limit"),
@@ -283,3 +286,10 @@ __all__ = [
     "normalize_tier_update",
     "normalize_tier_version_create",
 ]
+
+
+def normalize_tier_output_limit(value: object) -> int | None:
+    try:
+        return validate_output_limit(value)
+    except InvalidRequestError as exc:
+        raise TierAdminValidationError(exc.message) from exc

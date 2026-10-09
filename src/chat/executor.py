@@ -11,6 +11,7 @@ from fastapi import Request
 from src.chat.stream_validation import validate_first_downstream_stream_frame
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
+from src.services.output_token_context import OutputTokenContext
 from src.metrics import observe_request_phase
 from src.providers.base import ProviderAdapter, read_streaming_provider_error_details
 from src.providers.registry import resolve_chat_upstream
@@ -35,6 +36,7 @@ class OpenedStream:
     client_stream_usage_requested: bool
     internal_stream_usage_requested: bool
     upstream_started: float
+    output_context: OutputTokenContext | None = None
     _closed: bool = False
     _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
@@ -63,6 +65,26 @@ async def execute_chat(
     *,
     record_usage: bool = True,
 ) -> tuple[dict[str, Any], float]:
+    context: OutputTokenContext | None = getattr(
+        getattr(request, "state", None), "output_token_context", None
+    )
+    if context is not None:
+        await context.begin()
+    try:
+        return await _execute_chat(request, payload, deployment, record_usage=record_usage)
+    except BaseException:
+        if context is not None:
+            await context.finish()
+        raise
+
+
+async def _execute_chat(
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    *,
+    record_usage: bool = True,
+) -> tuple[dict[str, Any], float]:
     transform_started = perf_counter()
     params = deployment.deltallm_params
     upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
@@ -73,6 +95,9 @@ async def execute_chat(
     from src.routers.utils import apply_default_params
 
     apply_default_params(upstream_payload, deployment.model_info)
+    context: OutputTokenContext | None = getattr(
+        getattr(request, "state", None), "output_token_context", None
+    )
     if not payload.stream:
         upstream_payload.pop("stream_options", None)
     observe_request_phase(
@@ -92,7 +117,17 @@ async def execute_chat(
         model_name=payload.model,
         timeout=build_upstream_request_timeout_for_request(request, timeout),
         observer=_observe_answer_hop,
+        **(
+            {
+                "output_observer": context.observe_output,
+                "dispatch_observer": context.mark_dispatched,
+            }
+            if context is not None
+            else {}
+        ),
     )
+    if context is not None:
+        await context.finish()
     canonical_payload = canonical.model_dump(mode="json")
 
     if record_usage:
@@ -126,6 +161,22 @@ def _observe_answer_hop(phase: HopPhase, outcome: HopOutcome, latency: float) ->
 
 
 async def open_stream_with_first_chunk(
+    request: Request, payload: ChatCompletionRequest, deployment: Deployment
+) -> OpenedStream:
+    context: OutputTokenContext | None = getattr(
+        getattr(request, "state", None), "output_token_context", None
+    )
+    if context is not None:
+        await context.begin()
+    try:
+        return await _open_stream_with_first_chunk(request, payload, deployment)
+    except BaseException:
+        if context is not None:
+            await context.finish()
+        raise
+
+
+async def _open_stream_with_first_chunk(
     request: Request,
     payload: ChatCompletionRequest,
     deployment: Deployment,
@@ -147,6 +198,9 @@ async def open_stream_with_first_chunk(
     from src.routers.utils import apply_default_params
 
     apply_default_params(upstream_payload, deployment.model_info)
+    context: OutputTokenContext | None = getattr(
+        getattr(request, "state", None), "output_token_context", None
+    )
     internal_stream_usage_requested = _request_stream_usage_when_supported(upstream_payload, params)
     observe_request_phase(
         route="chat_completions",
@@ -182,9 +236,13 @@ async def open_stream_with_first_chunk(
             timeout=request_timeout,
         )
     upstream_started = perf_counter()
+    if context is not None:
+        context.mark_dispatched()
     try:
         response = await context_manager.__aenter__()
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, httpx.PoolTimeout) and context is not None:
+            context.observe_output(0)
         observe_request_phase(
             route="chat_completions",
             phase="upstream_http",
@@ -204,7 +262,13 @@ async def open_stream_with_first_chunk(
             raise adapter.map_error(status_exc, details=details)
 
         raw_stream = response.aiter_bytes() if adapter.stream_uses_bytes else response.aiter_lines()
-        translated_stream = adapter.translate_stream(raw_stream, model_name=payload.model)
+        translated_stream = (
+            adapter.translate_stream(
+                raw_stream, model_name=payload.model, output_observer=context.observe_output
+            )
+            if context is not None
+            else adapter.translate_stream(raw_stream, model_name=payload.model)
+        )
         first_line: str | None = None
         async for line in translated_stream:
             if line:
@@ -237,6 +301,7 @@ async def open_stream_with_first_chunk(
             client_stream_usage_requested=client_stream_usage_requested,
             internal_stream_usage_requested=internal_stream_usage_requested,
             upstream_started=upstream_started,
+            output_context=context,
         )
     except BaseException as exc:
         observe_request_phase(

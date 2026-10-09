@@ -37,6 +37,7 @@ from src.services.tier_admin_payloads import (
     normalize_tier_create,
     normalize_tier_update,
     normalize_tier_version_create,
+    normalize_tier_output_limit,
 )
 from src.services.tier_admin_serialization import (
     serialize_capacity_pool,
@@ -82,9 +83,7 @@ class TierAdminService:
         include_versions: bool = True,
     ) -> dict[str, Any]:
         tier = await self.require_tier(tier_id)
-        versions = (
-            await self.repository.list_tier_versions(tier_id) if include_versions else []
-        )
+        versions = await self.repository.list_tier_versions(tier_id) if include_versions else []
         return {
             "tier": serialize_tier(tier),
             "versions": [serialize_tier_version(version) for version in versions],
@@ -140,9 +139,7 @@ class TierAdminService:
         if not idempotency_key:
             raise TierAdminValidationError("Idempotency-Key header is required")
         if len(idempotency_key) > 200:
-            raise TierAdminValidationError(
-                "Idempotency-Key header must be at most 200 characters"
-            )
+            raise TierAdminValidationError("Idempotency-Key header must be at most 200 characters")
         request_hash = hashlib.sha256(
             json.dumps(
                 {
@@ -186,8 +183,8 @@ class TierAdminService:
                 raise TierAdminConflictError("A tier with this tier_key already exists")
 
         if existing.enabled and not fields["enabled"]:
-            live_assignments = (
-                await self.repository.count_live_or_scheduled_tier_assignments(tier_id)
+            live_assignments = await self.repository.count_live_or_scheduled_tier_assignments(
+                tier_id
             )
             if live_assignments:
                 raise TierAdminConflictError(
@@ -330,11 +327,9 @@ class TierAdminService:
         active_pools = (
             await self.repository.list_capacity_pools(active.tier_version_id) if active else []
         )
-        assignment_count = await self.repository.count_live_or_scheduled_tier_assignments(
+        assignment_count = await self.repository.count_live_or_scheduled_tier_assignments(tier_id)
+        organization_count = await self.repository.count_live_or_scheduled_tier_organizations(
             tier_id
-        )
-        organization_count = (
-            await self.repository.count_live_or_scheduled_tier_organizations(tier_id)
         )
         pinned_assignment_count = (
             await self.repository.count_non_expired_enabled_assignments_pinned_to_version(
@@ -350,9 +345,7 @@ class TierAdminService:
             draft_pools=draft_pools,
         )
         warnings: list[dict[str, str]] = []
-        if not any(
-            policy.enabled and policy.access_mode == "allow" for policy in draft_policies
-        ):
+        if not any(policy.enabled and policy.access_mode == "allow" for policy in draft_policies):
             warnings.append(
                 {
                     "code": "tier_activation_no_enabled_allow_policies",
@@ -500,7 +493,9 @@ class TierAdminService:
         payload: Mapping[str, Any],
     ) -> TierModelPolicyMutationResult:
         expected_revision = _expected_revision(payload)
-        policy_payload = {key: value for key, value in payload.items() if key != "expected_revision"}
+        policy_payload = {
+            key: value for key, value in payload.items() if key != "expected_revision"
+        }
         policy = normalize_model_policy_records(tier_version_id, [policy_payload])[0]
         try:
             return await self.repository.create_model_policy(
@@ -586,6 +581,8 @@ class TierAdminService:
                 rpm_limit=payload.get("rpm_limit"),
                 update_tpm_limit="tpm_limit" in payload,
                 tpm_limit=payload.get("tpm_limit"),
+                update_output_tpm_limit="output_tpm_limit" in payload,
+                output_tpm_limit=normalize_tier_output_limit(payload.get("output_tpm_limit")),
                 tier_model_policy_ids=(
                     tuple(str(value) for value in payload["policy_ids"])
                     if payload.get("policy_ids")
@@ -648,9 +645,7 @@ class TierAdminService:
             if identity_field in payload and payload[identity_field] != getattr(
                 existing, identity_field
             ):
-                raise TierAdminValidationError(
-                    "pool_key and callable_key cannot be changed"
-                )
+                raise TierAdminValidationError("pool_key and callable_key cannot be changed")
         merged = serialize_capacity_pool(existing)
         merged.update({key: value for key, value in payload.items() if key != "expected_revision"})
         merged["pool_key"] = existing.pool_key
@@ -715,6 +710,7 @@ class TierAdminService:
             raise TierAdminNotFoundError("Tier version not found")
         return version
 
+
 def _activation_changes(
     *,
     active_policies: Sequence[TierModelPolicyRecord],
@@ -724,20 +720,15 @@ def _activation_changes(
 ) -> dict[str, Any]:
     active_policy_map = {record.callable_key: record for record in active_policies}
     draft_policy_map = {record.callable_key: record for record in draft_policies}
-    active_pool_map = {
-        (record.pool_key, record.callable_key): record for record in active_pools
-    }
-    draft_pool_map = {
-        (record.pool_key, record.callable_key): record for record in draft_pools
-    }
+    active_pool_map = {(record.pool_key, record.callable_key): record for record in active_pools}
+    draft_pool_map = {(record.pool_key, record.callable_key): record for record in draft_pools}
 
     policy_added = sorted(draft_policy_map.keys() - active_policy_map.keys())
     policy_removed = sorted(active_policy_map.keys() - draft_policy_map.keys())
     policy_changed = sorted(
         key
         for key in active_policy_map.keys() & draft_policy_map.keys()
-        if _policy_fingerprint(active_policy_map[key])
-        != _policy_fingerprint(draft_policy_map[key])
+        if _policy_fingerprint(active_policy_map[key]) != _policy_fingerprint(draft_policy_map[key])
     )
     pool_added_keys = sorted(draft_pool_map.keys() - active_pool_map.keys())
     pool_removed_keys = sorted(active_pool_map.keys() - draft_pool_map.keys())
@@ -777,6 +768,7 @@ def _policy_fingerprint(record: TierModelPolicyRecord) -> str:
             "access_mode": record.access_mode,
             "rpm_limit": record.rpm_limit,
             "tpm_limit": record.tpm_limit,
+            "output_tpm_limit": record.output_tpm_limit,
             "rph_limit": record.rph_limit,
             "rpd_limit": record.rpd_limit,
             "tpd_limit": record.tpd_limit,

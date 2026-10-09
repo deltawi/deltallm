@@ -6,8 +6,8 @@ from src.db.platform_accounts import PlatformAccountDatabase
 from src.models.external_auth import ExternalWorkspaceContext
 
 _TEAM_COLUMNS = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend,
-    t.rpm_limit, t.tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
-    t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+    t.rpm_limit, t.tpm_limit, t.output_tpm_limit, t.rph_limit, t.rpd_limit, t.tpd_limit,
+    t.model_rpm_limit, t.model_tpm_limit, t.model_output_tpm_limit, t.blocked,
     t.self_service_keys_enabled, t.self_service_max_keys_per_user,
     t.self_service_budget_ceiling, t.self_service_require_expiry, t.self_service_max_expiry_days,
     o.lifecycle_state AS organization_lifecycle_state, t.created_at, t.updated_at,
@@ -104,7 +104,7 @@ class TeamDirectoryRepository:
         return await self.db.query_raw(
             """
             SELECT t.team_id, t.team_alias, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit,
-                   t.blocked, t.created_at, t.updated_at,
+                   t.output_tpm_limit, t.blocked, t.created_at, t.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count
             FROM deltallm_teamtable t
             WHERE t.organization_id = $1 AND ($2::text IS NULL OR t.team_id = $2)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.models.output_limits import OutputTokenLimit
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -36,6 +38,7 @@ class TierModelPolicyRequest(_StrictRequest):
     access_mode: str = "allow"
     rpm_limit: int | None = Field(default=None, ge=1)
     tpm_limit: int | None = Field(default=None, ge=1)
+    output_tpm_limit: OutputTokenLimit | None = None
     rph_limit: int | None = Field(default=None, ge=1)
     rpd_limit: int | None = Field(default=None, ge=1)
     tpd_limit: int | None = Field(default=None, ge=1)
@@ -58,6 +61,7 @@ class TierModelPolicyPatchRequest(_StrictRequest):
     access_mode: str | None = None
     rpm_limit: int | None = Field(default=None, ge=1)
     tpm_limit: int | None = Field(default=None, ge=1)
+    output_tpm_limit: OutputTokenLimit | None = None
     rph_limit: int | None = Field(default=None, ge=1)
     rpd_limit: int | None = Field(default=None, ge=1)
     tpd_limit: int | None = Field(default=None, ge=1)
@@ -74,6 +78,7 @@ class TierModelPolicyBulkLimitsRequest(_StrictRequest):
     expected_revision: int = Field(ge=0)
     rpm_limit: int | None = Field(default=None, ge=1)
     tpm_limit: int | None = Field(default=None, ge=1)
+    output_tpm_limit: OutputTokenLimit | None = None
     policy_ids: list[str] | None = None
     all_filtered: bool = False
     search: str | None = Field(default=None, max_length=200)
@@ -84,8 +89,8 @@ class TierModelPolicyBulkLimitsRequest(_StrictRequest):
     @model_validator(mode="after")
     def validate_bulk_target_and_values(self) -> TierModelPolicyBulkLimitsRequest:
         supplied = self.model_fields_set
-        if "rpm_limit" not in supplied and "tpm_limit" not in supplied:
-            raise ValueError("rpm_limit or tpm_limit is required")
+        if not {"rpm_limit", "tpm_limit", "output_tpm_limit"} & supplied:
+            raise ValueError("rpm_limit, tpm_limit, or output_tpm_limit is required")
         if self.policy_ids:
             if self.all_filtered:
                 raise ValueError("choose policy_ids or all_filtered, not both")

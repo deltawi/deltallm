@@ -269,6 +269,14 @@ export default function TierSimulationPanel({
                 <p className="mb-2 text-xs text-gray-500">
                   Assumes an empty rate-limit window. Live fair-share capacity and in-flight requests are not evaluated.
                 </p>
+                {(simulation.output_limit_projection || []).map((projection) => (
+                  <p key={projection.scope} className="mb-2 text-xs text-gray-600">
+                    {projection.scope}: {projection.projected_output.toLocaleString()} projected output
+                    against {projection.limit.toLocaleString()} per minute.
+                    {projection.next_call_blocked ? ' Later calls would be blocked after completion.' : ' Later calls would have capacity.'}
+                    {' '}Assumes an empty minute; live usage is not read. Admitted calls can exceed the limit.
+                  </p>
+                ))}
                 {simulation.static_limit_checks.length === 0 ? (
                   <p className="text-sm text-gray-400">No tier, capacity-pool, or organization hard-cap checks apply to this request shape.</p>
                 ) : (

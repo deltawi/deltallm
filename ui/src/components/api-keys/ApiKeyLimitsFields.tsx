@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { SelfServicePolicy } from '../../lib/api';
 import type { KeyFormState } from '../../lib/apiKeyForm';
+import OutputTpmField from '../admin/OutputTpmField';
+import ModelOutputTpmEditor from '../admin/ModelOutputTpmEditor';
 
 export default function ApiKeyLimitsFields({ form, onChange, selfService, editing, policy }: { form: KeyFormState; onChange: (next: KeyFormState) => void; selfService: boolean; editing: boolean; policy: SelfServicePolicy | null }) {
   const [expanded, setExpanded] = useState(() => form.rph_limit !== '' || form.rpd_limit !== '' || form.tpd_limit !== '');
@@ -16,7 +18,9 @@ export default function ApiKeyLimitsFields({ form, onChange, selfService, editin
       </label>}
       {field('rpm_limit', 'Requests per minute (RPM)')}
       {field('tpm_limit', 'Tokens per minute (TPM)')}
+      <OutputTpmField value={form.output_tpm_limit} onChange={(output_tpm_limit) => onChange({ ...form, output_tpm_limit })} />
     </div>
+    <ModelOutputTpmEditor rows={form.model_output_tpm_limit} onChange={(model_output_tpm_limit) => onChange({ ...form, model_output_tpm_limit })} />
     {selfService && policy?.self_service_budget_ceiling != null && <p className="text-xs text-gray-500">Team budget ceiling: ${policy.self_service_budget_ceiling}.</p>}
     <details className="rounded-lg border border-gray-200 p-3" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary className="cursor-pointer text-sm font-medium text-gray-800">Hourly and daily limits</summary>

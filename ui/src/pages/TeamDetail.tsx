@@ -1,3 +1,8 @@
+import { useScopedMutation } from '../lib/useScopedMutation';
+import ModelOutputTpmEditor from '../components/admin/ModelOutputTpmEditor';
+import { modelOutputRows, modelOutputPayload, type ModelOutputRow } from '../lib/modelOutputTpm';
+import OutputTpmField from '../components/admin/OutputTpmField';
+import { parseOutputTpm } from '../lib/outputTpm';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
@@ -104,6 +109,7 @@ export default function TeamDetail() {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    output_tpm_limit: '', model_output_tpm_limit: [] as ModelOutputRow[],
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
@@ -183,10 +189,14 @@ export default function TeamDetail() {
       max_budget: team.max_budget != null ? String(team.max_budget) : '',
       rpm_limit: team.rpm_limit != null ? String(team.rpm_limit) : '',
       tpm_limit: team.tpm_limit != null ? String(team.tpm_limit) : '',
+      output_tpm_limit: team.output_tpm_limit != null ? String(team.output_tpm_limit) : '',
+      model_output_tpm_limit: modelOutputRows(team.model_output_tpm_limit),
       rph_limit: team.rph_limit != null ? String(team.rph_limit) : '',
       rpd_limit: team.rpd_limit != null ? String(team.rpd_limit) : '',
       tpd_limit: team.tpd_limit != null ? String(team.tpd_limit) : '',
     }));
+    outputMutation.cancel();
+    setSaving(false);
     setIsEditingSettings(true);
   };
 
@@ -252,7 +262,11 @@ export default function TeamDetail() {
     ? assetAccessLoadErrorMessage(teamAssetAccessError || activeAssetAccessError)
     : null;
 
+  const outputMutation = useScopedMutation(`${teamId}:${isEditingSettings}`);
+
   const handleSaveSettings = async () => {
+    const pending = outputMutation.begin();
+    if (!pending) return;
     setSaving(true);
     setTeamError(null);
     try {
@@ -261,16 +275,21 @@ export default function TeamDetail() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        output_tpm_limit: parseOutputTpm(form.output_tpm_limit),
+        model_output_tpm_limit: modelOutputPayload(form.model_output_tpm_limit),
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
-      });
+      }, pending.signal);
+      if (!pending.current()) return;
       setIsEditingSettings(false);
       refetchTeam();
-    } catch (err: any) {
-      setTeamError(err?.message || 'Failed to update team');
+    } catch (err: unknown) {
+      if (!pending.current()) return;
+      setTeamError(err instanceof Error ? err.message : 'Failed to update team');
     } finally {
-      setSaving(false);
+      if (pending.current()) setSaving(false);
+      pending.finish();
     }
   };
 
@@ -294,8 +313,8 @@ export default function TeamDetail() {
       setIsEditingAssets(false);
       refetchTeam();
       refetchTeamAssetAccess();
-    } catch (err: any) {
-      setTeamError(err?.message || 'Failed to update asset access');
+    } catch (err: unknown) {
+      setTeamError(err instanceof Error ? err.message : 'Failed to update asset access');
     } finally {
       setSaving(false);
     }
@@ -371,15 +390,15 @@ export default function TeamDetail() {
       });
       setIsEditingPolicy(false);
       refetchTeam();
-    } catch (err: any) {
-      setPolicyError(err?.message || 'Failed to update self-service policy');
+    } catch (err: unknown) {
+      setPolicyError(err instanceof Error ? err.message : 'Failed to update self-service policy');
     } finally {
       setPolicySaving(false);
     }
   };
 
   /* ── derived ── */
-  const memberList: any[] = members || [];
+  const memberList = members || [];
   const spend = team?.spend || 0;
   const budget = team?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
@@ -387,7 +406,7 @@ export default function TeamDetail() {
   const assetSummary = currentTeamAssetAccess?.summary;
 
   const accessibleTargets = currentTeamAssetTargetsFull?.effective_targets ?? [];
-  const blockedTargets = currentTeamAssetTargetsFull?.selectable_targets?.filter((t: any) => t.selectable && !t.effective_visible) ?? [];
+  const blockedTargets = currentTeamAssetTargetsFull?.selectable_targets?.filter((t) => t.selectable && !t.effective_visible) ?? [];
   const teamCapabilities = team?.capabilities || {};
   const canEditTeam = Boolean(teamCapabilities.edit);
   const canManageMembers = Boolean(teamCapabilities.manage_members);
@@ -624,7 +643,7 @@ export default function TeamDetail() {
                     </button>
                   </div>
                   <div className="divide-y divide-gray-100">
-                    {topSpenders.map((m: any, idx: number) => (
+                    {topSpenders.map((m, idx: number) => (
                       <div key={m.user_id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors">
                         <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${AVATAR_COLORS[idx % AVATAR_COLORS.length]}`}>
                           {getInitials(m.user_id, m.user_email)}
@@ -710,6 +729,8 @@ export default function TeamDetail() {
                           placeholder="Unlimited"
                         />
                       </div>
+              <OutputTpmField value={form.output_tpm_limit} onChange={(value) => setForm({ ...form, output_tpm_limit: value })} />
+              <ModelOutputTpmEditor rows={form.model_output_tpm_limit} onChange={(rows) => setForm({ ...form, model_output_tpm_limit: rows })} disabled={saving} />
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">RPH Limit</label>
                         <input
@@ -743,7 +764,7 @@ export default function TeamDetail() {
                     </div>
                     <div className="flex gap-2 pt-1">
                       <button
-                        onClick={() => { setIsEditingSettings(false); setTeamError(null); }}
+                        onClick={() => { outputMutation.cancel(); setSaving(false); setIsEditingSettings(false); setTeamError(null); }}
                         className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                       >
                         Cancel
@@ -1071,7 +1092,7 @@ export default function TeamDetail() {
                     </td>
                   </tr>
                 ) : (
-                  memberList.map((m: any, idx: number) => {
+                  memberList.map((m, idx: number) => {
                     const role = ROLE_BADGES[m.user_role] ?? { label: m.user_role, cls: 'bg-gray-100 text-gray-600' };
                     const totalSpend = spend || 1;
                     return (
@@ -1200,7 +1221,7 @@ export default function TeamDetail() {
                   </p>
                   {accessibleTargets.length > 0 && (
                     <div className="space-y-1.5">
-                      {accessibleTargets.map((t: any) => (
+                      {accessibleTargets.map((t) => (
                         <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200">
                           <CheckCircle2 className="w-4 h-4 text-gray-400 shrink-0" />
                           <span className="text-sm font-medium text-gray-700">{t.callable_key}</span>
@@ -1224,7 +1245,7 @@ export default function TeamDetail() {
                     <div className="p-3 space-y-1.5">
                       {accessibleTargets.length === 0
                         ? <p className="text-sm text-gray-400 text-center py-4">No assets accessible yet.</p>
-                        : accessibleTargets.map((t: any) => (
+                        : accessibleTargets.map((t) => (
                           <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-indigo-50 border border-indigo-100">
                             <CheckCircle2 className="w-4 h-4 text-brand-secondary-ink shrink-0" />
                             <span className="text-sm font-medium text-gray-800">{t.callable_key}</span>
@@ -1251,7 +1272,7 @@ export default function TeamDetail() {
                         </span>
                       </div>
                       <div className="p-3 space-y-1.5">
-                        {blockedTargets.map((t: any) => (
+                        {blockedTargets.map((t) => (
                           <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 opacity-50">
                             <Lock className="w-4 h-4 text-gray-400 shrink-0" />
                             <span className="text-sm font-medium text-gray-500">{t.callable_key}</span>
@@ -1319,10 +1340,10 @@ export default function TeamDetail() {
             <UserSearchSelect
               search={memberSearch}
               onSearchChange={setMemberSearch}
-              options={(memberCandidates || []) as any[]}
+              options={memberCandidates || []}
               loading={memberCandidatesLoading}
               selectedAccountId={memberForm.user_id}
-              onSelect={(a: any) => setMemberForm({ ...memberForm, user_id: a.account_id, user_email: a.email || '' })}
+              onSelect={(a) => setMemberForm({ ...memberForm, user_id: a.account_id, user_email: a.email || '' })}
               searchPlaceholder="Search by email or account ID"
               helperText="Results are restricted to users who already belong to this organization."
               emptyText="No organization members match your search."

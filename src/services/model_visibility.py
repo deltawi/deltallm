@@ -13,6 +13,7 @@ from src.metrics import (
 )
 from src.models.errors import PermissionDeniedError
 from src.models.responses import UserAPIKeyAuth
+from src.runtime_settings import resolve_general_setting
 from src.services.runtime_scopes import resolve_runtime_scope_context
 from src.services.tier_model_access import (
     TierPolicyMode,
@@ -33,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 CallableTargetPolicyMode = Literal["shadow", "enforce"]
 _ALLOWED_POLICY_MODES = {"shadow", "enforce"}
-_MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -633,21 +633,12 @@ def _route_group_member_model_allowed(
 
 def _app_setting(app: Any, field_name: str, *, default: Any) -> Any:
     app_config = getattr(app.state, "app_config", None)
-    general_settings = getattr(app_config, "general_settings", None)
-    value = _explicit_general_setting(general_settings, field_name)
-    if value is not _MISSING:
-        return value
-    settings = getattr(app.state, "settings", None)
-    return getattr(settings, field_name, default)
-
-
-def _explicit_general_setting(general_settings: Any, field_name: str) -> Any:
-    if general_settings is None:
-        return _MISSING
-    fields_set = getattr(general_settings, "model_fields_set", None)
-    if fields_set is not None and field_name not in fields_set:
-        return _MISSING
-    return getattr(general_settings, field_name, _MISSING)
+    return resolve_general_setting(
+        getattr(app_config, "general_settings", None),
+        getattr(app.state, "settings", None),
+        field_name,
+        default,
+    )
 
 
 def _normalize_allowlist(values: Iterable[str] | None) -> set[str]:

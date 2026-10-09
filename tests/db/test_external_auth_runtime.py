@@ -135,7 +135,6 @@ async def test_durable_revocation_worker_recovers_and_denies_all_auth_paths(exte
     from src.services.cache_invalidation_worker import CacheInvalidationWorker
     from src.services.key_service import KeyService
     from src.services.key_removal import KeyRemovalService
-    from src.services.key_auth_cache import KeyAuthCache
     from src.models.errors import AuthenticationError
     from tests.db.test_external_customer_keys import own_key
     from tests.db.test_external_auth_exchange import services
@@ -156,7 +155,9 @@ async def test_durable_revocation_worker_recovers_and_denies_all_auth_paths(exte
     raw_key = "sk-" + uuid4().hex
     token_hash = await own_key(fixture, raw_key, keys)
     try:
-        await replica.validate_key(raw_key)
+        auth = await replica.validate_key(raw_key)
+        for version in (4, 6):
+            await second.setex(f"key:v{version}:{token_hash}", 300, auth.model_dump_json())
         original = keys.mark_key_revoked_by_hash
 
         async def outage(key_hash):
@@ -187,6 +188,8 @@ async def test_durable_revocation_worker_recovers_and_denies_all_auth_paths(exte
             removal.invalidation_id,
         )
         assert retained[0]["status"] == "completed" and retained[0]["scope_id"] == token_hash
+        for version in (4, 6):
+            assert await second.get(f"key:v{version}:{token_hash}") is None
         for authenticate in [
             lambda: replica.validate_key(raw_key),
             lambda: replica.get_auth_by_token_hash(token_hash),
@@ -197,6 +200,87 @@ async def test_durable_revocation_worker_recovers_and_denies_all_auth_paths(exte
         with pytest.raises(AuthenticationError):
             await replica.validate_key(raw_key)
     finally:
-        await first.delete(KeyAuthCache.key(token_hash))
+        await first.delete(*(f"key:v{version}:{token_hash}" for version in (4, 5, 6, 7)))
         await first.aclose()
         await second.aclose()
+
+
+async def test_rollback_preview_apply_and_retry_reconcile_all_exact_cache_versions(
+    external_database, monkeypatch, capfd
+):
+    import json
+    from uuid import uuid4
+    from scripts.external_auth_rollback import main
+    from src.db.repositories import KeyRepository
+    from src.models.responses import UserAPIKeyAuth
+    from src.services.key_auth_cache import KeyAuthCache
+    from src.services.key_removal import KeyRemovalService
+    from src.services.key_service import KeyService
+    from tests.db.test_external_customer_keys import own_key
+    from tests.db.test_external_auth_exchange import services
+
+    fixture = external_database
+    url = os.environ.get("DELTALLM_TEST_REDIS_URL")
+    if not url:
+        pytest.skip("DELTALLM_TEST_REDIS_URL is required")
+    monkeypatch.setenv("REDIS_URL", url)
+    redis = Redis.from_url(url, decode_responses=True)
+    approval = "test-rollback-" + uuid4().hex
+    await enable(fixture)
+    exchange, _, _ = services(fixture)
+    await exchange.exchange(proof(fixture), "rollback-preview")
+    keys = KeyService(KeyRepository(fixture.db), salt="test-external-salt")
+    token_hash = await own_key(fixture, "sk-" + uuid4().hex, keys)
+
+    async def approve(db):
+        return "self_service"
+
+    try:
+        removed = await KeyRemovalService(exchange.transactions, exchange.audit, keys).remove(
+            token_hash,
+            actor_id=fixture.account_id,
+            correlation_id="rollback-key-removal",
+            deleted=False,
+            approve=approve,
+        )
+        assert removed.enforcement == "pending"
+        raw_auth = UserAPIKeyAuth(api_key=token_hash, owner_account_id=fixture.account_id)
+        for version in (4, 6):
+            await redis.setex(f"key:v{version}:{token_hash}", 300, raw_auth.model_dump_json())
+        lookup = await KeyAuthCache(redis).lookup(token_hash)
+        await KeyAuthCache(redis).fill(
+            token_hash, raw_auth, ttl_seconds=300, deadline_ms=lookup.fill_deadline_ms
+        )
+
+        await main(False, None)
+        preview = json.loads(capfd.readouterr().out)
+        assert preview["applied"] is False and preview["before"] == preview["remaining"]
+        assert preview["remaining"]["live_children"] > 0
+        assert preview["remaining"]["enabled_integrations"] > 0
+        for version in (4, 6):
+            assert await redis.ttl(f"key:v{version}:{token_hash}") > 61
+
+        for _ in range(2):
+            await main(True, approval)
+            result = json.loads(capfd.readouterr().out)
+            assert result["reconciled_revocations"] >= 1
+            for count in ("live_children", "live_parents", "enabled_integrations"):
+                assert result["remaining"][count] == 0
+            for version in (4, 6):
+                assert await redis.get(f"key:v{version}:{token_hash}") is None
+            for version in (5, 7):
+                assert json.loads(await redis.get(f"key:v{version}:{token_hash}")) == {
+                    "cache_version": version,
+                    "cache_kind": "revoked",
+                }
+        assert await fixture.db.query_raw(
+            "SELECT 1 FROM deltallm_audit_ingestion_outbox WHERE payload_json->'event'->'metadata'->>'approval_reference' = $1",
+            approval,
+        )
+    finally:
+        await redis.delete(*(f"key:v{version}:{token_hash}" for version in (4, 5, 6, 7)))
+        await redis.aclose()
+        await fixture.db.execute_raw(
+            "DELETE FROM deltallm_audit_ingestion_outbox WHERE payload_json->'event'->'metadata'->>'approval_reference' = $1",
+            approval,
+        )

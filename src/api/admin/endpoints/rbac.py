@@ -138,6 +138,7 @@ def _runtime_user_context(row: dict[str, Any]) -> dict[str, Any]:
         "spend": item.get("spend"),
         "rpm_limit": item.get("rpm_limit"),
         "tpm_limit": item.get("tpm_limit"),
+        "output_tpm_limit": item.get("output_tpm_limit"),
         "rph_limit": item.get("rph_limit"),
         "rpd_limit": item.get("rpd_limit"),
         "tpd_limit": item.get("tpd_limit"),
@@ -303,7 +304,7 @@ async def list_principals(
             ORDER BY matched_account_id, match_rank, user_id
         )
         SELECT r.matched_account_id, u.user_id, u.user_email, u.team_id, u.max_budget, u.soft_budget, u.spend,
-               u.rpm_limit, u.tpm_limit, u.rph_limit, u.rpd_limit, u.tpd_limit,
+               u.rpm_limit, u.tpm_limit, u.output_tpm_limit, u.rph_limit, u.rpd_limit, u.tpd_limit,
                u.blocked, u.metadata AS user_metadata, u.created_at, u.updated_at,
                t.organization_id, t.team_alias,
                t.self_service_keys_enabled, t.self_service_max_keys_per_user,

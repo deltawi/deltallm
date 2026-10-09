@@ -1,4 +1,6 @@
 import type { SelfServicePolicy } from './api';
+import { modelOutputPayload, type ModelOutputRow } from './modelOutputTpm';
+import { parseOutputTpm } from './outputTpm';
 
 export type KeyFormTab = 'details' | 'access' | 'limits';
 export type KeyFormState = {
@@ -9,6 +11,8 @@ export type KeyFormState = {
   max_budget: string;
   rpm_limit: string;
   tpm_limit: string;
+  output_tpm_limit: string;
+  model_output_tpm_limit: ModelOutputRow[];
   rph_limit: string;
   rpd_limit: string;
   tpd_limit: string;
@@ -17,12 +21,13 @@ export type KeyFormState = {
   selected_callable_keys: string[];
   selected_access_group_keys: string[];
 };
-export type KeyMutationPayload = Record<string, number | string | null | undefined>;
+export type KeyMutationPayload = Record<string, number | string | Record<string, number> | null | undefined>;
 
 export function emptyKeyForm(): KeyFormState {
   return {
     key_name: '', team_id: '', owner_mode: 'self', owner_service_account_id: '',
     max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '',
+    output_tpm_limit: '', model_output_tpm_limit: [],
     expires: '', asset_access_mode: 'inherit', selected_callable_keys: [], selected_access_group_keys: [],
   };
 }
@@ -34,6 +39,12 @@ export function validateKeyForm(form: KeyFormState, selfService: boolean, policy
     return { tab: 'details', message: 'Select a service account or switch ownership to You.' };
   }
   if (form.expires && Number.isNaN(new Date(form.expires).getTime())) return { tab: 'limits', message: 'Enter a valid expiry date.' };
+  try {
+    parseOutputTpm(form.output_tpm_limit);
+    modelOutputPayload(form.model_output_tpm_limit);
+  } catch (error: unknown) {
+    return { tab: 'limits', message: error instanceof Error ? error.message : 'Enter valid output token limits.' };
+  }
   if (selfService && policy) {
     if (policy.self_service_require_expiry && !form.expires) return { tab: 'limits', message: 'This team requires an expiry date for self-service keys.' };
     if (policy.self_service_max_expiry_days != null && form.expires) {
@@ -50,6 +61,8 @@ export function validateKeyForm(form: KeyFormState, selfService: boolean, policy
 
 export function keyMutationPayload(form: KeyFormState, context: { selfService: boolean; editing: boolean; accountId: string }): KeyMutationPayload {
   const payload: KeyMutationPayload = { key_name: form.key_name.trim(), team_id: form.team_id || undefined };
+  payload.output_tpm_limit = parseOutputTpm(form.output_tpm_limit);
+  payload.model_output_tpm_limit = modelOutputPayload(form.model_output_tpm_limit);
   for (const key of ['max_budget', 'rpm_limit', 'tpm_limit', 'rph_limit', 'rpd_limit', 'tpd_limit'] as const) {
     payload[key] = form[key] ? Number(form[key]) : context.editing ? null : undefined;
   }

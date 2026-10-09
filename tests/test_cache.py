@@ -38,6 +38,9 @@ class _TierPricingService:
         self.pricing = pricing
         self.mode = "enforce"
 
+    def get_model_policy(self, organization_id: str, model_key: str):
+        return None
+
     def get_pricing_policy(self, organization_id: str, callable_key: str, *, mode: str = "sync"):
         if organization_id != "org-default" or callable_key != "gpt-4o-mini" or mode != "sync":
             return None
@@ -510,8 +513,8 @@ async def test_cache_keys_are_versioned_and_separated_by_response_mode(client, t
     assert stream_response.status_code == 200
     keys = list(test_app.state.cache_backend._cache)
     assert len(keys) == 2
-    assert any("schema:v5:mode:json:" in key for key in keys)
-    assert any("schema:v5:mode:stream:" in key for key in keys)
+    assert any("schema:v6:mode:json:" in key for key in keys)
+    assert any("schema:v6:mode:stream:" in key for key in keys)
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,5 @@
+import { useScopedMutation } from '../lib/useScopedMutation';
+import { modelOutputRows } from '../lib/modelOutputTpm';
 import KeyRevocationNotice from '../components/KeyRevocationNotice';
 import type { KeyRemovalResult } from '../lib/api/keyRevocations';
 import { useState, useEffect, useMemo } from 'react';
@@ -199,6 +201,7 @@ export default function ApiKeys() {
   }, [editItem, currentEditAssetAccess]);
 
   const closeEditor = () => {
+    outputMutation.cancel();
     setShowCreate(false);
     setEditItem(null);
     setError(null);
@@ -258,8 +261,12 @@ export default function ApiKeys() {
     }
   };
 
+  const outputMutation = useScopedMutation(`${showCreate}:${editItem?.token || ''}`);
+
   const handleCreate = async () => {
     if (saving || creatingServiceAccount) return;
+    const pending = outputMutation.begin();
+    if (!pending) return;
     setError(null);
     setSaving(true);
     try {
@@ -268,7 +275,8 @@ export default function ApiKeys() {
       if (assetAccessLoadError) { setError(assetAccessLoadError); return; }
       if (assetAccessLoading) { setError('Wait for asset access options to finish loading.'); return; }
       const payload = keyMutationPayload(form, { selfService: isSelfServiceCreate, editing: false, accountId: currentUserId });
-      const result = await keys.create(payload);
+      const result = await keys.create(payload, pending.signal);
+      if (!pending.current()) return;
       let assetAccessError: string | null = null;
       if (!isSelfServiceCreate && form.asset_access_mode === 'restrict') {
         try {
@@ -276,8 +284,10 @@ export default function ApiKeys() {
             mode: 'restrict',
             selected_callable_keys: form.selected_callable_keys,
             selected_access_group_keys: form.selected_access_group_keys,
-          });
+          }, pending.signal);
+          if (!pending.current()) return;
         } catch (err: unknown) {
+          if (!pending.current()) return;
           assetAccessError = getErrorMessage(
             err,
             'API key created, but asset access could not be updated. Open the key again to finish access setup.',
@@ -289,15 +299,19 @@ export default function ApiKeys() {
       refetch();
       setPageError(assetAccessError);
     } catch (err: unknown) {
+      if (!pending.current()) return;
       setError(getErrorMessage(err, 'Failed to create key'));
     } finally {
-      setSaving(false);
+      if (pending.current()) setSaving(false);
+      pending.finish();
     }
   };
 
   const handleUpdate = async () => {
     if (!editItem) return;
     if (saving || creatingServiceAccount) return;
+    const pending = outputMutation.begin();
+    if (!pending) return;
     setError(null);
     setSaving(true);
     try {
@@ -306,22 +320,35 @@ export default function ApiKeys() {
       if (assetAccessLoadError) { setError(assetAccessLoadError); return; }
       if (editAssetAccessPending || assetAccessLoading) { setError('Wait for asset access options to finish loading.'); return; }
       const payload = keyMutationPayload(form, { selfService: isSelfServiceCreate, editing: true, accountId: currentUserId });
-      await keys.update(editItem.token, payload);
-      await keys.updateAssetAccess(editItem.token, {
-        mode: form.asset_access_mode,
-        selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
-        selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
-      });
+      await keys.update(editItem.token, payload, pending.signal);
+      if (!pending.current()) return;
+      let assetAccessError: string | null = null;
+      try {
+        await keys.updateAssetAccess(editItem.token, {
+          mode: form.asset_access_mode,
+          selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
+          selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
+        }, pending.signal);
+      } catch (err: unknown) {
+        if (!pending.current()) return;
+        assetAccessError = `Key limits saved. Asset access could not be saved: ${getErrorMessage(err, 'Try again.')}`;
+      }
+      if (!pending.current()) return;
       closeEditor();
       refetch();
+      setPageError(assetAccessError);
     } catch (err: unknown) {
+      if (!pending.current()) return;
       setError(getErrorMessage(err, 'Failed to update key'));
     } finally {
-      setSaving(false);
+      if (pending.current()) setSaving(false);
+      pending.finish();
     }
   };
 
   const openEdit = (row: ApiKey) => {
+    outputMutation.cancel();
+    setSaving(false);
     setPageError(null);
     setForm({
       key_name: row.key_name || '',
@@ -331,6 +358,8 @@ export default function ApiKeys() {
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
+      output_tpm_limit: row.output_tpm_limit != null ? String(row.output_tpm_limit) : '',
+      model_output_tpm_limit: modelOutputRows(row.model_output_tpm_limit),
       rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
       rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
       tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
@@ -401,6 +430,7 @@ export default function ApiKeys() {
     { key: 'status', header: 'Status', render: (row: ApiKey) => <KeyStatus row={row} /> },
     { key: 'budget', header: 'Budget', render: (row: ApiKey) => <BudgetBar spend={row.spend || 0} max_budget={row.max_budget} /> },
     { key: 'rpm_limit', header: 'RPM', render: (row: ApiKey) => row.rpm_limit != null ? <span className="text-xs font-medium">{Number(row.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'output_tpm_limit', header: 'Output TPM', render: (row: ApiKey) => row.output_tpm_limit == null ? 'No limit' : row.output_tpm_limit.toLocaleString() },
     { key: 'tpm_limit', header: 'TPM', render: (row: ApiKey) => row.tpm_limit != null ? <span className="text-xs font-medium">{Number(row.tpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     { key: 'rph_limit', header: 'RPH', render: (row: ApiKey) => row.rph_limit != null ? <span className="text-xs font-medium">{Number(row.rph_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     { key: 'rpd_limit', header: 'RPD', render: (row: ApiKey) => row.rpd_limit != null ? <span className="text-xs font-medium">{Number(row.rpd_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },

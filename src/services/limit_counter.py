@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import math
 import secrets
 import time
-from typing import Any, Literal
+from typing import Any
 
 from src.models.errors import RateLimitError, ServiceUnavailableError
 from src.services.parallel_lease_lua import PARALLEL_LEASE_LUA
@@ -27,78 +26,45 @@ from src.services.tier_fair_share_counter import (
 )
 from src.services.tier_fair_share_admission_lua import RATE_AND_FAIR_SHARE_LUA
 
-_PARALLEL_LEASE_TTL_SECONDS = 300
+from src.services.rate_limit_contracts import (
+    LegacyParallelLease,
+    ParallelLimitCheck,
+    ParallelLimitLease,
+    RateLimitAdmissionResult,
+    RateLimitCheck,
+    RateLimitResult,
+    _ParallelLeaseGroup,
+    _PARALLEL_LEASE_TTL_SECONDS,
+)
 
 
-@dataclass(frozen=True)
-class RateLimitCheck:
-    scope: str
-    entity_id: str
-    limit: int
-    amount: int = 1
-    window_seconds: int = 60
-
-
-@dataclass(frozen=True)
-class ParallelLimitCheck:
-    scope: str
-    entity_id: str
-    limit: int
-
-
-@dataclass(frozen=True)
-class LegacyParallelLease:
-    scope: str
-    entity_id: str
-    limit: int
-    backend: Literal["redis", "fallback"]
-    ttl_seconds: int = _PARALLEL_LEASE_TTL_SECONDS
-
-    @property
-    def check(self) -> ParallelLimitCheck:
-        return ParallelLimitCheck(scope=self.scope, entity_id=self.entity_id, limit=self.limit)
-
-
-@dataclass(frozen=True)
-class ParallelLimitLease:
-    scope: str
-    entity_id: str
-    limit: int
-    token: str
-    backend: Literal["redis", "fallback"]
-    ttl_seconds: int = _PARALLEL_LEASE_TTL_SECONDS
-
-    @property
-    def check(self) -> ParallelLimitCheck:
-        return ParallelLimitCheck(scope=self.scope, entity_id=self.entity_id, limit=self.limit)
-
-
-@dataclass(frozen=True)
-class _ParallelLeaseGroup:
-    check: ParallelLimitCheck
-    requested_count: int
-
-
-@dataclass
-class RateLimitResult:
-    checks: list[RateLimitCheck] = field(default_factory=list)
-    current_values: list[int] = field(default_factory=list)
-    window_reset_at: int = 0
-    window_resets: list[int] = field(default_factory=list)
-
-
-@dataclass
-class RateLimitAdmissionResult:
-    rate_result: RateLimitResult = field(default_factory=RateLimitResult)
-    fair_share_decisions: tuple[TierFairShareDecision, ...] = ()
-    legacy_parallel_lease: LegacyParallelLease | None = None
-    parallel_leases: tuple[ParallelLimitLease, ...] = ()
+from src.services.output_limit_types import OutputAccountingEvent, OutputPolicy, OutputSnapshot
+from src.services.output_limit_redis import (
+    OUTPUT_COORDINATION_TIMEOUT_SECONDS,
+    attach_output_result,
+    check_output_failure,
+    output_args,
+    output_unavailable,
+    account_output,
+    evaluate_output_script,
+)
+from src.services.rate_limit_admission_lua import RATE_LIMIT_SCRIPT, RATE_LIMIT_OUTPUT_LUA
+from src.services.tier_fair_share_admission_lua import RATE_AND_FAIR_SHARE_OUTPUT_LUA
 
 
 class LimitCounter:
-    def __init__(self, redis_client: Any | None = None, degraded_mode: str = "fail_open") -> None:
+    def __init__(
+        self,
+        redis_client: Any | None = None,
+        degraded_mode: str = "fail_open",
+        *,
+        environment: str = "dev",
+    ) -> None:
         self.redis = redis_client
-        self.degraded_mode = degraded_mode if degraded_mode in {"fail_open", "fail_closed"} else "fail_open"
+        self.output_environment = environment
+        self.degraded_mode = (
+            degraded_mode if degraded_mode in {"fail_open", "fail_closed"} else "fail_open"
+        )
         self._fallback_counters: dict[str, tuple[int, int]] = {}
         self._fallback_parallel: dict[str, int] = {}
         self._fallback_lock = asyncio.Lock()
@@ -107,11 +73,18 @@ class LimitCounter:
             degraded_mode=self.degraded_mode,
         )
 
+    async def account_output(self, event: OutputAccountingEvent) -> OutputSnapshot:
+        if self.redis is None:
+            raise output_unavailable()
+        return await account_output(self.redis, event, environment=self.output_environment)
+
     @staticmethod
     def _window_id(window_seconds: int) -> int:
         return math.floor(time.time() / window_seconds)
 
-    async def check_rate_limit(self, scope: str, entity_id: str, limit: int | None, amount: int = 1) -> None:
+    async def check_rate_limit(
+        self, scope: str, entity_id: str, limit: int | None, amount: int = 1
+    ) -> None:
         if limit is None or limit <= 0:
             return
         if self.redis is None:
@@ -138,7 +111,9 @@ class LimitCounter:
             retry_after = window_seconds - int(time.time() % window_seconds)
             raise RateLimitError(retry_after=retry_after)
 
-    async def check_rate_limits_atomic(self, checks: list[RateLimitCheck]) -> RateLimitResult:
+    async def check_rate_limits_atomic(
+        self, checks: list[RateLimitCheck], *, output: OutputPolicy | None = None
+    ) -> RateLimitResult:
         """Atomically validate and increment rate limits for multiple scopes.
 
         Each check carries its own ``window_seconds`` so minute, hour and day
@@ -147,18 +122,22 @@ class LimitCounter:
         Returns a RateLimitResult with post-increment counter values for each check.
         """
         normalized = [check for check in checks if check.limit > 0 and check.amount > 0]
-        if not normalized:
+        if output is not None and (self.redis is None or self.degraded_mode != "fail_closed"):
+            raise output_unavailable()
+        if not normalized and output is None:
             return RateLimitResult()
 
         now = time.time()
         per_check_resets = [
             int((math.floor(now / c.window_seconds) + 1) * c.window_seconds) for c in normalized
         ]
-        min_window = min(c.window_seconds for c in normalized)
+        min_window = min((c.window_seconds for c in normalized), default=60)
         window_reset_at = int((math.floor(now / min_window) + 1) * min_window)
 
         if self.redis is None:
-            return await self._check_rate_limits_fallback(normalized, window_reset_at, per_check_resets)
+            return await self._check_rate_limits_fallback(
+                normalized, window_reset_at, per_check_resets
+            )
 
         keys = [
             f"ratelimit:{check.scope}:{check.entity_id}:{self._window_id(check.window_seconds)}"
@@ -168,42 +147,49 @@ class LimitCounter:
         limits = [str(int(check.limit)) for check in normalized]
         ttls = [str(int(check.window_seconds)) for check in normalized]
 
-        script = """
-local n = #KEYS
-for i = 1, n do
-  local current = tonumber(redis.call('GET', KEYS[i]) or '0')
-  local amount = tonumber(ARGV[i]) or 0
-  local limit = tonumber(ARGV[n + i]) or 0
-  if current + amount > limit then
-    return {0, i}
-  end
-end
-local results = {1, 0}
-for i = 1, n do
-  local amount = tonumber(ARGV[i]) or 0
-  local ttl = tonumber(ARGV[(2 * n) + i]) or 60
-  local new_val = redis.call('INCRBY', KEYS[i], amount)
-  redis.call('EXPIRE', KEYS[i], ttl)
-  results[i + 2] = new_val
-end
-return results
-"""
+        output_keys = output.keys(environment=self.output_environment) if output else ()
         try:
-            raw = await self.redis.eval(script, len(keys), *keys, *amounts, *limits, *ttls)
-        except Exception:
+            if output:
+                raw = await evaluate_output_script(
+                    RATE_LIMIT_OUTPUT_LUA,
+                    self.redis,
+                    tuple(keys) + output_keys,
+                    (*amounts, *limits, *ttls, *output_args(output)),
+                )
+            else:
+                raw = await self.redis.eval(
+                    RATE_LIMIT_SCRIPT, len(keys), *keys, *amounts, *limits, *ttls
+                )
+            if output:
+                if not isinstance(raw, (list, tuple)):
+                    raise output_unavailable()
+                check_output_failure(raw, output)
+        except (RateLimitError, ServiceUnavailableError):
+            raise
+        except Exception as exc:
+            if output:
+                raise output_unavailable() from exc
             await self._handle_redis_degraded()
-            return await self._check_rate_limits_fallback(normalized, window_reset_at, per_check_resets)
+            return await self._check_rate_limits_fallback(
+                normalized, window_reset_at, per_check_resets
+            )
         ok = int(raw[0]) if isinstance(raw, (list, tuple)) and len(raw) >= 1 else 1
         if ok == 1:
             current_values = []
             if isinstance(raw, (list, tuple)) and len(raw) > 2:
-                current_values = [int(raw[i + 2]) for i in range(len(normalized)) if i + 2 < len(raw)]
-            return RateLimitResult(
+                current_values = [
+                    int(raw[i + 2]) for i in range(len(normalized)) if i + 2 < len(raw)
+                ]
+            result = RateLimitResult(
                 checks=normalized,
                 current_values=current_values,
                 window_reset_at=window_reset_at,
                 window_resets=per_check_resets,
             )
+
+            if output:
+                attach_output_result(result, raw, output)
+            return result
 
         failed_index = int(raw[1]) - 1 if isinstance(raw, (list, tuple)) and len(raw) >= 2 else 0
         failed = normalized[max(0, failed_index)]
@@ -225,8 +211,13 @@ return results
         legacy_parallel_check: ParallelLimitCheck | None = None,
         parallel_checks: list[ParallelLimitCheck] | None = None,
         parallel_ttl_seconds: int = _PARALLEL_LEASE_TTL_SECONDS,
+        output: OutputPolicy | None = None,
     ) -> RateLimitAdmissionResult:
-        normalized_rate_checks = [check for check in rate_checks if check.limit > 0 and check.amount > 0]
+        if output is not None and (self.redis is None or self.degraded_mode != "fail_closed"):
+            raise output_unavailable()
+        normalized_rate_checks = [
+            check for check in rate_checks if check.limit > 0 and check.amount > 0
+        ]
         normalized_fair_share_checks = _normalize_tier_fair_share_checks(fair_share_checks)
         normalized_capacity_rate_checks = _normalize_capacity_rate_checks(
             capacity_rate_checks or [],
@@ -235,7 +226,9 @@ return results
         normalized_parallel_groups = _coalesce_parallel_limit_checks(parallel_checks or [])
         normalized_legacy_check = (
             legacy_parallel_check
-            if legacy_parallel_check is not None and legacy_parallel_check.limit > 0 and legacy_parallel_check.entity_id
+            if legacy_parallel_check is not None
+            and legacy_parallel_check.limit > 0
+            and legacy_parallel_check.entity_id
             else None
         )
         if (
@@ -244,7 +237,7 @@ return results
             and normalized_legacy_check is None
             and not normalized_parallel_groups
         ):
-            rate_result = await self.check_rate_limits_atomic(normalized_rate_checks)
+            rate_result = await self.check_rate_limits_atomic(normalized_rate_checks, output=output)
             return RateLimitAdmissionResult(rate_result=rate_result)
 
         now = time.time()
@@ -295,7 +288,7 @@ return results
                 ttl_seconds=normalized_parallel_ttl_seconds,
             )
             for group in normalized_parallel_groups
-            for _ in range(group.requested_count)
+            for lease_index in range(group.requested_count)
         )
         parallel_keys = [
             _parallel_lease_key(group.check.scope, group.check.entity_id)
@@ -305,7 +298,9 @@ return results
         fair_args: list[str] = []
         for check in normalized_fair_share_checks:
             fair_keys.extend(fair_share_script_keys(check, window_id=window_id))
-            fair_args.extend(fair_share_script_args(check, now=now, ttl_seconds=max(1, int(active_ttl_seconds))))
+            fair_args.extend(
+                fair_share_script_args(check, now=now, ttl_seconds=max(1, int(active_ttl_seconds)))
+            )
         capacity_keys = (
             [
                 fair_share_limit_hit_heatmap_key(window_id),
@@ -337,12 +332,12 @@ return results
         rate_limits = [str(int(check.limit)) for check in normalized_rate_checks]
         rate_ttls = [str(int(check.window_seconds)) for check in normalized_rate_checks]
         legacy_parallel_limits = (
-            [str(int(normalized_legacy_check.limit))]
-            if normalized_legacy_check is not None
-            else []
+            [str(int(normalized_legacy_check.limit))] if normalized_legacy_check is not None else []
         )
         parallel_limits = [str(int(group.check.limit)) for group in normalized_parallel_groups]
-        parallel_requested_counts = [str(int(group.requested_count)) for group in normalized_parallel_groups]
+        parallel_requested_counts = [
+            str(int(group.requested_count)) for group in normalized_parallel_groups
+        ]
         parallel_tokens = [lease.token for lease in parallel_leases]
         argv = [
             str(len(normalized_rate_checks)),
@@ -363,22 +358,40 @@ return results
             *capacity_args,
         ]
 
+        output_keys = output.keys(environment=self.output_environment) if output else ()
+        script = RATE_AND_FAIR_SHARE_OUTPUT_LUA if output else RATE_AND_FAIR_SHARE_LUA
         try:
-            raw = await RATE_AND_FAIR_SHARE_LUA.eval(
+            evaluation = script.eval(
                 self.redis,
                 len(rate_keys)
                 + len(legacy_parallel_keys)
                 + len(parallel_keys)
                 + len(fair_keys)
-                + len(capacity_keys),
+                + len(capacity_keys)
+                + len(output_keys),
                 *rate_keys,
                 *legacy_parallel_keys,
                 *parallel_keys,
                 *fair_keys,
                 *capacity_keys,
+                *output_keys,
                 *argv,
+                *(output_args(output) if output else ()),
             )
-        except Exception:
+            if output:
+                async with asyncio.timeout(OUTPUT_COORDINATION_TIMEOUT_SECONDS):
+                    raw = await evaluation
+            else:
+                raw = await evaluation
+            if output:
+                if not isinstance(raw, (list, tuple)):
+                    raise output_unavailable()
+                check_output_failure(raw, output)
+        except (RateLimitError, ServiceUnavailableError):
+            raise
+        except Exception as exc:
+            if output:
+                raise output_unavailable() from exc
             await self._handle_redis_degraded()
             return await self._check_rate_limits_and_tier_fair_share_fallback(
                 normalized_rate_checks,
@@ -397,7 +410,9 @@ return results
         if ok == 1:
             rate_count = int(values[1]) if len(values) > 1 else len(normalized_rate_checks)
             fair_count = int(values[2]) if len(values) > 2 else len(normalized_fair_share_checks)
-            current_values = [int(values[3 + index]) for index in range(rate_count) if 3 + index < len(values)]
+            current_values = [
+                int(values[3 + index]) for index in range(rate_count) if 3 + index < len(values)
+            ]
             fair_start = 3 + rate_count
             decisions = tuple(
                 fair_share_decision_from_raw(
@@ -406,7 +421,7 @@ return results
                 )
                 for index in range(fair_count)
             )
-            return RateLimitAdmissionResult(
+            admission = RateLimitAdmissionResult(
                 rate_result=RateLimitResult(
                     checks=normalized_rate_checks,
                     current_values=current_values,
@@ -428,6 +443,10 @@ return results
                 parallel_leases=parallel_leases,
             )
 
+            if output:
+                attach_output_result(admission.rate_result, values, output)
+            return admission
+
         failure_kind = str(values[1]) if len(values) > 1 else "rate"
         if failure_kind == "fair":
             failed_index = int(values[2]) - 1 if len(values) > 2 else 0
@@ -442,7 +461,11 @@ return results
             if len(values) > 2 and str(values[2]) == "lease":
                 failed_index = int(values[3]) - 1 if len(values) > 3 else 0
                 failed_index = max(0, min(failed_index, len(normalized_parallel_groups) - 1))
-                failed_check = normalized_parallel_groups[failed_index].check if normalized_parallel_groups else None
+                failed_check = (
+                    normalized_parallel_groups[failed_index].check
+                    if normalized_parallel_groups
+                    else None
+                )
             if failed_check is None:
                 failed_check = ParallelLimitCheck(scope="key", entity_id="", limit=1)
             raise _parallel_limit_error(failed_check.scope)
@@ -457,7 +480,9 @@ return results
             retry_after=retry_after,
         )
         error.rate_limit_current = int(values[4]) if len(values) > 4 else 0
-        error.rate_limit_attempted = int(values[3]) if len(values) > 3 else failed.limit + failed.amount
+        error.rate_limit_attempted = (
+            int(values[3]) if len(values) > 3 else failed.limit + failed.amount
+        )
         error.capacity_limit_hit_recorded = any(
             rate_index == failed_index
             for rate_index, _observation in normalized_capacity_rate_checks
@@ -623,7 +648,9 @@ return {1, next_value}
             raise ServiceUnavailableError(message="Rate limit backend unavailable")
 
         key = _legacy_parallel_key(lease.scope, lease.entity_id)
-        normalized_ttl_seconds = max(1, int(ttl_seconds if ttl_seconds is not None else lease.ttl_seconds))
+        normalized_ttl_seconds = max(
+            1, int(ttl_seconds if ttl_seconds is not None else lease.ttl_seconds)
+        )
         script = """
 local current = tonumber(redis.call('GET', KEYS[1]) or '0') or 0
 if current <= 0 then
@@ -847,7 +874,9 @@ return {1, 0}
             raise ServiceUnavailableError(message="Rate limit backend unavailable")
 
     async def _check_rate_limits_fallback(
-        self, checks: list[RateLimitCheck], window_reset_at: int = 0,
+        self,
+        checks: list[RateLimitCheck],
+        window_reset_at: int = 0,
         per_check_resets: list[int] | None = None,
     ) -> RateLimitResult:
         if self.degraded_mode == "fail_closed":
@@ -975,7 +1004,9 @@ return {1, 0}
 
             if legacy_parallel_check is not None:
                 legacy_key = f"{legacy_parallel_check.scope}:{legacy_parallel_check.entity_id}"
-                self._fallback_parallel[legacy_key] = int(self._fallback_parallel.get(legacy_key, 0)) + 1
+                self._fallback_parallel[legacy_key] = (
+                    int(self._fallback_parallel.get(legacy_key, 0)) + 1
+                )
                 legacy_parallel_lease = LegacyParallelLease(
                     scope=legacy_parallel_check.scope,
                     entity_id=legacy_parallel_check.entity_id,
@@ -1014,7 +1045,9 @@ return {1, 0}
         except Exception:
             await self._rollback_rate_limit_fallback(rate_checks)
             if legacy_parallel_lease is not None:
-                await self._release_parallel_fallback(legacy_parallel_lease.scope, legacy_parallel_lease.entity_id)
+                await self._release_parallel_fallback(
+                    legacy_parallel_lease.scope, legacy_parallel_lease.entity_id
+                )
             if parallel_leases:
                 await self._release_parallel_leases_fallback(list(parallel_leases))
             raise
@@ -1041,7 +1074,9 @@ return {1, 0}
                 else:
                     self._fallback_counters[key] = (expiry, next_value)
 
-    async def _check_rate_limit_fallback(self, scope: str, entity_id: str, limit: int, amount: int) -> None:
+    async def _check_rate_limit_fallback(
+        self, scope: str, entity_id: str, limit: int, amount: int
+    ) -> None:
         if self.degraded_mode == "fail_closed":
             raise ServiceUnavailableError(message="Rate limit backend unavailable")
         window_seconds = 60
@@ -1149,7 +1184,9 @@ def _normalize_tier_fair_share_checks(checks: list[TierFairShareCheck]) -> list[
         for check in checks
         if (
             (check.rpm_capacity is not None and check.rpm_capacity > 0 and check.request_amount > 0)
-            or (check.tpm_capacity is not None and check.tpm_capacity > 0 and check.token_amount > 0)
+            or (
+                check.tpm_capacity is not None and check.tpm_capacity > 0 and check.token_amount > 0
+            )
         )
     ]
 
@@ -1190,7 +1227,9 @@ def _legacy_parallel_key(scope: str, entity_id: str) -> str:
     return f"parallel:{scope}:{entity_id}"
 
 
-def _coalesce_parallel_limit_checks(checks: list[ParallelLimitCheck]) -> tuple[_ParallelLeaseGroup, ...]:
+def _coalesce_parallel_limit_checks(
+    checks: list[ParallelLimitCheck],
+) -> tuple[_ParallelLeaseGroup, ...]:
     groups: dict[tuple[str, str], _ParallelLeaseGroup] = {}
     for check in checks:
         if check.limit <= 0 or not check.entity_id:

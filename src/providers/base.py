@@ -416,16 +416,25 @@ class ProviderAdapter(ABC):
     ) -> ChatCompletionResponse:
         raise NotImplementedError
 
+    def complete_output_count(self, payload: object) -> int | None:
+        return None
+
     async def translate_success_response(
         self,
         response: httpx.Response,
         model_name: str,
+        *,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> ChatCompletionResponse:
         """Parse and translate a nominal-success response at the provider boundary."""
 
         payload = parse_provider_json_response(response)
+        output = self.complete_output_count(payload) if output_observer is not None else None
+        if output_observer is not None:
+            output_observer(output)
         try:
-            return await self.translate_response(payload, model_name)
+            canonical = await self.translate_response(payload, model_name)
+            return canonical
         except ProxyError:
             raise
         except Exception as exc:
@@ -437,9 +446,13 @@ class ProviderAdapter(ABC):
         model_name: str,
         *,
         receipt_observer: TokenReceiptObserver | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> ChatCompletionResponse:
         """Opt-in single-result contract without changing ordinary answer translation."""
         payload = parse_provider_json_response(response)
+        output = self.complete_output_count(payload) if output_observer is not None else None
+        if output_observer is not None:
+            output_observer(output)
         try:
             if receipt_observer is not None:
                 receipt_observer(self.reported_token_receipt(payload))
@@ -465,6 +478,7 @@ class ProviderAdapter(ABC):
         provider_stream: AsyncIterator[Any],
         *,
         model_name: str | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> AsyncIterator[str]:
         raise NotImplementedError
 

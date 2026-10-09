@@ -3,6 +3,8 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
+from src.api.admin.output_policy import validate_tier_output_write, validate_tier_output_activation
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.api.admin.endpoints.common import emit_admin_mutation_audit
@@ -211,7 +213,10 @@ async def update_tier(
     service = _tier_service(request)
     request_payload = _payload(payload)
     try:
-        before = serialize_tier(await service.require_tier(tier_id))
+        current = await service.require_tier(tier_id)
+        before = serialize_tier(current)
+        if request_payload.get("enabled") is True and current.active_version_id:
+            await validate_tier_output_activation(request, current.active_version_id)
         updated = await service.update_tier(tier_id, request_payload)
     except TierAdminError as exc:
         raise _http_error(exc) from exc
@@ -415,6 +420,7 @@ async def create_tier_model_policy(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     request_payload = _payload(payload)
+    validate_tier_output_write(request, request_payload)
     try:
         result = await _tier_service(request).create_model_policy(
             tier_id,
@@ -457,6 +463,7 @@ async def bulk_update_tier_model_policy_limits(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     request_payload = _payload(payload)
+    validate_tier_output_write(request, request_payload)
     try:
         result = await _tier_service(request).bulk_update_model_policy_limits(
             tier_id,
@@ -499,6 +506,7 @@ async def update_tier_model_policy(
     request_start = perf_counter()
     service = _tier_service(request)
     request_payload = _payload(payload)
+    validate_tier_output_write(request, request_payload)
     before_record = await service.repository.get_model_policy_for_version(
         tier_id=tier_id,
         tier_version_id=tier_version_id,
@@ -794,6 +802,7 @@ async def activate_tier_version(
     request_start = perf_counter()
     service = _tier_service(request)
     request_payload = _payload(payload)
+    await validate_tier_output_activation(request, tier_version_id)
     try:
         before = serialize_tier_version(
             await service.require_version_for_tier(tier_id, tier_version_id)
@@ -859,5 +868,5 @@ async def archive_tier_version(
         metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response
-    TierModelPolicyCreateRequest,
-    TierModelPolicyPatchRequest,
+    (TierModelPolicyCreateRequest,)
+    (TierModelPolicyPatchRequest,)

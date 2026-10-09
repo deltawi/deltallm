@@ -215,6 +215,10 @@ class WorkerPersistenceMixin:
             payload=prepared.payload,
             auth=prepared.policy_auth,
         )
+        if isinstance(prepared, _PreparedChatItem) and prepared.policy_lease is not None:
+            prepared.request_shim.state.output_token_context = (
+                prepared.policy_lease.rate_limit_lease.output_context
+            )
         self._start_prepared_policy_lease_refresher(prepared)
 
     async def _release_prepared_policy_lease(

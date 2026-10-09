@@ -12,6 +12,7 @@ DEFAULT_CACHE_KEY_FIELDS = {
     "temperature",
     "top_p",
     "max_tokens",
+    "max_completion_tokens",
     "n",
     "stop",
     "tools",

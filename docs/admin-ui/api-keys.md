@@ -23,7 +23,7 @@ the [API-key admin API](../api/admin.md#api-keys).
 2. Choose who owns it in the admin UI:
    `You` for a human-owned key, or `Service account` for automation.
 3. If you need a new service account, create it directly from the same dialog after selecting a team.
-4. Set optional limits such as budget, RPM, TPM, RPH, RPD, or TPD.
+4. Set optional limits such as budget, RPM, TPM, Output TPM, RPH, RPD, or TPD.
 5. Choose whether the key inherits the team asset set or narrows it to selected targets or access groups.
 6. Create the key and copy the raw secret immediately. It is only shown once.
 
@@ -75,6 +75,8 @@ A failed clipboard operation shows an error so you can copy the displayed key ma
 - **Owned by**: who the key belongs to in the admin UI
 - **Max budget**: hard spend ceiling for that key
 - **RPM / TPM**: request and token throttles per minute
+- **Output TPM**: actual provider output across text models per completion accounting minute. Leave it blank for no key limit. Admitted calls can exceed the limit; new calls then wait until reset. See [Output TPM](../features/rate-limiting.md#output-tokens-per-minute).
+- **Model Output TPM**: output allowance for each exact callable model. Add or remove rows in the key form. Clearing a key limit keeps its team, organization, and tier limits.
 - **RPH**: request throttle per hour
 - **RPD / TPD**: request and token throttles per day
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from src.services.output_limit_types import complete_output_count
+
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, AsyncIterator
 
 import httpx
@@ -243,6 +245,14 @@ class BedrockAdapter(ProviderAdapter):
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
 
+    def complete_output_count(self, payload: object) -> int | None:
+        usage = payload.get("usage") if isinstance(payload, Mapping) else None
+        return (
+            complete_output_count({"completion_tokens": usage.get("outputTokens")})
+            if isinstance(usage, Mapping)
+            else None
+        )
+
     async def translate_request(
         self,
         canonical_request: ChatCompletionRequest,
@@ -308,8 +318,9 @@ class BedrockAdapter(ProviderAdapter):
             payload["toolConfig"] = tool_config
 
         inference_config: dict[str, Any] = {}
-        if canonical_request.max_tokens is not None:
-            inference_config["maxTokens"] = canonical_request.max_tokens
+        output_cap = canonical_request.max_completion_tokens or canonical_request.max_tokens
+        if output_cap is not None:
+            inference_config["maxTokens"] = output_cap
         fields_set = getattr(canonical_request, "model_fields_set", set())
         if "temperature" in fields_set and canonical_request.temperature is not None:
             inference_config["temperature"] = canonical_request.temperature
@@ -392,6 +403,7 @@ class BedrockAdapter(ProviderAdapter):
         provider_stream: AsyncIterator[bytes],
         *,
         model_name: str | None = None,
+        output_observer: Callable[[int | None], None] | None = None,
     ) -> AsyncIterator[str]:
         stream_id = f"chatcmpl-bedrock-{int(time.time() * 1000)}"
         created = int(time.time())
@@ -520,6 +532,9 @@ class BedrockAdapter(ProviderAdapter):
                 elif event_type == "metadata":
                     if not saw_message_start or not saw_message_stop:
                         raise invalid_provider_response_error()
+                    if output_observer is not None:
+                        # Keep final raw usage before validation or the next read can fail.
+                        output_observer(self.complete_output_count(event))
                     usage_data = event.get("usage")
                     if not isinstance(usage_data, Mapping) or not all(
                         is_valid_provider_token_count(usage_data.get(key))
@@ -534,6 +549,8 @@ class BedrockAdapter(ProviderAdapter):
 
         if not saw_message_start or not saw_message_stop:
             raise invalid_provider_response_error()
+        if output_observer is not None and not usage:
+            output_observer(None)
         if not sent_role:
             yield _chunk({"role": "assistant", "content": ""})
             sent_role = True

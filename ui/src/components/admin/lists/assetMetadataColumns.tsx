@@ -7,7 +7,6 @@ interface ListMetadata {
   visibility?: string | null;
   access?: { visibility: string } | null;
 }
-
 export function assetMetadataColumns<T extends ListMetadata>(): Column<T>[] {
   return [
     { key: 'created_by', header: 'Created by', sortKey: 'created_by', render: (row) => <CopyIdentifier value={row.created_by_user_id} /> },
@@ -15,4 +14,3 @@ export function assetMetadataColumns<T extends ListMetadata>(): Column<T>[] {
     { key: 'visibility', header: 'Visibility', sortKey: 'visibility', render: (row) => <Visibility value={row.visibility || row.access?.visibility} /> },
   ];
 }
-
