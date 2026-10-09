@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock
 import pytest
 from starlette.datastructures import State
 
-from src.billing.charges.realtime_native import NativeRealtimeBilling
-from src.billing.spend.spend import SpendTrackingService
-from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.realtime_native import NativeRealtimeBilling
+from src.billing.spend import SpendTrackingService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.bootstrap.realtime import init_realtime_runtime
 from src.config import AppConfig, GeneralSettings, Settings
 from src.realtime.config import RealtimeSettings

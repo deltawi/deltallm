@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from src.billing.spend.spend_read import SPEND_READ_SOURCE
+from src.billing.spend_read import SPEND_READ_SOURCE
 
 _ANSWER_FIELDS = (
     "usage_snapshot",

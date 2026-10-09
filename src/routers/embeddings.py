@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from src.audit.delivery import AuditDeliveryClass
-from src.billing.pricing.tier_pricing import (
+from src.billing.tier_pricing import (
     attach_pricing_metadata,
     resolve_token_billing_result,
 )
@@ -66,7 +66,7 @@ from src.services.audit_service import (
 )
 from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
-from src.billing.accounting.accounting_protocol import AccountingOperationHandle
+from src.billing.accounting_protocol import AccountingOperationHandle
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 

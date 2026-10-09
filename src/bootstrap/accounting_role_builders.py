@@ -3,29 +3,18 @@
 from __future__ import annotations
 
 from src.accounting_settings import AccountingProtocolSettings
-from src.billing.accounting.health.accounting_admission_monitor import AccountingAdmissionMonitor
-from src.billing.accounting.health.accounting_health import (
-    AccountingBacklogPolicy,
-    AccountingBacklogProbe,
-)
-from src.billing.accounting.journal.accounting_journal_runtime import (
-    JournalProcessingWorker,
-    JournalWorkerConfig,
-)
-from src.billing.accounting.accounting_lane_group import AccountingLaneGroup
-from src.billing.accounting.health.accounting_read_model_health import ReadModelHealth
-from src.billing.accounting.health.accounting_native_observation import NativeAccountingObservation
-from src.billing.accounting.health.accounting_presence import ProjectionPresencePublisher
-from src.billing.accounting.health.accounting_projection_observation import (
-    NativeProjectionObservation,
-)
-from src.billing.accounting.reporting.accounting_read_model_claims import ReadModelWorkerConfig
-from src.billing.accounting.reporting.accounting_read_model_runtime import ReadModelProcessingWorker
-from src.billing.accounting.journal.accounting_recovery import (
-    AccountingRecoveryWorker,
-    RecoveryConfig,
-)
-from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
+from src.billing.accounting_admission_monitor import AccountingAdmissionMonitor
+from src.billing.accounting_health import AccountingBacklogPolicy, AccountingBacklogProbe
+from src.billing.accounting_journal_runtime import JournalProcessingWorker, JournalWorkerConfig
+from src.billing.accounting_lane_group import AccountingLaneGroup
+from src.billing.accounting_read_model_health import ReadModelHealth
+from src.billing.accounting_native_observation import NativeAccountingObservation
+from src.billing.accounting_presence import ProjectionPresencePublisher
+from src.billing.accounting_projection_observation import NativeProjectionObservation
+from src.billing.accounting_read_model_claims import ReadModelWorkerConfig
+from src.billing.accounting_read_model_runtime import ReadModelProcessingWorker
+from src.billing.accounting_recovery import AccountingRecoveryWorker, RecoveryConfig
+from src.billing.accounting_rpc_service import AccountingRpcService
 from src.bootstrap.accounting_roles import (
     AccountingProcessors,
     AccountingProjectionRuntime,

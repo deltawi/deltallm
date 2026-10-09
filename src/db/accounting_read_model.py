@@ -5,11 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from uuid import UUID, uuid4
 
-from src.billing.accounting.reporting.accounting_read_model_claims import (
-    READ_MODEL_PROJECTION,
-    ReadModelClaim,
-)
-from src.billing.accounting.health.accounting_read_model_health import ReadModelProgress
+from src.billing.accounting_read_model_claims import READ_MODEL_PROJECTION, ReadModelClaim
+from src.billing.accounting_read_model_health import ReadModelProgress
 from src.db.accounting_calls import (
     AccountingDatabaseCalls,
     AccountingProtocolUnavailable,

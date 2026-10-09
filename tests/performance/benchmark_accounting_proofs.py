@@ -9,16 +9,10 @@ import json
 from statistics import median
 from time import process_time
 
-from src.billing.accounting.permits.accounting_local_leases import (
-    LocalAccountingHandle,
-    LocalDispatchPermit,
-)
-from src.billing.accounting.permits.accounting_local_receipts import RetainedLocalReceipt
-from src.billing.accounting.accounting_protocol import AccountingAttempt, ReserveDecision
-from src.billing.accounting.journal.accounting_terminal_snapshots import (
-    FrozenLocalTerminal,
-    freeze_terminal_snapshots,
-)
+from src.billing.accounting_local_leases import LocalAccountingHandle, LocalDispatchPermit
+from src.billing.accounting_local_receipts import RetainedLocalReceipt
+from src.billing.accounting_protocol import AccountingAttempt, ReserveDecision
+from src.billing.accounting_terminal_snapshots import FrozenLocalTerminal, freeze_terminal_snapshots
 from tests.test_accounting_local_leases import terminal
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from uuid import UUID
 
-from src.billing.accounting.health.accounting_presence import ProjectionLease, ProjectionPresence
+from src.billing.accounting_presence import ProjectionLease, ProjectionPresence
 from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
 from src.db.accounting_permit_results import invalid_result
 

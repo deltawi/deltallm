@@ -7,9 +7,9 @@ import pytest
 
 from src.batch.completion_outbox import BatchCompletionOutboxWorker
 from src.batch.selector_identity import batch_selector_operation_id
-from src.billing.charges.operation_reservation import BillingOperationUnavailable, ComponentState
-from src.billing.spend.spend import SpendTrackingService
-from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.operation_reservation import BillingOperationUnavailable, ComponentState
+from src.billing.spend import SpendTrackingService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.db.billing_operation_recovery import BillingOperationRecovery
 from src.db.billing_operations import BillingOperationRepository
 from src.services.spend_visibility import SpendVisibility

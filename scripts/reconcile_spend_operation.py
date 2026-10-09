@@ -4,7 +4,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from src.billing.spend.spend_reconciliation import SpendOperationResolution
+from src.billing.spend_reconciliation import SpendOperationResolution
 from src.config import DatabaseConnectionSettings
 from src.db.allocation_config import DatabasePolicy
 from src.db.client import PrismaClientManager

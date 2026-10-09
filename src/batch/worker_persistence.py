@@ -22,7 +22,7 @@ from src.batch.worker_types import (
     _PreparedChatItem,
     _PreparedEmbeddingItem,
 )
-from src.billing.pricing.tier_pricing import (
+from src.billing.tier_pricing import (
     PricingResolution,
     TokenBillingResolution,
     resolve_deployment_tier_pricing,

@@ -45,7 +45,7 @@
 ## Run Log
 - 2026-02-27: `db`/`redis` healthy via `docker compose ps`.
 - 2026-02-27: Prisma sync run via `uv run prisma generate` + `DATABASE_URL=... uv run prisma db push`.
-- 2026-02-27: Fixed startup blocker in `src/billing/budgets/budget.py` (`org` path selected `soft_budget` column that does not exist).
+- 2026-02-27: Fixed startup blocker in `src/billing/budget.py` (`org` path selected `soft_budget` column that does not exist).
 - 2026-02-27: Provider matrix passed on dedicated models for OpenAI, Groq, Anthropic across:
   - `/v1/chat/completions` (non-stream + stream)
   - `/v1/completions`

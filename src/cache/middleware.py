@@ -12,9 +12,9 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.billing.pricing.pricing import normalize_gateway_cache_hit_usage
+from src.billing.pricing import normalize_gateway_cache_hit_usage
 from src.billing.money import canonical_money
-from src.billing.pricing.tier_pricing import (
+from src.billing.tier_pricing import (
     attach_pricing_metadata,
     resolve_tier_pricing,
     resolve_token_billing_result,
@@ -38,7 +38,7 @@ from src.routers.text_adapters import (
     completions_to_chat_request,
     responses_to_chat_request,
 )
-from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.telemetry.request_failures import enqueue_request_log_write, maybe_log_proxy_error
 from src.telemetry.cache_accounting import reserve_cached_charge
 from src.telemetry.spend_operation import billing_write_context

@@ -22,28 +22,28 @@ from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.models import BatchItemRecord, BatchJobRecord
 from src.batch.selector_checkpoint import BatchSelectorClaim
 from src.batch.selector_identity import batch_selector_operation_id
-from src.billing.accounting.accounting_admission import (
+from src.billing.accounting_admission import (
     ACCOUNTING_RECOVERY_LIFETIME,
     admit_accounting_reservation,
     reservation_audit_envelope,
 )
-from src.billing.accounting.accounting_finalization import accounting_audit_envelope
-from src.billing.accounting.accounting_pricing import accounting_pricing_snapshot
-from src.billing.accounting.accounting_protocol import (
+from src.billing.accounting_finalization import accounting_audit_envelope
+from src.billing.accounting_pricing import accounting_pricing_snapshot
+from src.billing.accounting_protocol import (
     AccountingAttribution,
     AccountingAttempt,
     AccountingOperationHandle,
     AccountingReservation,
     request_fingerprint,
 )
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.accounting.journal.accounting_terminal_preparation import (
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting_terminal_preparation import (
     prepare_accounting_not_dispatched,
     prepare_accounting_uncertain,
 )
-from src.billing.pricing.frozen_pricing import freeze_operation_pricing
-from src.billing.charges.provider_allowance import conservative_provider_allowance
-from src.billing.pricing.tier_pricing import resolve_deployment_tier_pricing
+from src.billing.frozen_pricing import freeze_operation_pricing
+from src.billing.provider_allowance import conservative_provider_allowance
+from src.billing.tier_pricing import resolve_deployment_tier_pricing
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
 from src.providers.resolution import resolve_provider

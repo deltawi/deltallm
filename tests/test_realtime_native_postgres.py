@@ -9,9 +9,9 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.charges.realtime_accounting_bounds import RealtimeCostBounds
-from src.billing.charges.realtime_native import NativeRealtimeBilling
-from src.billing.charges.realtime_usage import RealtimeDurationUsage
+from src.billing.realtime_accounting_bounds import RealtimeCostBounds
+from src.billing.realtime_native import NativeRealtimeBilling
+from src.billing.realtime_usage import RealtimeDurationUsage
 from src.db.realtime_billing import RealtimeBillingRepository
 from src.realtime.errors import RealtimeError
 from tests.realtime.test_pricing import charge_context, receipt

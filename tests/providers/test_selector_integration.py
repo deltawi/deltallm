@@ -8,7 +8,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from src.billing.charges.selector_charge import SelectorPriceSnapshot, SelectorTokenReceipt
+from src.billing.selector_charge import SelectorPriceSnapshot, SelectorTokenReceipt
 from src.providers.chat_upstream import resolve_chat_upstream_from_registry
 from src.router.selection.contracts import SelectorHopSuccess
 from src.router.selection.provider import ConcreteSelectorTarget, SelectorProviderHop

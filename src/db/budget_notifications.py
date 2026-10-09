@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from typing import TypedDict
 
 from src.billing.money import money_string
-from src.billing.accounting.accounting_protocol import AccountingScope
+from src.billing.accounting_protocol import AccountingScope
 from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 
 if TYPE_CHECKING:

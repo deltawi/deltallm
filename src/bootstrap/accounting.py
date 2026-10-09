@@ -9,14 +9,14 @@ from src.bootstrap.accounting_config import (
     resolve_accounting_settings as resolve_accounting_settings,
     validate_legacy_accounting_writers as validate_legacy_accounting_writers,
 )
-from src.billing.accounting.reporting.accounting_projection import (
+from src.billing.accounting_projection import (
     AccountingCompatibilityProjector,
     AccountingProjectionConfig,
     AccountingProjectionWorker,
 )
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.spend.ledger import SpendLedgerService
-from src.billing.spend.spend import SpendTrackingService
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.ledger import SpendLedgerService
+from src.billing.spend import SpendTrackingService
 from src.config import GeneralSettings, Settings
 from src.db.accounting_pool import AccountingPostgresClient
 from src.db.accounting_projection import AccountingProjectionRepository

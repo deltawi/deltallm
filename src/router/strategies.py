@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from src.billing.pricing.cost import compute_billing_result
+from src.billing.cost import compute_billing_result
 from src.router.candidates import UsageCounterName
 
 

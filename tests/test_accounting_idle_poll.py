@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.accounting.reporting.accounting_read_model_claims import ReadModelWorkerConfig
-from src.billing.accounting.reporting.accounting_read_model_runtime import ReadModelProcessingWorker
+from src.billing.accounting_read_model_claims import ReadModelWorkerConfig
+from src.billing.accounting_read_model_runtime import ReadModelProcessingWorker
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.telemetry_acceptance import AcceptanceFailure
 from src.telemetry.lifecycle import WorkerState

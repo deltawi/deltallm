@@ -5,15 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.billing.budgets.budget import (
+from src.billing.budget import (
     BudgetEnforcementService,
     BudgetExceeded,
     BudgetStateUnavailable,
     _next_reset_after,
 )
-from src.billing.spend.spend import SpendTrackingService
-from src.billing.spend.spend_events import build_spend_event
-from src.billing.spend.spend_read import SPEND_READ_SOURCE
+from src.billing.spend import SpendTrackingService
+from src.billing.spend_events import build_spend_event
+from src.billing.spend_read import SPEND_READ_SOURCE
 
 
 class RecordingDB:

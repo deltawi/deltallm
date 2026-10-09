@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from src.billing.spend.spend_ingestion import SpendIngestionConfig
+from src.billing.spend_ingestion import SpendIngestionConfig
 from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import (
     DynamicConfigManager,

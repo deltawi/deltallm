@@ -8,16 +8,16 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from src.billing.accounting.accounting_protocol import AccountingOutcome
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.accounting.accounting_snapshots import finalization_bytes
-from src.billing.charges.operation_reservation import (
+from src.billing.accounting_protocol import AccountingOutcome
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting_snapshots import finalization_bytes
+from src.billing.operation_reservation import (
     BillingOperationUnavailable,
     ComponentState,
     SoftSelectorOperation,
     token_price_allowance,
 )
-from src.billing.charges.selector_native import NativeSelectorBilling
+from src.billing.selector_native import NativeSelectorBilling
 from tests.test_accounting_local_service import state
 from tests.test_accounting_request_path import _AccountingRepository
 from tests.test_selector_charge import make_selector_charge

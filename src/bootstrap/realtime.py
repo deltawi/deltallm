@@ -4,8 +4,8 @@ import asyncio
 
 from starlette.datastructures import State
 
-from src.billing.spend.spend_ingestion import SpendIngestionService
-from src.billing.charges.realtime_native import NativeRealtimeBilling
+from src.billing.spend_ingestion import SpendIngestionService
+from src.billing.realtime_native import NativeRealtimeBilling
 from src.bootstrap.runtime_services import _runtime_setting
 from src.config import AppConfig
 from src.db.realtime_billing import RealtimeBillingRepository

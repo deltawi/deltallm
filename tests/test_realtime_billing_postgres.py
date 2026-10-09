@@ -7,9 +7,9 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.charges.operation_reservation import BillingOperationUnavailable
-from src.billing.spend.spend import SpendTrackingService
-from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.spend import SpendTrackingService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.db.realtime_billing import RealtimeBillingRepository
 from src.db.realtime_recovery import RealtimeBillingRecovery
 from src.realtime.errors import RealtimeError
@@ -127,7 +127,7 @@ async def test_conflicting_receipt_does_not_replace_authoritative_facts(realtime
 
 @pytest.mark.parametrize("duration", [False, True])
 async def test_turn_timestamps_survive_duplicate_receipts_and_recovery(realtime_db, duration):
-    from src.billing.charges.realtime_usage import RealtimeDurationUsage
+    from src.billing.realtime_usage import RealtimeDurationUsage
 
     db, context = realtime_db
     context = replace(context, started_at=datetime.now(UTC) - timedelta(minutes=2))

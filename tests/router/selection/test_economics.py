@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.charges.operation_reservation import (
+from src.billing.operation_reservation import (
     BillingOperationUnavailable,
     ComponentState,
     ReservedOperation,

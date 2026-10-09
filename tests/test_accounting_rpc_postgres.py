@@ -9,25 +9,19 @@ import httpx
 import pytest
 
 from src.api.internal_accounting import accounting_rpc_router
-from src.billing.accounting.health.accounting_health import (
-    AccountingBacklogPolicy,
-    AccountingBacklogProbe,
-)
-from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
-from src.billing.accounting.journal.accounting_journal_runtime import (
-    JournalProcessingWorker,
-    JournalWorkerConfig,
-)
-from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
-from src.billing.accounting.accounting_local_runtime import LocalAccountingRuntime
-from src.billing.accounting.accounting_local_service import LocalAccountingService
-from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
-from src.billing.accounting.transport.accounting_remote_leases import RemoteLocalLeasePersistence
-from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
-from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
+from src.billing.accounting_health import AccountingBacklogPolicy, AccountingBacklogProbe
+from src.billing.accounting_http import AccountingHttpTransport
+from src.billing.accounting_journal_runtime import JournalProcessingWorker, JournalWorkerConfig
+from src.billing.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting_local_returns import LocalReturnWorker
+from src.billing.accounting_local_runtime import LocalAccountingRuntime
+from src.billing.accounting_local_service import LocalAccountingService
+from src.billing.accounting_local_terminal import LocalTerminalOwner
+from src.billing.accounting_remote_leases import RemoteLocalLeasePersistence
+from src.billing.accounting_rpc_service import AccountingRpcService
+from src.billing.accounting_terminal_receipts import JournalReceipt
 from src.db.accounting_health import AccountingBacklogRepository
 from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
 from src.outbound.network_policy import OutboundNetworkPolicy
@@ -146,9 +140,7 @@ async def test_funding_and_terminal_on_different_workers_preserve_one_issue_and_
         assert type(ack) is JournalReceipt and not ack.replayed
         assert receipts.entries == receipts.retained_bytes == 0
         if replay:
-            from src.billing.accounting.permits.accounting_local_leases import (
-                LocalPermitFinalization,
-            )
+            from src.billing.accounting_local_leases import LocalPermitFinalization
 
             repeated = await persistence.finalize_batch(
                 [LocalPermitFinalization(receipt=operation.proof, finalization=record)],

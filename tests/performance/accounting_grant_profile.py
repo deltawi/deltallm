@@ -33,7 +33,7 @@ from scripts.measure_gateway_load import (
     summarize,
     write_results,
 )
-from src.billing.accounting.accounting_protocol import (
+from src.billing.accounting_protocol import (
     AccountingAttribution,
     AccountingFinalization,
     AccountingOutcome,
@@ -43,8 +43,8 @@ from src.billing.accounting.accounting_protocol import (
     ReserveDecision,
     request_fingerprint,
 )
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.accounting.permits.preissued_permits import PreissuedPermitBank
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.preissued_permits import PreissuedPermitBank
 from src.config import DatabaseConnectionSettings
 from src.db.accounting_pool import AccountingPostgresManager
 from src.db.accounting_protocol import AccountingProtocolRepository
@@ -102,14 +102,14 @@ def _percentiles(values: list[float]) -> dict[str, float | None]:
 
 def _source_manifest() -> dict[str, object]:
     paths = (
-        Path("src/billing/accounting/accounting_service.py"),
-        Path("src/billing/accounting/durable_microbatch.py"),
+        Path("src/billing/accounting_service.py"),
+        Path("src/billing/durable_microbatch.py"),
         Path("src/db/accounting_protocol.py"),
         Path("src/db/accounting_pool.py"),
         Path("src/db/accounting_calls.py"),
         Path("src/db/accounting_permits.py"),
-        Path("src/billing/accounting/accounting_protocol.py"),
-        Path("src/billing/accounting/permits/preissued_permits.py"),
+        Path("src/billing/accounting_protocol.py"),
+        Path("src/billing/preissued_permits.py"),
         Path("prisma/migrations/20260926120000_accounting_protocol_v2/migration.sql"),
         Path("prisma/migrations/20260926180000_accounting_budget_grants/migration.sql"),
         Path("prisma/migrations/20260927150000_accounting_atomic_grant_admission/migration.sql"),

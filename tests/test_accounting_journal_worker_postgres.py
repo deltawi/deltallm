@@ -8,9 +8,9 @@ import asyncpg
 import pytest
 from prisma.errors import RawQueryError
 
-from src.billing.accounting.journal.accounting_journal_claims import JournalFailure
-from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
-from src.billing.accounting.accounting_protocol import AccountingOutcome
+from src.billing.accounting_journal_claims import JournalFailure
+from src.billing.accounting_local_leases import LocalPermitReturn
+from src.billing.accounting_protocol import AccountingOutcome
 from src.db.accounting_journal import AccountingJournalRepository
 from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
 from src.db.accounting_calls import AccountingProtocolUnavailable

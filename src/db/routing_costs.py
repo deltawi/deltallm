@@ -5,10 +5,10 @@ import json
 
 from pydantic import ValidationError
 
-from src.billing.pricing.routing_costs import RoutingCostObservation
-from src.billing.charges.operation_reservation import ComponentState
-from src.billing.charges.selector_charge import SelectorPriceSnapshot, SelectorTokenReceipt
-from src.billing.spend.spend_read import SPEND_READ_SOURCE
+from src.billing.routing_costs import RoutingCostObservation
+from src.billing.operation_reservation import ComponentState
+from src.billing.selector_charge import SelectorPriceSnapshot, SelectorTokenReceipt
+from src.billing.spend_read import SPEND_READ_SOURCE
 from src.db.routing_cost_sql import routing_cost_sql
 from src.services.spend_visibility import SpendVisibility, apply_spend_visibility
 

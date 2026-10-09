@@ -44,7 +44,7 @@ Accounting:
 - Extension points confirmed:
   - Request/response API composition: `src/api/v1/router.py`, `src/api/v1/endpoints/__init__.py`
   - Existing embeddings execution lifecycle to reuse: `src/routers/embeddings.py`
-  - Cost engine extension for batch tier: `src/billing/pricing/cost.py`
+  - Cost engine extension for batch tier: `src/billing/cost.py`
   - Deployment pricing schema source: `src/config.py` (`ModelInfo`)
   - DB access pattern (raw SQL repositories): `src/db/repositories.py`
   - App lifecycle wiring for services/workers: `src/main.py`
@@ -52,7 +52,7 @@ Accounting:
   - Cache middleware currently targets sync endpoints and does not provide batch lifecycle primitives (`src/cache/middleware.py`); no direct conflict.
   - Callback + guardrails + spend hooks are already centralized around request lifecycle and can be reused per batch item by invoking embeddings path/service.
 - Minimal file-level change set (v1 implementation):
-  - Update: `src/config.py`, `src/billing/pricing/cost.py`, `prisma/schema.prisma`, `src/db/repositories.py`, `src/main.py`, `src/api/v1/endpoints/__init__.py`, `src/api/v1/router.py`
+  - Update: `src/config.py`, `src/billing/cost.py`, `prisma/schema.prisma`, `src/db/repositories.py`, `src/main.py`, `src/api/v1/endpoints/__init__.py`, `src/api/v1/router.py`
   - Add: `src/batch/models.py`, `src/batch/repository.py`, `src/batch/service.py`, `src/batch/storage.py`, `src/batch/worker.py`, `src/api/v1/endpoints/files.py`, `src/api/v1/endpoints/batches.py`
   - Tests: new batch-focused unit/integration files under `tests/`
 

@@ -1,6 +1,6 @@
 """Map final edge models to billing facts without retaining request content."""
 
-from src.billing.charges.provider_allowance import ProviderRequestBounds
+from src.billing.provider_allowance import ProviderRequestBounds
 from src.models.requests import (
     AudioSpeechRequest,
     ChatCompletionRequest,

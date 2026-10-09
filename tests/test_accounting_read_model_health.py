@@ -2,10 +2,7 @@
 
 import pytest
 
-from src.billing.accounting.health.accounting_read_model_health import (
-    ReadModelHealth,
-    ReadModelProgress,
-)
+from src.billing.accounting_read_model_health import ReadModelHealth, ReadModelProgress
 from src.bootstrap.accounting_roles import AccountingProcessors
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.telemetry.lifecycle import WorkerState

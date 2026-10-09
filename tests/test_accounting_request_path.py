@@ -6,16 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.requests import Request
 
-from src.billing.accounting.accounting_protocol import (
+from src.billing.accounting_protocol import (
     AccountingOutcome,
     DispatchPermit,
     FinalizationReceipt,
     ReserveDecision,
 )
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.charges.provider_allowance import ProviderRequestBounds
-from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.provider_allowance import ProviderRequestBounds
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.cache.backends.base import CacheEntry
 from src.cache.middleware import CacheMiddleware
 from src.models.errors import BudgetExceededError

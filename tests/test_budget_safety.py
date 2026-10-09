@@ -5,11 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.billing.budgets.budget import (
-    BudgetEnforcementService,
-    BudgetExceeded,
-    BudgetStateUnavailable,
-)
+from src.billing.budget import BudgetEnforcementService, BudgetExceeded, BudgetStateUnavailable
 from tests.test_billing import CombinedBudgetDB
 
 

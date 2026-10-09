@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.billing.accounting.journal.accounting_recovery import RecoveryAction
+from src.billing.accounting_recovery import RecoveryAction
 from src.db.accounting_calls import AccountingDatabaseCalls, AccountingQueryClient
 from src.db.accounting_permit_results import invalid_result
 

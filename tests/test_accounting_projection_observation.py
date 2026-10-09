@@ -2,10 +2,8 @@
 
 import pytest
 
-from src.billing.accounting.health.accounting_projection_observation import (
-    NativeProjectionObservation,
-)
-from src.billing.accounting.health.accounting_read_model_health import ReadModelHealth
+from src.billing.accounting_projection_observation import NativeProjectionObservation
+from src.billing.accounting_read_model_health import ReadModelHealth
 from src.metrics.accounting_read_models import (
     native_oldest_work_age,
     native_work_observation_available,

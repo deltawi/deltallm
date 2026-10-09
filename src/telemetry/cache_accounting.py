@@ -7,17 +7,17 @@ from uuid import UUID, uuid4
 
 from fastapi import Request
 
-from src.billing.accounting.accounting_protocol import (
+from src.billing.accounting_protocol import (
     AccountingAttempt,
     AccountingAttribution,
     AccountingReservation,
     request_fingerprint,
 )
-from src.billing.pricing.frozen_pricing import freeze_operation_pricing
+from src.billing.frozen_pricing import freeze_operation_pricing
 from src.billing.money import canonical_money
-from src.billing.spend.spend_ingestion import SpendIngestionService
-from src.billing.spend.spend_operations import SpendPersistenceUnavailable
-from src.billing.pricing.tier_pricing import PricingResolution
+from src.billing.spend_ingestion import SpendIngestionService
+from src.billing.spend_operations import SpendPersistenceUnavailable
+from src.billing.tier_pricing import PricingResolution
 from src.models.responses import UserAPIKeyAuth
 from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.telemetry.spend_operation import (

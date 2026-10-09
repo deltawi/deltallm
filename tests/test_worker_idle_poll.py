@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.services.audit_service import AuditIngestionConfig, AuditService
 from src.telemetry.worker_idle import IdleWorkerPoll
 from tests.services.test_audit_service import FakeAuditRepository

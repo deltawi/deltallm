@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
-from src.billing.accounting.accounting_protocol import (
+from src.billing.accounting_protocol import (
     DispatchPermit,
     PreissuedPermitAllocation,
     PreissuedPermitClaim,

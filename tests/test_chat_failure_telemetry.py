@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.requests import Request
 
-from src.billing.accounting.accounting_protocol import AccountingOperationHandle
+from src.billing.accounting_protocol import AccountingOperationHandle
 from src.chat.telemetry import emit_precommit_failure
 from src.models.errors import BudgetExceededError, ServiceUnavailableError
 

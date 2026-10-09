@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import TYPE_CHECKING, AsyncIterator
 
-from src.billing.charges.operation_reservation import BillingOperationUnavailable
+from src.billing.operation_reservation import BillingOperationUnavailable
 
 if TYPE_CHECKING:
     from prisma import Prisma

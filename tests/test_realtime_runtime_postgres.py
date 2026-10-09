@@ -15,8 +15,8 @@ from redis.asyncio import Redis
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
-from src.billing.spend.spend import SpendTrackingService
-from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend import SpendTrackingService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.bootstrap.realtime import init_realtime_runtime
 from src.config import AppConfig
 from src.db.key_repository import KeyRepository

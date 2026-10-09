@@ -4,11 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from src.billing.accounting.health.accounting_health import (
-    AccountingBacklogPolicy,
-    AccountingBacklogProbe,
-)
-from src.billing.accounting.journal.accounting_journal_claims import JournalFailure
+from src.billing.accounting_health import AccountingBacklogPolicy, AccountingBacklogProbe
+from src.billing.accounting_journal_claims import JournalFailure
 from src.db.accounting_health import AccountingBacklogRepository
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_journal_worker_postgres import pending, worker

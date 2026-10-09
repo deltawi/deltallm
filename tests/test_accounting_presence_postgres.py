@@ -6,10 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.health.accounting_presence import (
-    ProjectionLease,
-    ProjectionPresencePublisher,
-)
+from src.billing.accounting_presence import ProjectionLease, ProjectionPresencePublisher
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.accounting_presence import AccountingPresenceRepository
 from src.telemetry.lifecycle import WorkerState

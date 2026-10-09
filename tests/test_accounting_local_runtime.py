@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
-from src.billing.accounting.accounting_local_runtime import LocalAccountingRuntime
-from src.billing.accounting.durable_microbatch import DurableBatchClosed
+from src.billing.accounting_local_returns import LocalReturnWorker
+from src.billing.accounting_local_runtime import LocalAccountingRuntime
+from src.billing.durable_microbatch import DurableBatchClosed
 from src.lifecycle_settings import LifecycleSettings
 from src.process_lifecycle import ProcessLifecycle
 from src.shutdown import ShutdownOwner, shutdown_owner

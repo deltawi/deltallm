@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from src.billing.charges.operation_reservation import ComponentState
-from src.billing.spend.spend import SpendTrackingService
+from src.billing.operation_reservation import ComponentState
+from src.billing.spend import SpendTrackingService
 from src.db.billing_operations import BillingOperationRepository
 from src.db.routing_costs import routing_cost_observation, routing_cost_query
 from src.services.spend_visibility import SpendVisibility

@@ -322,7 +322,7 @@ Reset fields follow the same omitted-field contract as `PUT`:
 
 Files:
 
-- `src/billing/budgets/budget.py`
+- `src/billing/budget.py`
 - `tests/test_billing.py`
 
 Tasks:
@@ -463,7 +463,7 @@ npm run build --prefix ui
 Optional broader checks:
 
 ```bash
-uv run ruff check src/billing/budgets/budget.py src/api/admin/endpoints/organizations.py tests/test_billing.py tests/test_ui_organizations_assets.py
+uv run ruff check src/billing/budget.py src/api/admin/endpoints/organizations.py tests/test_billing.py tests/test_ui_organizations_assets.py
 ```
 
 Manual smoke path:

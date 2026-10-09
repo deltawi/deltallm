@@ -8,7 +8,7 @@ import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
-from src.billing.spend.spend_read import SPEND_READ_SOURCE
+from src.billing.spend_read import SPEND_READ_SOURCE
 from src.models.platform_auth import PlatformAuthContext
 
 

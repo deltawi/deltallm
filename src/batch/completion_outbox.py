@@ -9,8 +9,8 @@ from typing import Any
 from src.batch.models import BatchCompletionOutboxRecord
 from src.batch.repository import BatchRepository
 from src.batch.accounting_delivery import NativeBatchCompletionDelivery
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.spend.spend import SpendTrackingService
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.spend import SpendTrackingService
 from src.metrics import (
     increment_batch_completion_outbox_failure,
     increment_request,

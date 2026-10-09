@@ -5,12 +5,12 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.reporting.accounting_projection import (
+from src.billing.accounting_projection import (
     AccountingCompatibilityProjector,
     AccountingProjectionConfig,
     AccountingProjectionWorker,
 )
-from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend import SpendTrackingService
 from src.db.accounting_projection import AccountingProjectionRepository
 from src.db.accounting_protocol import AccountingProtocolRepository
 from src.db.audit_ingestion import AuditIngestionRepository

@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
-from src.billing.charges.audio_usage import normalize_speech_usage
+from src.billing.audio_usage import normalize_speech_usage
 
 
 class _SpendRecorder:

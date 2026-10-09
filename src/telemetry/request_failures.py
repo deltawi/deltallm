@@ -9,7 +9,7 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 
 from src.audit.actions import AuditAction
-from src.billing.accounting.accounting_protocol import AccountingOperationHandle
+from src.billing.accounting_protocol import AccountingOperationHandle
 from src.metrics.counters import increment_optional_request_diagnostic
 from src.models.errors import (
     ApprovalRequiredError,
@@ -19,7 +19,7 @@ from src.models.errors import (
 )
 from src.routers.audit_helpers import emit_audit_event
 from src.telemetry.spend_operation import billing_write_context
-from src.billing.spend.spend_operations import SpendPersistenceUnavailable
+from src.billing.spend_operations import SpendPersistenceUnavailable
 from src.db.accounting_protocol import AccountingProtocolUnavailable
 from src.metrics.accounting import increment_accounting_failure
 

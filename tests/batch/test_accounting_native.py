@@ -10,13 +10,9 @@ from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.batch.accounting_delivery import NativeBatchCompletionDelivery
 from src.batch.accounting_native import NativeBatchBilling, decode_checkpoint
 from src.batch.selector_identity import batch_selector_operation_id
-from src.billing.accounting.accounting_protocol import (
-    AccountingOutcome,
-    DispatchPermit,
-    ReserveDecision,
-)
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.accounting.accounting_snapshots import finalization_bytes
+from src.billing.accounting_protocol import AccountingOutcome, DispatchPermit, ReserveDecision
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting_snapshots import finalization_bytes
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
 from src.router.router import Deployment

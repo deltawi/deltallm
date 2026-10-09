@@ -6,11 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.journal.accounting_journal_terminal import JournalTerminalPersistence
-from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
-from src.billing.accounting.accounting_protocol import AccountingOutcome
-from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
+from src.billing.accounting_journal_terminal import JournalTerminalPersistence
+from src.billing.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting_local_terminal import LocalTerminalOwner
+from src.billing.accounting_protocol import AccountingOutcome
+from src.billing.accounting_terminal_receipts import JournalReceipt
 from tests.test_accounting_local_issue import deadline
 from tests.test_accounting_local_leases import terminal
 from tests.test_accounting_local_receipts import acknowledgement
@@ -127,8 +127,8 @@ async def test_unknown_receipt_contract_cannot_construct_an_owner(receipt_type):
 
 @pytest.mark.parametrize("path", ["provider", "paid_cache"])
 async def test_provider_and_paid_cache_keep_the_same_journal_acceptance_owner(path):
-    from src.billing.accounting.accounting_local_service import LocalAccountingService
-    from src.billing.charges.provider_allowance import ProviderRequestBounds
+    from src.billing.accounting_local_service import LocalAccountingService
+    from src.billing.provider_allowance import ProviderRequestBounds
     from src.cache.middleware import CacheMiddleware
     from src.telemetry.spend_operation import durable_provider_call, operation_handle
     from tests.test_accounting_local_service import state as service_state, ingestion

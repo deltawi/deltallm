@@ -5,13 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting.permits.accounting_local_leases import (
-    LocalPermitGrant,
-    LocalPermitReturn,
-)
-from src.billing.accounting.accounting_protocol import AccountingScope, BudgetWindowRef
-from src.billing.accounting.permits.preissued_permits import PermitSubject
+from src.billing.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting_local_leases import LocalPermitGrant, LocalPermitReturn
+from src.billing.accounting_protocol import AccountingScope, BudgetWindowRef
+from src.billing.preissued_permits import PermitSubject
 from tests.test_accounting_local_leases import terminal
 from tests.test_preissued_permit_bytes import retained_object_bytes
 

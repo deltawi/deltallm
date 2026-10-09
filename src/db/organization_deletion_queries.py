@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.billing.spend.spend_read import SPEND_READ_SOURCE
+from src.billing.spend_read import SPEND_READ_SOURCE
 from src.db.organization_deletion_scope_inventory import (
     ORGANIZATION_SCOPE_INVENTORY_CTE_SQL,
     approval_attribution_predicate,

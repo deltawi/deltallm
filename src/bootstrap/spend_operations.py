@@ -2,7 +2,7 @@
 
 from starlette.datastructures import State
 
-from src.billing.spend.spend_operation_service import SpendOperationService
+from src.billing.spend_operation_service import SpendOperationService
 
 
 def build_spend_operations(state: State) -> SpendOperationService | None:

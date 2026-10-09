@@ -8,12 +8,12 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting.permits.accounting_local_issue import LocalIssueCommit
-from src.billing.accounting.permits.accounting_local_leases import LocalPermitReceipt
-from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting.accounting_protocol import ReserveDecision
-from src.billing.accounting.durable_microbatch import DurableBatchFull
+from src.billing.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting_local_issue import LocalIssueCommit
+from src.billing.accounting_local_leases import LocalPermitReceipt
+from src.billing.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting_protocol import ReserveDecision
+from src.billing.durable_microbatch import DurableBatchFull
 from tests.test_accounting_local_cursors import value
 from tests.test_accounting_local_leases import terminal
 from tests.test_preissued_permit_bank import fresh
@@ -287,7 +287,7 @@ async def test_empty_issue_has_no_side_effect_and_oversized_batch_fails():
 
 
 def test_issue_commit_and_both_store_mutations_have_no_await():
-    root = Path(__file__).resolve().parents[1] / "src" / "billing" / "accounting" / "permits"
+    root = Path(__file__).resolve().parents[1] / "src" / "billing"
     for filename, method in (
         ("accounting_local_issue.py", "commit"),
         ("accounting_local_cursors.py", "_commit_issue"),

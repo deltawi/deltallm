@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from src.billing.charges.realtime_pricing import RealtimePrices
-from src.billing.pricing.tier_pricing import resolve_deployment_tier_pricing
+from src.billing.realtime_pricing import RealtimePrices
+from src.billing.tier_pricing import resolve_deployment_tier_pricing
 from src.providers.openai_realtime import OpenAIRealtimeTarget, resolve_realtime_target
 from src.realtime.contracts import RealtimeRequest
 from src.realtime.errors import RealtimeError

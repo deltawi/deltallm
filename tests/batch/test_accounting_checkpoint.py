@@ -11,7 +11,7 @@ from src.batch.accounting_checkpoint import (
     BatchAccountingWrite,
 )
 from src.batch.selector_checkpoint import BatchSelectorClaim
-from src.billing.accounting.accounting_protocol import AccountingAttempt
+from src.billing.accounting_protocol import AccountingAttempt
 from tests.batch.accounting_fixtures import checkpoint_for, uncertain
 
 

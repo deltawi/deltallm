@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.billing.pricing.cost import completion_cost, compute_billing_result
-from src.billing.pricing.tier_pricing import (
+from src.billing.cost import completion_cost, compute_billing_result
+from src.billing.tier_pricing import (
     resolve_deployment_tier_pricing,
     resolve_tier_pricing,
     resolve_token_billing_result,
@@ -320,7 +320,9 @@ def test_token_billing_ignores_cache_only_pricing_on_live_catalog_request() -> N
     resolution = resolve_deployment_tier_pricing(
         auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
         model="gpt-4o-mini",
-        deployment=_deployment(model_info={"input_cost_per_token_cache_hit": 0.25}),
+        deployment=_deployment(
+            model_info={"input_cost_per_token_cache_hit": 0.25}
+        ),
         tier_policy_service=None,
     )
 
@@ -343,7 +345,9 @@ def test_token_billing_marks_unknown_cache_only_live_request_unpriced() -> None:
     resolution = resolve_deployment_tier_pricing(
         auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
         model="unknown-model",
-        deployment=_deployment(model_info={"input_cost_per_token_cache_hit": 0.25}),
+        deployment=_deployment(
+            model_info={"input_cost_per_token_cache_hit": 0.25}
+        ),
         tier_policy_service=None,
     )
 
@@ -365,7 +369,9 @@ def test_token_billing_combines_cache_override_with_catalog_output() -> None:
     resolution = resolve_deployment_tier_pricing(
         auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
         model="gpt-4o-mini",
-        deployment=_deployment(model_info={"input_cost_per_token_cache_hit": 0.25}),
+        deployment=_deployment(
+            model_info={"input_cost_per_token_cache_hit": 0.25}
+        ),
         tier_policy_service=None,
     )
 
@@ -452,18 +458,8 @@ def test_tier_pricing_overrides_customer_price_and_preserves_provider_price() ->
     )
 
     usage = {"prompt_tokens": 10, "completion_tokens": 5}
-    assert (
-        completion_cost(
-            model="model-a", usage=usage, custom_pricing=resolution.customer_token_pricing
-        )
-        == 2.0
-    )
-    assert (
-        completion_cost(
-            model="model-a", usage=usage, custom_pricing=resolution.provider_token_pricing
-        )
-        == 20.0
-    )
+    assert completion_cost(model="model-a", usage=usage, custom_pricing=resolution.customer_token_pricing) == 2.0
+    assert completion_cost(model="model-a", usage=usage, custom_pricing=resolution.provider_token_pricing) == 20.0
     metadata = resolution.spend_metadata(provider_cost=20.0)
     assert metadata["pricing_source"] == "tier"
     assert metadata["customer_tier_key"] == "enterprise"
@@ -497,11 +493,7 @@ def test_tier_pricing_partially_overrides_and_falls_back_to_deployment_fields() 
 def test_shadow_mode_observes_tier_pricing_without_charging_it() -> None:
     auth = UserAPIKeyAuth(api_key="key-1", organization_id="org-1")
     service = _TierPricingService(
-        {
-            ("org-1", "model-a", "sync"): _policy(
-                {"input_cost_per_token": 0.1, "output_cost_per_token": 0.2}
-            )
-        },
+        {("org-1", "model-a", "sync"): _policy({"input_cost_per_token": 0.1, "output_cost_per_token": 0.2})},
         mode="shadow",
     )
 
@@ -530,11 +522,7 @@ def test_shadow_mode_observes_tier_pricing_without_charging_it() -> None:
 def test_disabled_mode_ignores_tier_pricing() -> None:
     auth = UserAPIKeyAuth(api_key="key-1", organization_id="org-1")
     service = _TierPricingService(
-        {
-            ("org-1", "model-a", "sync"): _policy(
-                {"input_cost_per_token": 0.1, "output_cost_per_token": 0.2}
-            )
-        },
+        {("org-1", "model-a", "sync"): _policy({"input_cost_per_token": 0.1, "output_cost_per_token": 0.2})},
         mode="disabled",
     )
 
@@ -563,11 +551,7 @@ def test_disabled_mode_ignores_tier_pricing() -> None:
 def test_stale_tier_pricing_is_observed_without_charging_it() -> None:
     auth = UserAPIKeyAuth(api_key="key-1", organization_id="org-1")
     service = _TierPricingService(
-        {
-            ("org-1", "model-a", "sync"): _policy(
-                {"input_cost_per_token": 0.1, "output_cost_per_token": 0.2}
-            )
-        },
+        {("org-1", "model-a", "sync"): _policy({"input_cost_per_token": 0.1, "output_cost_per_token": 0.2})},
         snapshot_stale=True,
     )
 
@@ -774,7 +758,5 @@ def test_tier_pricing_supports_non_chat_billing_modes(
         deployment_model_info={},
     )
 
-    result = compute_billing_result(
-        mode=mode, usage=usage, model_info=resolution.customer_model_info
-    )
+    result = compute_billing_result(mode=mode, usage=usage, model_info=resolution.customer_model_info)
     assert result.cost == expected_cost

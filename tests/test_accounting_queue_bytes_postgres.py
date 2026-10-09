@@ -6,8 +6,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.billing.accounting.accounting_protocol import ReserveDecision
+from src.billing.accounting_service import AccountingProtocolService
+from src.billing.accounting_protocol import ReserveDecision
 from src.db.accounting_protocol import AccountingProtocolRepository
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_accounting_protocol_postgres import (

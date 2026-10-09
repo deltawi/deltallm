@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import Request
 
-from src.billing.charges.operation_reservation import BillingOperationUnavailable
+from src.billing.operation_reservation import BillingOperationUnavailable
 from src.cache.execution_eligibility import ResponseCacheEligibility
 from src.models.requests import ChatCompletionRequest
 from src.models.errors import ProxyError, RoutingFailureAction

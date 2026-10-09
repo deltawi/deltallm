@@ -8,14 +8,14 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.accounting_protocol import AccountingAttempt, AccountingOperationHandle
+from src.billing.accounting_protocol import AccountingAttempt, AccountingOperationHandle
 from src.db.accounting_protocol import AccountingProtocolRepository
-from src.billing.accounting.permits.accounting_local_leases import (
+from src.billing.accounting_local_leases import (
     LocalPermitFinalization,
     LocalPermitReceipt,
     LocalPermitReturn,
 )
-from src.billing.accounting.accounting_protocol import AccountingOutcome
+from src.billing.accounting_protocol import AccountingOutcome
 from src.db.accounting_journal import AccountingJournalRepository
 from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
 from prisma.errors import RawQueryError

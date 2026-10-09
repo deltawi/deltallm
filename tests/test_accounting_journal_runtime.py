@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.journal.accounting_journal_claims import JournalClaim, JournalFailure
-from src.billing.accounting.journal.accounting_journal_runtime import (
+from src.billing.accounting_journal_claims import JournalClaim, JournalFailure
+from src.billing.accounting_journal_runtime import (
     MAX_RETAINED_CLAIM_BYTES,
     JournalProcessingWorker,
     JournalWorkerConfig,

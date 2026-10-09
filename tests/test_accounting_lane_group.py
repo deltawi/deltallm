@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.billing.accounting.accounting_lane_group import AccountingLaneGroup
+from src.billing.accounting_lane_group import AccountingLaneGroup
 from src.bootstrap.accounting_role_builders import native_processing_lanes
 from src.telemetry.lifecycle import WorkerHealth, WorkerState, stop_tasks_before_deadline
 from tests.test_accounting_native_config import native

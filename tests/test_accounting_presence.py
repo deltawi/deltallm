@@ -5,15 +5,12 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.health.accounting_presence import (
+from src.billing.accounting_presence import (
     ProjectionLease,
     ProjectionPresence,
     ProjectionPresencePublisher,
 )
-from src.billing.accounting.journal.accounting_recovery import (
-    AccountingRecoveryWorker,
-    RecoveryConfig,
-)
+from src.billing.accounting_recovery import AccountingRecoveryWorker, RecoveryConfig
 from src.concurrency import CapacityGateFull
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.accounting_permit_results import invalid_result

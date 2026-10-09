@@ -2,10 +2,10 @@
 
 import asyncio
 
-from src.billing.accounting.reporting.accounting_read_model_claims import READ_MODEL_PROJECTION
+from src.billing.accounting_read_model_claims import READ_MODEL_PROJECTION
 
-from src.billing.accounting.accounting_finalization import accounting_audit_envelope
-from src.billing.accounting.accounting_protocol import (
+from src.billing.accounting_finalization import accounting_audit_envelope
+from src.billing.accounting_protocol import (
     AccountingAttempt,
     AccountingOperationHandle,
     AccountingOutcome,

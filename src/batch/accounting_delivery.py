@@ -9,8 +9,8 @@ from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.batch.accounting_native import decode_checkpoint
 from src.batch.models import BatchCompletionOutboxRecord
 from src.batch.selector_identity import batch_selector_operation_id
-from src.billing.accounting.accounting_protocol import AccountingOutcome
-from src.billing.accounting.accounting_service import AccountingProtocolService
+from src.billing.accounting_protocol import AccountingOutcome
+from src.billing.accounting_service import AccountingProtocolService
 
 
 class FencedCompletionDeliveryStore(Protocol):

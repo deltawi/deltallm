@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend import SpendTrackingService
 from src.db.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
 from src.db.email import EmailOutboxRecord, EmailOutboxRepository
 from src.db.prompt_registry import PromptRegistryRepository

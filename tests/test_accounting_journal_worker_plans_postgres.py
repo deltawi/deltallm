@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.journal.accounting_journal_claims import JournalFailure
-from src.billing.accounting.accounting_protocol import AccountingOutcome
+from src.billing.accounting_journal_claims import JournalFailure
+from src.billing.accounting_protocol import AccountingOutcome
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes
 from tests.test_accounting_journal_plans_postgres import seed_journal_history

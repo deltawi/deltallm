@@ -9,8 +9,8 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from src.billing.pricing.cost import compute_billing_result
-from src.billing.pricing.tier_pricing import attach_pricing_metadata
+from src.billing.cost import compute_billing_result
+from src.billing.tier_pricing import attach_pricing_metadata
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.router.runtime_generation import pin_routing_runtime_generation
 from src.middleware.auth import require_api_key

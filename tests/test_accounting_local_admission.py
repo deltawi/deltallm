@@ -5,7 +5,7 @@ import inspect
 
 import pytest
 
-from src.billing.accounting.permits.accounting_local_admission import LocalAdmissionOwner
+from src.billing.accounting_local_admission import LocalAdmissionOwner
 from src.concurrency import CapacityGateFull, CapacityGateTimedOut
 
 

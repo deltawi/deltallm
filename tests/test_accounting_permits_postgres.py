@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from src.billing.accounting.accounting_protocol import (
+from src.billing.accounting_protocol import (
     AccountingOutcome,
     AccountingScope,
     BudgetWindowRef,

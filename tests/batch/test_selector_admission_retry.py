@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from src.billing.charges.operation_reservation import BillingOperationUnavailable
+from src.billing.operation_reservation import BillingOperationUnavailable
 from tests.batch import selector_fixtures
 from tests.batch.selector_fixtures import answer_calls, selection_calls
 

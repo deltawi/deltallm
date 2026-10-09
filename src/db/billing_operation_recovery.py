@@ -7,7 +7,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Literal
 
-from src.billing.charges.operation_reservation import BillingOperationUnavailable
+from src.billing.operation_reservation import BillingOperationUnavailable
 from src.db.billing_operations import BillingOperationRepository
 from src.db.spend_ingestion import SpendIngestionRepository
 from src.metrics.spend_ingestion import increment_spend_ingestion_failure

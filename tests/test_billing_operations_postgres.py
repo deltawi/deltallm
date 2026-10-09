@@ -5,9 +5,9 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.charges.operation_reservation import BillingOperationUnavailable
-from src.billing.spend.spend import SpendTrackingService
-from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.spend import SpendTrackingService
+from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.db.billing_operations import BillingOperationRepository
 from src.db.billing_operation_recovery import BillingOperationRecovery
 from tests.test_operation_reservation import make_operation

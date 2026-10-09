@@ -7,7 +7,7 @@ from uuid import uuid4
 import asyncpg
 import pytest
 
-from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
+from src.billing.accounting_local_leases import LocalPermitReturn
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_local_leases_postgres import allocation, deadline, owner
 from tests.test_accounting_protocol_postgres import (

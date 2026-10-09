@@ -5,14 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.health.accounting_health import (
-    AccountingBacklogPolicy,
-    AccountingBacklogProbe,
-)
-from src.billing.accounting.journal.accounting_recovery import (
-    AccountingRecoveryWorker,
-    RecoveryConfig,
-)
+from src.billing.accounting_health import AccountingBacklogPolicy, AccountingBacklogProbe
+from src.billing.accounting_recovery import AccountingRecoveryWorker, RecoveryConfig
 from src.db.accounting_health import AccountingBacklogRepository
 from src.db.accounting_recovery import AccountingRecoveryRepository
 from src.db.accounting_calls import AccountingProtocolUnavailable

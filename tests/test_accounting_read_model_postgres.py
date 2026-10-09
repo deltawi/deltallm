@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting.permits.accounting_local_leases import LocalPermitFinalization
-from src.billing.accounting.accounting_protocol import AccountingOutcome
+from src.billing.accounting_local_leases import LocalPermitFinalization
+from src.billing.accounting_protocol import AccountingOutcome
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.db.accounting_journal import AccountingJournalRepository
 from src.db.accounting_journal_worker import AccountingJournalWorkerRepository

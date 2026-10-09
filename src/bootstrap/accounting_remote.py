@@ -1,8 +1,8 @@
 """One API owner closes local grants and queues before its dedicated RPC pool."""
 
 from src.accounting_settings import AccountingProtocolSettings
-from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
-from src.billing.accounting.accounting_local_service import LocalAccountingService
+from src.billing.accounting_http import AccountingHttpTransport
+from src.billing.accounting_local_service import LocalAccountingService
 from src.bootstrap.accounting_local import build_api_accounting_runtime
 from src.bootstrap.accounting_role_config import validate_accounting_role
 from src.deployment_capacity_report import Role
