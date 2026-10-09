@@ -1,5 +1,4 @@
-from .runtime.client import PrismaClientManager
-from .identity.key_repository import KeyRepository
-from .audit.repository import AuditRepository
+from .client import PrismaClientManager
+from .repositories import AuditRepository, KeyRepository
 
 __all__ = ["PrismaClientManager", "KeyRepository", "AuditRepository"]

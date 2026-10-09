@@ -14,9 +14,9 @@ from scripts.benchmarks.ingestion_database import (
     SPEND,
     ingestion_database,
 )
-from src.db.runtime.allocated_client import DatabaseUnavailableError
-from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
-from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.allocated_client import DatabaseUnavailableError
+from src.db.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
+from src.db.spend_ingestion import SpendIngestionRepository
 
 pytestmark = pytest.mark.postgres
 

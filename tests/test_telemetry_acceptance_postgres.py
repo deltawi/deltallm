@@ -8,9 +8,9 @@ from prisma import Prisma
 from prisma.errors import RawQueryError
 import pytest
 
-from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
-from src.db.runtime.allocated_client import DatabaseUnavailableError
-from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
+from src.db.allocated_client import DatabaseUnavailableError
+from src.db.spend_ingestion import SpendIngestionRepository
 from src.metrics.prometheus import get_prometheus_registry
 from tests import test_database_allocations_postgres as allocation_fixtures
 from tests.test_telemetry_acceptance_metrics import assert_released, operation, sample

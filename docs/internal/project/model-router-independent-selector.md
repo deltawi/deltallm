@@ -80,7 +80,7 @@ this focused correction neither extends that path nor changes its defaults.
 
 ## Transactional dependency protection
 
-`src/db/routing/route_policy_dependencies.py` coordinates policy references and physical
+`src/db/route_policy_dependencies.py` coordinates policy references and physical
 model mutations. Published references, including disabled groups, are protected.
 Draft/archived references do not prevent deletion; publication/rollback revalidate.
 Invalid changes roll back policy history, model mutations and runtime revision together.

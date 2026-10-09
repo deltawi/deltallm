@@ -26,7 +26,7 @@ from src.billing.spend.spend_ingestion import (
     SpendIngestionOverloadedError,
     SpendIngestionService,
 )
-from src.db.billing.spend_ingestion import SpendEnqueueResult
+from src.db.spend_ingestion import SpendEnqueueResult
 
 
 def make_selector_charge(**price_overrides: object) -> AcceptedSelectorCharge:

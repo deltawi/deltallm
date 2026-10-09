@@ -46,10 +46,10 @@ from src.billing.accounting.accounting_protocol import (
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.permits.preissued_permits import PreissuedPermitBank
 from src.config import DatabaseConnectionSettings
-from src.db.runtime.accounting_pool import AccountingPostgresManager
-from src.db.accounting.accounting_protocol import AccountingProtocolRepository
-from src.db.accounting.accounting_calls import AccountingQueryClient
-from src.db.accounting.permits.accounting_permits import AccountingPermitRepository
+from src.db.accounting_pool import AccountingPostgresManager
+from src.db.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting_calls import AccountingQueryClient
+from src.db.accounting_permits import AccountingPermitRepository
 from tests.performance.gateway_concurrency_dependencies import fixture_database_url
 
 _PROFILE_TABLES = (
@@ -104,10 +104,10 @@ def _source_manifest() -> dict[str, object]:
     paths = (
         Path("src/billing/accounting/accounting_service.py"),
         Path("src/billing/accounting/durable_microbatch.py"),
-        Path("src/db/accounting/accounting_protocol.py"),
-        Path("src/db/runtime/accounting_pool.py"),
-        Path("src/db/accounting/accounting_calls.py"),
-        Path("src/db/accounting/permits/accounting_permits.py"),
+        Path("src/db/accounting_protocol.py"),
+        Path("src/db/accounting_pool.py"),
+        Path("src/db/accounting_calls.py"),
+        Path("src/db/accounting_permits.py"),
         Path("src/billing/accounting/accounting_protocol.py"),
         Path("src/billing/accounting/permits/preissued_permits.py"),
         Path("prisma/migrations/20260926120000_accounting_protocol_v2/migration.sql"),

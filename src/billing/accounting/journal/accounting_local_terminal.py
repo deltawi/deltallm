@@ -20,9 +20,9 @@ from src.billing.accounting.journal.accounting_terminal_receipts import (
     TerminalReceipt,
     TerminalReceiptType,
 )
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting.permits.accounting_permit_results import invalid_result
-from src.db.runtime.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_permit_results import invalid_result
+from src.db.telemetry_acceptance import AcceptanceFailure
 
 
 class LocalTerminalPersistence(Protocol):

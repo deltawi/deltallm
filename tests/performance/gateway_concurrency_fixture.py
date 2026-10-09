@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from src.db.identity.key_repository import KeyRepository
+from src.db.repositories import KeyRepository
 from src.services.key_service import KeyService
 from tests.performance.gateway_concurrency_dependencies import local_database
 

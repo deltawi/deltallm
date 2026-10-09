@@ -12,9 +12,9 @@ from pathlib import Path
 
 from redis.asyncio import Redis
 
-from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner
-from src.db.runtime.allocation_config import DatabasePolicy
-from src.db.identity.key_repository import KeyRepository
+from src.db.allocated_client import AllocatedPrisma, DatabaseOwner
+from src.db.allocation_config import DatabasePolicy
+from src.db.repositories import KeyRepository
 from src.services.auth_fallback import AuthFallbackLimits
 from src.services.key_service import KeyService
 from tests.performance.gateway_concurrency_dependencies import (

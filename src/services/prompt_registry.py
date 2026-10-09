@@ -11,12 +11,12 @@ import time
 from typing import Any, TypeVar
 from uuid import uuid4
 
-from src.db.catalog.prompt_registry import (
+from src.db.prompt_registry import (
     PromptBindingRecord,
     PromptRegistryRepository,
     PromptResolvedRecord,
 )
-from src.db.routing.route_groups import RouteGroupRepository
+from src.db.route_groups import RouteGroupRepository
 from src.metrics import (
     increment_prompt_cache_lookup,
     increment_prompt_resolution,

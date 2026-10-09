@@ -8,8 +8,8 @@ import random
 from typing import Protocol
 
 from src.concurrency import CapacityGateFull
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_permit_results import invalid_result
 from src.telemetry.lifecycle import (
     WorkerHealth,
     WorkerState,

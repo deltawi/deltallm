@@ -11,7 +11,7 @@ from src.billing.accounting.permits.accounting_local_cursors import LocalCursorS
 from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
 from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
 from src.concurrency import CapacityGateTimedOut
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.telemetry.lifecycle import (
     WorkerHealth,
     WorkerState,

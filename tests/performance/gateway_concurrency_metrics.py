@@ -15,7 +15,7 @@ from typing import Literal, TextIO, TypeVar
 
 import httpx
 from prometheus_client.parser import text_string_to_metric_families
-from src.db.runtime.telemetry_acceptance import AcceptanceFailure
+from src.db.telemetry_acceptance import AcceptanceFailure
 from src.metrics.request_phases import OUTCOMES, PHASES, RESPONSE_KINDS, ROUTES
 from src.metrics.telemetry_acceptance import AcceptancePhase
 

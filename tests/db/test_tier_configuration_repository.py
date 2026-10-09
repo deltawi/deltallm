@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.db.tiers.tiers import (
+from src.db.tiers import (
     TierActivationActiveVersionChangedError,
     TierActivationConfigurationChangedError,
     TierBootstrapIdempotencyConflictError,
@@ -327,7 +327,9 @@ async def test_tier_bootstrap_locks_key_before_lookup_and_creates_atomically() -
     calls = prisma.tx_clients[0].calls
     assert len(calls) == 5
     assert "pg_advisory_xact_lock(hashtextextended($1, 0))" in calls[0][0]
-    assert calls[0][1] == ("tier-bootstrap:v1:account:acct-1:request-key-1",)
+    assert calls[0][1] == (
+        "tier-bootstrap:v1:account:acct-1:request-key-1",
+    )
     assert "FROM deltallm_tiercreationrequest" in calls[1][0]
     assert "INSERT INTO deltallm_tier (" in calls[2][0]
     assert "INSERT INTO deltallm_tierversion" in calls[3][0]
@@ -350,7 +352,9 @@ async def test_tier_bootstrap_replays_same_principal_key_and_hash() -> None:
         "version_number": 1,
     }
     replay_tier = {**_tier_row(), "version_count": 1}
-    prisma = _ScriptedPrisma([[{"locked": None}], [replay_row], [replay_tier], [initial_version]])
+    prisma = _ScriptedPrisma(
+        [[{"locked": None}], [replay_row], [replay_tier], [initial_version]]
+    )
     repository = TierRepository(prisma)
 
     result = await repository.create_tier_with_initial_draft(
@@ -517,7 +521,9 @@ async def test_guarded_activation_rechecks_revision_and_active_version_under_loc
 
 @pytest.mark.asyncio
 async def test_guarded_activation_rejects_changed_revision_before_lifecycle_mutation() -> None:
-    prisma = _ScriptedPrisma([[{"tier_id": "tier-1"}], [_version_row(revision=5)]])
+    prisma = _ScriptedPrisma(
+        [[{"tier_id": "tier-1"}], [_version_row(revision=5)]]
+    )
     repository = TierRepository(prisma)
 
     with pytest.raises(TierActivationConfigurationChangedError) as caught:
@@ -784,7 +790,9 @@ async def test_bulk_policy_limits_proves_selected_scope_and_bumps_once() -> None
 
 @pytest.mark.asyncio
 async def test_bulk_policy_limits_rejects_any_wrong_scope_without_update_or_bump() -> None:
-    prisma = _ScriptedPrisma([[_version_row()], [{"tier_model_policy_id": "policy-1"}]])
+    prisma = _ScriptedPrisma(
+        [[_version_row()], [{"tier_model_policy_id": "policy-1"}]]
+    )
     repository = TierRepository(prisma)
 
     with pytest.raises(TierConfigurationChildNotFoundError):

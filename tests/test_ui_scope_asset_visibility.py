@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.db.routing.callable_target_access_groups import CallableTargetAccessGroupBindingRecord
-from src.db.routing.callable_targets import CallableTargetBindingRecord
-from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
-from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRecord
+from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
 from src.services.asset_ownership import apply_owner_scope_to_metadata, owner_scope_from_metadata
 from src.services.callable_targets import CallableTarget
 

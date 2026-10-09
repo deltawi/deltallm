@@ -9,7 +9,7 @@ from src.billing.accounting.journal.accounting_journal_runtime import (
     JournalProcessingWorker,
     JournalWorkerConfig,
 )
-from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
 from tests.test_accounting_journal_postgres import counts
 from tests.test_accounting_journal_worker_postgres import pending
 from tests.test_accounting_local_leases_postgres import deadline

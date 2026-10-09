@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from prisma.errors import RawQueryError
 
-from src.db.catalog.managed_assets import ManagedAssetAudienceNotFoundError
+from src.db.managed_assets import ManagedAssetAudienceNotFoundError
 from src.middleware.errors import (
     anthropic_proxy_error_response,
     proxy_error_response,

@@ -26,9 +26,9 @@ from src.billing.accounting.accounting_protocol import (
     ReserveDecision,
 )
 from src.billing.accounting.durable_microbatch import DurableBatchClosed, DurableBatchFull
-from src.db.accounting.permits.accounting_permit_results import invalid_result
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
-from src.db.runtime.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting_permit_results import invalid_result
+from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.telemetry_acceptance import AcceptanceFailure
 from src.telemetry.lifecycle import WorkerHealthSource, WorkerState
 
 

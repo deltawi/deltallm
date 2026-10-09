@@ -6,15 +6,13 @@ from uuid import uuid4
 import pytest
 
 from src.batch.repositories.webhook_outbox_repository import BatchWebhookOutboxRepository
-from src.db.organizations.deletion.organization_deletion_final_inventory import (
+from src.db.organization_deletion_final_inventory import (
     ORGANIZATION_DELETION_FINAL_INVENTORY_SQL,
 )
-from src.db.organizations.deletion.organization_deletion_invitation_cleanup import (
+from src.db.organization_deletion_invitation_cleanup import (
     OrganizationDeletionInvitationCleanup,
 )
-from src.db.organizations.deletion.organization_deletion_tenant_cleanup import (
-    OrganizationDeletionTenantCleanup,
-)
+from src.db.organization_deletion_tenant_cleanup import OrganizationDeletionTenantCleanup
 from tests.db.tier_migration_helpers import connect_prisma
 
 

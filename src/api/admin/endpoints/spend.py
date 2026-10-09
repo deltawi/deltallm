@@ -18,7 +18,7 @@ from src.api.admin.endpoints.common import (
 )
 from src.auth.roles import Permission
 from src.billing.spend.spend_read import SpendReadSource, get_spend_read_source
-from src.db.billing.spend_components import external_request_sql
+from src.db.spend_components import external_request_sql
 from src.middleware.admin import require_any_admin_permission
 from src.providers.resolution import provider_from_model, resolve_provider
 from src.services.spend_reporting_cache import reporting_cache_ttl
@@ -31,7 +31,7 @@ from src.api.admin.spend_reporting_dependencies import (
     _load_reporting_response,
     _run_uncached_reporting_response,
 )
-from src.db.runtime.reporting import (
+from src.db.reporting import (
     _run_reporting_query,
     _run_reporting_transaction,
     _run_reporting_statement,

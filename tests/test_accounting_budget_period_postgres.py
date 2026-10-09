@@ -11,10 +11,10 @@ from prisma.errors import RawQueryError
 
 from src.billing.accounting.accounting_protocol import AccountingScope, ReserveDecision
 from src.billing.spend.spend import SpendTrackingService
-from src.db.accounting.accounting_budget_reads import AccountingBudgetReadRepository
+from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 from src.billing.accounting.journal.accounting_recovery import RecoveryAction
-from src.db.accounting.accounting_recovery import AccountingRecoveryRepository
-from src.db.accounting.reporting.accounting_read_model import AccountingReadModelRepository
+from src.db.accounting_recovery import AccountingRecoveryRepository
+from src.db.accounting_read_model import AccountingReadModelRepository
 from tests.test_accounting_budget_policy_history_postgres import _POLICIES, complete, owners
 from tests.test_accounting_budget_regressions_postgres import issuer
 from tests.test_accounting_local_leases_postgres import deadline

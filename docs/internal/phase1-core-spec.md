@@ -1181,7 +1181,7 @@ Scope: Database schema and data access layer
 Inputs: Prisma schema definition
 Outputs:
   - prisma/schema.prisma
-  - src/db/runtime/client.py          # Prisma client singleton
+  - src/db/client.py          # Prisma client singleton
   - src/db/repositories/
       - key_repository.py     # Key CRUD operations
       - user_repository.py    # User CRUD

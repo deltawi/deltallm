@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from src.db.routing.callable_targets import CallableTargetBindingRecord
-from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRecord
-from src.db.tiers.tiers import OrganizationTierAssignmentRecord
+from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.db.tiers import OrganizationTierAssignmentRecord
 from src.services.cache_invalidation import CacheInvalidationResult
 from src.services.callable_targets import CallableTarget
 from src.services.asset_ownership import owner_scope_from_metadata

@@ -12,7 +12,7 @@ from src.api.admin.endpoints.common import (
 )
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.audit.repository import AuditRepository
+from src.db.repositories import AuditRepository
 from src.middleware.admin import require_admin_permission
 from src.services.telemetry_replay import TelemetryReplayService
 

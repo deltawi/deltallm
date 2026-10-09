@@ -780,7 +780,7 @@ The `ModelDeploymentRepository` in `repositories.py` provides CRUD operations fo
 3. Deleting a deployment does not remove it from routing
 
 **Files Impacted**:
-- `src/db/catalog/model_deployments.py` (lines 149-283)
+- `src/db/repositories.py` (lines 149-283)
 - `src/api/admin/endpoints/config.py` (no deployment management endpoints found)
 
 **Suggested Fix**:
@@ -801,7 +801,7 @@ Add deployment management endpoints that update both the database AND the in-mem
 In `repositories.py`, methods like `list_all()` return an empty list `[]` when `self.prisma` is None (lines 154-155, 175-176). This could mask database connectivity issues and make debugging difficult. Callers might interpret an empty list as "no data" rather than "database unavailable".
 
 **Files Impacted**:
-- `src/db/catalog/model_deployments.py` (multiple methods)
+- `src/db/repositories.py` (multiple methods)
 
 **Suggested Fix**:
 Raise an exception when the database is unavailable, or return a distinct result that indicates "unavailable" vs "empty".

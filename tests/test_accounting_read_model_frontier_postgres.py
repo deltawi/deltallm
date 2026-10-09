@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from src.db.accounting.reporting.accounting_read_model import AccountingReadModelRepository
-from src.db.accounting.reporting.accounting_read_model_queries import RECOVER_CLAIM
+from src.db.accounting_read_model import AccountingReadModelRepository
+from src.db.accounting_read_model_queries import RECOVER_CLAIM
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes
 from tests.test_accounting_local_leases_postgres import deadline

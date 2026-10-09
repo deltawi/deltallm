@@ -4,9 +4,8 @@ from src.audit.actions import AuditAction
 from src.batch.models import BatchWebhookOutboxRecord
 from src.batch.repository import BatchRepository
 from src.batch.webhooks.observability import bounded_webhook_reason, webhook_status_class
-from src.db.audit.repository import AuditRepository
+from src.db.repositories import AuditRepository
 from src.services.audit_service import AuditEventInput, AuditService
-
 
 async def build_batch_webhook_terminal_audit_event(
     *,

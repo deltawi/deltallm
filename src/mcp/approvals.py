@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from src.db.mcp.mcp import MCPApprovalRequestRecord, MCPRepository, MCPToolPolicyRecord
+from src.db.mcp import MCPApprovalRequestRecord, MCPRepository, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
 
 from .auth import build_effective_mcp_forwarded_headers

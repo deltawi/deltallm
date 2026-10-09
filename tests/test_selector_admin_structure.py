@@ -59,7 +59,7 @@ def test_selector_admin_components_stay_separate_from_the_route_page():
 
 
 @pytest.mark.parametrize(
-    "module", ["services/selector_inventory.py", "db/routing/route_policy_dependencies.py"]
+    "module", ["services/selector_inventory.py", "db/route_policy_dependencies.py"]
 )
 def test_independent_selector_boundaries_remain_typed_and_off_the_inference_path(module):
     source = (ROOT / "src" / module).read_text()

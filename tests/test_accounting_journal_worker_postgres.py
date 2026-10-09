@@ -11,9 +11,9 @@ from prisma.errors import RawQueryError
 from src.billing.accounting.journal.accounting_journal_claims import JournalFailure
 from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
 from src.billing.accounting.accounting_protocol import AccountingOutcome
-from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
-from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_journal import AccountingJournalRepository
+from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_journal_postgres import at_ordinal, counts
 from tests.test_accounting_local_leases_postgres import deadline, funded, owner
 from tests.test_accounting_permits_postgres import CountingClient

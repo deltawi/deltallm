@@ -8,8 +8,8 @@ import httpx
 import pytest
 
 from src.config_runtime.secrets import SecretResolver
-from src.db.catalog.named_credentials import NamedCredentialRecord
-from src.db.catalog.model_deployments import ModelDeploymentRecord
+from src.db.named_credentials import NamedCredentialRecord
+from src.db.repositories import ModelDeploymentRecord
 from src.router.router import build_deployment_registry
 from src.services.model_deployments import build_model_registry_from_records
 from tests.test_named_credentials_api import (

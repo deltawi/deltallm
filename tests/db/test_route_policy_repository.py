@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.routing.route_groups import RouteGroupRepository
-from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.route_groups import RouteGroupRepository
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.router.selection.policy import (
     RouteSelectorActivationState,
     RouteSelectorActivationUnsupportedError,

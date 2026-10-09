@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
 from src.audit.actions import AuditAction
-from src.db.catalog.managed_assets import (
+from src.db.managed_assets import (
     ManagedAssetAccessRepository,
     ManagedAssetNotFoundError,
     ManagedAssetPolicyConflictError,
@@ -172,7 +172,9 @@ async def _validate_model_credential_dependencies(
     revised: AssetAccessPolicy,
 ) -> None:
     dependency_pairs: list[tuple[AssetAccessPolicy, AssetAccessPolicy]] = []
-    dependency_pairs_with_mode: list[tuple[AssetAccessPolicy, AssetAccessPolicy, str | None]] = []
+    dependency_pairs_with_mode: list[
+        tuple[AssetAccessPolicy, AssetAccessPolicy, str | None]
+    ] = []
     if revised.asset.asset_kind is AssetKind.MODEL:
         if revised.asset.governance_source is not GovernanceSource.CREATOR:
             return

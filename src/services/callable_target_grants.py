@@ -11,11 +11,9 @@ from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.services.runtime_scopes import resolve_runtime_scope_context
 
 if TYPE_CHECKING:
-    from src.db.routing.callable_target_access_groups import (
-        CallableTargetAccessGroupBindingRepository,
-    )
-    from src.db.routing.callable_targets import CallableTargetBindingRepository
-    from src.db.routing.callable_target_policies import CallableTargetScopePolicyRepository
+    from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+    from src.db.callable_targets import CallableTargetBindingRepository
+    from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 
 
 @dataclass(frozen=True, slots=True)

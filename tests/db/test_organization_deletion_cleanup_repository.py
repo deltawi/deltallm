@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.organizations.deletion.organization_deletion_cleanup_repository import (
+from src.db.organization_deletion_cleanup_repository import (
     CleanupPageResult,
     OrganizationDeletionCleanupRepository,
 )

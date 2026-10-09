@@ -8,9 +8,9 @@ import pytest
 from prometheus_client import generate_latest
 
 from src.cache import InMemoryBackend
-from src.db.mcp.mcp import MCPApprovalRequestRecord
-from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
-from src.db.mcp.mcp_scope_policies import MCPScopePolicyRecord
+from src.db.mcp import MCPApprovalRequestRecord
+from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp_scope_policies import MCPScopePolicyRecord
 from src.metrics import get_prometheus_registry
 from src.mcp.approvals import MCPApprovalService
 from src.mcp.capabilities import namespace_tools

@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 
 from src.billing.accounting.accounting_protocol import AccountingScope
 from src.billing.budgets.budget import BudgetStateUnavailable
-from src.db.accounting.accounting_budget_reads import AccountingBudgetReadRepository
+from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 
 _IDENTITIES = {
     AccountingScope.API_KEY: "token",

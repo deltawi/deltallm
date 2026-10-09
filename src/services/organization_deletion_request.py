@@ -5,13 +5,9 @@ from datetime import datetime
 from typing import Any
 
 from src.audit.actions import AuditAction
-from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
-from src.db.organizations.deletion.organization_deletion_records import (
-    OrganizationDeletionJobRecord,
-)
-from src.db.organizations.deletion.organization_deletion_repository import (
-    OrganizationDeletionRepository,
-)
+from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.organization_deletion_records import OrganizationDeletionJobRecord
+from src.db.organization_deletion_repository import OrganizationDeletionRepository
 from src.services.organization_deletion_audit import record_lifecycle_mutation_audit
 from src.services.organization_deletion_tokens import (
     build_deletion_plan_snapshot,

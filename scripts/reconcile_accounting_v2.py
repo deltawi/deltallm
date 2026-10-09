@@ -10,8 +10,8 @@ from uuid import UUID
 
 from src.billing.money import money_string
 from src.config import DatabaseConnectionSettings
-from src.db.runtime.allocation_config import DatabasePolicy
-from src.db.runtime.client import PrismaClientManager
+from src.db.allocation_config import DatabasePolicy
+from src.db.client import PrismaClientManager
 
 
 def _spend_payload(path: str | None, *, additional_charge: str) -> str:

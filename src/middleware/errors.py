@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from prisma.errors import RawQueryError
 
-from src.db.catalog.managed_assets import ManagedAssetAudienceNotFoundError
+from src.db.managed_assets import ManagedAssetAudienceNotFoundError
 from src.guardrails.exceptions import GuardrailViolationError
 from src.models.errors import (
     ApprovalRequiredError,

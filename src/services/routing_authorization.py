@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from src.db.routing.callable_targets import CallableTargetBindingRepository
-from src.db.routing.route_groups import RouteGroupRepository
+from src.db.callable_targets import CallableTargetBindingRepository
+from src.db.route_groups import RouteGroupRepository
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
 from src.services.callable_targets import CallableTarget
 from src.services.organization_callable_target_sync import (

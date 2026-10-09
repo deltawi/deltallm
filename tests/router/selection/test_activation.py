@@ -2,11 +2,8 @@ from dataclasses import replace
 
 import pytest
 
-from src.db.routing.route_groups import RouteGroupRepository
-from src.db.routing.route_policy_lifecycle import (
-    RoutePolicyValidationContext,
-    StoredRoutePolicyDocument,
-)
+from src.db.route_groups import RouteGroupRepository
+from src.db.route_policy_lifecycle import RoutePolicyValidationContext, StoredRoutePolicyDocument
 from src.router.policy_validation import PolicyMemberInventoryItem, validate_route_policy
 from src.router.selection.activation import validate_selector_activation_inventory
 

@@ -20,10 +20,10 @@ from src.billing.accounting.accounting_protocol import (
     request_fingerprint,
 )
 from src.config import DatabaseConnectionSettings
-from src.db.runtime.accounting_pool import AccountingPostgresManager
-from src.db.accounting.accounting_protocol import AccountingProtocolRepository
-from src.db.accounting.accounting_protocol import AccountingProtocolUnavailable
-from src.db.accounting.reporting.accounting_projection import AccountingProjectionRepository
+from src.db.accounting_pool import AccountingPostgresManager
+from src.db.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting_protocol import AccountingProtocolUnavailable
+from src.db.accounting_projection import AccountingProjectionRepository
 
 pytestmark = pytest.mark.postgres
 

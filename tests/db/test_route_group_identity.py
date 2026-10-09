@@ -4,8 +4,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.routing.route_group_identity import RouteGroupIdentity, RouteGroupIdentityNotFoundError
-from src.db.routing.route_groups import RouteGroupRepository
+from src.db.route_group_identity import RouteGroupIdentity, RouteGroupIdentityNotFoundError
+from src.db.route_groups import RouteGroupRepository
 from src.services.route_group_mutations import RouteGroupMutationService
 from tests.db.test_route_policy_publication_invariants import _cleanup_group, _seed_group
 from tests.db.tier_migration_helpers import connect_prisma

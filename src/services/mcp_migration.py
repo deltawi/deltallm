@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.db.mcp.mcp import MCPServerRecord
+from src.db.mcp import MCPServerRecord
 
 ORGANIZATION_ROLLOUT_STATES = {
     "needs_org_bootstrap",
@@ -241,9 +241,7 @@ async def _list_mcp_bindings_by_scope(repository: Any, *, scope_type: str) -> di
     offset = 0
     limit = 1000
     while True:
-        page, total = await repository.list_bindings(
-            scope_type=scope_type, limit=limit, offset=offset
-        )
+        page, total = await repository.list_bindings(scope_type=scope_type, limit=limit, offset=offset)
         for binding in page:
             scope_id = str(binding.scope_id or "").strip()
             server_id = str(binding.mcp_server_id or "").strip()
@@ -263,9 +261,7 @@ async def _list_scope_policies(repository: Any | None, *, scope_type: str) -> di
     offset = 0
     limit = 1000
     while True:
-        page, total = await repository.list_policies(
-            scope_type=scope_type, limit=limit, offset=offset
-        )
+        page, total = await repository.list_policies(scope_type=scope_type, limit=limit, offset=offset)
         for policy in page:
             scope_id = str(policy.scope_id or "").strip()
             if scope_id:
@@ -328,9 +324,7 @@ def _classify_child_scope_rollout_state(*, binding_count: int, scope_policy_mode
     return "ready_for_enforce"
 
 
-def _classify_org_rollout_state(
-    *, missing_org_server_ids: list[str], child_items: list[dict[str, Any]]
-) -> str:
+def _classify_org_rollout_state(*, missing_org_server_ids: list[str], child_items: list[dict[str, Any]]) -> str:
     if missing_org_server_ids:
         return "needs_org_bootstrap"
     if any(str(item.get("rollout_state") or "") == "needs_scope_backfill" for item in child_items):
@@ -350,9 +344,7 @@ def _build_summary(organizations: list[dict[str, Any]]) -> dict[str, Any]:
         organizations_by_rollout_state.setdefault(rollout_state, 0)
         organizations_by_rollout_state[rollout_state] += 1
         organization_ids_by_rollout_state.setdefault(rollout_state, [])
-        organization_ids_by_rollout_state[rollout_state].append(
-            str(organization.get("organization_id") or "")
-        )
+        organization_ids_by_rollout_state[rollout_state].append(str(organization.get("organization_id") or ""))
 
         for team in organization.get("teams") or []:
             if team.get("rollout_state") == "needs_scope_backfill":
@@ -366,9 +358,7 @@ def _build_summary(organizations: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "organizations_total": len(organizations),
-        "organizations_needing_bootstrap": organizations_by_rollout_state.get(
-            "needs_org_bootstrap", 0
-        ),
+        "organizations_needing_bootstrap": organizations_by_rollout_state.get("needs_org_bootstrap", 0),
         "teams_needing_scope_backfill": teams_needing_scope_backfill,
         "api_keys_needing_scope_backfill": api_keys_needing_scope_backfill,
         "users_needing_scope_backfill": users_needing_scope_backfill,
@@ -381,9 +371,7 @@ def _normalize_rollout_states(rollout_states: set[str] | None) -> set[str]:
     if not rollout_states:
         return set()
     normalized = {
-        ROLLOUT_STATE_ALIASES.get(
-            str(value or "").strip().lower(), str(value or "").strip().lower()
-        )
+        ROLLOUT_STATE_ALIASES.get(str(value or "").strip().lower(), str(value or "").strip().lower())
         for value in rollout_states
         if str(value or "").strip()
     }

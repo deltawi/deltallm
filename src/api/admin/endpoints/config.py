@@ -39,7 +39,7 @@ from src.config_runtime.dynamic import (
     DynamicConfigPostCommitApplyError,
     DynamicConfigRestartRequiredError,
 )
-from src.db.catalog.ui_branding_assets import BrandingAssetDatabase, UIBrandingAssetRepository
+from src.db.ui_branding_assets import BrandingAssetDatabase, UIBrandingAssetRepository
 from src.middleware.admin import require_admin_permission
 from src.providers.resolution import resolve_provider
 from src.services.audit_service import require_audit_service

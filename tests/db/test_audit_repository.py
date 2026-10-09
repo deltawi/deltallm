@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from src.db.audit.repository import AuditEventRecord, AuditPayloadRecord, AuditRepository
+from src.db.repositories import AuditEventRecord, AuditPayloadRecord, AuditRepository
 
 
 class FakePrisma:

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.db.mcp.mcp import MCPRepository, MCPServerRecord
+from src.db.mcp import MCPRepository, MCPServerRecord
 from src.mcp.health import MCPHealthProbe
 from src.mcp.registry import MCPRegistryService
 

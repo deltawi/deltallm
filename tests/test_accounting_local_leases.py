@@ -13,12 +13,9 @@ from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitReceipt,
     LocalPermitReturn,
 )
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting.permits.accounting_local_leases import AccountingLocalLeaseRepository
-from src.db.accounting.permits.accounting_local_lease_results import (
-    allocation_result,
-    finalization_payload,
-)
+from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_local_leases import AccountingLocalLeaseRepository
+from src.db.accounting_local_lease_results import allocation_result, finalization_payload
 from tests.test_accounting_permits import allocation
 from tests.test_accounting_protocol import finalization
 

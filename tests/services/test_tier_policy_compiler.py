@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 
-from src.db.tiers.tiers import (
+from src.db.tiers import (
     TierCapacityPoolRecord,
     TierModelPolicyRecord,
     TierPolicyAssignmentRecord,

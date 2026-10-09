@@ -11,7 +11,7 @@ from src.auth.sso_identity import (
     SSOAccountMatch,
     SSOIdentityAssertion,
 )
-from src.db.identity.platform_accounts import (
+from src.db.platform_accounts import (
     PlatformAccountDatabase,
     PlatformAccountRecord,
     insert_platform_account_if_absent,

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import logging
 from typing import Protocol
 
-from src.db.catalog.managed_assets import (
+from src.db.managed_assets import (
     ManagedAssetLinkHealth,
     ManagedAssetReconciliationResult,
 )

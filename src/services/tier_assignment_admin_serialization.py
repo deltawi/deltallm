@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from src.db.tiers.tiers import OrganizationTierAssignmentRecord
+from src.db.tiers import OrganizationTierAssignmentRecord
 
 
 def serialize_tier_assignment(record: OrganizationTierAssignmentRecord) -> dict[str, Any]:

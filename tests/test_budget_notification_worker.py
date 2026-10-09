@@ -11,7 +11,7 @@ from src.billing.budgets.budget_notifications import (
     BudgetNotificationProducer,
     BudgetNotificationWorker,
 )
-from src.db.billing.budget_notifications import BudgetNotification, BudgetThresholdScanUnavailable
+from src.db.budget_notifications import BudgetNotification, BudgetThresholdScanUnavailable
 
 
 def record():

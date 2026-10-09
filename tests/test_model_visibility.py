@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from src.config import AppConfig, GeneralSettings, Settings
-from src.db.routing.callable_target_access_groups import CallableTargetAccessGroupBindingRecord
-from src.db.routing.callable_targets import CallableTargetBindingRecord
-from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRecord
+from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.models.errors import PermissionDeniedError
 from src.models.responses import UserAPIKeyAuth
 from src.router.runtime_generation import (

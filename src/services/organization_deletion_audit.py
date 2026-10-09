@@ -3,10 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from src.audit.actions import AuditAction
-from src.db.organizations.deletion.organization_deletion_records import (
-    OrganizationDeletionJobRecord,
-)
-from src.db.audit.repository import AuditEventRecord, AuditRepository
+from src.db.organization_deletion_records import OrganizationDeletionJobRecord
+from src.db.repositories import AuditEventRecord, AuditRepository
 
 
 async def record_lifecycle_mutation_audit(

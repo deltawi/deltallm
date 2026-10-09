@@ -5,8 +5,8 @@ from src.billing.charges.operation_reservation import BillingOperationUnavailabl
 
 from src.billing.spend.spend_ingestion import SpendIngestionService
 from src.billing.charges.selector_native import NativeSelectorBilling
-from src.db.billing.billing_operation_recovery import BillingOperationRecovery
-from src.db.billing.billing_operations import BillingOperationRepository
+from src.db.billing_operation_recovery import BillingOperationRecovery
+from src.db.billing_operations import BillingOperationRepository
 from src.router.runtime_generation import require_routing_runtime_generation
 from src.router.selection.runtime import SelectorExecutionFactory
 

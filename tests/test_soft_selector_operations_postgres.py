@@ -11,8 +11,8 @@ from src.billing.charges.operation_reservation import (
 )
 from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.db.billing.billing_operation_recovery import BillingOperationRecovery
-from src.db.billing.billing_operations import BillingOperationRepository
+from src.db.billing_operation_recovery import BillingOperationRecovery
+from src.db.billing_operations import BillingOperationRepository
 from tests import test_billing_operations_postgres as operation_fixtures
 from tests.test_billing_operations_postgres import deadline, hold
 
@@ -26,7 +26,7 @@ async def test_soft_admission_query_plan_uses_one_counter_and_never_reads_histor
     import json
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
-    from src.db.billing.soft_selector_admission import check_soft_selector_admission
+    from src.db.soft_selector_admission import check_soft_selector_admission
 
     db, _, charge = operation_db
     operation = soft_operation(charge)

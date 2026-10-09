@@ -6,7 +6,7 @@ from typing import Protocol
 
 from src.billing.accounting.health.accounting_health import AccountingBacklogProbe
 from src.billing.accounting.health.accounting_presence import ProjectionPresence
-from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.accounting_permit_results import invalid_result
 from src.telemetry.lifecycle import WorkerState
 
 

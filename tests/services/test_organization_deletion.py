@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.organizations.deletion.organization_deletion_records import (
+from src.db.organization_deletion_records import (
     OrganizationDeletionCounts,
     OrganizationDeletionJobRecord,
     OrganizationDeletionPlanRecord,

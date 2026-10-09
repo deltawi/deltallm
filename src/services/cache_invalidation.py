@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
+from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.services.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 from src.services.cache_invalidation_worker import (
     CacheInvalidationWorker,

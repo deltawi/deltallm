@@ -23,10 +23,10 @@ from src.billing.accounting.transport.accounting_rpc_contracts import (
 )
 from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
 from src.billing.accounting.durable_microbatch import DurableMicrobatcher
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable, AccountingQueryClient
-from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
-from src.db.accounting.permits.accounting_local_leases import AccountingLocalLeaseRepository
-from src.db.runtime.telemetry_acceptance import AcceptanceFailure
+from src.db.accounting_calls import AccountingProtocolUnavailable, AccountingQueryClient
+from src.db.accounting_journal import AccountingJournalRepository
+from src.db.accounting_local_leases import AccountingLocalLeaseRepository
+from src.db.telemetry_acceptance import AcceptanceFailure
 from src.metrics.accounting import (
     observe_accounting_batch,
     observe_accounting_queue_wait,

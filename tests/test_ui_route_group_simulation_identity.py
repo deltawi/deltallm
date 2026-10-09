@@ -5,7 +5,7 @@ import httpx
 from pydantic import JsonValue
 import pytest
 
-from src.db.routing.route_groups import RouteGroupRepository
+from src.db.route_groups import RouteGroupRepository
 
 GROUP_KEY = "vendor/model"
 OLD_ID = "00000000-0000-0000-0000-000000000001"

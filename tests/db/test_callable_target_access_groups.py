@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.routing.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.governance.access_groups import InvalidAccessGroupError
 
 

@@ -9,7 +9,7 @@ from time import perf_counter
 
 from scripts.benchmarks.ingestion_database import CAPACITY, ingestion_database
 from scripts.benchmarks.measure_admission import distribution
-from src.db.audit.audit_ingestion import AuditIngestionRepository
+from src.db.audit_ingestion import AuditIngestionRepository
 
 
 async def run(output, revision):

@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from src.db.catalog.prompt_registry import (
+from src.db.prompt_registry import (
     PromptBindingRecord,
     PromptRegistryRepository,
     PromptResolvedRecord,

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.db.identity.key_repository import KeyRecord, KeyRepository
+from src.db.repositories import KeyRecord, KeyRepository
 from src.services.key_service import KeyService
 
 

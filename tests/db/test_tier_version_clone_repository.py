@@ -6,8 +6,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.tiers.tier_records import parse_json_object
-from src.db.tiers.tiers import TierRepository
+from src.db.tier_records import parse_json_object
+from src.db.tiers import TierRepository
 from tests.db.tier_migration_helpers import cleanup
 from tests.db.tier_migration_helpers import connect_prisma
 from tests.db.tier_migration_helpers import require_tier_schema

@@ -21,7 +21,7 @@ Move deployed model persistence from `deltallm_config.proxy_config.model_list` (
 - Schema + migrations: `prisma/schema.prisma` (+ migration SQL)
 - Runtime config: `src/main.py`, `src/config_runtime/models.py`, `src/config_runtime/dynamic.py`
 - Admin/UI model CRUD path: `src/ui/routes.py`
-- New data-access layer: `src/db/catalog/model_deployments.py` (or dedicated repository module)
+- New data-access layer: `src/db/repositories.py` (or dedicated repository module)
 - Tests: `tests/config/test_dynamic.py` and new repository/runtime parity tests
 
 ### Risk Areas

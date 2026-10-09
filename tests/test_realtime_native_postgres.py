@@ -12,7 +12,7 @@ import pytest
 from src.billing.charges.realtime_accounting_bounds import RealtimeCostBounds
 from src.billing.charges.realtime_native import NativeRealtimeBilling
 from src.billing.charges.realtime_usage import RealtimeDurationUsage
-from src.db.billing.realtime_billing import RealtimeBillingRepository
+from src.db.realtime_billing import RealtimeBillingRepository
 from src.realtime.errors import RealtimeError
 from tests.realtime.test_pricing import charge_context, receipt
 from tests.test_accounting_local_leases_postgres import deadline

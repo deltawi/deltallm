@@ -13,9 +13,9 @@ from src.billing.accounting.journal.accounting_recovery import (
     AccountingRecoveryWorker,
     RecoveryConfig,
 )
-from src.db.accounting.health.accounting_health import AccountingBacklogRepository
-from src.db.accounting.accounting_recovery import AccountingRecoveryRepository
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_health import AccountingBacklogRepository
+from src.db.accounting_recovery import AccountingRecoveryRepository
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_local_leases_postgres import allocation, deadline, owner
 from tests.test_accounting_local_runtime_postgres import processor, runtime
 from tests.test_accounting_local_service import handle

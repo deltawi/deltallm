@@ -19,7 +19,7 @@ from src.metrics.route_group_cache import (
     RouteGroupCacheFailureReason,
     record_route_group_cache_failure,
 )
-from src.db.routing.route_groups import RouteGroupRepository, RouteGroupRuntimeSnapshot
+from src.db.route_groups import RouteGroupRepository, RouteGroupRuntimeSnapshot
 from src.route_group_config import ModelMode
 from src.route_policy_contract import (
     RoutePolicyMember,

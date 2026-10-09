@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRecord
+from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRecord
 from src.services.cache_invalidation import (
     CacheInvalidationResult,
     CacheInvalidationService,

@@ -16,8 +16,8 @@ from src.billing.accounting.accounting_protocol import (
     PreissuedPermitGrant,
     ReserveDecision,
 )
-from src.db.accounting.permits.accounting_permits import AccountingPermitRepository
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_permits import AccountingPermitRepository
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_protocol_postgres import (
     _create_window,
     _finalization,

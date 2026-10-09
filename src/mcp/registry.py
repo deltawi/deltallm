@@ -5,12 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from src.db.mcp.mcp import (
-    MCPRepository,
-    MCPServerBindingRecord,
-    MCPServerRecord,
-    MCPToolPolicyRecord,
-)
+from src.db.mcp import MCPRepository, MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 
 from .capabilities import NamespacedTool, extract_tool_schemas, namespace_tools
 from .models import MCPServerConfig
@@ -51,9 +46,7 @@ class MCPRegistryService:
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[MCPServerRecord], int]:
-        return await self.repository.list_servers(
-            search=search, enabled=enabled, limit=limit, offset=offset
-        )
+        return await self.repository.list_servers(search=search, enabled=enabled, limit=limit, offset=offset)
 
     async def get_server_capabilities(self, server: MCPServerRecord) -> dict[str, Any]:
         l1_key = server.server_key
@@ -71,16 +64,12 @@ class MCPRegistryService:
                 except (TypeError, ValueError):
                     payload = None
                 if isinstance(payload, dict):
-                    self._server_capabilities_l1[l1_key] = _CacheEntry(
-                        value=payload, expires_at=now + self.l1_ttl_seconds
-                    )
+                    self._server_capabilities_l1[l1_key] = _CacheEntry(value=payload, expires_at=now + self.l1_ttl_seconds)
                     return dict(payload)
 
         payload = dict(server.capabilities_json or {})
         if payload:
-            self._server_capabilities_l1[l1_key] = _CacheEntry(
-                value=payload, expires_at=now + self.l1_ttl_seconds
-            )
+            self._server_capabilities_l1[l1_key] = _CacheEntry(value=payload, expires_at=now + self.l1_ttl_seconds)
         return payload
 
     async def store_server_capabilities(
@@ -115,9 +104,7 @@ class MCPRegistryService:
             latency_ms=latency_ms,
         )
 
-    async def list_effective_bindings(
-        self, *, scopes: list[tuple[str, str]]
-    ) -> list[MCPServerBindingRecord]:
+    async def list_effective_bindings(self, *, scopes: list[tuple[str, str]]) -> list[MCPServerBindingRecord]:
         return await self.repository.list_effective_bindings(scopes=scopes)
 
     async def list_effective_tool_policies(
@@ -126,9 +113,7 @@ class MCPRegistryService:
         scopes: list[tuple[str, str]],
         server_id: str | None = None,
     ) -> list[MCPToolPolicyRecord]:
-        return await self.repository.list_effective_tool_policies(
-            scopes=scopes, server_id=server_id
-        )
+        return await self.repository.list_effective_tool_policies(scopes=scopes, server_id=server_id)
 
     async def list_namespaced_tools(self, server: MCPServerRecord) -> list[NamespacedTool]:
         capabilities = await self.get_server_capabilities(server)
@@ -145,9 +130,7 @@ class MCPRegistryService:
         self._server_capabilities_l1.clear()
         self._known_server_keys.clear()
         if self.redis is not None and server_keys:
-            await self.redis.delete(
-                *(self._redis_server_key(server_key) for server_key in server_keys)
-            )
+            await self.redis.delete(*(self._redis_server_key(server_key) for server_key in server_keys))
 
     async def _populate_cache(self, server_key: str, capabilities: dict[str, Any]) -> None:
         self._known_server_keys.add(server_key)
@@ -156,9 +139,7 @@ class MCPRegistryService:
             expires_at=time.monotonic() + self.l1_ttl_seconds,
         )
         if self.redis is not None:
-            await self.redis.set(
-                self._redis_server_key(server_key), json.dumps(capabilities), ex=self.l2_ttl_seconds
-            )
+            await self.redis.set(self._redis_server_key(server_key), json.dumps(capabilities), ex=self.l2_ttl_seconds)
 
     @staticmethod
     def _redis_server_key(server_key: str) -> str:

@@ -3,9 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from src.db.organizations.deletion.organization_deletion_records import (
-    OrganizationDeletionPlanRecord,
-)
+from src.db.organization_deletion_records import OrganizationDeletionPlanRecord
 from src.models.organization_lifecycle import ORGANIZATION_LIFECYCLE_PROTOCOL_VERSION
 
 

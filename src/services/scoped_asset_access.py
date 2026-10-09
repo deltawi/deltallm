@@ -4,18 +4,12 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from src.db.routing.callable_target_access_groups import (
+from src.db.callable_target_access_groups import (
     CallableTargetAccessGroupBindingRecord,
     CallableTargetAccessGroupBindingRepository,
 )
-from src.db.routing.callable_target_policies import (
-    CallableTargetScopePolicyRecord,
-    CallableTargetScopePolicyRepository,
-)
-from src.db.routing.callable_targets import (
-    CallableTargetBindingRecord,
-    CallableTargetBindingRepository,
-)
+from src.db.callable_target_policies import CallableTargetScopePolicyRecord, CallableTargetScopePolicyRepository
+from src.db.callable_targets import CallableTargetBindingRecord, CallableTargetBindingRepository
 from src.governance.access_groups import (
     InvalidAccessGroupError,
     build_callable_keys_by_access_group,
@@ -163,9 +157,7 @@ def _normalize_selected_access_group_keys(value: Any) -> list[str]:
     return normalized
 
 
-def _normalize_page_limit(
-    value: int | None, *, default: int = _DEFAULT_ACCESS_GROUP_PAGE_LIMIT
-) -> int:
+def _normalize_page_limit(value: int | None, *, default: int = _DEFAULT_ACCESS_GROUP_PAGE_LIMIT) -> int:
     try:
         limit = int(value if value is not None else default)
     except (TypeError, ValueError):
@@ -223,14 +215,20 @@ async def build_scope_asset_access(
         scope_type=normalized_scope_type,
         scope_id=scope_id,
     )
-    direct_selected = {binding.callable_key for binding in direct_bindings if binding.enabled}
+    direct_selected = {
+        binding.callable_key
+        for binding in direct_bindings
+        if binding.enabled
+    }
     direct_group_bindings = await _list_scope_access_group_bindings(
         request,
         scope_type=normalized_scope_type,
         scope_id=scope_id,
     )
     direct_selected_groups = {
-        binding.group_key for binding in direct_group_bindings if binding.enabled
+        binding.group_key
+        for binding in direct_group_bindings
+        if binding.enabled
     }
     parent_effective_keys = await _parent_effective_callable_keys(
         request,
@@ -290,9 +288,7 @@ async def build_scope_asset_access(
                 inherited_only=(
                     callable_key in effective_keys
                     and callable_key not in direct_selected
-                    and not bool(
-                        via_access_groups.get(callable_key, set()) & direct_selected_groups
-                    )
+                    and not bool(via_access_groups.get(callable_key, set()) & direct_selected_groups)
                 ),
                 via_access_groups=via_access_groups.get(callable_key, set()),
             )
@@ -323,9 +319,7 @@ async def build_scope_asset_access(
                 member_keys=callable_keys_by_group.get(group_key, frozenset()),
                 selectable=group_key in selectable_group_keys,
                 selected=group_key in direct_selected_groups,
-                effective_visible=bool(
-                    callable_keys_by_group.get(group_key, frozenset()) & effective_keys
-                ),
+                effective_visible=bool(callable_keys_by_group.get(group_key, frozenset()) & effective_keys),
             )
             for group_key in access_group_page
         ]
@@ -417,16 +411,10 @@ async def sync_scope_asset_access_state(
     normalized_selected = _normalize_selected_callable_keys(selected_callable_keys)
     access_groups_provided = selected_access_group_keys is not _MISSING
     normalized_selected_groups = (
-        _normalize_selected_access_group_keys(selected_access_group_keys)
-        if access_groups_provided
-        else []
+        _normalize_selected_access_group_keys(selected_access_group_keys) if access_groups_provided else []
     )
     catalog = callable_catalog(request)
-    group_repository = (
-        access_group_repository
-        if access_group_repository is not None
-        else _access_group_repository(request)
-    )
+    group_repository = access_group_repository if access_group_repository is not None else _access_group_repository(request)
     sync_access_groups = access_groups_provided or normalized_mode == "inherit"
     if sync_access_groups and group_repository is None:
         group_repository = _access_group_repository_or_503(request)
@@ -522,9 +510,7 @@ async def sync_scope_asset_access_state(
             repository=group_repository,
             scope_type=normalized_scope_type,
             scope_id=scope_id,
-            selected_access_group_keys=normalized_selected_groups
-            if normalized_mode != "inherit"
-            else [],
+            selected_access_group_keys=normalized_selected_groups if normalized_mode != "inherit" else [],
         )
     await _sync_scope_policy(
         request,
@@ -546,15 +532,11 @@ async def _resolved_mode(request: Request, *, scope_type: str, scope_id: str) ->
             return record.mode
         if scope_type == "user":
             bindings = await _list_scope_bindings(request, scope_type=scope_type, scope_id=scope_id)
-            group_bindings = await _list_scope_access_group_bindings(
-                request, scope_type=scope_type, scope_id=scope_id
-            )
+            group_bindings = await _list_scope_access_group_bindings(request, scope_type=scope_type, scope_id=scope_id)
             return "restrict" if bindings or group_bindings else "inherit"
         return "inherit"
     bindings = await _list_scope_bindings(request, scope_type=scope_type, scope_id=scope_id)
-    group_bindings = await _list_scope_access_group_bindings(
-        request, scope_type=scope_type, scope_id=scope_id
-    )
+    group_bindings = await _list_scope_access_group_bindings(request, scope_type=scope_type, scope_id=scope_id)
     return "restrict" if bindings or group_bindings else "inherit"
 
 
@@ -624,16 +606,13 @@ async def _selectable_callable_keys(
     if scope_type in {"team", "api_key", "user"}:
         if parent_effective_keys is not None:
             return set(parent_effective_keys)
-        return (
-            await _parent_effective_callable_keys(
-                request,
-                scope_type=scope_type,
-                organization_id=organization_id,
-                team_id=team_id,
-                api_key_id=api_key_id,
-            )
-            or set()
-        )
+        return await _parent_effective_callable_keys(
+            request,
+            scope_type=scope_type,
+            organization_id=organization_id,
+            team_id=team_id,
+            api_key_id=api_key_id,
+        ) or set()
     return set()
 
 
@@ -681,9 +660,7 @@ async def _selectable_access_group_keys(
     known_group_keys = set(callable_keys_by_group)
 
     if scope_type == "organization":
-        group_repository = (
-            repository if repository is not None else _access_group_repository(request)
-        )
+        group_repository = repository if repository is not None else _access_group_repository(request)
         known_group_keys.update(await _list_access_group_binding_keys(group_repository))
         return known_group_keys
 
@@ -691,16 +668,13 @@ async def _selectable_access_group_keys(
         return set()
     parent_keys = parent_effective_keys
     if parent_keys is None:
-        parent_keys = (
-            await _parent_effective_callable_keys(
-                request,
-                scope_type=scope_type,
-                organization_id=organization_id,
-                team_id=team_id,
-                api_key_id=api_key_id,
-            )
-            or set()
-        )
+        parent_keys = await _parent_effective_callable_keys(
+            request,
+            scope_type=scope_type,
+            organization_id=organization_id,
+            team_id=team_id,
+            api_key_id=api_key_id,
+        ) or set()
 
     selectable = {
         group_key
@@ -725,9 +699,7 @@ async def _list_access_group_binding_keys(
     offset = 0
     while True:
         page, total = await list_group_binding_counts(limit=page_size, offset=offset)
-        keys.update(
-            str(item.group_key or "").strip() for item in page if str(item.group_key or "").strip()
-        )
+        keys.update(str(item.group_key or "").strip() for item in page if str(item.group_key or "").strip())
         offset += len(page)
         if not page or offset >= total:
             break
@@ -859,11 +831,7 @@ async def _sync_scope_bindings(
 
     for callable_key in selected_callable_keys:
         existing_binding = existing_by_key.get(callable_key)
-        metadata = (
-            dict(existing_binding.metadata)
-            if existing_binding and existing_binding.metadata is not None
-            else None
-        )
+        metadata = dict(existing_binding.metadata) if existing_binding and existing_binding.metadata is not None else None
         await repository.upsert_binding(
             callable_key=callable_key,
             scope_type=scope_type,
@@ -906,9 +874,7 @@ async def _sync_scope_bindings(
                     scope_id=scope_id,
                 )
                 for route_group_binding in bindings:
-                    await route_group_repository.delete_binding(
-                        route_group_binding.route_group_binding_id
-                    )
+                    await route_group_repository.delete_binding(route_group_binding.route_group_binding_id)
             else:
                 await delete_route_group_binding_mirror(
                     request,
@@ -935,11 +901,7 @@ async def _sync_scope_access_group_bindings(
 
     for group_key in selected_access_group_keys:
         existing_binding = existing_by_group.get(group_key)
-        metadata = (
-            dict(existing_binding.metadata)
-            if existing_binding and existing_binding.metadata is not None
-            else None
-        )
+        metadata = dict(existing_binding.metadata) if existing_binding and existing_binding.metadata is not None else None
         await repository.upsert_binding(
             group_key=group_key,
             scope_type=scope_type,

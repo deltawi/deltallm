@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from src.db.tiers.tiers import (
+from src.db.tiers import (
     TierCapacityPoolRecord,
     TierModelPolicyRecord,
     TierPolicyAssignmentRecord,
@@ -70,12 +70,14 @@ def compile_pricing_policies(
         if not key.startswith(_BATCH_PRICING_PREFIX)
     }
     if sync_pricing:
-        compiled[(policy.organization_id, policy.callable_key, "sync")] = CompiledTierPricingPolicy(
-            organization_id=policy.organization_id,
-            callable_key=policy.callable_key,
-            mode="sync",
-            pricing=MappingProxyType(sync_pricing),
-            source=policy.source,
+        compiled[(policy.organization_id, policy.callable_key, "sync")] = (
+            CompiledTierPricingPolicy(
+                organization_id=policy.organization_id,
+                callable_key=policy.callable_key,
+                mode="sync",
+                pricing=MappingProxyType(sync_pricing),
+                source=policy.source,
+            )
         )
     if any(key.startswith(_BATCH_PRICING_PREFIX) for key in policy.pricing):
         compiled[(policy.organization_id, policy.callable_key, "batch")] = (
@@ -245,9 +247,7 @@ def _freeze_pricing(pricing: Mapping[str, Any] | None) -> Mapping[str, float]:
 def _freeze_metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
     if not metadata:
         return None
-    return MappingProxyType(
-        {str(key): _freeze_json_value(value) for key, value in metadata.items()}
-    )
+    return MappingProxyType({str(key): _freeze_json_value(value) for key, value in metadata.items()})
 
 
 def _freeze_json_value(value: Any) -> Any:

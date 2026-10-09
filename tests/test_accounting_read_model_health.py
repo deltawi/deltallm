@@ -7,7 +7,7 @@ from src.billing.accounting.health.accounting_read_model_health import (
     ReadModelProgress,
 )
 from src.bootstrap.accounting_roles import AccountingProcessors
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.telemetry.lifecycle import WorkerState
 from src.metrics.accounting_read_models import (
     read_model_progress_available,

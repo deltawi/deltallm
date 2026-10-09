@@ -10,8 +10,8 @@ from src.billing.accounting.health.accounting_presence import (
     ProjectionLease,
     ProjectionPresencePublisher,
 )
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting.health.accounting_presence import AccountingPresenceRepository
+from src.db.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_presence import AccountingPresenceRepository
 from src.telemetry.lifecycle import WorkerState
 from tests.performance.accounting_allocator_plans import capture_accounting_plans
 from tests.test_accounting_allocator_bounds_postgres import nodes

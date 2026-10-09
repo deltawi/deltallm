@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.organizations.deletion.organization_deletion_repository import (
-    OrganizationDeletionRepository,
-)
+from src.db.organization_deletion_repository import OrganizationDeletionRepository
 
 
 class _LifecyclePrisma:

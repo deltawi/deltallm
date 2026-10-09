@@ -15,9 +15,9 @@ from src.api.admin.endpoints.common import (
 from src.api.admin.endpoints.managed_assets import parse_asset_access_input
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.catalog.managed_assets import ManagedAssetAccessRepository
-from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
-from src.db.catalog.model_deployments import ModelDeploymentRepository
+from src.db.managed_assets import ManagedAssetAccessRepository
+from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.db.repositories import ModelDeploymentRepository
 from src.middleware.admin import require_admin_permission, require_authenticated
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.managed_asset_access import (

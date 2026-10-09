@@ -13,7 +13,7 @@ from src.billing.accounting.permits.accounting_local_leases import (
 )
 from src.billing.accounting.permits.preissued_permits import PermitSubject
 from src.billing.accounting.durable_microbatch import DurableBatchClosed
-from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.accounting_permit_results import invalid_result
 from src.telemetry.lifecycle import WorkerState
 from tests.test_accounting_local_cursors import value
 from tests.test_accounting_local_issue import deadline

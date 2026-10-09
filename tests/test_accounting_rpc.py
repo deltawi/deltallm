@@ -36,7 +36,7 @@ from src.billing.accounting.transport.accounting_rpc_contracts import (
 )
 from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
 from src.billing.accounting.accounting_protocol import ReserveDecision
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.telemetry.lifecycle import WorkerHealth, WorkerState
 from tests.test_accounting_local_leases import (

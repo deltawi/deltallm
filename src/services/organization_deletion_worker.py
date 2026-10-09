@@ -7,14 +7,12 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Awaitable, Callable
 
-from src.db.organizations.deletion.organization_deletion_cleanup_repository import (
+from src.db.organization_deletion_cleanup_repository import (
     CleanupPageResult,
     OrganizationDeletionCleanupRepository,
 )
-from src.db.organizations.deletion.organization_deletion_records import (
-    OrganizationDeletionJobRecord,
-)
-from src.db.organizations.deletion.organization_deletion_worker_repository import (
+from src.db.organization_deletion_records import OrganizationDeletionJobRecord
+from src.db.organization_deletion_worker_repository import (
     OrganizationDeletionClaimLost,
     OrganizationDeletionWorkerRepository,
 )

@@ -8,7 +8,7 @@ from uuid import uuid4
 import asyncpg
 import pytest
 
-from src.db.accounting.reporting.accounting_read_model_queries import CLAIM
+from src.db.accounting_read_model_queries import CLAIM
 from tests.test_accounting_protocol_postgres import _window, accounting_db as _accounting_db
 from tests.test_accounting_read_model_postgres import effects, next_page, repository, source
 

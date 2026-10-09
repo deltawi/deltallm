@@ -3,11 +3,8 @@ from __future__ import annotations
 import pytest
 
 from src.config_runtime.secrets import SecretResolver
-from src.db.catalog.named_credentials import NamedCredentialRecord
-from src.services.named_credentials import (
-    resolve_named_credential_connection_config,
-    resolve_named_credential_record,
-)
+from src.db.named_credentials import NamedCredentialRecord
+from src.services.named_credentials import resolve_named_credential_connection_config, resolve_named_credential_record
 from src.upstream_auth import validate_auth_header_format, validate_auth_header_name
 
 

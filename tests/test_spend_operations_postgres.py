@@ -17,8 +17,8 @@ from src.billing.spend.spend_operations import (
     OperationPrincipal,
     SpendOperationIntent,
 )
-from src.db.billing.spend_ingestion import SpendIngestionRepository
-from src.db.billing.spend_operations import SpendOperationRepository
+from src.db.spend_ingestion import SpendIngestionRepository
+from src.db.spend_operations import SpendOperationRepository
 
 pytestmark = pytest.mark.postgres
 

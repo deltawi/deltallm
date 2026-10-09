@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from src.db.routing.route_policy_lifecycle import RoutePolicyRecord, RoutePolicyWriteResult
+from src.db.route_policy_lifecycle import RoutePolicyRecord, RoutePolicyWriteResult
 
 
 class RoutePolicyPublicationRepository(Protocol):

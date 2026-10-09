@@ -4,8 +4,8 @@ from uuid import uuid4
 
 import pytest
 
-from src.db.billing.billing_operation_recovery import BillingOperationRecovery
-from src.db.billing.billing_operations import BillingOperationRepository
+from src.db.billing_operation_recovery import BillingOperationRecovery
+from src.db.billing_operations import BillingOperationRepository
 from tests import test_billing_operations_postgres as operation_fixtures
 
 selector_billing_db = operation_fixtures.selector_billing_db

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.email.email import EmailOutboxRecord
+from src.db.email import EmailOutboxRecord
 from src.email.models import EmailDeliveryError, EmailDeliveryResult, PreparedEmail
 from src.services.email_outbox_service import (
     EmailOutboxService,

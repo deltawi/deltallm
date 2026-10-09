@@ -22,7 +22,7 @@ from src.billing.charges.operation_reservation import SoftSelectorOperation, tok
 from src.billing.charges.realtime_accounting_bounds import RealtimeCostBounds
 from src.billing.charges.realtime_native import NativeRealtimeBilling
 from src.billing.charges.selector_native import NativeSelectorBilling
-from src.db.billing.realtime_billing import RealtimeBillingRepository
+from src.db.realtime_billing import RealtimeBillingRepository
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import UserAPIKeyAuth
 from src.router.router import Deployment

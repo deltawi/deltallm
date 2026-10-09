@@ -5,7 +5,7 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
-from src.db.identity.key_repository import KeyRepository
+from src.db.repositories import KeyRepository
 from src.models.errors import AuthenticationError, AuthenticationUnavailableError
 from src.metrics.admission import auth_events
 from src.services.auth_fallback import AuthFallback, AuthFallbackLimits, AuthLookup

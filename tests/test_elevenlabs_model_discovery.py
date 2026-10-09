@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from src.db.catalog.named_credentials import NamedCredentialRecord
+from src.db.named_credentials import NamedCredentialRecord
 
 
 class _FakeNamedCredentialRepository:
@@ -128,11 +128,7 @@ async def test_elevenlabs_model_discovery_supports_named_credentials(client, tes
         del timeout
         return httpx.Response(
             200,
-            json={
-                "models": [
-                    {"model_id": "eleven_v3", "name": "Eleven v3", "can_do_text_to_speech": True}
-                ]
-            },
+            json={"models": [{"model_id": "eleven_v3", "name": "Eleven v3", "can_do_text_to_speech": True}]},
         )
 
     test_app.state.http_client.get = get
@@ -150,9 +146,7 @@ async def test_elevenlabs_model_discovery_supports_named_credentials(client, tes
 
 
 @pytest.mark.asyncio
-async def test_elevenlabs_model_discovery_filters_live_results_to_supported_batch_stt(
-    client, test_app
-):
+async def test_elevenlabs_model_discovery_filters_live_results_to_supported_batch_stt(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     async def get(url: str, headers: dict[str, str] | None = None, timeout=None):  # noqa: ANN001, ANN201

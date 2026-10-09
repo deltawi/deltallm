@@ -9,7 +9,7 @@ import pytest
 from redis.asyncio import Redis
 
 from src.config import AppConfig
-from src.db.routing.route_groups import RouteGroupRuntimeSnapshot
+from src.db.route_groups import RouteGroupRuntimeSnapshot
 from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.router.selection.policy import RouteSelectorActivationState
 from src.services.governance_invalidation import GovernanceInvalidationService

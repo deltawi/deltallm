@@ -5,14 +5,14 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
 from src.mcp.models import MCPBindingResolution
 from src.services.runtime_scopes import resolve_runtime_scope_context
 
 if TYPE_CHECKING:
-    from src.db.mcp.mcp import MCPRepository
-    from src.db.mcp.mcp_scope_policies import MCPScopePolicyRepository
+    from src.db.mcp import MCPRepository
+    from src.db.mcp_scope_policies import MCPScopePolicyRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,18 +62,14 @@ class MCPGovernanceService:
             offset = 0
             limit = 500
             while True:
-                page, total = await self.repository.list_servers(
-                    enabled=True, limit=limit, offset=offset
-                )
+                page, total = await self.repository.list_servers(enabled=True, limit=limit, offset=offset)
                 enabled_servers.extend(page)
                 offset += len(page)
                 if not page or offset >= total:
                     break
             servers_by_id = {server.mcp_server_id: server for server in enabled_servers}
 
-            bindings_by_scope: dict[tuple[str, str], list[MCPServerBindingRecord]] = defaultdict(
-                list
-            )
+            bindings_by_scope: dict[tuple[str, str], list[MCPServerBindingRecord]] = defaultdict(list)
             binding_counts_by_scope: dict[tuple[str, str], int] = defaultdict(int)
             if self.repository is not None:
                 offset = 0
@@ -97,9 +93,7 @@ class MCPGovernanceService:
                 offset = 0
                 limit = 1000
                 while True:
-                    page, total = await self.policy_repository.list_policies(
-                        limit=limit, offset=offset
-                    )
+                    page, total = await self.policy_repository.list_policies(limit=limit, offset=offset)
                     for policy in page:
                         scope_modes_by_scope[(policy.scope_type, policy.scope_id)] = policy.mode
                     offset += len(page)
@@ -111,9 +105,7 @@ class MCPGovernanceService:
                 offset = 0
                 limit = 1000
                 while True:
-                    page, total = await self.repository.list_tool_policies(
-                        limit=limit, offset=offset
-                    )
+                    page, total = await self.repository.list_tool_policies(limit=limit, offset=offset)
                     for policy in page:
                         if policy.mcp_server_id not in servers_by_id:
                             continue
@@ -125,14 +117,10 @@ class MCPGovernanceService:
             self._snapshot = MCPGovernanceSnapshot(
                 enabled_servers=tuple(enabled_servers),
                 servers_by_id=servers_by_id,
-                bindings_by_scope={
-                    scope: tuple(items) for scope, items in bindings_by_scope.items()
-                },
+                bindings_by_scope={scope: tuple(items) for scope, items in bindings_by_scope.items()},
                 binding_counts_by_scope=dict(binding_counts_by_scope),
                 scope_modes_by_scope=scope_modes_by_scope,
-                policies_by_scope={
-                    scope: tuple(items) for scope, items in policies_by_scope.items()
-                },
+                policies_by_scope={scope: tuple(items) for scope, items in policies_by_scope.items()},
             )
 
     async def invalidate_all(self) -> None:
@@ -151,9 +139,7 @@ class MCPGovernanceService:
             return None
         return self._snapshot.scope_modes_by_scope.get((normalized_scope_type, normalized_scope_id))
 
-    def list_effective_bindings(
-        self, *, scopes: tuple[tuple[str, str], ...] | list[tuple[str, str]]
-    ) -> list[MCPServerBindingRecord]:
+    def list_effective_bindings(self, *, scopes: tuple[tuple[str, str], ...] | list[tuple[str, str]]) -> list[MCPServerBindingRecord]:
         snapshot = self._snapshot
         bindings: list[MCPServerBindingRecord] = []
         for scope in scopes:
@@ -181,31 +167,14 @@ class MCPGovernanceService:
             return []
 
         snapshot = self._snapshot
-        if scope_context.organization_id is not None and self._has_bindings(
-            snapshot, "organization", scope_context.organization_id
-        ):
-            effective = self._bindings_for_scope(
-                snapshot, "organization", scope_context.organization_id
-            )
-            if scope_context.team_id is not None and self._should_restrict_scope(
-                snapshot, "team", scope_context.team_id
-            ):
-                effective = self._intersect_bindings(
-                    effective, self._bindings_for_scope(snapshot, "team", scope_context.team_id)
-                )
-            if scope_context.api_key_scope_id is not None and self._should_restrict_scope(
-                snapshot, "api_key", scope_context.api_key_scope_id
-            ):
-                effective = self._intersect_bindings(
-                    effective,
-                    self._bindings_for_scope(snapshot, "api_key", scope_context.api_key_scope_id),
-                )
-            if scope_context.user_id is not None and self._should_restrict_scope(
-                snapshot, "user", scope_context.user_id
-            ):
-                effective = self._intersect_bindings(
-                    effective, self._bindings_for_scope(snapshot, "user", scope_context.user_id)
-                )
+        if scope_context.organization_id is not None and self._has_bindings(snapshot, "organization", scope_context.organization_id):
+            effective = self._bindings_for_scope(snapshot, "organization", scope_context.organization_id)
+            if scope_context.team_id is not None and self._should_restrict_scope(snapshot, "team", scope_context.team_id):
+                effective = self._intersect_bindings(effective, self._bindings_for_scope(snapshot, "team", scope_context.team_id))
+            if scope_context.api_key_scope_id is not None and self._should_restrict_scope(snapshot, "api_key", scope_context.api_key_scope_id):
+                effective = self._intersect_bindings(effective, self._bindings_for_scope(snapshot, "api_key", scope_context.api_key_scope_id))
+            if scope_context.user_id is not None and self._should_restrict_scope(snapshot, "user", scope_context.user_id):
+                effective = self._intersect_bindings(effective, self._bindings_for_scope(snapshot, "user", scope_context.user_id))
             return list(effective.values())
 
         # Compatibility path for legacy MCP scope setups with no org-level ceiling yet.
@@ -215,9 +184,7 @@ class MCPGovernanceService:
             grouped[binding.mcp_server_id].append(binding)
         resolutions: list[MCPBindingResolution] = []
         for server_bindings in grouped.values():
-            selected = _select_record_for_scope_order(
-                server_bindings, scope_order=scope_context.scope_chain
-            )
+            selected = _select_record_for_scope_order(server_bindings, scope_order=scope_context.scope_chain)
             resolutions.append(
                 MCPBindingResolution(
                     server_id=selected.mcp_server_id,

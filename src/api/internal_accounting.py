@@ -21,7 +21,7 @@ from src.billing.accounting.transport.accounting_rpc_contracts import (
 )
 from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
 from src.billing.accounting.durable_microbatch import DurableBatchClosed, DurableBatchFull
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.metrics.accounting import increment_accounting_failure
 
 

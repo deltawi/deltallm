@@ -5,7 +5,7 @@ import pytest
 
 from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.db.audit.repository import AuditRepository
+from src.db.repositories import AuditRepository
 from src.services.audit_service import AuditEventInput, AuditIngestionConfig, AuditService
 
 pytestmark = pytest.mark.hermetic
@@ -105,7 +105,7 @@ async def test_worker_transaction_and_foreground_fallback_keep_their_client_owne
 
 async def test_auth_invalidation_discovery_cannot_consume_lookup_database():
     from types import SimpleNamespace
-    from src.db.identity.key_repository import KeyRepository
+    from src.db.repositories import KeyRepository
     from src.services.key_service import KeyService
 
     foreground = SimpleNamespace(query_raw=AsyncMock(side_effect=AssertionError("auth pool used")))

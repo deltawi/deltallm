@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.mcp.mcp import MCPServerRecord
+from src.db.mcp import MCPServerRecord
 from src.models.responses import UserAPIKeyAuth
 from src.services.creator_mcp_access import CreatorMCPAccessService, CreatorMCPAccessSnapshot
 from src.services.managed_asset_access import (
@@ -126,7 +126,9 @@ async def test_creator_mcp_snapshot_compiles_owner_team_org_and_public_visibilit
         "server-2",
         "server-3",
     }
-    assert snapshot.visible_server_ids(UserAPIKeyAuth(api_key="sk-outsider")) == {"server-3"}
+    assert snapshot.visible_server_ids(UserAPIKeyAuth(api_key="sk-outsider")) == {
+        "server-3"
+    }
 
 
 def test_creator_mcp_fail_closed_snapshot_keeps_creator_classification() -> None:
@@ -142,14 +144,11 @@ def test_creator_mcp_fail_closed_snapshot_keeps_creator_classification() -> None
     denied = snapshot.deny_asset("asset-1")
 
     assert denied.server_ids == {"server-1"}
-    assert (
-        denied.visible_server_ids(
-            UserAPIKeyAuth(
-                api_key="sk-test",
-                owner_account_id="owner-1",
-                team_id="team-1",
-                organization_id="org-1",
-            )
+    assert denied.visible_server_ids(
+        UserAPIKeyAuth(
+            api_key="sk-test",
+            owner_account_id="owner-1",
+            team_id="team-1",
+            organization_id="org-1",
         )
-        == set()
-    )
+    ) == set()

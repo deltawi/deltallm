@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from src.db.tiers.tiers import OrganizationTierAssignmentRecord
+from src.db.tiers import OrganizationTierAssignmentRecord
 from src.services.tier_admin_errors import (
     TierAdminConflictError,
     TierAdminError,

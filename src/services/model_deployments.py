@@ -5,8 +5,11 @@ from typing import TYPE_CHECKING, Any
 
 from src.config import AppConfig
 from src.providers.resolution import resolve_provider_connection_defaults
-from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
-from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.db.repositories import (
+    ModelDeploymentRecord,
+    ModelDeploymentRepository,
+)
 from src.services.named_credentials import (
     merge_named_credential_params,
     resolve_named_credential_record,

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from prometheus_client import generate_latest
 
-from src.db.audit.repository import AuditEventRecord, AuditPayloadRecord
+from src.db.repositories import AuditEventRecord, AuditPayloadRecord
 from src.metrics import get_prometheus_registry
 from src.services.audit_service import (
     AuditEventInput,
@@ -19,7 +19,7 @@ from src.services.audit_service import (
     RequiredAuditPersistenceError,
     enqueue_audit_event,
 )
-from src.db.audit.audit_ingestion import (
+from src.db.audit_ingestion import (
     AuditBundleEnqueueResult,
     AuditEnqueueResult,
     AuditIngestionRepository,

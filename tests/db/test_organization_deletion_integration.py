@@ -6,20 +6,16 @@ from uuid import uuid4
 import pytest
 
 from src.audit.actions import AuditAction
-from src.db.organizations.deletion.organization_deletion_cleanup_repository import (
+from src.db.organization_deletion_cleanup_repository import (
     CleanupPageResult,
     OrganizationDeletionCleanupRepository,
 )
-from src.db.organizations.deletion.organization_deletion_final_inventory import (
+from src.db.organization_deletion_final_inventory import (
     ORGANIZATION_DELETION_FINAL_INVENTORY_SQL,
 )
-from src.db.organizations.deletion.organization_deletion_records import (
-    OrganizationDeletionJobRecord,
-)
-from src.db.organizations.deletion.organization_deletion_repository import (
-    OrganizationDeletionRepository,
-)
-from src.db.organizations.deletion.organization_deletion_worker_repository import (
+from src.db.organization_deletion_records import OrganizationDeletionJobRecord
+from src.db.organization_deletion_repository import OrganizationDeletionRepository
+from src.db.organization_deletion_worker_repository import (
     OrganizationDeletionClaimLost,
     OrganizationDeletionWorkerRepository,
 )

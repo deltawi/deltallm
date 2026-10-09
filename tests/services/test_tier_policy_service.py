@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.db.tiers.tiers import (
+from src.db.tiers import (
     TierModelPolicyRecord,
     TierPolicyAssignmentRecord,
     TierPolicyLoadResult,

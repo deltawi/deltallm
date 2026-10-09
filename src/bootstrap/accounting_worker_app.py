@@ -18,8 +18,8 @@ from src.bootstrap.accounting_role_builders import (
 )
 from src.bootstrap.accounting_roles import AccountingProjectionRuntime, AccountingRequestRuntime
 from src.config import DatabaseConnectionSettings
-from src.db.runtime.accounting_pool import AccountingPostgresManager
-from src.db.runtime.migration_status import verify_migration_status
+from src.db.accounting_pool import AccountingPostgresManager
+from src.db.migration_status import verify_migration_status
 from src.ingress import IngressLimits, IngressRuntime
 from src.bootstrap.metrics import (
     freeze_startup_heap,

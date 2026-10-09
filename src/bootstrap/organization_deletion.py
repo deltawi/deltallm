@@ -8,13 +8,11 @@ from typing import Any
 from uuid import uuid4
 
 from src.bootstrap.status import BootstrapStatus
-from src.db.organizations.deletion.organization_deletion_cleanup_repository import (
+from src.db.organization_deletion_cleanup_repository import (
     OrganizationDeletionCleanupRepository,
 )
-from src.db.organizations.deletion.organization_deletion_repository import (
-    OrganizationDeletionRepository,
-)
-from src.db.organizations.deletion.organization_deletion_worker_repository import (
+from src.db.organization_deletion_repository import OrganizationDeletionRepository
+from src.db.organization_deletion_worker_repository import (
     OrganizationDeletionWorkerRepository,
 )
 from src.organization_deletion_migrations import verify_readiness

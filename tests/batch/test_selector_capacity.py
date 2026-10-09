@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import pytest
-from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.callable_targets import CallableTargetBindingRecord
 from src.router.runtime_generation import with_authorization_snapshot
 from src.models.errors import ServiceUnavailableError
 from src.batch.chat_capacity import bind_chat_capacity

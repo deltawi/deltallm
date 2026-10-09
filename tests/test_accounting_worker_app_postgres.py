@@ -13,7 +13,7 @@ from src.bootstrap.accounting_remote import RemoteAccountingOwner
 from src.bootstrap.server_application import create_server_application
 from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
 from src.config import DatabaseConnectionSettings
-from src.db.runtime.accounting_pool import AccountingPostgresClient, AccountingPostgresManager
+from src.db.accounting_pool import AccountingPostgresClient, AccountingPostgresManager
 from src.lifecycle_settings import LifecycleSettings
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.process_lifecycle import ProcessLifecycle

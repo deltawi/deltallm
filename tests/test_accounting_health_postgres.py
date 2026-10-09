@@ -9,8 +9,8 @@ from src.billing.accounting.health.accounting_health import (
     AccountingBacklogProbe,
 )
 from src.billing.accounting.journal.accounting_journal_claims import JournalFailure
-from src.db.accounting.health.accounting_health import AccountingBacklogRepository
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_health import AccountingBacklogRepository
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_journal_worker_postgres import pending, worker
 from tests.test_accounting_local_leases_postgres import deadline
 from tests.test_accounting_permits_postgres import CountingClient

@@ -1,5 +1,4 @@
 """Admin MCP approval-request routes."""
-
 from __future__ import annotations
 
 from time import perf_counter
@@ -10,7 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.mcp.mcp import MCPRepository
+from src.db.mcp import MCPRepository
 from src.mcp.approvals import MCPApprovalService
 from src.mcp.metrics import record_mcp_approval_decision
 from src.middleware.admin import require_admin_permission
@@ -29,10 +28,7 @@ from src.api.admin.endpoints.mcp.sql_visibility import _approval_visibility_clau
 router = APIRouter(tags=["Admin MCP"])
 
 
-@router.get(
-    "/ui/api/mcp-approval-requests",
-    dependencies=[Depends(require_admin_permission(Permission.KEY_UPDATE))],
-)
+@router.get("/ui/api/mcp-approval-requests", dependencies=[Depends(require_admin_permission(Permission.KEY_UPDATE))])
 async def list_mcp_approval_requests(
     request: Request,
     server_id: str | None = Query(default=None),
@@ -43,19 +39,9 @@ async def list_mcp_approval_requests(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
-    scope = get_auth_scope(
-        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
-    )
-    if status_value is not None and status_value not in {
-        "pending",
-        "approved",
-        "rejected",
-        "expired",
-    }:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="status must be pending, approved, rejected, or expired",
-        )
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    if status_value is not None and status_value not in {"pending", "approved", "rejected", "expired"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status must be pending, approved, rejected, or expired")
     if scope.is_platform_admin:
         approvals, total = await repository.list_approval_requests(
             server_id=server_id,
@@ -63,9 +49,7 @@ async def list_mcp_approval_requests(
             limit=limit,
             offset=offset,
         )
-        servers = await _load_server_summary_map(
-            request, [item.mcp_server_id for item in approvals]
-        )
+        servers = await _load_server_summary_map(request, [item.mcp_server_id for item in approvals])
         return {
             "data": [
                 _serialize_approval_request(
@@ -75,19 +59,11 @@ async def list_mcp_approval_requests(
                 )
                 for item in approvals
             ],
-            "pagination": {
-                "total": total,
-                "limit": limit,
-                "offset": offset,
-                "has_more": offset + limit < total,
-            },
+            "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
         }
 
     if not scope.org_ids and not scope.team_ids:
-        return {
-            "data": [],
-            "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
-        }
+        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
     db = _db_or_503(request)
     clauses: list[str] = []
@@ -149,19 +125,11 @@ async def list_mcp_approval_requests(
             )
             for item in approvals
         ],
-        "pagination": {
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + limit < total,
-        },
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
 
-@router.post(
-    "/ui/api/mcp-approval-requests/{approval_request_id}/decision",
-    dependencies=[Depends(require_admin_permission(Permission.KEY_UPDATE))],
-)
+@router.post("/ui/api/mcp-approval-requests/{approval_request_id}/decision", dependencies=[Depends(require_admin_permission(Permission.KEY_UPDATE))])
 async def decide_mcp_approval_request(
     request: Request,
     approval_request_id: str,
@@ -172,33 +140,23 @@ async def decide_mcp_approval_request(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     approval_service = MCPApprovalService(repository)
-    scope = get_auth_scope(
-        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
-    )
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     decision = str(payload.get("status") or "").strip().lower()
     if decision not in {"approved", "rejected"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="status must be approved or rejected"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status must be approved or rejected")
     existing = await _load_approval_request_or_404(request, approval_request_id)
     if not await _approval_visible_to_scope(request, scope, existing):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     context = get_platform_auth_context(request)
     decided = await repository.decide_approval_request(
         approval_request_id,
         status=decision,
         decided_by_account_id=getattr(context, "account_id", None),
-        decision_comment=str(payload.get("decision_comment")).strip()
-        if payload.get("decision_comment") is not None
-        else None,
+        decision_comment=str(payload.get("decision_comment")).strip() if payload.get("decision_comment") is not None else None,
         expires_at=approval_service.decision_expiry_for_status(decision),
     )
     if decided is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Pending MCP approval request not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending MCP approval request not found")
     record_mcp_approval_decision(status=decision)
     server = await _load_server_or_404(request, decided.mcp_server_id)
     response = _serialize_approval_request(decided, server=server, can_decide=False)

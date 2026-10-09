@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from src.audit.actions import AuditAction
 from src.audit.delivery import AuditDeliveryClass
-from src.db.email.email import EmailOutboxRecord, EmailOutboxRepository
+from src.db.email import EmailOutboxRecord, EmailOutboxRepository
 from src.email.models import (
     EmailConfigurationError,
     EmailDeliveryDisposition,

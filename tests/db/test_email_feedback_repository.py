@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from src.db.email.email_feedback import EmailFeedbackRepository, EmailWebhookEventRecord
+from src.db.email_feedback import EmailFeedbackRepository, EmailWebhookEventRecord
 
 
 class FakePrisma:
@@ -52,18 +52,20 @@ class FakePrisma:
                 "provider_message_id": args[4],
                 "webhook_event_id": args[5],
                 "metadata": json.loads(str(args[6])) if args[6] is not None else None,
-                "first_seen_at": (existing or {}).get("first_seen_at")
-                or datetime.now(tz=UTC).isoformat(),
+                "first_seen_at": (existing or {}).get("first_seen_at") or datetime.now(tz=UTC).isoformat(),
                 "last_seen_at": datetime.now(tz=UTC).isoformat(),
-                "created_at": (existing or {}).get("created_at")
-                or datetime.now(tz=UTC).isoformat(),
+                "created_at": (existing or {}).get("created_at") or datetime.now(tz=UTC).isoformat(),
                 "updated_at": datetime.now(tz=UTC).isoformat(),
             }
             self.suppressions[email_address] = row
             return [dict(row)]
 
         if "FROM deltallm_emailsuppression" in query and "WHERE email_address IN" in query:
-            return [{"email_address": item} for item in args if str(item) in self.suppressions]
+            return [
+                {"email_address": item}
+                for item in args
+                if str(item) in self.suppressions
+            ]
 
         if "FROM deltallm_emailsuppression" in query and "ORDER BY last_seen_at DESC" in query:
             return list(self.suppressions.values())[: int(args[-1])]
@@ -112,20 +114,8 @@ async def test_email_feedback_repository_roundtrip() -> None:
     assert created is True
     assert duplicate is False
     assert stored.email_address == "user@example.com"
-    assert (
-        await repo.resolve_email_id_by_provider_message_id(
-            provider="resend", provider_message_id="re_123"
-        )
-        == "email-1"
-    )
-    assert (
-        await repo.resolve_email_id_by_provider_message_id(
-            provider="sendgrid", provider_message_id="re_123"
-        )
-        == "email-2"
-    )
-    assert await repo.get_suppressed_addresses(["USER@example.com", "other@example.com"]) == {
-        "user@example.com"
-    }
+    assert await repo.resolve_email_id_by_provider_message_id(provider="resend", provider_message_id="re_123") == "email-1"
+    assert await repo.resolve_email_id_by_provider_message_id(provider="sendgrid", provider_message_id="re_123") == "email-2"
+    assert await repo.get_suppressed_addresses(["USER@example.com", "other@example.com"]) == {"user@example.com"}
     assert len(await repo.list_suppressions(limit=10)) == 1
     assert await repo.remove_suppression("user@example.com") is True

@@ -9,15 +9,15 @@ from uuid import uuid4
 import pytest
 
 from src.billing.accounting.accounting_protocol import AccountingAttempt, AccountingOperationHandle
-from src.db.accounting.accounting_protocol import AccountingProtocolRepository
+from src.db.accounting_protocol import AccountingProtocolRepository
 from src.billing.accounting.permits.accounting_local_leases import (
     LocalPermitFinalization,
     LocalPermitReceipt,
     LocalPermitReturn,
 )
 from src.billing.accounting.accounting_protocol import AccountingOutcome
-from src.db.accounting.journal.accounting_journal import AccountingJournalRepository
-from src.db.accounting.journal.accounting_journal_worker import AccountingJournalWorkerRepository
+from src.db.accounting_journal import AccountingJournalRepository
+from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
 from prisma.errors import RawQueryError
 from prisma import Prisma
 from tests.accounting_read_model_fixtures import reporting_finalization, reporting_handle

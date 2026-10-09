@@ -11,7 +11,7 @@ from collections.abc import Callable
 from decimal import Decimal
 
 from src.billing.budgets.alerts import AlertService
-from src.db.billing.budget_notifications import (
+from src.db.budget_notifications import (
     BudgetNotification,
     BudgetNotificationRepository,
     BudgetThresholdScanUnavailable,

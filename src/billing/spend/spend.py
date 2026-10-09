@@ -10,7 +10,7 @@ from src.billing.spend.ledger import SpendLedgerService
 from src.billing.money import canonical_money, money_string
 from src.billing.spend.spend_events import build_spend_event
 from src.billing.spend.spend_preparation import PreparedSpendEvent, prepare_spend_event
-from src.db.runtime.client import is_prisma_transaction_client
+from src.db.client import is_prisma_transaction_client
 
 logger = logging.getLogger(__name__)
 

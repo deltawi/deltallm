@@ -21,7 +21,7 @@ from src.billing.spend.spend_ingestion import (
     SpendIngestionService,
     _OutboxRecord,
 )
-from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.spend_ingestion import SpendIngestionRepository
 from src.telemetry.event_identity import get_or_create_billing_event_id
 from src.telemetry.lifecycle import WorkerState
 

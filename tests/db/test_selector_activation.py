@@ -3,8 +3,8 @@ from copy import deepcopy
 
 import pytest
 
-from src.db.routing.route_groups import RouteGroupRepository
-from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.route_groups import RouteGroupRepository
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.router.selection.policy import RouteSelectorActivationUnsupportedError
 from tests.db import test_route_policy_selector_integration as fixtures
 
@@ -95,8 +95,8 @@ async def test_unqualified_selector_cannot_archive_a_working_policy(selector_dat
 
 
 async def test_active_selector_model_metadata_edit_rolls_back_atomically(selector_database):
-    from src.db.catalog.model_deployments import ModelDeploymentRepository
-    from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
+    from src.db.repositories import ModelDeploymentRepository
+    from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 
     db, group, policy = selector_database
     info = await qualify(db, policy)

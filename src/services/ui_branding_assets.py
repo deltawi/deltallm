@@ -11,7 +11,7 @@ from typing import cast
 from xml.etree import ElementTree
 
 from src.config import AppConfig
-from src.db.catalog.ui_branding_assets import (
+from src.db.ui_branding_assets import (
     BrandingAssetDatabase,
     UIBrandingAssetKind,
     UIBrandingAssetRepository,

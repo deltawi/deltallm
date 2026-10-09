@@ -9,7 +9,7 @@ from time import monotonic
 from pydantic import Field, model_validator
 
 from src.billing.charges.selector_charge import FrozenBillingContract
-from src.db.accounting.permits.accounting_permit_results import invalid_result
+from src.db.accounting_permit_results import invalid_result
 from src.metrics.accounting_read_models import (
     observe_read_model_progress,
     unavailable_read_model_progress,

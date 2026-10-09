@@ -13,12 +13,12 @@ from uuid import UUID, uuid5
 
 from src.audit.delivery import AuditDeliveryClass
 from src.billing.spend.spend import SpendTrackingService
-from src.db.accounting.reporting.accounting_projection import (
+from src.db.accounting_projection import (
     AccountingProjectionClaim,
     AccountingProjectionEvent,
     AccountingProjectionRepository,
 )
-from src.db.audit.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
+from src.db.audit_ingestion import AuditIngestionRepository, AuditOutboxEnvelope
 from src.metrics.accounting import (
     increment_accounting_projection,
     observe_accounting_projection_lag,

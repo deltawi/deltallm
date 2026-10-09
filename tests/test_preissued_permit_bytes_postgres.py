@@ -7,7 +7,7 @@ import pytest
 
 from src.billing.accounting.accounting_protocol import ReserveDecision
 from src.billing.accounting.permits.preissued_permits import PermitSubject, PreissuedPermitBank
-from src.db.accounting.permits.accounting_permits import AccountingPermitRepository
+from src.db.accounting_permits import AccountingPermitRepository
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_accounting_protocol_postgres import (
     _create_window,

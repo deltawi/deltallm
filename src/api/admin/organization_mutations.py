@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from src.db.organizations.organization_mutation_guard import OrganizationMutationGuardDatabase
+from src.db.organization_mutation_guard import OrganizationMutationGuardDatabase
 from src.services.organization_mutation_policy import (
     OrganizationMutationError,
     OrganizationMutationInactiveError,

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.identity.invitations import PlatformInvitationRecord
+from src.db.invitations import PlatformInvitationRecord
 from src.services.invitation_service import InvitationService
 from src.services.organization_mutation_policy import OrganizationMutationInactiveError
 from src.services.platform_identity_service import LoginResult

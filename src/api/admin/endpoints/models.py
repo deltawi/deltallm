@@ -23,11 +23,11 @@ from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
-from src.db.catalog.logical_models import LogicalModelRecord, LogicalModelRepository
-from src.db.catalog.managed_assets import ManagedAssetAccessRepository
-from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
-from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
-from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
+from src.db.logical_models import LogicalModelRecord, LogicalModelRepository
+from src.db.managed_assets import ManagedAssetAccessRepository
+from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.route_policy_lifecycle import RoutePolicyStateConflictError
 from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated
 from src.upstream_auth import (
@@ -342,7 +342,9 @@ async def _control_plane_model_entries(app: Any) -> list[dict[str, Any]]:
     """Build control-plane entries from persisted, unresolved deployment records."""
 
     runtime_entries = model_entries(app)
-    runtime_deployment_ids = {str(entry.get("deployment_id") or "") for entry in runtime_entries}
+    runtime_deployment_ids = {
+        str(entry.get("deployment_id") or "") for entry in runtime_entries
+    }
     repository = _model_deployment_repository(app)
     list_all = getattr(repository, "list_all", None)
     if not callable(list_all):
@@ -484,7 +486,10 @@ def _apply_principal_credential_view(
     has_named_binding = bool(named_credential_id or binding_state or binding_mode)
     can_revoke = bool(
         binding_state == ModelCredentialBindingState.ACTIVE.value
-        and ((principal is not None and principal.is_platform_admin) or credential_owned)
+        and (
+            (principal is not None and principal.is_platform_admin)
+            or credential_owned
+        )
     )
     entry["credential_binding"] = {
         "state": binding_state,
@@ -1528,7 +1533,9 @@ async def revoke_model_credential_binding(
     logical_model, model_policy = model_access if model_access is not None else (None, None)
     warnings = await _reload_model_runtime_after_commit(
         request.app,
-        fail_closed_asset_id=(model_policy.asset.asset_id if model_policy is not None else None),
+        fail_closed_asset_id=(
+            model_policy.asset.asset_id if model_policy is not None else None
+        ),
         fail_closed_model_names={
             logical_model.model_name if logical_model is not None else deployment.model_name
         },
@@ -1975,7 +1982,9 @@ async def update_model(
             "named_credential_id": stored_deployment.named_credential_id,
             "credential_binding_mode": stored_deployment.credential_binding_mode,
             "credential_binding_state": stored_deployment.credential_binding_state,
-            "credential_bound_by_account_id": (stored_deployment.credential_bound_by_account_id),
+            "credential_bound_by_account_id": (
+                stored_deployment.credential_bound_by_account_id
+            ),
             "deltallm_params": dict(stored_deployment.deltallm_params),
             "model_info": dict(stored_deployment.model_info or {}),
         }
@@ -2017,11 +2026,13 @@ async def update_model(
     )
     display_name = _display_name_or_400(payload, fallback=existing_display_name)
     display_name_changed = logical_model is not None and display_name != existing_display_name
-    existing_named_credential_id = (
-        str(found_deployment.get("named_credential_id") or "").strip() or None
-    )
+    existing_named_credential_id = str(
+        found_deployment.get("named_credential_id") or ""
+    ).strip() or None
     credential_replaced = named_credential_id != existing_named_credential_id
-    existing_binding_state = str(found_deployment.get("credential_binding_state") or "").strip()
+    existing_binding_state = str(
+        found_deployment.get("credential_binding_state") or ""
+    ).strip()
     if (
         not credential_replaced
         and policy is not None
@@ -2053,19 +2064,23 @@ async def update_model(
             principal.account_id if credential_binding_mode is not None else None
         )
     else:
-        raw_binding_mode = str(found_deployment.get("credential_binding_mode") or "").strip()
+        raw_binding_mode = str(
+            found_deployment.get("credential_binding_mode") or ""
+        ).strip()
         try:
             credential_binding_mode = (
-                ModelCredentialBindingMode(raw_binding_mode) if raw_binding_mode else None
+                ModelCredentialBindingMode(raw_binding_mode)
+                if raw_binding_mode
+                else None
             )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The model credential binding is invalid; choose a replacement credential",
             ) from exc
-        credential_bound_by_account_id = (
-            str(found_deployment.get("credential_bound_by_account_id") or "").strip() or None
-        )
+        credential_bound_by_account_id = str(
+            found_deployment.get("credential_bound_by_account_id") or ""
+        ).strip() or None
         if credential_binding_mode is None and named_credential_id:
             access_repository = _managed_asset_repository(request.app)
             credential_policy = (
@@ -2079,7 +2094,8 @@ async def update_model(
             if (
                 credential_policy is not None
                 and policy is not None
-                and credential_policy.asset.owner_account_id == policy.asset.owner_account_id
+                and credential_policy.asset.owner_account_id
+                == policy.asset.owner_account_id
             ):
                 credential_binding_mode = ModelCredentialBindingMode.OWNER_DELEGATED
                 credential_bound_by_account_id = credential_policy.asset.owner_account_id

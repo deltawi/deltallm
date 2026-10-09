@@ -1,5 +1,4 @@
 """Operational helpers (capability refresh, tool filtering, timeout parsing)."""
-
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -9,7 +8,7 @@ from typing import Any
 from fastapi import HTTPException, Request, status
 
 from src.api.admin.endpoints.common import optional_int, to_json_value
-from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.mcp.metrics import record_mcp_capability_refresh
 from src.mcp.registry import server_record_to_config
 
@@ -41,11 +40,7 @@ def _filter_server_tools_for_scope(
                 break
             allowed_names.update(str(name) for name in allowlist)
 
-        filtered = [
-            tool
-            for tool in tools
-            if all_allowed or str(getattr(tool, "original_name", "")) in allowed_names
-        ]
+        filtered = [tool for tool in tools if all_allowed or str(getattr(tool, "original_name", "")) in allowed_names]
     precedence = {scope_type: index for index, scope_type in enumerate(_SCOPE_SPECIFICITY)}
     effective_policy_by_tool: dict[str, MCPToolPolicyRecord] = {}
     for policy in sorted(policies, key=lambda item: precedence.get(item.scope_type, 999)):
@@ -88,9 +83,7 @@ async def _capability_refresh(
             for tool in tools
         ]
     }
-    updated = await registry.store_server_capabilities(
-        server.mcp_server_id, capabilities=capabilities
-    )
+    updated = await registry.store_server_capabilities(server.mcp_server_id, capabilities=capabilities)
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
     record_mcp_capability_refresh(
@@ -106,10 +99,7 @@ def _request_timeout_ms(payload: dict[str, Any], *, default: int) -> int:
     timeout_ms = optional_int(payload.get("request_timeout_ms"), "request_timeout_ms")
     value = timeout_ms if timeout_ms is not None else default
     if value <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="request_timeout_ms must be greater than 0",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request_timeout_ms must be greater than 0")
     return value
 
 

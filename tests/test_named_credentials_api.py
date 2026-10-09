@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from src.db.catalog.named_credentials import NamedCredentialRecord
+from src.db.named_credentials import NamedCredentialRecord
 from src.models.platform_auth import PlatformAuthContext
 from src.services.managed_asset_access import (
     AssetAccessPolicy,
@@ -167,7 +167,7 @@ class _FakeManagedAssetAccessRepository:
         del changed_by_account_id
         current = self.policies[policy.asset.asset_id]
         if current.asset.policy_version != expected_policy_version:
-            from src.db.catalog.managed_assets import ManagedAssetPolicyConflictError
+            from src.db.managed_assets import ManagedAssetPolicyConflictError
 
             raise ManagedAssetPolicyConflictError("asset policy changed")
         updated = AssetAccessPolicy(
@@ -459,7 +459,7 @@ class _FakeModelDeploymentRepository:
         self.records = {str(record["deployment_id"]): dict(record) for record in records}
 
     async def list_all(self):  # noqa: ANN201
-        from src.db.catalog.model_deployments import ModelDeploymentRecord
+        from src.db.repositories import ModelDeploymentRecord
 
         return [
             ModelDeploymentRecord(
@@ -475,7 +475,7 @@ class _FakeModelDeploymentRepository:
         ]
 
     async def list_by_deployment_ids(self, deployment_ids):  # noqa: ANN201
-        from src.db.catalog.model_deployments import ModelDeploymentRecord
+        from src.db.repositories import ModelDeploymentRecord
 
         results = []
         for deployment_id in deployment_ids:

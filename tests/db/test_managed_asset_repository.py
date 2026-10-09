@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from src.db.catalog.managed_assets import (
+from src.db.managed_assets import (
     ManagedAssetAccessRepository,
     ManagedAssetAudienceNotFoundError,
     ManagedAssetSnapshotLimitError,
@@ -50,9 +50,7 @@ def test_policy_rows_are_grouped_into_multiple_audience_grants() -> None:
         ]
     )
 
-    assert [
-        (grant.subject_type, grant.subject_id, grant.access_role) for grant in policy.grants
-    ] == [
+    assert [(grant.subject_type, grant.subject_id, grant.access_role) for grant in policy.grants] == [
         (AssetSubjectType.TEAM, "team-1", AssetAccessRole.READER),
         (AssetSubjectType.ORGANIZATION, "org-1", AssetAccessRole.EDITOR),
     ]

@@ -10,8 +10,8 @@ from src.batch.selector_identity import batch_selector_operation_id
 from src.billing.charges.operation_reservation import BillingOperationUnavailable, ComponentState
 from src.billing.spend.spend import SpendTrackingService
 from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.db.billing.billing_operation_recovery import BillingOperationRecovery
-from src.db.billing.billing_operations import BillingOperationRepository
+from src.db.billing_operation_recovery import BillingOperationRecovery
+from src.db.billing_operations import BillingOperationRepository
 from src.services.spend_visibility import SpendVisibility
 from tests import test_billing_operations_postgres as billing_fixtures
 from tests.test_batch_completion_outbox import _build_record

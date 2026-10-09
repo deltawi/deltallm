@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.identity.email_tokens import EmailTokenRecord
+from src.db.email_tokens import EmailTokenRecord
 from src.email.models import EmailConfigurationError
 from src.services.email_token_service import EmailTokenService
 
@@ -23,11 +23,7 @@ class FakeEmailTokenRepository:
 
     async def get_active_by_hash(self, *, purpose: str, token_hash: str) -> EmailTokenRecord | None:
         for record in self.records.values():
-            if (
-                record.purpose == purpose
-                and record.token_hash == token_hash
-                and record.consumed_at is None
-            ):
+            if record.purpose == purpose and record.token_hash == token_hash and record.consumed_at is None:
                 return record
         return None
 
@@ -38,15 +34,9 @@ class FakeEmailTokenRepository:
         self.records[token_id] = replace(record, consumed_at=datetime.now(tz=UTC))
         return True
 
-    async def claim_active_by_hash(
-        self, *, purpose: str, token_hash: str
-    ) -> EmailTokenRecord | None:
+    async def claim_active_by_hash(self, *, purpose: str, token_hash: str) -> EmailTokenRecord | None:
         for token_id, record in list(self.records.items()):
-            if (
-                record.purpose != purpose
-                or record.token_hash != token_hash
-                or record.consumed_at is not None
-            ):
+            if record.purpose != purpose or record.token_hash != token_hash or record.consumed_at is not None:
                 continue
             claimed = replace(record, consumed_at=datetime.now(tz=UTC))
             self.records[token_id] = claimed
@@ -90,9 +80,7 @@ def _config(**overrides):
 @pytest.mark.asyncio
 async def test_issue_validate_consume_invitation_token() -> None:
     repository = FakeEmailTokenRepository()
-    service = EmailTokenService(
-        repository=repository, salt="test-salt", config_getter=lambda: _config()
-    )
+    service = EmailTokenService(repository=repository, salt="test-salt", config_getter=lambda: _config())
 
     issued = await service.issue_invitation_token(
         account_id="acct-1",
@@ -116,31 +104,20 @@ async def test_issue_validate_consume_invitation_token() -> None:
 @pytest.mark.asyncio
 async def test_issue_password_reset_token_and_invalidate_all() -> None:
     repository = FakeEmailTokenRepository()
-    service = EmailTokenService(
-        repository=repository, salt="test-salt", config_getter=lambda: _config()
-    )
+    service = EmailTokenService(repository=repository, salt="test-salt", config_getter=lambda: _config())
 
     first = await service.issue_password_reset_token(account_id="acct-1", email="user@example.com")
     second = await service.issue_password_reset_token(account_id="acct-1", email="user@example.com")
 
-    assert (
-        await service.invalidate_active_tokens(purpose="password_reset", account_id="acct-1") == 2
-    )
+    assert await service.invalidate_active_tokens(purpose="password_reset", account_id="acct-1") == 2
     assert await service.validate_token(purpose="password_reset", raw_token=first.raw_token) is None
-    assert (
-        await service.validate_token(purpose="password_reset", raw_token=second.raw_token) is None
-    )
+    assert await service.validate_token(purpose="password_reset", raw_token=second.raw_token) is None
 
 
 def test_build_action_url_uses_configured_base_url() -> None:
-    service = EmailTokenService(
-        repository=FakeEmailTokenRepository(), salt="test-salt", config_getter=lambda: _config()
-    )
+    service = EmailTokenService(repository=FakeEmailTokenRepository(), salt="test-salt", config_getter=lambda: _config())
 
-    assert (
-        service.build_action_url(path="/accept-invite", raw_token="abc")
-        == "https://gateway.example.com/accept-invite?token=abc"
-    )
+    assert service.build_action_url(path="/accept-invite", raw_token="abc") == "https://gateway.example.com/accept-invite?token=abc"
 
 
 def test_build_action_url_requires_email_base_url() -> None:
@@ -161,7 +138,5 @@ def test_build_action_url_requires_absolute_email_base_url() -> None:
         config_getter=lambda: _config(email_base_url="gateway.example.com"),
     )
 
-    with pytest.raises(
-        EmailConfigurationError, match="email_base_url must be an absolute http\\(s\\) URL"
-    ):
+    with pytest.raises(EmailConfigurationError, match="email_base_url must be an absolute http\\(s\\) URL"):
         service.build_action_url(path="/accept-invite", raw_token="abc")

@@ -4,7 +4,6 @@ Houses the view-capability dataclass plus the predicates/validators that
 decide whether the caller's :class:`AuthScope` is allowed to read, mutate,
 or operate on a given MCP server / approval record.
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,7 +16,7 @@ from src.api.admin.endpoints.common import (
     ResolvedScopeTarget,
     resolve_runtime_scope_target,
 )
-from src.db.mcp.mcp import MCPApprovalRequestRecord, MCPServerRecord
+from src.db.mcp import MCPApprovalRequestRecord, MCPServerRecord
 
 from src.api.admin.endpoints.mcp.dependencies import _db_or_503
 from src.api.admin.endpoints.mcp.validators import (
@@ -33,9 +32,7 @@ class MCPServerCapabilities:
     can_manage_scope_config: bool
 
 
-async def _validate_scope_target(
-    request: Request, *, scope_type: str, scope_id: str
-) -> ResolvedScopeTarget:
+async def _validate_scope_target(request: Request, *, scope_type: str, scope_id: str) -> ResolvedScopeTarget:
     return await resolve_runtime_scope_target(
         _db_or_503(request),
         scope_type=scope_type,
@@ -52,29 +49,17 @@ async def _validate_owner_scope(
 ) -> tuple[str, str | None]:
     if owner_scope_type == "global":
         if owner_scope_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="owner_scope_id must be omitted for global servers",
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_scope_id must be omitted for global servers")
         if not scope.is_platform_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only platform admins can create global MCP servers",
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only platform admins can create global MCP servers")
         return owner_scope_type, None
 
     if not owner_scope_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="owner_scope_id is required for organization-owned servers",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_scope_id is required for organization-owned servers")
 
     await _validate_scope_target(request, scope_type="organization", scope_id=owner_scope_id)
     if not scope.is_platform_admin and owner_scope_id not in scope.org_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions for the selected organization",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions for the selected organization")
     return owner_scope_type, owner_scope_id
 
 
@@ -85,9 +70,7 @@ async def _resolve_server_create_owner_scope(
     payload: dict[str, Any],
 ) -> tuple[str, str | None]:
     requested_type = _validate_owner_scope_type(
-        payload.get("owner_scope_type")
-        if scope.is_platform_admin
-        else payload.get("owner_scope_type", "organization")
+        payload.get("owner_scope_type") if scope.is_platform_admin else payload.get("owner_scope_type", "organization")
     )
     requested_id = (
         _normalize_scope_id(payload.get("owner_scope_id"), field_name="owner_scope_id")
@@ -103,23 +86,15 @@ async def _resolve_server_create_owner_scope(
         )
 
     if not scope.org_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     if requested_type != "organization":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization-owned MCP servers can be created in scoped mode",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only organization-owned MCP servers can be created in scoped mode")
     owner_scope_id = requested_id
     if owner_scope_id is None:
         if len(scope.org_ids) == 1:
             owner_scope_id = scope.org_ids[0]
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="owner_scope_id is required when you manage multiple organizations",
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_scope_id is required when you manage multiple organizations")
     return await _validate_owner_scope(
         request,
         scope=scope,
@@ -145,11 +120,7 @@ def _server_operable_by_scope(server: MCPServerRecord, scope: AuthScope) -> bool
 
 
 def _server_scope_config_writable_by_scope(server: MCPServerRecord, scope: AuthScope) -> bool:
-    return (
-        _server_owned_by_scope(server, scope)
-        or scope.is_platform_admin
-        or server.owner_scope_type == "global"
-    )
+    return _server_owned_by_scope(server, scope) or scope.is_platform_admin or server.owner_scope_type == "global"
 
 
 def _server_view_capabilities(
@@ -184,10 +155,7 @@ async def _validate_scoped_server_target_write(
     if scope.is_platform_admin:
         return {"organization_id": target.organization_id, "team_id": target.team_id}
     if not target_organization_id or target_organization_id not in scope.org_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions for the selected scope",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions for the selected scope")
     if server.owner_scope_type == "organization":
         if server.owner_scope_id != target_organization_id:
             raise HTTPException(
@@ -212,16 +180,11 @@ async def _validate_scoped_scope_target_write(
         return {"organization_id": target.organization_id, "team_id": target.team_id}
     target_organization_id = str(target.organization_id or "")
     if not target_organization_id or target_organization_id not in scope.org_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions for the selected scope",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions for the selected scope")
     return {"organization_id": target.organization_id, "team_id": target.team_id}
 
 
-async def _approval_visible_to_scope(
-    request: Request, scope: AuthScope, approval: MCPApprovalRequestRecord
-) -> bool:
+async def _approval_visible_to_scope(request: Request, scope: AuthScope, approval: MCPApprovalRequestRecord) -> bool:
     if scope.is_platform_admin:
         return True
     if approval.scope_type == "organization":
@@ -258,10 +221,7 @@ async def _approval_visible_to_scope(
         row = rows[0] if rows else {}
         team_id = str(row.get("team_id") or "")
         organization_id = str(row.get("organization_id") or "")
-        return bool(
-            (team_id and team_id in scope.team_ids)
-            or (organization_id and organization_id in scope.org_ids)
-        )
+        return bool((team_id and team_id in scope.team_ids) or (organization_id and organization_id in scope.org_ids))
     if approval.scope_type == "user":
         db = _db_or_503(request)
         rows = await db.query_raw(
@@ -277,10 +237,7 @@ async def _approval_visible_to_scope(
         row = rows[0] if rows else {}
         team_id = str(row.get("team_id") or "")
         organization_id = str(row.get("organization_id") or "")
-        return bool(
-            (team_id and team_id in scope.team_ids)
-            or (organization_id and organization_id in scope.org_ids)
-        )
+        return bool((team_id and team_id in scope.team_ids) or (organization_id and organization_id in scope.org_ids))
     return False
 
 

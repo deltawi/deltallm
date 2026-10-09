@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import httpx
 
-from src.db.billing.spend_ingestion import SpendIngestionRepository
+from src.db.spend_ingestion import SpendIngestionRepository
 from tests.performance.gateway_concurrency_dependencies import local_database
 from tests.performance.lifecycle_cluster import LOAD_KEY
 

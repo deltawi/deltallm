@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.db.runtime.migration_status import (
+from src.db.migration_status import (
     MigrationVerificationError,
     required_migrations,
     verify_history,

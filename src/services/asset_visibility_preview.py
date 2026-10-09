@@ -4,8 +4,8 @@ from typing import Any
 
 from fastapi import Request
 
-from src.db.routing.callable_target_policies import CallableTargetScopePolicyRepository
-from src.db.routing.route_groups import RouteGroupRepository
+from src.db.callable_target_policies import CallableTargetScopePolicyRepository
+from src.db.route_groups import RouteGroupRepository
 from src.services.asset_binding_mirror import (
     callable_catalog,
     callable_target_access_group_binding_repository,
@@ -22,18 +22,13 @@ _DEFAULT_ACCESS_GROUP_PAGE_LIMIT = 50
 _MAX_ACCESS_GROUP_PAGE_LIMIT = 200
 
 
-def _callable_target_scope_policy_repository(
-    request: Request,
-) -> CallableTargetScopePolicyRepository | None:
+def _callable_target_scope_policy_repository(request: Request) -> CallableTargetScopePolicyRepository | None:
     repository = getattr(request.app.state, "callable_target_scope_policy_repository", None)
     if repository is not None and callable(getattr(repository, "list_policies", None)):
         return repository
     return None
 
-
-async def list_scope_route_group_bindings(
-    request: Request, *, scope_type: str, scope_id: str
-) -> list[dict[str, Any]]:
+async def list_scope_route_group_bindings(request: Request, *, scope_type: str, scope_id: str) -> list[dict[str, Any]]:
     repository = route_group_repository(request)
     if repository is None:
         return []
@@ -54,9 +49,7 @@ async def list_scope_route_group_bindings(
     ]
 
 
-async def list_scope_callable_target_bindings(
-    request: Request, *, scope_type: str, scope_id: str
-) -> list[dict[str, Any]]:
+async def list_scope_callable_target_bindings(request: Request, *, scope_type: str, scope_id: str) -> list[dict[str, Any]]:
     repository = callable_target_binding_repository(request)
     if repository is None:
         return []
@@ -114,9 +107,7 @@ async def get_scope_callable_target_policy_mode(
     repository = _callable_target_scope_policy_repository(request)
     if repository is None:
         return None
-    policies, _ = await repository.list_policies(
-        scope_type=scope_type, scope_id=scope_id, limit=1, offset=0
-    )
+    policies, _ = await repository.list_policies(scope_type=scope_type, scope_id=scope_id, limit=1, offset=0)
     if not policies:
         return None
     return str(policies[0].mode or "inherit")
@@ -299,9 +290,7 @@ def _has_source(item: dict[str, Any], *, scope_type: str, kind: str | None = Non
     return False
 
 
-def _normalize_page_limit(
-    value: int | None, *, default: int = _DEFAULT_ACCESS_GROUP_PAGE_LIMIT
-) -> int:
+def _normalize_page_limit(value: int | None, *, default: int = _DEFAULT_ACCESS_GROUP_PAGE_LIMIT) -> int:
     try:
         limit = int(value if value is not None else default)
     except (TypeError, ValueError):
@@ -372,13 +361,7 @@ def _apply_effective_visibility(
     if user_mode is not None:
         item["effective_visible"] = user_visible
     else:
-        item["effective_visible"] = (
-            key_visible
-            if api_key_mode is not None
-            else team_visible
-            if team_mode is not None
-            else org_visible
-        )
+        item["effective_visible"] = key_visible if api_key_mode is not None else team_visible if team_mode is not None else org_visible
 
 
 async def build_asset_visibility_preview(
@@ -399,11 +382,7 @@ async def build_asset_visibility_preview(
     callable_keys_by_access_group = build_callable_keys_by_access_group(callable_catalog_by_key)
     route_group_repo = route_group_repository(request)
     all_route_groups = await _list_all_route_groups(route_group_repo)
-    route_groups_by_key = {
-        str(group.group_key): group
-        for group in all_route_groups
-        if str(group.group_key or "").strip()
-    }
+    route_groups_by_key = {str(group.group_key): group for group in all_route_groups if str(group.group_key or "").strip()}
     route_group_keys = set(route_groups_by_key.keys())
     team_policy_mode = await get_scope_callable_target_policy_mode(
         request,
@@ -438,12 +417,8 @@ async def build_asset_visibility_preview(
             owner_scope_id=item.get("owner_scope_id"),
         )
 
-    async def _apply_scope_callable_target_bindings(
-        scope_type: str, scope_id: str
-    ) -> list[dict[str, Any]]:
-        bindings = await list_scope_callable_target_bindings(
-            request, scope_type=scope_type, scope_id=scope_id
-        )
+    async def _apply_scope_callable_target_bindings(scope_type: str, scope_id: str) -> list[dict[str, Any]]:
+        bindings = await list_scope_callable_target_bindings(request, scope_type=scope_type, scope_id=scope_id)
         for binding in bindings:
             callable_key = str(binding.get("callable_key") or "")
             if not callable_key:
@@ -478,9 +453,7 @@ async def build_asset_visibility_preview(
             )
         return bindings
 
-    async def _apply_scope_access_group_bindings(
-        scope_type: str, scope_id: str
-    ) -> list[dict[str, Any]]:
+    async def _apply_scope_access_group_bindings(scope_type: str, scope_id: str) -> list[dict[str, Any]]:
         bindings = await list_scope_callable_target_access_group_bindings(
             request,
             scope_type=scope_type,
@@ -575,11 +548,7 @@ async def build_asset_visibility_preview(
         )
         item["sources"] = sorted(
             item["sources"],
-            key=lambda source: (
-                str(source.get("scope_type") or ""),
-                str(source.get("scope_id") or ""),
-                str(source.get("kind") or ""),
-            ),
+            key=lambda source: (str(source.get("scope_type") or ""), str(source.get("scope_id") or ""), str(source.get("kind") or "")),
         )
 
     for item in callable_items.values():
@@ -592,10 +561,7 @@ async def build_asset_visibility_preview(
         )
         item["sources"] = sorted(
             item["sources"],
-            key=lambda source: (
-                str(source.get("scope_type") or ""),
-                str(source.get("scope_id") or ""),
-            ),
+            key=lambda source: (str(source.get("scope_type") or ""), str(source.get("scope_id") or "")),
         )
 
     response: dict[str, Any] = {
@@ -608,11 +574,8 @@ async def build_asset_visibility_preview(
         "scope_policies": {
             "team": team_policy_mode or "inherit",
             "api_key": api_key_policy_mode or "inherit",
-            "user": user_policy_mode
-            or (
-                "restrict"
-                if user_id and (user_callable_target_bindings or user_access_group_bindings)
-                else "inherit"
+            "user": user_policy_mode or (
+                "restrict" if user_id and (user_callable_target_bindings or user_access_group_bindings) else "inherit"
             ),
         },
         "route_groups": {

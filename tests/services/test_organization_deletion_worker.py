@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.db.organizations.deletion.organization_deletion_cleanup_repository import CleanupPageResult
-from src.db.organizations.deletion.organization_deletion_records import (
+from src.db.organization_deletion_cleanup_repository import CleanupPageResult
+from src.db.organization_deletion_records import (
     OrganizationDeletionFinalizationResult,
     OrganizationDeletionJobRecord,
 )

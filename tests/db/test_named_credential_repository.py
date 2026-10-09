@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from src.db.catalog.named_credentials import NamedCredentialRepository
+from src.db.named_credentials import NamedCredentialRepository
 
 
 class _TransactionContext:

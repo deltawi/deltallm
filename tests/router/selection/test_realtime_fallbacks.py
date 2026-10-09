@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from src.db.routing.callable_targets import CallableTargetBindingRecord
+from src.db.callable_targets import CallableTargetBindingRecord
 from src.router.failover import FallbackConfig
 from src.router.runtime_generation import with_authorization_snapshot
 from tests.router.selection.provider_fixtures import response_body

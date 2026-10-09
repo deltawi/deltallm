@@ -16,7 +16,7 @@ from src.billing.accounting.accounting_protocol import AccountingAttempt, reques
 from src.billing.accounting.journal.accounting_terminal_preparation import prepare_accounting_charge
 from src.billing.charges.operation_reservation import SoftSelectorOperation, token_price_allowance
 from src.billing.charges.selector_native import NativeSelectorBilling
-from src.db.routing.routing_costs import routing_cost_query
+from src.db.routing_costs import routing_cost_query
 from src.services.spend_visibility import SpendVisibility
 from tests.test_accounting_local_leases_postgres import deadline
 from tests.test_accounting_protocol_postgres import accounting_db as _accounting_db

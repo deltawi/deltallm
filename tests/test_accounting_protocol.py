@@ -28,17 +28,17 @@ from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.billing.accounting.accounting_finalization import (
     accounting_audit_envelope as _accounting_audit_envelope,
 )
-from src.db.accounting.reporting.accounting_projection import (
+from src.db.accounting_projection import (
     AccountingProjectionClaim,
     AccountingProjectionEvent,
     AccountingProjectionRepository,
 )
-from src.db.accounting.accounting_protocol import (
+from src.db.accounting_protocol import (
     AccountingProtocolRepository,
     AccountingProtocolUnavailable,
     AccountingResultFailure,
 )
-from src.db.runtime.telemetry_acceptance import AcceptanceFailure
+from src.db.telemetry_acceptance import AcceptanceFailure
 from src.metrics.prometheus import get_prometheus_registry
 
 

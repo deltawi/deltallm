@@ -4,13 +4,13 @@ from dataclasses import replace
 
 import pytest
 
-from src.db.routing.callable_target_access_groups import (
+from src.db.callable_target_access_groups import (
     CallableTargetAccessGroupBindingCount,
     CallableTargetAccessGroupBindingRecord,
 )
-from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
-from src.db.routing.callable_targets import CallableTargetBindingRecord
-from src.db.routing.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.db.callable_target_policies import CallableTargetScopePolicyRecord
+from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
 from src.governance.access_groups import normalize_access_group_key
 from src.services.callable_targets import CallableTarget
 
@@ -90,9 +90,7 @@ class _FakeCallableTargetBindingRepository:
         self.bindings: list[CallableTargetBindingRecord] = []
         self._counter = 0
 
-    async def list_bindings(
-        self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0
-    ):  # noqa: ANN001, ANN201
+    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if callable_key:
             items = [item for item in items if item.callable_key == callable_key]
@@ -105,11 +103,7 @@ class _FakeCallableTargetBindingRepository:
 
     async def upsert_binding(self, *, callable_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         for index, item in enumerate(self.bindings):
-            if (
-                item.callable_key == callable_key
-                and item.scope_type == scope_type
-                and item.scope_id == scope_id
-            ):
+            if item.callable_key == callable_key and item.scope_type == scope_type and item.scope_id == scope_id:
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -140,9 +134,7 @@ class _FakeCallableTargetAccessGroupBindingRepository:
         self.unfiltered_list_calls = 0
         self.group_count_calls = 0
 
-    async def list_bindings(
-        self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0
-    ):  # noqa: ANN001, ANN201
+    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
         if group_key is None and scope_type is None and scope_id is None:
             self.unfiltered_list_calls += 1
         items = list(self.bindings)
@@ -173,11 +165,7 @@ class _FakeCallableTargetAccessGroupBindingRepository:
     async def upsert_binding(self, *, group_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         normalized_group_key = normalize_access_group_key(group_key, strict=True)
         for index, item in enumerate(self.bindings):
-            if (
-                item.group_key == normalized_group_key
-                and item.scope_type == scope_type
-                and item.scope_id == scope_id
-            ):
+            if item.group_key == normalized_group_key and item.scope_type == scope_type and item.scope_id == scope_id:
                 updated = replace(item, enabled=enabled, metadata=metadata)
                 self.bindings[index] = updated
                 return updated
@@ -194,11 +182,7 @@ class _FakeCallableTargetAccessGroupBindingRepository:
         return record
 
     async def delete_binding(self, binding_id: str) -> bool:
-        kept = [
-            item
-            for item in self.bindings
-            if item.callable_target_access_group_binding_id != binding_id
-        ]
+        kept = [item for item in self.bindings if item.callable_target_access_group_binding_id != binding_id]
         if len(kept) == len(self.bindings):
             return False
         self.bindings = kept
@@ -283,9 +267,7 @@ class _CountingRouteGroupRepository:
         items = list(self.shared.groups.values())[offset : offset + limit]
         return items, len(self.shared.groups)
 
-    async def list_bindings(
-        self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0
-    ):  # noqa: ANN001, ANN201
+    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
         items = list(self.shared.bindings)
         if group_key:
             items = [item for item in items if item.group_key == group_key]
@@ -299,11 +281,7 @@ class _CountingRouteGroupRepository:
     async def upsert_binding(self, group_key: str, *, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
         self.upsert_calls += 1
         for index, item in enumerate(self.shared.bindings):
-            if (
-                item.group_key == group_key
-                and item.scope_type == scope_type
-                and item.scope_id == scope_id
-            ):
+            if item.group_key == group_key and item.scope_type == scope_type and item.scope_id == scope_id:
                 self.shared.bindings[index] = replace(item, enabled=enabled, metadata=metadata)
                 return self.shared.bindings[index]
         group = self.shared.groups[group_key]
@@ -341,9 +319,7 @@ async def test_get_organization_asset_access_returns_selected_targets(client, te
         metadata=None,
     )
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
@@ -379,14 +355,10 @@ async def test_get_organization_asset_access_returns_selected_access_groups(clie
     )
     test_app.state.callable_target_binding_repository = binding_repository
     test_app.state.callable_target_access_group_repository = access_group_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
         "support-chat": CallableTarget(key="support-chat", target_type="route_group"),
     }
 
@@ -417,20 +389,12 @@ async def test_get_organization_asset_access_pages_access_groups(client, test_ap
     access_group_repository = _FakeCallableTargetAccessGroupBindingRepository()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
     test_app.state.callable_target_access_group_repository = access_group_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "alpha-model": CallableTarget(
-            key="alpha-model", target_type="model", access_groups=frozenset({"alpha"})
-        ),
-        "beta-model": CallableTarget(
-            key="beta-model", target_type="model", access_groups=frozenset({"beta"})
-        ),
-        "gamma-model": CallableTarget(
-            key="gamma-model", target_type="model", access_groups=frozenset({"gamma"})
-        ),
+        "alpha-model": CallableTarget(key="alpha-model", target_type="model", access_groups=frozenset({"alpha"})),
+        "beta-model": CallableTarget(key="beta-model", target_type="model", access_groups=frozenset({"beta"})),
+        "gamma-model": CallableTarget(key="gamma-model", target_type="model", access_groups=frozenset({"gamma"})),
     }
 
     response = await client.get(
@@ -458,9 +422,7 @@ async def test_update_organization_asset_access_select_all_enables_auto_follow(c
     binding_repository = _FakeCallableTargetBindingRepository()
     grant_service = _FakeGrantService()
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = grant_service
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
@@ -502,22 +464,14 @@ async def test_update_team_asset_access_accepts_parent_visible_access_group(clie
     test_app.state.callable_target_scope_policy_repository = policy_repository
     test_app.state.callable_target_grant_service = grant_service
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
-        "support-chat": CallableTarget(
-            key="support-chat", target_type="route_group", access_groups=frozenset({"support"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group", access_groups=frozenset({"support"})),
     }
 
     response = await client.put(
         "/ui/api/teams/team-1/asset-access",
         headers={"Authorization": "Bearer mk-test"},
-        json={
-            "mode": "restrict",
-            "selected_callable_keys": [],
-            "selected_access_group_keys": ["beta"],
-        },
+        json={"mode": "restrict", "selected_callable_keys": [], "selected_access_group_keys": ["beta"]},
     )
 
     assert response.status_code == 200
@@ -538,9 +492,7 @@ async def test_update_team_asset_access_accepts_parent_visible_access_group(clie
 
 
 @pytest.mark.asyncio
-async def test_update_team_asset_access_preserves_access_groups_when_field_is_omitted(
-    client, test_app
-):
+async def test_update_team_asset_access_preserves_access_groups_when_field_is_omitted(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     binding_repository = _FakeCallableTargetBindingRepository()
@@ -565,9 +517,7 @@ async def test_update_team_asset_access_preserves_access_groups_when_field_is_om
     test_app.state.callable_target_scope_policy_repository = policy_repository
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
     }
 
     response = await client.put(
@@ -587,9 +537,7 @@ async def test_update_team_asset_access_preserves_access_groups_when_field_is_om
 
 
 @pytest.mark.asyncio
-async def test_update_team_asset_access_clears_access_groups_when_empty_array_is_provided(
-    client, test_app
-):
+async def test_update_team_asset_access_clears_access_groups_when_empty_array_is_provided(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     binding_repository = _FakeCallableTargetBindingRepository()
@@ -610,14 +558,10 @@ async def test_update_team_asset_access_clears_access_groups_when_empty_array_is
     )
     test_app.state.callable_target_binding_repository = binding_repository
     test_app.state.callable_target_access_group_repository = access_group_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
     }
 
     response = await client.put(
@@ -636,9 +580,7 @@ async def test_update_team_asset_access_clears_access_groups_when_empty_array_is
 
 
 @pytest.mark.asyncio
-async def test_update_team_asset_access_rejects_explicit_group_sync_without_repository(
-    client, test_app
-):
+async def test_update_team_asset_access_rejects_explicit_group_sync_without_repository(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     binding_repository = _FakeCallableTargetBindingRepository()
@@ -662,17 +604,14 @@ async def test_update_team_asset_access_rejects_explicit_group_sync_without_repo
     response = await client.put(
         "/ui/api/teams/team-1/asset-access",
         headers={"Authorization": "Bearer mk-test"},
-        json={
-            "mode": "restrict",
-            "selected_callable_keys": ["gpt-4o-mini"],
-            "selected_access_group_keys": [],
-        },
+        json={"mode": "restrict", "selected_callable_keys": ["gpt-4o-mini"], "selected_access_group_keys": []},
     )
 
     assert response.status_code == 503
     assert "Callable target access group repository unavailable" in response.text
     assert {
-        (item.scope_type, item.scope_id, item.callable_key) for item in binding_repository.bindings
+        (item.scope_type, item.scope_id, item.callable_key)
+        for item in binding_repository.bindings
     } == {("organization", "org-1", "gpt-4o-mini")}
     assert policy_repository.policies == []
     assert grant_service.reloads == 0
@@ -691,17 +630,11 @@ async def test_update_team_asset_access_rejects_null_access_group_array(client, 
         metadata=None,
     )
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_access_group_repository = (
-        _FakeCallableTargetAccessGroupBindingRepository()
-    )
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_access_group_repository = _FakeCallableTargetAccessGroupBindingRepository()
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
     }
 
     response = await client.put(
@@ -715,9 +648,7 @@ async def test_update_team_asset_access_rejects_null_access_group_array(client, 
 
 
 @pytest.mark.asyncio
-async def test_update_key_asset_access_inherit_rejects_missing_group_repository_before_partial_clear(
-    client, test_app
-):
+async def test_update_key_asset_access_inherit_rejects_missing_group_repository_before_partial_clear(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     binding_repository = _FakeCallableTargetBindingRepository()
@@ -760,9 +691,7 @@ async def test_update_key_asset_access_inherit_rejects_missing_group_repository_
     assert response.status_code == 503
     assert "Callable target access group repository unavailable" in response.text
     assert any(
-        item.scope_type == "api_key"
-        and item.scope_id == "key-1"
-        and item.callable_key == "gpt-4o-mini"
+        item.scope_type == "api_key" and item.scope_id == "key-1" and item.callable_key == "gpt-4o-mini"
         for item in binding_repository.bindings
     )
     assert any(
@@ -785,30 +714,18 @@ async def test_update_key_asset_access_rejects_access_group_outside_parent_scope
         metadata=None,
     )
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_access_group_repository = (
-        _FakeCallableTargetAccessGroupBindingRepository()
-    )
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_access_group_repository = _FakeCallableTargetAccessGroupBindingRepository()
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
-        "support-chat": CallableTarget(
-            key="support-chat", target_type="route_group", access_groups=frozenset({"support"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group", access_groups=frozenset({"support"})),
     }
 
     response = await client.put(
         "/ui/api/keys/key-1/asset-access",
         headers={"Authorization": "Bearer mk-test"},
-        json={
-            "mode": "restrict",
-            "selected_callable_keys": [],
-            "selected_access_group_keys": ["support"],
-        },
+        json={"mode": "restrict", "selected_callable_keys": [], "selected_access_group_keys": ["support"]},
     )
 
     assert response.status_code == 400
@@ -816,9 +733,7 @@ async def test_update_key_asset_access_rejects_access_group_outside_parent_scope
 
 
 @pytest.mark.asyncio
-async def test_get_team_asset_access_marks_stale_selected_access_group_not_selectable(
-    client, test_app
-):
+async def test_get_team_asset_access_marks_stale_selected_access_group_not_selectable(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     binding_repository = _FakeCallableTargetBindingRepository()
@@ -839,17 +754,11 @@ async def test_get_team_asset_access_marks_stale_selected_access_group_not_selec
     )
     test_app.state.callable_target_binding_repository = binding_repository
     test_app.state.callable_target_access_group_repository = access_group_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
-        "support-chat": CallableTarget(
-            key="support-chat", target_type="route_group", access_groups=frozenset({"support"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group", access_groups=frozenset({"support"})),
     }
 
     response = await client.get(
@@ -888,27 +797,17 @@ async def test_update_team_asset_access_rejects_stale_selected_access_group(clie
     )
     test_app.state.callable_target_binding_repository = binding_repository
     test_app.state.callable_target_access_group_repository = access_group_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
-        "support-chat": CallableTarget(
-            key="support-chat", target_type="route_group", access_groups=frozenset({"support"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group", access_groups=frozenset({"support"})),
     }
 
     response = await client.put(
         "/ui/api/teams/team-1/asset-access",
         headers={"Authorization": "Bearer mk-test"},
-        json={
-            "mode": "restrict",
-            "selected_callable_keys": [],
-            "selected_access_group_keys": ["support"],
-        },
+        json={"mode": "restrict", "selected_callable_keys": [], "selected_access_group_keys": ["support"]},
     )
 
     assert response.status_code == 400
@@ -920,9 +819,7 @@ async def test_update_team_asset_access_rejects_stale_selected_access_group(clie
 
 
 @pytest.mark.asyncio
-async def test_update_organization_asset_access_uses_transaction_route_group_repository(
-    client, test_app, monkeypatch
-) -> None:
+async def test_update_organization_asset_access_uses_transaction_route_group_repository(client, test_app, monkeypatch) -> None:
     from src.api.admin.endpoints import organizations as organizations_endpoints
 
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -934,9 +831,7 @@ async def test_update_organization_asset_access_uses_transaction_route_group_rep
     grant_service = _FakeGrantService()
     test_app.state.prisma_manager = type("Prisma", (), {"client": scope_db})()
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = grant_service
     test_app.state.route_group_repository = request_route_repo
     test_app.state.callable_target_catalog = {
@@ -981,9 +876,7 @@ async def test_get_team_asset_access_can_skip_target_lists(client, test_app):
         metadata=None,
     )
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
@@ -1003,9 +896,7 @@ async def test_get_team_asset_access_can_skip_target_lists(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_get_team_asset_access_does_not_scan_all_access_group_bindings_for_selectable_groups(
-    client, test_app
-):
+async def test_get_team_asset_access_does_not_scan_all_access_group_bindings_for_selectable_groups(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     binding_repository = _FakeCallableTargetBindingRepository()
@@ -1026,14 +917,10 @@ async def test_get_team_asset_access_does_not_scan_all_access_group_bindings_for
     )
     test_app.state.callable_target_binding_repository = binding_repository
     test_app.state.callable_target_access_group_repository = access_group_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(
-            key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})
-        ),
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
     }
 
     response = await client.get(
@@ -1067,9 +954,7 @@ async def test_update_team_asset_access_restricts_to_selected_assets(client, tes
         metadata=None,
     )
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_access_group_repository = (
-        _FakeCallableTargetAccessGroupBindingRepository()
-    )
+    test_app.state.callable_target_access_group_repository = _FakeCallableTargetAccessGroupBindingRepository()
     test_app.state.callable_target_scope_policy_repository = policy_repository
     test_app.state.callable_target_grant_service = grant_service
     test_app.state.callable_target_catalog = {
@@ -1089,9 +974,7 @@ async def test_update_team_asset_access_restricts_to_selected_assets(client, tes
     assert payload["selected_callable_keys"] == ["support-chat"]
     assert payload["summary"]["effective_total"] == 1
     assert any(
-        item.scope_type == "team"
-        and item.scope_id == "team-1"
-        and item.callable_key == "support-chat"
+        item.scope_type == "team" and item.scope_id == "team-1" and item.callable_key == "support-chat"
         for item in binding_repository.bindings
     )
     assert any(
@@ -1107,9 +990,7 @@ async def test_update_organization_asset_access_can_select_all_current_assets(cl
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
     binding_repository = _FakeCallableTargetBindingRepository()
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
@@ -1126,10 +1007,7 @@ async def test_update_organization_asset_access_can_select_all_current_assets(cl
     payload = response.json()
     assert payload["summary"]["selected_total"] == 2
     assert payload["selected_callable_keys"] == ["gpt-4o-mini", "support-chat"]
-    assert {item.callable_key for item in binding_repository.bindings} == {
-        "gpt-4o-mini",
-        "support-chat",
-    }
+    assert {item.callable_key for item in binding_repository.bindings} == {"gpt-4o-mini", "support-chat"}
 
 
 @pytest.mark.asyncio
@@ -1160,9 +1038,7 @@ async def test_update_key_asset_access_inherit_clears_existing_state(client, tes
         metadata=None,
     )
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_access_group_repository = (
-        _FakeCallableTargetAccessGroupBindingRepository()
-    )
+    test_app.state.callable_target_access_group_repository = _FakeCallableTargetAccessGroupBindingRepository()
     test_app.state.callable_target_scope_policy_repository = policy_repository
     test_app.state.callable_target_grant_service = grant_service
     test_app.state.callable_target_catalog = {
@@ -1179,14 +1055,8 @@ async def test_update_key_asset_access_inherit_clears_existing_state(client, tes
     payload = response.json()
     assert payload["mode"] == "inherit"
     assert payload["selected_callable_keys"] == []
-    assert not any(
-        item.scope_type == "api_key" and item.scope_id == "key-1"
-        for item in binding_repository.bindings
-    )
-    assert not any(
-        item.scope_type == "api_key" and item.scope_id == "key-1"
-        for item in policy_repository.policies
-    )
+    assert not any(item.scope_type == "api_key" and item.scope_id == "key-1" for item in binding_repository.bindings)
+    assert not any(item.scope_type == "api_key" and item.scope_id == "key-1" for item in policy_repository.policies)
     assert grant_service.reloads == 1
 
 
@@ -1203,9 +1073,7 @@ async def test_update_key_asset_access_rejects_targets_outside_parent_scope(clie
         metadata=None,
     )
     test_app.state.callable_target_binding_repository = binding_repository
-    test_app.state.callable_target_scope_policy_repository = (
-        _FakeCallableTargetScopePolicyRepository()
-    )
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_grant_service = _FakeGrantService()
     test_app.state.callable_target_catalog = {
         "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.db.tiers.tiers import TierPolicyRepositoryUnavailableError, TierRepository
+from src.db.tiers import TierPolicyRepositoryUnavailableError, TierRepository
 
 from tests.db.tier_repository_fakes import _FakePrisma
 

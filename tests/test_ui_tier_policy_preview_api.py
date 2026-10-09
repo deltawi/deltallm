@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.db.tiers.tiers import (
+from src.db.tiers import (
     OrganizationTierAssignmentRecord,
     TierCapacityPoolRecord,
     TierModelPolicyRecord,
@@ -250,9 +250,10 @@ async def test_org_tier_policy_preview_filters_capacity_pools_by_model(
 
     assert response.status_code == 200
     payload = response.json()
-    assert [(pool["pool_key"], pool["callable_key"]) for pool in payload["capacity_pools"]] == [
-        ("shared-chat", "gpt-4o-mini")
-    ]
+    assert [
+        (pool["pool_key"], pool["callable_key"])
+        for pool in payload["capacity_pools"]
+    ] == [("shared-chat", "gpt-4o-mini")]
 
 
 @pytest.mark.asyncio
@@ -263,7 +264,9 @@ async def test_org_tier_policy_preview_skips_capacity_pools_for_denied_policy(
     repository = _TierPreviewRepository()
     repository.policy_inputs = TierPolicyLoadResult(
         assignments=repository.policy_inputs.assignments,
-        model_policies=(replace(repository.policy_inputs.model_policies[0], access_mode="deny"),),
+        model_policies=(
+            replace(repository.policy_inputs.model_policies[0], access_mode="deny"),
+        ),
         capacity_pools=repository.policy_inputs.capacity_pools,
         next_transition_at=repository.policy_inputs.next_transition_at,
     )
@@ -361,7 +364,9 @@ async def test_org_tier_policy_simulation_is_static_and_reports_limits(
     assert payload["request"]["tokens_per_request"] == 550
     assert payload["request"]["aggregate_tokens"] == 6050
     exceeded_scopes = {
-        item["scope"] for item in payload["static_limit_checks"] if item["would_exceed_limit"]
+        item["scope"]
+        for item in payload["static_limit_checks"]
+        if item["would_exceed_limit"]
     }
     assert exceeded_scopes == {
         "tier_org_model_rpm",
@@ -393,7 +398,9 @@ async def test_org_tier_policy_simulation_scales_token_checks_by_request_count(
     assert response.status_code == 200
     payload = response.json()
     model_tpm_check = next(
-        item for item in payload["static_limit_checks"] if item["scope"] == "tier_org_model_tpm"
+        item
+        for item in payload["static_limit_checks"]
+        if item["scope"] == "tier_org_model_tpm"
     )
     assert payload["request"]["tokens_per_request"] == 251
     assert payload["request"]["aggregate_tokens"] == 502
@@ -520,7 +527,9 @@ async def test_org_tier_policy_simulation_requires_input_image_pricing(
     base_policy = repository.policy_inputs.model_policies[0]
     repository.policy_inputs = replace(
         repository.policy_inputs,
-        model_policies=(replace(base_policy, pricing={"output_cost_per_image": 0.4}),),
+        model_policies=(
+            replace(base_policy, pricing={"output_cost_per_image": 0.4}),
+        ),
     )
     await _install_preview_services(test_app, repository=repository)
     base_deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
@@ -623,7 +632,9 @@ async def test_org_tier_policy_simulation_applies_provider_transcription_duratio
     base_policy = repository.policy_inputs.model_policies[0]
     repository.policy_inputs = replace(
         repository.policy_inputs,
-        model_policies=(replace(base_policy, pricing={"input_cost_per_second": 0.111}),),
+        model_policies=(
+            replace(base_policy, pricing={"input_cost_per_second": 0.111}),
+        ),
     )
     await _install_preview_services(test_app, repository=repository)
     base_deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
@@ -670,7 +681,9 @@ async def test_org_tier_policy_simulation_does_not_bill_groq_minimum_without_dur
     base_policy = repository.policy_inputs.model_policies[0]
     repository.policy_inputs = replace(
         repository.policy_inputs,
-        model_policies=(replace(base_policy, pricing={"input_cost_per_second": 0.111}),),
+        model_policies=(
+            replace(base_policy, pricing={"input_cost_per_second": 0.111}),
+        ),
     )
     await _install_preview_services(test_app, repository=repository)
     base_deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
@@ -1347,7 +1360,8 @@ async def test_org_tier_policy_simulation_skips_pool_checks_for_denied_policy(
     assert payload["capacity_pool"] is None
     assert payload["capacity_pool_rate_limits"] == []
     assert not any(
-        item["scope"].startswith("tier_pool_") for item in payload["static_limit_checks"]
+        item["scope"].startswith("tier_pool_")
+        for item in payload["static_limit_checks"]
     )
 
 
@@ -1375,7 +1389,9 @@ async def test_org_tier_policy_batch_simulation_falls_back_to_sync_limits(
     scopes = {item["scope"] for item in payload["static_limit_checks"]}
     assert {"tier_org_model_rpm", "tier_org_model_tpm"}.issubset(scopes)
     exceeded_scopes = {
-        item["scope"] for item in payload["static_limit_checks"] if item["would_exceed_limit"]
+        item["scope"]
+        for item in payload["static_limit_checks"]
+        if item["would_exceed_limit"]
     }
     assert {"tier_org_model_rpm", "tier_org_model_tpm"}.issubset(exceeded_scopes)
 

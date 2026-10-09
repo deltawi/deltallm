@@ -7,8 +7,8 @@ from fastapi import FastAPI
 import httpx
 import pytest
 
-from src.db.routing.route_group_identity import RouteGroupIdentity
-from src.db.routing.route_groups import RouteGroupRecord
+from src.db.route_group_identity import RouteGroupIdentity
+from src.db.route_groups import RouteGroupRecord
 from src.models.platform_auth import PlatformAuthContext
 from tests.test_ui_route_groups import _FakeHotReload, _FakeRouteGroupRepository
 

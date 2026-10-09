@@ -34,7 +34,7 @@ from tests.performance.routing_cache_profile import queue_slope
 from tests.test_realtime_billing_postgres import dispatch, realtime_db
 from tests.test_selector_charge_db_integration import selector_billing_db
 from tests.test_realtime_runtime_postgres import response_event
-from src.db.billing.realtime_billing import RealtimeBillingRepository
+from src.db.realtime_billing import RealtimeBillingRepository
 from src.realtime.admission import RealtimeSessionPermit
 from src.realtime.config import RealtimeSettings
 from src.router.candidates import AttemptCapacity

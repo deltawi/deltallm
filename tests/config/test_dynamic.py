@@ -20,8 +20,8 @@ from src.config_runtime.loader import deep_merge
 from src.config_runtime.models import ModelHotReloadManager
 from src.config_runtime.secrets import BaseSecretManager, SecretResolver
 from src.providers.base import map_standard_provider_status_error
-from src.db.catalog.model_deployments import ModelDeploymentRecord
-from src.db.routing.route_groups import RouteGroupRuntimeSnapshot
+from src.db.repositories import ModelDeploymentRecord
+from src.db.route_groups import RouteGroupRuntimeSnapshot
 from src.router.selection.policy import RouteSelectorActivationState
 from src.router import (
     CooldownManager,

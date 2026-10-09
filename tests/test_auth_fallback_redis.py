@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from redis.asyncio import Redis
 
-from src.db.identity.key_repository import KeyRecord
+from src.db.repositories import KeyRecord
 from src.models.errors import AuthenticationError
 from src.services.auth_fallback import AuthFallbackLimits
 from src.services.key_service import KeyService

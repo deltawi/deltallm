@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from src.config_runtime.secrets import SecretResolver
-from src.db.catalog.named_credentials import NamedCredentialRecord
+from src.db.named_credentials import NamedCredentialRecord
 
 
 class _FakeNamedCredentialRepository:
@@ -35,9 +35,7 @@ async def test_provider_model_discovery_returns_catalog_without_credentials(clie
 
 
 @pytest.mark.asyncio
-async def test_provider_model_discovery_preserves_catalog_suggestions_for_azure_alias(
-    client, test_app
-):
+async def test_provider_model_discovery_preserves_catalog_suggestions_for_azure_alias(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     response = await client.post(
@@ -67,19 +65,11 @@ async def test_provider_model_discovery_catalog_matches_current_provider_models(
         },
         "groq": {
             "mode": "chat",
-            "expected_ids": {
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "llama-3.3-70b-versatile",
-            },
+            "expected_ids": {"openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile"},
         },
         "gemini": {
             "mode": "chat",
-            "expected_ids": {
-                "gemini-3.1-pro-preview",
-                "gemini-3-flash-preview",
-                "gemini-2.5-flash",
-            },
+            "expected_ids": {"gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-flash"},
         },
     }
 
@@ -146,10 +136,7 @@ async def test_provider_model_discovery_supports_named_credentials(client, test_
                 credential_id="cred-1",
                 name="OpenAI prod",
                 provider="openai",
-                connection_config={
-                    "api_key": "provider-key",
-                    "api_base": "https://api.openai.com/v1",
-                },
+                connection_config={"api_key": "provider-key", "api_base": "https://api.openai.com/v1"},
             )
         ]
     )
@@ -179,9 +166,7 @@ async def test_provider_model_discovery_supports_named_credentials(client, test_
 
 
 @pytest.mark.asyncio
-async def test_provider_model_discovery_supports_named_credentials_with_custom_auth_headers(
-    client, test_app
-):
+async def test_provider_model_discovery_supports_named_credentials_with_custom_auth_headers(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
         [
@@ -203,9 +188,7 @@ async def test_provider_model_discovery_supports_named_credentials_with_custom_a
         assert url == "https://vllm.example/v1/models"
         assert headers == {"X-API-Key": "provider-key"}
         del timeout
-        return httpx.Response(
-            200, json={"data": [{"id": "meta-llama/Llama-3.1-8B-Instruct", "name": "Llama"}]}
-        )
+        return httpx.Response(200, json={"data": [{"id": "meta-llama/Llama-3.1-8B-Instruct", "name": "Llama"}]})
 
     test_app.state.http_client.get = get
 
@@ -258,19 +241,14 @@ async def test_provider_model_discovery_resolves_named_credential_env_refs(
 ):
     setattr(test_app.state.settings, "master_key", "mk-test")
     monkeypatch.setenv("OPENAI_PROVIDER_KEY", "provider-key")
-    test_app.state.dynamic_config_manager = type(
-        "DynamicConfig", (), {"secret_resolver": SecretResolver()}
-    )()
+    test_app.state.dynamic_config_manager = type("DynamicConfig", (), {"secret_resolver": SecretResolver()})()
     test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
         [
             NamedCredentialRecord(
                 credential_id="cred-1",
                 name="OpenAI prod",
                 provider="openai",
-                connection_config={
-                    "api_key": "os.environ/OPENAI_PROVIDER_KEY",
-                    "api_base": "https://api.openai.com/v1",
-                },
+                connection_config={"api_key": "os.environ/OPENAI_PROVIDER_KEY", "api_base": "https://api.openai.com/v1"},
             )
         ]
     )
@@ -295,9 +273,7 @@ async def test_provider_model_discovery_resolves_named_credential_env_refs(
 
 
 @pytest.mark.asyncio
-async def test_provider_model_discovery_returns_catalog_with_warning_on_live_failure(
-    client, test_app
-):
+async def test_provider_model_discovery_returns_catalog_with_warning_on_live_failure(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201

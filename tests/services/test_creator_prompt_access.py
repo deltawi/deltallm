@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.db.catalog.prompt_registry import PromptTemplateRecord
+from src.db.prompt_registry import PromptTemplateRecord
 from src.models.responses import UserAPIKeyAuth
 from src.services.creator_prompt_access import (
     CreatorPromptAccessService,
@@ -61,7 +61,9 @@ class _PromptRepository:
     def __init__(self, records: list[PromptTemplateRecord]) -> None:
         self.records = records
 
-    async def list_by_managed_asset_ids(self, asset_ids: list[str]) -> list[PromptTemplateRecord]:
+    async def list_by_managed_asset_ids(
+        self, asset_ids: list[str]
+    ) -> list[PromptTemplateRecord]:
         return [record for record in self.records if record.managed_asset_id in asset_ids]
 
 

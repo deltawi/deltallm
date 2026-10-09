@@ -20,7 +20,7 @@ from src.models.errors import (
 from src.routers.audit_helpers import emit_audit_event
 from src.telemetry.spend_operation import billing_write_context
 from src.billing.spend.spend_operations import SpendPersistenceUnavailable
-from src.db.accounting.accounting_protocol import AccountingProtocolUnavailable
+from src.db.accounting_protocol import AccountingProtocolUnavailable
 from src.metrics.accounting import increment_accounting_failure
 
 logger = logging.getLogger(__name__)

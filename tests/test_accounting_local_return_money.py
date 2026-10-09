@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.billing.accounting.permits.accounting_local_leases import LocalPermitReturn
-from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting_calls import AccountingProtocolUnavailable
 from tests.test_accounting_local_leases import database_grant, deadline, owner, suffix
 
 

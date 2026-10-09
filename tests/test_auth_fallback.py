@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from src.db.identity.key_repository import KeyRecord, KeyRepository
+from src.db.repositories import KeyRecord, KeyRepository
 from src.metrics.prometheus import get_prometheus_registry
 from src.models.errors import AuthenticationError, AuthenticationUnavailableError
 from src.services.auth_fallback import AuthFallbackLimits

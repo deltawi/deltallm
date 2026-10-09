@@ -18,9 +18,9 @@ from scripts.measure_gateway_load import (
     write_results,
 )
 from src.billing.budgets.budget import BudgetEnforcementService
-from src.db.runtime.allocated_client import AllocatedPrisma, DatabaseOwner
-from src.db.runtime.allocation_config import DatabasePolicy
-from src.db.billing.budgets import BudgetRepository
+from src.db.allocated_client import AllocatedPrisma, DatabaseOwner
+from src.db.allocation_config import DatabasePolicy
+from src.db.budgets import BudgetRepository
 from tests.performance.gateway_concurrency_dependencies import fixture_database_url
 
 TABLES = (

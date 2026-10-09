@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from src.db.organizations.deletion.organization_deletion_records import (
+from src.db.organization_deletion_records import (
     OrganizationDeletionJobRecord,
     OrganizationDeletionPlanRecord,
 )

@@ -32,10 +32,10 @@ from src.billing.budgets.budget_notifications import (
     BudgetNotificationProducer,
     BudgetNotificationWorker,
 )
-from src.db.accounting.accounting_budget_reads import AccountingBudgetReadRepository
+from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 from src.billing.accounting.reporting.accounting_projection import AccountingProjectionWorker
 from src.billing.accounting.accounting_service import AccountingProtocolService
-from src.db.billing.budget_notifications import BudgetNotificationRepository
+from src.db.budget_notifications import BudgetNotificationRepository
 from src.callbacks import CallbackManager
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry

@@ -12,7 +12,7 @@ from src.bootstrap.accounting_config import (
 )
 from src.bootstrap.accounting_role_config import validate_accounting_role
 from src.config import resolve_database_settings
-from src.db.runtime.allocation_config import resolve_allocation_settings
+from src.db.allocation_config import resolve_allocation_settings
 from src.deployment_capacity_settings import resolve_capacity_settings
 from src.process_lifecycle import ProcessLifecycle
 from src.startup_config import StartupConfig

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from src.db.catalog.logical_models import LogicalModelRepository
-from src.db.catalog.managed_assets import ManagedAssetAccessRepository
+from src.db.logical_models import LogicalModelRepository
+from src.db.managed_assets import ManagedAssetAccessRepository
 from src.models.responses import UserAPIKeyAuth
 from src.services.managed_asset_access import (
     AssetKind,

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from src.db.email.email import EmailOutboxRecord, EmailOutboxRepository
+from src.db.email import EmailOutboxRecord, EmailOutboxRepository
 
 
 class FakePrisma:

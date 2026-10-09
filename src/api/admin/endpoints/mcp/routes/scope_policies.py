@@ -1,5 +1,4 @@
 """Admin MCP scope-policy routes."""
-
 from __future__ import annotations
 
 from time import perf_counter
@@ -10,7 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
-from src.db.mcp.mcp_scope_policies import MCPScopePolicyRepository
+from src.db.mcp_scope_policies import MCPScopePolicyRepository
 from src.middleware.admin import require_admin_permission
 
 from src.api.admin.endpoints.mcp.dependencies import (
@@ -31,10 +30,7 @@ from src.api.admin.endpoints.mcp.validators import (
 router = APIRouter(tags=["Admin MCP"])
 
 
-@router.get(
-    "/ui/api/mcp-scope-policies",
-    dependencies=[Depends(require_admin_permission(Permission.KEY_READ))],
-)
+@router.get("/ui/api/mcp-scope-policies", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
 async def list_mcp_scope_policies(
     request: Request,
     scope_type: str | None = Query(default=None),
@@ -45,12 +41,8 @@ async def list_mcp_scope_policies(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     repository = _scope_policy_repository_or_503(request)
-    scope = get_auth_scope(
-        request, authorization, x_master_key, required_permission=Permission.KEY_READ
-    )
-    normalized_scope_type = (
-        _validate_mcp_scope_policy_scope_type(scope_type) if scope_type is not None else None
-    )
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    normalized_scope_type = _validate_mcp_scope_policy_scope_type(scope_type) if scope_type is not None else None
     if scope.is_platform_admin:
         policies, total = await repository.list_policies(
             scope_type=normalized_scope_type,
@@ -60,19 +52,11 @@ async def list_mcp_scope_policies(
         )
         return {
             "data": [_serialize_scope_policy(policy) for policy in policies],
-            "pagination": {
-                "total": total,
-                "limit": limit,
-                "offset": offset,
-                "has_more": offset + limit < total,
-            },
+            "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
         }
 
     if not scope.org_ids and not scope.team_ids:
-        return {
-            "data": [],
-            "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
-        }
+        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
     db = _db_or_503(request)
     clauses: list[str] = []
@@ -113,19 +97,11 @@ async def list_mcp_scope_policies(
     policies = [MCPScopePolicyRepository._to_policy_record(row) for row in rows]
     return {
         "data": [_serialize_scope_policy(policy) for policy in policies],
-        "pagination": {
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + limit < total,
-        },
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
 
-@router.post(
-    "/ui/api/mcp-scope-policies",
-    dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))],
-)
+@router.post("/ui/api/mcp-scope-policies", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def upsert_mcp_scope_policy(
     request: Request,
     payload: dict[str, Any],
@@ -134,14 +110,10 @@ async def upsert_mcp_scope_policy(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _scope_policy_repository_or_503(request)
-    scope = get_auth_scope(
-        request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE
-    )
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     scope_type = _validate_mcp_scope_policy_scope_type(payload.get("scope_type"))
     scope_id = _normalize_scope_id(payload.get("scope_id"))
-    await _validate_scoped_scope_target_write(
-        request, scope=scope, scope_type=scope_type, scope_id=scope_id
-    )
+    await _validate_scoped_scope_target_write(request, scope=scope, scope_type=scope_type, scope_id=scope_id)
 
     policy = await repository.upsert_policy(
         scope_type=scope_type,
@@ -150,9 +122,7 @@ async def upsert_mcp_scope_policy(
         metadata=_normalize_metadata(payload.get("metadata")),
     )
     if policy is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found")
     await _reload_runtime_governance(request)
     response = _serialize_scope_policy(policy)
     await emit_admin_mutation_audit(
@@ -168,10 +138,7 @@ async def upsert_mcp_scope_policy(
     return response
 
 
-@router.delete(
-    "/ui/api/mcp-scope-policies/{policy_id}",
-    dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))],
-)
+@router.delete("/ui/api/mcp-scope-policies/{policy_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def delete_mcp_scope_policy(
     request: Request,
     policy_id: str,
@@ -180,14 +147,10 @@ async def delete_mcp_scope_policy(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _scope_policy_repository_or_503(request)
-    scope = get_auth_scope(
-        request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE
-    )
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     policy = await repository.get_policy(policy_id)
     if policy is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found")
     await _validate_scoped_scope_target_write(
         request,
         scope=scope,
@@ -196,9 +159,7 @@ async def delete_mcp_scope_policy(
     )
     deleted = await repository.delete_policy(policy_id)
     if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found")
     await _reload_runtime_governance(request)
     response = {"deleted": True, "mcp_scope_policy_id": policy_id}
     await emit_admin_mutation_audit(
