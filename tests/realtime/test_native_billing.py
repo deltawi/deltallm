@@ -10,18 +10,18 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_protocol import AccountingOutcome
-from src.billing.accounting_service import AccountingProtocolService
-from src.billing.accounting_snapshots import finalization_bytes
-from src.billing.accounting_turn_proofs import (
+from src.billing.accounting.accounting_protocol import AccountingOutcome
+from src.billing.accounting.accounting_service import AccountingProtocolService
+from src.billing.accounting.accounting_snapshots import finalization_bytes
+from src.billing.accounting.journal.accounting_turn_proofs import (
     AccountingTurnProofs,
     TURN_RESERVED_BYTES,
     ACKNOWLEDGED_BYTES,
 )
-from src.billing.realtime_accounting_bounds import RealtimeCostBounds, realtime_cost_bounds
-from src.billing.realtime_native import NativeRealtimeBilling
-from src.billing.realtime_usage import RealtimeDurationUsage
-from src.billing.spend_operations import SpendPersistenceUnavailable
+from src.billing.charges.realtime_accounting_bounds import RealtimeCostBounds, realtime_cost_bounds
+from src.billing.charges.realtime_native import NativeRealtimeBilling
+from src.billing.charges.realtime_usage import RealtimeDurationUsage
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.realtime.errors import RealtimeError
 from src.realtime.admission import RealtimeSessionPermit
 from src.realtime.config import RealtimeSettings

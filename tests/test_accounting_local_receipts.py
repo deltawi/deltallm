@@ -4,13 +4,13 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_local_leases import LocalPermitReceipt
-from src.billing.accounting_protocol import AccountingOutcome, FinalizationReceipt
+from src.billing.accounting.permits.accounting_local_leases import LocalPermitReceipt
+from src.billing.accounting.accounting_protocol import AccountingOutcome, FinalizationReceipt
 from tests.test_preissued_permit_bytes import retained_object_bytes
 from collections import OrderedDict
 from tests.test_accounting_local_leases import terminal
 
-from src.billing.accounting_local_receipts import (
+from src.billing.accounting.permits.accounting_local_receipts import (
     LocalReceiptStore,
     RetainedLocalReceipt,
     reservation_bytes,

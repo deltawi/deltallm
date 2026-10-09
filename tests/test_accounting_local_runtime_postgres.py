@@ -6,16 +6,19 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_journal_runtime import JournalProcessingWorker, JournalWorkerConfig
-from src.billing.accounting_journal_terminal import JournalTerminalPersistence
-from src.billing.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_local_returns import LocalReturnWorker
-from src.billing.accounting_local_runtime import LocalAccountingRuntime
-from src.billing.accounting_local_service import LocalAccountingService
-from src.billing.accounting_local_terminal import LocalTerminalOwner
-from src.billing.accounting_terminal_receipts import JournalReceipt
+from src.billing.accounting.journal.accounting_journal_runtime import (
+    JournalProcessingWorker,
+    JournalWorkerConfig,
+)
+from src.billing.accounting.journal.accounting_journal_terminal import JournalTerminalPersistence
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
+from src.billing.accounting.accounting_local_runtime import LocalAccountingRuntime
+from src.billing.accounting.accounting_local_service import LocalAccountingService
+from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
+from src.billing.accounting.journal.accounting_terminal_receipts import JournalReceipt
 from src.db.accounting_journal import AccountingJournalRepository
 from src.db.accounting_journal_worker import AccountingJournalWorkerRepository
 from src.db.accounting_local_leases import AccountingLocalLeaseRepository

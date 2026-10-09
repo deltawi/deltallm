@@ -5,8 +5,11 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_local_leases import LocalAccountingHandle, LocalDispatchPermit
-from src.billing.accounting_protocol import (
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalAccountingHandle,
+    LocalDispatchPermit,
+)
+from src.billing.accounting.accounting_protocol import (
     AccountingAttempt,
     AccountingOperationHandle,
     DispatchPermit,
@@ -128,7 +131,7 @@ async def test_original_request_mutation_cannot_change_a_constructed_dispatch_ha
 
 @pytest.mark.parametrize("kind", ["permit", "handle"])
 async def test_proof_encoding_runs_only_at_the_two_mutable_boundaries(monkeypatch, kind):
-    from src.billing import accounting_local_leases
+    from src.billing.accounting.permits import accounting_local_leases
 
     _, permit, handle = values()
     original = accounting_local_leases.reservation_snapshot

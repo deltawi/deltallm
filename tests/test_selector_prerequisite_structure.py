@@ -5,8 +5,8 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 MODULES = (
-    "billing/operation_reservation.py",
-    "billing/routing_costs.py",
+    "billing/charges/operation_reservation.py",
+    "billing/pricing/routing_costs.py",
     "cache/execution_eligibility.py",
     "db/billing_operations.py",
     "db/soft_selector_admission.py",

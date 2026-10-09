@@ -6,22 +6,25 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.billing.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting_local_leases import LocalAccountingHandle, LocalDispatchPermit
-from src.billing.accounting_local_receipts import LocalReceiptStore
-from src.billing.accounting_local_service import LocalAccountingService
-from src.billing.accounting_local_terminal import LocalTerminalOwner
-from src.billing.accounting_protocol import (
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalAccountingHandle,
+    LocalDispatchPermit,
+)
+from src.billing.accounting.permits.accounting_local_receipts import LocalReceiptStore
+from src.billing.accounting.accounting_local_service import LocalAccountingService
+from src.billing.accounting.journal.accounting_local_terminal import LocalTerminalOwner
+from src.billing.accounting.accounting_protocol import (
     AccountingOperationHandle,
     DispatchPermit,
     ReserveDecision,
 )
-from src.billing.accounting_service import AccountingProtocolService
-from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull
-from src.billing.provider_allowance import ProviderRequestBounds
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
-from src.billing.spend_operations import SpendPersistenceUnavailable
+from src.billing.accounting.accounting_service import AccountingProtocolService
+from src.billing.accounting.durable_microbatch import DurableBatchClosed, DurableBatchFull
+from src.billing.charges.provider_allowance import ProviderRequestBounds
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend.spend_operations import SpendPersistenceUnavailable
 from src.cache.middleware import CacheMiddleware
 from src.telemetry.spend_operation import (
     admit_accounting_reservation,

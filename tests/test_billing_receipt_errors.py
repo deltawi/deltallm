@@ -1,6 +1,6 @@
 import pytest
 
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.db.errors import is_record_specific_database_error
 from src.db.spend_ingestion import SpendOutboxRecord
 from tests.test_spend_ingestion import _OutboxDB, _Writer, _spend_payload

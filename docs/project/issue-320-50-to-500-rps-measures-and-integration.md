@@ -519,7 +519,7 @@ The conflict set includes critical integration points:
 
 - `prisma/schema.prisma` and `scripts/verify_migration_paths.py`
 - `src/main.py`, `src/router/state.py`, and `src/bootstrap/infrastructure.py`
-- `src/billing/spend_ingestion.py` and `src/db/billing_operations.py`
+- `src/billing/spend/spend_ingestion.py` and `src/db/billing_operations.py`
 - runtime configuration, health, Helm values, deployment docs, and `uv.lock`
 
 The new `main` work includes provider failover, asset access, organization deletion,

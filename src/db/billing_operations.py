@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, AsyncIterator, Literal
 
 from src.billing.money import money_string
-from src.billing.operation_reservation import (
+from src.billing.charges.operation_reservation import (
     BillingOperationUnavailable,
     BillingOperation,
     ComponentState,
@@ -15,7 +15,7 @@ from src.billing.operation_reservation import (
     SoftSelectorOperation,
     operation_selector_pricing,
 )
-from src.billing.selector_charge import AcceptedSelectorCharge
+from src.billing.charges.selector_charge import AcceptedSelectorCharge
 from src.db.billing_transaction import billing_transaction
 from src.db.soft_selector_admission import check_soft_selector_admission
 

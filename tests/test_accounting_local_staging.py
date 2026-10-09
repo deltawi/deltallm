@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.billing.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
 from tests.test_accounting_local_cursors import value
 from tests.test_preissued_permit_bytes import retained_object_bytes
 

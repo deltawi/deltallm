@@ -10,8 +10,8 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 
 from src.api.admin.accounting_budget import apply_accounting_balances
-from src.billing.accounting_protocol import AccountingScope
-from src.billing.budget import BudgetStateUnavailable, budget_read_period
+from src.billing.accounting.accounting_protocol import AccountingScope
+from src.billing.budgets.budget import BudgetStateUnavailable, budget_read_period
 from src.db.accounting_budget_reads import AccountingBudgetReadRepository
 
 

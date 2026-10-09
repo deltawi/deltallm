@@ -7,8 +7,12 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.budget import BudgetEnforcementService, BudgetExceeded, BudgetStateUnavailable
-from src.billing.ledger import SpendLedgerService
+from src.billing.budgets.budget import (
+    BudgetEnforcementService,
+    BudgetExceeded,
+    BudgetStateUnavailable,
+)
+from src.billing.spend.ledger import SpendLedgerService
 from src.db.budget_notifications import BudgetNotificationRepository
 from src.db.budget_reconciliation import BudgetCounterChanged, BudgetReconciliationRepository
 from tests.test_telemetry_ingestion_db_integration import _connect_prisma

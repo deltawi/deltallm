@@ -780,7 +780,7 @@ The approved pass-through charging policy now has an isolated, typed receipt-to-
 This is **partial PR 3 implementation**, not completed durable selector execution or permission
 to activate the feature.
 
-- `src/billing/selector_charge.py` owns immutable pricing, reported token receipt, frozen
+- `src/billing/charges/selector_charge.py` owns immutable pricing, reported token receipt, frozen
   attribution, deterministic UUIDv5 child identity (`selector:v1` within the server operation
   UUID), and mapping to the existing spend payload. Customer charge equals provider cost.
   Unknown/unattempted usage is not a billable receipt. Missing rates, invalid counts, unsupported
@@ -805,7 +805,7 @@ to activate the feature.
   updates. Database statement/lock-deadline and integration evidence remain open. No production
   request calls this method, so selector-free request dependency counts are unchanged.
 - Spend preparation was extracted from the oversized writer into
-  `src/billing/spend_preparation.py`; the original method delegates to the single mapper.
+  `src/billing/spend/spend_preparation.py`; the original method delegates to the single mapper.
   Its historical dynamic outbox representation is a named compatibility boundary, not a new
   domain interface. Keep it bounded and remove that dynamic shape when accepted spend events
   migrate together to a typed representation. The new receipt contract has no dynamic fields

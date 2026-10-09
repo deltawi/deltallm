@@ -11,13 +11,13 @@ from uuid import uuid4
 import pytest
 from pydantic import BaseModel
 
-from src.billing.accounting_protocol import (
+from src.billing.accounting.accounting_protocol import (
     AccountingScope,
     BudgetWindowRef,
     PreissuedPermitAllocation,
     ReserveDecision,
 )
-from src.billing.preissued_permits import PermitSubject, _GrantCursor
+from src.billing.accounting.permits.preissued_permits import PermitSubject, _GrantCursor
 from src.metrics.prometheus import get_prometheus_registry
 from tests.test_accounting_protocol import reservation
 from tests.test_preissued_permit_bank import FakePermitRepository, bank, deadline, fresh

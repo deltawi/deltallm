@@ -3,12 +3,12 @@ from __future__ import annotations
 import httpx
 from collections.abc import Awaitable, Callable
 
-from src.billing.operation_reservation import (
+from src.billing.charges.operation_reservation import (
     BillingOperationUnavailable,
     OperationReservationStore,
     SoftSelectorOperation,
 )
-from src.billing.selector_native import NativeSelectorBilling
+from src.billing.charges.selector_native import NativeSelectorBilling
 from src.cache.execution_eligibility import ResponseCacheEligibility
 from src.providers.chat_upstream import ChatAdapterLookup
 from src.router.selection.capacity import CapacityAdmittedSelectorHop, SelectorCapacityOwner

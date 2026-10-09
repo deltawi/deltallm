@@ -7,8 +7,8 @@ import json
 import math
 from typing import TYPE_CHECKING
 
-from src.billing.spend_operations import OperationHandle, SpendPersistenceUnavailable
-from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.spend.spend_operations import OperationHandle, SpendPersistenceUnavailable
+from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.db.billing_operations import BillingOperationRepository
 from src.db.billing_transaction import DB_BUDGET_SECONDS
 from src.db.spend_ingestion import SpendIngestionRepository

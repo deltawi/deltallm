@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
-from src.billing.budget import BudgetStateUnavailable, budget_read_period
-from src.billing.accounting_protocol import AccountingScope
+from src.billing.budgets.budget import BudgetStateUnavailable, budget_read_period
+from src.billing.accounting.accounting_protocol import AccountingScope
 from src.db.accounting_calls import (
     AccountingDatabaseCalls,
     AccountingProtocolUnavailable,

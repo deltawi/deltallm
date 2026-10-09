@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import pytest
 from starlette.datastructures import State
 
-from src.billing.operation_reservation import BillingOperationUnavailable
-from src.billing.selector_native import NativeSelectorBilling
+from src.billing.charges.operation_reservation import BillingOperationUnavailable
+from src.billing.charges.selector_native import NativeSelectorBilling
 from src.bootstrap.selector import configure_selector_execution
 from src.db.billing_operation_recovery import BillingOperationRecovery
 from src.router.selection.runtime import SelectorExecutionFactory

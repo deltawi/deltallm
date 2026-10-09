@@ -5,16 +5,19 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_local_cursors import LocalCursorStore
-from src.billing.accounting_local_leases import LocalPermitFinalization, LocalPermitReceipt
-from src.billing.accounting_protocol import (
+from src.billing.accounting.permits.accounting_local_cursors import LocalCursorStore
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalPermitFinalization,
+    LocalPermitReceipt,
+)
+from src.billing.accounting.accounting_protocol import (
     AccountingOutcome,
     PreissuedPermitAllocation,
     PreissuedPermitClaim,
 )
 from src.db.accounting_permits import AccountingPermitRepository
 from src.db.accounting_protocol import AccountingProtocolRepository
-from src.billing.preissued_permits import PermitSubject
+from src.billing.accounting.permits.preissued_permits import PermitSubject
 from tests.test_accounting_local_leases_postgres import allocation, funded, owner, deadline
 from tests.test_accounting_permits_postgres import CountingClient
 from tests.test_accounting_protocol_postgres import (

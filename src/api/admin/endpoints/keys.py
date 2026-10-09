@@ -11,7 +11,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.api.admin.accounting_budget import apply_accounting_balances
-from src.billing.accounting_protocol import AccountingScope
+from src.billing.accounting.accounting_protocol import AccountingScope
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import (

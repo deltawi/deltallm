@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.billing.accounting_protocol import AccountingOutcome
+from src.billing.accounting.accounting_protocol import AccountingOutcome
 from tests.test_accounting_protocol_postgres import (
     _create_window,
     _finalization,

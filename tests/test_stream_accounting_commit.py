@@ -11,8 +11,8 @@ import httpx
 import pytest
 import uvicorn
 
-from src.billing.spend import SpendTrackingService
-from src.billing.spend_ingestion import SpendIngestionConfig, SpendIngestionService
+from src.billing.spend.spend import SpendTrackingService
+from src.billing.spend.spend_ingestion import SpendIngestionConfig, SpendIngestionService
 from src.chat.stream_response import DeadlineStreamingResponse
 from src.router.execution import ManagedFailoverResult, RequestDeadline
 from tests.router.selection.test_realtime import configure

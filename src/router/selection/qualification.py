@@ -8,8 +8,8 @@ import json
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from src.billing.operation_reservation import token_price_allowance
-from src.billing.selector_charge import SelectorPriceSnapshot
+from src.billing.charges.operation_reservation import token_price_allowance
+from src.billing.charges.selector_charge import SelectorPriceSnapshot
 from src.chat_capabilities import ChatRoutingCapabilities
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router.selection.capacity import SelectorCapacityBounds

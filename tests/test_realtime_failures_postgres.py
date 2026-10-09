@@ -10,7 +10,7 @@ import pytest
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
-from src.billing.operation_reservation import BillingOperationUnavailable
+from src.billing.charges.operation_reservation import BillingOperationUnavailable
 from src.realtime.routing import resolve_realtime_target
 from src.router.candidates import AttemptCapacity
 from src.services.limit_counter import _parallel_lease_key

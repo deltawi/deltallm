@@ -16,7 +16,7 @@ from tests.test_accounting_protocol_postgres import (
     _repository,
     _reservation,
 )
-from src.billing.accounting_protocol import AccountingOutcome
+from src.billing.accounting.accounting_protocol import AccountingOutcome
 from tests.test_accounting_local_leases_postgres import funded
 from tests.performance.native_qualification_failures import (
     _UNSETTLED_SQL,

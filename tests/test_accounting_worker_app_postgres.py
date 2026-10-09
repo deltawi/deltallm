@@ -11,7 +11,7 @@ from src.bootstrap.accounting_local import build_api_accounting_runtime
 from src.bootstrap.accounting_worker_app import create_accounting_worker_app
 from src.bootstrap.accounting_remote import RemoteAccountingOwner
 from src.bootstrap.server_application import create_server_application
-from src.billing.accounting_http import AccountingHttpTransport
+from src.billing.accounting.transport.accounting_http import AccountingHttpTransport
 from src.config import DatabaseConnectionSettings
 from src.db.accounting_pool import AccountingPostgresClient, AccountingPostgresManager
 from src.lifecycle_settings import LifecycleSettings

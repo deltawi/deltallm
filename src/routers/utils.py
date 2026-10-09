@@ -30,7 +30,7 @@ async def enforce_budget_if_configured(
     # in the same durable statement that grants provider dispatch. Keeping the
     # legacy read here would add hot-path queries and still race concurrent
     # requests.
-    from src.billing.accounting_service import AccountingProtocolService
+    from src.billing.accounting.accounting_service import AccountingProtocolService
 
     if isinstance(
         getattr(request.app.state, "accounting_protocol_service", None),
@@ -44,7 +44,7 @@ async def enforce_budget_if_configured(
         request.state.budget_checked = True
         return
     try:
-        from src.billing.budget import BudgetExceeded
+        from src.billing.budgets.budget import BudgetExceeded
 
         await budget_service.check_budgets(
             api_key=getattr(auth_ctx, "api_key", None),

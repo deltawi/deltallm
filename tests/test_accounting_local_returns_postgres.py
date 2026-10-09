@@ -4,9 +4,12 @@ from decimal import Decimal
 
 import pytest
 
-from src.billing.accounting_local_leases import LocalPermitFinalization, LocalPermitReceipt
-from src.billing.accounting_local_issuer import LocalPermitIssuer
-from src.billing.accounting_local_returns import LocalReturnWorker
+from src.billing.accounting.permits.accounting_local_leases import (
+    LocalPermitFinalization,
+    LocalPermitReceipt,
+)
+from src.billing.accounting.permits.accounting_local_issuer import LocalPermitIssuer
+from src.billing.accounting.permits.accounting_local_returns import LocalReturnWorker
 from src.telemetry.lifecycle import WorkerState
 from tests.test_accounting_local_issue_postgres import state
 from tests.test_accounting_local_leases_postgres import deadline, funded, owner
@@ -18,7 +21,7 @@ from tests.test_accounting_protocol_postgres import (
     _window,
     accounting_db as _accounting_db,
 )
-from src.billing.preissued_permits import PermitSubject
+from src.billing.accounting.permits.preissued_permits import PermitSubject
 
 pytestmark = pytest.mark.postgres
 accounting_db = _accounting_db

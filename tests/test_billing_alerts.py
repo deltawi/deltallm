@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.billing.alerts import AlertService
-from src.billing.budget_notifications import BudgetNotificationWorker
+from src.billing.budgets.alerts import AlertService
+from src.billing.budgets.budget_notifications import BudgetNotificationWorker
 from tests.test_budget_notification_worker import dependencies, record
 from src.notifications.channels.email import EmailChannel
 from src.notifications.dispatcher import NotificationDispatcher

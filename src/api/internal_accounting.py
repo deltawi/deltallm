@@ -7,20 +7,20 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from src.billing.accounting_auth import (
+from src.billing.accounting.transport.accounting_auth import (
     ACCOUNTING_INTERNAL_PREFIX,
     ACCOUNTING_MAX_BODY_BYTES,
     ACCOUNTING_SIGNATURE_HEADER,
     ACCOUNTING_TIMESTAMP_HEADER,
     verify_accounting_signature,
 )
-from src.billing.accounting_rpc_contracts import (
+from src.billing.accounting.transport.accounting_rpc_contracts import (
     LocalFundingRequest,
     LocalReturnRequest,
     LocalTerminalRequest,
 )
-from src.billing.accounting_rpc_service import AccountingRpcService
-from src.billing.durable_microbatch import DurableBatchClosed, DurableBatchFull
+from src.billing.accounting.transport.accounting_rpc_service import AccountingRpcService
+from src.billing.accounting.durable_microbatch import DurableBatchClosed, DurableBatchFull
 from src.db.accounting_calls import AccountingProtocolUnavailable
 from src.metrics.accounting import increment_accounting_failure
 
