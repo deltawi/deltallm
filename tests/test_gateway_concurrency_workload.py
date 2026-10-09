@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import tarfile
 from pathlib import Path
 
 import httpx
@@ -418,10 +419,30 @@ async def test_dependency_snapshot_deadline_cancels_a_stuck_query(
     assert released.is_set()
 
 
-def test_published_samples_reproduce_the_historical_summary_and_contain_only_allowlisted_fields() -> (
-    None
-):
-    directory = ROOT / "docs/project/benchmarks/concurrency-2026-09-11"
+def test_published_samples_reproduce_the_historical_summary_and_contain_only_allowlisted_fields(
+    tmp_path: Path,
+) -> None:
+    fixture = ROOT / "tests/fixtures/concurrency-history-20260911.tar.gz"
+    assert hashlib.sha256(fixture.read_bytes()).hexdigest() == (
+        "b3730bb6ed59ec63aa5f781b15f984364745097220ecb234c319749ed6755463"
+    )
+    directory = tmp_path / "historical-samples"
+    directory.mkdir()
+    prefix = "docs/project/benchmarks/concurrency-2026-09-11/"
+    with tarfile.open(fixture) as archive:
+        members = [member for member in archive.getmembers() if member.isfile()]
+        assert len(members) == 9
+        assert sum(member.size for member in members) < 2_000_000
+        for member in members:
+            assert member.name.startswith(prefix)
+            name = member.name.removeprefix(prefix)
+            assert name == Path(name).name
+            assert name in {"manifest.json", "summary.json"} or name in {
+                f"stage-{rate}.jsonl" for rate in (1, 5, 10, 50, 100, 200, 500)
+            }
+            payload = archive.extractfile(member)
+            assert payload is not None
+            (directory / name).write_bytes(payload.read())
     manifest = json.loads((directory / "manifest.json").read_text())
     allowed = {
         "index",

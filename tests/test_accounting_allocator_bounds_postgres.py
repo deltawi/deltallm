@@ -11,7 +11,7 @@ from prisma.errors import RawQueryError
 
 from src.billing.accounting_protocol import PreissuedPermitAllocation, ReserveDecision
 from src.billing.preissued_permits import PreissuedPermitBank
-from src.db.accounting_permits import AccountingPermitRepository
+from tests.accounting_adapters.permit_repository import AccountingPermitRepository
 from src.db.accounting_local_leases import AccountingLocalLeaseRepository
 from src.db.accounting_protocol import AccountingProtocolUnavailable
 from tests.performance.accounting_allocator_plans import capture_accounting_plans

@@ -16,15 +16,12 @@ The runner requires a successful one-token warmup before recording load; warmup
 is excluded from request and dependency deltas. The fixture includes the explicit
 organization model grant required by enforced callable-target policy. The
 manifest reads `DELTALLM_CONFIG_PATH` and includes effective ingress, auth fallback,
-and all four database allocation budgets. See the
-[ingress comparison](ingress-measurement.md) for the PR2 results and reproduction.
+and all four database allocation budgets.
 
-This is a local baseline, not a supported production capacity profile. The saved
-[September 11 summary](../project/benchmarks/concurrency-2026-09-11/summary.json)
-is historical mixed-provider, closed-loop evidence. Its
-[manifest](../project/benchmarks/concurrency-2026-09-11/manifest.json) links seven
-sanitized sample files. It does not establish per-pod capacity or identify the
-database exception behind every audit failure.
+This is a local baseline, not a supported production capacity profile. Use the
+[current RPS report](../project/issue-320-rps-report.md) for results and the
+[evidence restore procedure](../project/issue-320-rps-reproduction.md#restore-historical-records)
+for earlier comparisons. Historical measurements are not a release certificate.
 
 **Prepare disposable dependencies**
 
@@ -221,14 +218,6 @@ failure requires a code change, build a new clean image and start a new evidence
 directory. Keep the failed evidence. These fixed short requests do not replace
 streaming, batch, Realtime, provider-loss, or production-scale tenant tests.
 
-The separate [instrumentation regression sample](../project/benchmarks/concurrency-observability/summary.json)
-uses an in-process ASGI fixture, fake Redis/provider, 10 RPS, and 200 requests
-per case. Redis/cache/provider call counts are unchanged between the paired
-runs. Miss p95 was 9.333 ms before and 9.316 ms after; hit p95 was 5.790 ms
-and 5.957 ms. Corresponding p99 values rose from 10.720 to 11.951 ms and
-6.481 to 7.159 ms. This small sample does not establish a capacity improvement
-and does not exercise outbox acceptance or lifecycle sampling.
-
 **Interpret the new measurements**
 
 | Metric | Interpretation |
@@ -281,9 +270,6 @@ is still cleaning up. Later discarded body frames do not count as transferred by
 disconnect, not only accounting. HTTP byte counters measure transferred bytes,
 not retained memory.
 
-Recompute the historical summary without any private source files:
-
-```bash
-uv run python -m tests.performance.summarize_historical_concurrency \
-  docs/project/benchmarks/concurrency-2026-09-11
-```
+The original closed-loop samples remain in one compressed regression fixture.
+The test checks their hashes, allowed fields and original summary. Restore other
+historical records with the reproduction guide linked above.

@@ -94,7 +94,7 @@ archive. The complete integrated image requires new load qualification.
 ## Rollout and rollback
 
 1. Keep operation intents disabled. Pause telemetry producers/workers during the
-   coordinated migration window described in the [design](../design/pr6-spend-recovery.md).
+   coordinated migration window described in the [design](../design/concurrency-runtime.md).
    Validate the migration on a restored production-size copy first. DDL waits at most
    two seconds for locks and rolls back if a statement exceeds 30 seconds.
 2. Apply the additive migration before deploying APIs. Verify legacy queued and

@@ -108,7 +108,7 @@ ceilings remain 38 PostgreSQL and 96 Redis per API process: 950 and 2,400 at tha
 peak, before reserves or separately enabled batch workers. These are connection
 ceilings, not supported throughput. See [dependency capacity](dependency-capacity.md).
 
-See the [design decision](../design/pr5-budget-prompts.md) for state and capacity details.
+See the [design decision](../design/concurrency-runtime.md) for state and capacity details.
 
 ## Prompt cache fills
 

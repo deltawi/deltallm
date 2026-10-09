@@ -306,3 +306,38 @@ Use `tests/realtime/sdk-requirements.txt` in an isolated Python 3.11 environment
 and set `DELTALLM_REALTIME_SDK_PYTHON` to that interpreter for the four official
 SDK cases. The Redis eviction check needs two separate empty Redis servers,
 not two database numbers on one server. No user workloads were used as fixtures.
+
+## Restore historical records
+
+Historical measurements and stage-specific design notes are no longer loose files
+in the current checkout. All passing and failed results remain in Git revision
+`abd09e5ff33d102bcb65f78fd288617f260331cd`. Its full snapshot also retains the old
+commands and their matching imports. Restore into a fresh directory, not over the
+working checkout:
+
+```sh
+git fetch origin codex/issue-320-main-integration
+task_history=$(mktemp -d /private/tmp/deltallm-history.XXXXXX)
+git archive --format=tar --output "$task_history/source.tar" \\
+  abd09e5ff33d102bcb65f78fd288617f260331cd
+tar -xf "$task_history/source.tar" -C "$task_history"
+```
+
+The restored snapshot contains:
+
+- `docs/project/benchmarks/`: the September baseline and overload comparisons.
+- `docs/project/evidence/issue-320-20261007/`: all 87 stage decisions and checksums.
+- The original long measure list, six stage-specific design notes and three
+  diagnostic commands under `scripts/benchmarks/`.
+
+A local archive of those 46 files is also retained at
+`artifacts/pr-cleanup-20261009/historical-materials.tar.gz`. Its SHA-256 is
+`a6a5ffd5f7691243d70c614ac451a679012318bee976dbd861f2be7ab8e1f6ed`.
+The adjacent manifest records the original file hashes. Local ignored artifacts
+are not published with the PR; the Git restore command does not depend on them.
+
+The nine original closed-loop regression files remain in
+`tests/fixtures/concurrency-history-20260911.tar.gz`. The test verifies the archive
+hash, each original sample hash, allowed fields and the unchanged summary. This
+fixture is not a current release certificate. New qualification still uses the
+normal constant-arrival kind runner and retains its complete evidence.

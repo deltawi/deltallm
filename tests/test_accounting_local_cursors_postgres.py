@@ -12,7 +12,7 @@ from src.billing.accounting_protocol import (
     PreissuedPermitAllocation,
     PreissuedPermitClaim,
 )
-from src.db.accounting_permits import AccountingPermitRepository
+from tests.accounting_adapters.permit_repository import AccountingPermitRepository
 from src.db.accounting_protocol import AccountingProtocolRepository
 from src.billing.preissued_permits import PermitSubject
 from tests.test_accounting_local_leases_postgres import allocation, funded, owner, deadline

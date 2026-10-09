@@ -17,7 +17,7 @@ from src.billing.accounting_protocol import (
     ReserveDecision,
 )
 from src.db.accounting_calls import AccountingProtocolUnavailable
-from src.db.accounting_permits import AccountingPermitRepository
+from tests.accounting_adapters.permit_repository import AccountingPermitRepository
 from tests.test_accounting_protocol import reservation
 
 

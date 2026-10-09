@@ -185,9 +185,10 @@ retain the existing cross-replica race and TTL/invalidation contract.
 
 ## Observe and qualify the allocations
 
-The [local ingress/authentication measurement](ingress-measurement.md) records
-the controlled overload comparison, dependency counts, raw samples, and limits
-of that evidence.
+The [RPS report](../project/issue-320-rps-report.md) records current results.
+The [reproduction guide](../project/issue-320-rps-reproduction.md#restore-historical-records)
+explains how to restore earlier overload comparisons without treating them as
+production qualification.
 
 Use `deltallm_ingress_active`, `deltallm_ingress_waiters`, and
 `deltallm_ingress_buffered_bytes` by the fixed `allocation` label (`inference`,

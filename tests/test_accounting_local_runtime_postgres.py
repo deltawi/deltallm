@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from src.billing.accounting_journal_runtime import JournalProcessingWorker, JournalWorkerConfig
-from src.billing.accounting_journal_terminal import JournalTerminalPersistence
+from tests.accounting_adapters.journal_terminal import JournalTerminalPersistence
 from src.billing.accounting_local_cursors import LocalCursorStore
 from src.billing.accounting_local_issuer import LocalPermitIssuer
 from src.billing.accounting_local_receipts import LocalReceiptStore

@@ -1,4 +1,4 @@
-"""Use journal acceptance through the shared local terminal owner."""
+"""Adapt journal acceptance for real-database local terminal tests."""
 
 from collections.abc import Sequence
 from typing import Protocol

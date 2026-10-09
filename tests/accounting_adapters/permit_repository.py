@@ -1,4 +1,4 @@
-"""Typed, bounded persistence for permit refills and claims across subjects."""
+"""Exercise durable permit SQL through a typed, bounded test adapter."""
 
 from __future__ import annotations
 

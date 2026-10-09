@@ -31,8 +31,8 @@ The PR is a draft until those contracts are combined and verified.
 
 These rows use application revision `7d4fbe713e4ae1fa295ce7af2ccd9e87a2ada62f`.
 Each row had zero errors, zero dropped arrivals and correct accounting.
-The source and image identities are retained in the
-[complete stage index](evidence/issue-320-20261007/all-runs.json).
+The source and image identities are retained in the archived complete stage index.
+Use the [restore procedure](issue-320-rps-reproduction.md#restore-historical-records).
 
 | Rate | Duration | Successful / scheduled | p95 / p99 | Result |
 | --- | ---: | ---: | ---: | --- |
@@ -48,9 +48,9 @@ The unchanged limit is +0.01. This is a small stability failure, not a throughpu
 collapse. It remains a failed gate. No ten-minute 50, 100 or 200 RPS stage ran on
 this image because the normal runner stopped after its short-stage failure.
 
-The versioned index covers all 87 earlier stages, including failures.
-Its [readable index](evidence/issue-320-20261007/all-runs.md) and
-[checksums](evidence/issue-320-20261007/checksums.json) remain unchanged.
+The archived index covers all 87 earlier stages, including failures. Its readable
+index, source identities and checksums are preserved at the original Git revision.
+The cleanup changes storage location, not any recorded result.
 
 ## Latest provider-pool diagnostics
 
@@ -149,8 +149,9 @@ Large raw evidence remains local and is not part of the PR:
 
 The earlier full reports and source archive are recoverable locally and in Git
 history. Obsolete upgrade plans and host-only wrappers were already removed.
-Current tests, migrations, architecture decisions, deployment guides, reproduction
-tools and referenced regression baselines remain. The cleanup does not erase failed
+Current tests, migrations, architecture decisions, deployment guides and reproduction
+tools remain. Historical samples used by regression tests are stored unchanged in
+one compressed test fixture. Older stage indexes and design notes are archived. The cleanup does not erase failed
 results or change acceptance limits.
 
 See the [reproduction guide](issue-320-rps-reproduction.md) for source restore,
@@ -158,3 +159,18 @@ image checks and load commands. New results must record their own exact source a
 image identities. Before release, integrate current main, verify its new auth and
 output-token contracts, pass database and migration checks, then run all four rates
 on one unchanged image under the normal qualification schedule.
+
+## PR scope cleanup
+
+The folder reorganizations are preserved on the separate package-layout branch.
+This upgrade keeps the pre-reorganization import layout. Six stage-specific design
+notes are consolidated in [Concurrency runtime design](../design/concurrency-runtime.md).
+Test-only accounting adapters now live under tests, with their coverage unchanged.
+Three unreferenced historical diagnostic commands and the old measurement files
+are archived. Financial repair commands and all migration bytes remain unchanged.
+
+The archive is recoverable from Git revision
+`abd09e5ff33d102bcb65f78fd288617f260331cd`. The local copy is
+`artifacts/pr-cleanup-20261009/historical-materials.tar.gz`.
+No RPS test was rerun for this cleanup. Earlier results still do not qualify the
+new source or its integration with current main.
