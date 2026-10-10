@@ -3,7 +3,7 @@ from pathlib import Path
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
 from src.billing.spend.spend_read import get_spend_read_source
-from src.services.spend_visibility import apply_spend_visibility, resolve_spend_visibility
+from src.services.reporting.spend_visibility import apply_spend_visibility, resolve_spend_visibility
 
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]

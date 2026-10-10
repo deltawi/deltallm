@@ -8,7 +8,7 @@ import pytest
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
 from src.models.platform_auth import PlatformAuthContext
-from src.services.audit_service import AuditService
+from src.services.audit.audit_service import AuditService
 from tests.test_selector_evaluation import fixture_payload
 from tests.test_ui_rbac_scoping import FakeSpendDB
 
@@ -124,7 +124,7 @@ async def test_aggregate_cost_overflow_is_sanitized_bad_input(client, report_app
 async def test_evaluation_required_audit_failure_is_not_report_success(
     client, report_app, monkeypatch
 ):
-    from src.services.audit_service import RequiredAuditPersistenceError
+    from src.services.audit.audit_service import RequiredAuditPersistenceError
 
     monkeypatch.setattr(
         "src.api.admin.endpoints.selector_evaluations.emit_admin_mutation_audit",

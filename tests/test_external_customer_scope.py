@@ -27,8 +27,8 @@ from src.middleware.platform_auth import (
 )
 from src.models.external_auth import ExternalWorkspaceContext
 from src.models.platform_auth import PlatformAuthContext
-from src.services.master_session_service import MasterSessionStatus
-from src.services.ui_authorization import effective_permissions_for_context, build_ui_access
+from src.services.identity.master_session_service import MasterSessionStatus
+from src.services.ui.ui_authorization import effective_permissions_for_context, build_ui_access
 
 
 def customer() -> PlatformAuthContext:
@@ -225,7 +225,7 @@ async def test_all_helpers_deny_mixed_master_credentials_even_for_expired_child(
             b"deltallm_session=psk_ext1_expired; deltallm_master_session=master-cookie",
         )
         # Use the actual master cookie name to avoid assumptions in the test.
-        from src.services.master_session_service import MASTER_SESSION_COOKIE_NAME
+        from src.services.identity.master_session_service import MASTER_SESSION_COOKIE_NAME
 
         headers[0] = (
             b"cookie",

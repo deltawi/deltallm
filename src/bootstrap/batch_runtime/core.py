@@ -24,7 +24,7 @@ from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
     RoutingRuntimeRouterProvider,
 )
-from src.services.model_visibility import normalize_callable_target_policy_mode
+from src.services.access.model_visibility import normalize_callable_target_policy_mode
 
 
 @dataclass(frozen=True)

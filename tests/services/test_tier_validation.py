@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.services.tiers import (
+from src.services.tiers.tiers import (
     float_gte_one_or_none,
     ensure_single_active_primary_assignment,
     non_negative_float,

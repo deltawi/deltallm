@@ -9,9 +9,9 @@ ROOT = Path(__file__).parents[1]
 @pytest.mark.parametrize(
     "module",
     [
-        "services/selector_evaluation.py",
-        "services/selector_evaluation_cli.py",
-        "services/routing_cost_reports.py",
+        "services/routing/selector_evaluation.py",
+        "services/routing/selector_evaluation_cli.py",
+        "services/reporting/routing_cost_reports.py",
     ],
 )
 def test_selector_admin_services_are_bounded_typed_and_do_not_execute_models(module):
@@ -59,7 +59,7 @@ def test_selector_admin_components_stay_separate_from_the_route_page():
 
 
 @pytest.mark.parametrize(
-    "module", ["services/selector_inventory.py", "db/routing/route_policy_dependencies.py"]
+    "module", ["services/routing/selector_inventory.py", "db/routing/route_policy_dependencies.py"]
 )
 def test_independent_selector_boundaries_remain_typed_and_off_the_inference_path(module):
     source = (ROOT / "src" / module).read_text()

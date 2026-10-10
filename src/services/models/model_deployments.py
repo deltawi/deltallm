@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from src.config import AppConfig
+from src.providers.resolution import resolve_provider_connection_defaults
+from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.db.catalog.model_deployments import ModelDeploymentRecord, ModelDeploymentRepository
+from src.services.models.named_credentials import (
+    merge_named_credential_params,
+    resolve_named_credential_record,
+)
+
+if TYPE_CHECKING:
+    from src.config_runtime.secrets import SecretResolver
+
+
+logger = logging.getLogger(__name__)
+_SECRET_CONNECTION_FIELDS = frozenset(
+    {
+        "api_key",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+    }
+)
+
+
+def _deployment_id(model_name: str, index: int, value: str | None) -> str:
+    if value:
+        return str(value)
+    return f"{model_name}-{index}"
+
+
+def resolve_runtime_deltallm_params(
+    params: dict[str, Any],
+    settings: Any,
+    *,
+    named_credential: NamedCredentialRecord | None = None,
+    allow_platform_defaults: bool = True,
+) -> dict[str, Any]:
+    resolved = merge_named_credential_params(params, named_credential)
+    return resolve_provider_connection_defaults(
+        resolved,
+        default_api_key=(
+            getattr(settings, "openai_api_key", None) if allow_platform_defaults else None
+        ),
+        default_api_base=(
+            getattr(settings, "openai_base_url", None) if allow_platform_defaults else None
+        ),
+    )
+
+
+def _credential_secret_resolution_failed(
+    raw: NamedCredentialRecord | None,
+    resolved: NamedCredentialRecord | None,
+) -> bool:
+    if raw is None or resolved is None:
+        return raw is not None
+    return any(
+        str(raw.connection_config.get(field) or "").strip()
+        and not str(resolved.connection_config.get(field) or "").strip()
+        for field in _SECRET_CONNECTION_FIELDS
+    )
+
+
+async def _named_credentials_by_id(
+    repository: NamedCredentialRepository | None,
+    credential_ids: list[str],
+) -> dict[str, NamedCredentialRecord]:
+    if repository is None:
+        return {}
+    return await repository.list_by_ids(credential_ids)
+
+
+def model_records_from_config(cfg: AppConfig) -> list[ModelDeploymentRecord]:
+    records: list[ModelDeploymentRecord] = []
+    for index, entry in enumerate(cfg.model_list):
+        records.append(
+            ModelDeploymentRecord(
+                deployment_id=_deployment_id(
+                    entry.model_name, index, getattr(entry, "deployment_id", None)
+                ),
+                model_name=entry.model_name,
+                named_credential_id=str(entry.named_credential_id).strip() or None
+                if entry.named_credential_id is not None
+                else None,
+                deltallm_params=entry.deltallm_params.model_dump(exclude_none=True),
+                model_info=entry.model_info.model_dump(exclude_none=True)
+                if entry.model_info
+                else {},
+                routing_state_incarnation=entry.routing_state_incarnation,
+            )
+        )
+    return records
+
+
+async def build_model_registry_from_config(
+    cfg: AppConfig,
+    settings: Any,
+    *,
+    named_credential_repository: NamedCredentialRepository | None = None,
+    secret_resolver: "SecretResolver | None" = None,
+) -> dict[str, list[dict[str, Any]]]:
+    named_credentials = await _named_credentials_by_id(
+        named_credential_repository,
+        [
+            str(entry.named_credential_id).strip()
+            for entry in cfg.model_list
+            if entry.named_credential_id is not None
+        ],
+    )
+    model_registry: dict[str, list[dict[str, Any]]] = {}
+    for index, entry in enumerate(cfg.model_list):
+        raw_named_credential = (
+            named_credentials.get(str(entry.named_credential_id).strip())
+            if entry.named_credential_id is not None
+            else None
+        )
+        named_credential = resolve_named_credential_record(
+            raw_named_credential, secret_resolver=secret_resolver
+        )
+        model_registry.setdefault(entry.model_name, []).append(
+            {
+                "deployment_id": _deployment_id(
+                    entry.model_name, index, getattr(entry, "deployment_id", None)
+                ),
+                "model_id": None,
+                "deltallm_params": resolve_runtime_deltallm_params(
+                    entry.deltallm_params.model_dump(exclude_none=True),
+                    settings,
+                    named_credential=named_credential,
+                ),
+                "model_info": entry.model_info.model_dump(exclude_none=True)
+                if entry.model_info
+                else {},
+                "named_credential_id": str(entry.named_credential_id).strip() or None
+                if entry.named_credential_id is not None
+                else None,
+                "named_credential_name": named_credential.name
+                if named_credential is not None
+                else None,
+                "routing_state_incarnation": entry.routing_state_incarnation
+                or _deployment_id(entry.model_name, index, getattr(entry, "deployment_id", None)),
+            }
+        )
+    return model_registry
+
+
+async def build_model_registry_from_records(
+    records: list[ModelDeploymentRecord],
+    settings: Any,
+    named_credential_repository: NamedCredentialRepository | None = None,
+    *,
+    secret_resolver: "SecretResolver | None" = None,
+) -> dict[str, list[dict[str, Any]]]:
+    named_credentials = await _named_credentials_by_id(
+        named_credential_repository,
+        [record.named_credential_id for record in records if record.named_credential_id],
+    )
+    model_registry: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        raw_named_credential = named_credentials.get(record.named_credential_id or "")
+        named_credential = resolve_named_credential_record(
+            raw_named_credential, secret_resolver=secret_resolver
+        )
+        if record.governance_source == "creator" and (
+            record.credential_binding_state != "active"
+            or not record.named_credential_id
+            or named_credential is None
+            or _credential_secret_resolution_failed(raw_named_credential, named_credential)
+        ):
+            logger.warning(
+                "excluding creator deployment %s because its credential binding is unavailable",
+                record.deployment_id,
+            )
+            continue
+        model_registry.setdefault(record.model_name, []).append(
+            {
+                "deployment_id": record.deployment_id,
+                "model_id": record.model_id,
+                "named_credential_id": record.named_credential_id,
+                "named_credential_name": named_credential.name
+                if named_credential is not None
+                else None,
+                "credential_binding_mode": record.credential_binding_mode,
+                "credential_binding_state": record.credential_binding_state,
+                "routing_state_incarnation": record.routing_state_incarnation
+                or record.deployment_id,
+                "deltallm_params": resolve_runtime_deltallm_params(
+                    record.deltallm_params,
+                    settings,
+                    named_credential=named_credential,
+                    allow_platform_defaults=record.governance_source != "creator",
+                ),
+                "model_info": dict(record.model_info or {}),
+            }
+        )
+    return model_registry
+
+
+async def bootstrap_model_deployments_from_config(
+    repository: ModelDeploymentRepository,
+    cfg: AppConfig,
+) -> bool:
+    records = model_records_from_config(cfg)
+    if not records:
+        return False
+    return await repository.bulk_insert_if_empty(records)
+
+
+async def load_model_registry(
+    repository: ModelDeploymentRepository | None,
+    cfg: AppConfig,
+    settings: Any,
+    source_mode: str = "hybrid",
+    named_credential_repository: NamedCredentialRepository | None = None,
+    secret_resolver: "SecretResolver | None" = None,
+    allow_db_error_fallback: bool = True,
+) -> tuple[dict[str, list[dict[str, Any]]], str]:
+    if source_mode == "config_only":
+        return await build_model_registry_from_config(
+            cfg,
+            settings,
+            named_credential_repository=named_credential_repository,
+            secret_resolver=secret_resolver,
+        ), "config"
+
+    if repository is not None and source_mode in {"hybrid", "db_only"}:
+        try:
+            records = await repository.list_all()
+        except Exception:
+            if source_mode == "db_only":
+                raise RuntimeError(
+                    "model deployment source is db_only, but loading deployments from DB failed"
+                )
+            if not allow_db_error_fallback:
+                raise RuntimeError("loading model deployments from the database failed")
+            records = []
+        if records:
+            return await build_model_registry_from_records(
+                records,
+                settings,
+                named_credential_repository=named_credential_repository,
+                secret_resolver=secret_resolver,
+            ), "db"
+        if source_mode == "db_only":
+            raise RuntimeError(
+                "model deployment source is db_only, but no deployments were found in DB"
+            )
+
+    if source_mode == "db_only":
+        raise RuntimeError(
+            "model deployment source is db_only, but model repository is unavailable"
+        )
+
+    return await build_model_registry_from_config(
+        cfg,
+        settings,
+        named_credential_repository=named_credential_repository,
+        secret_resolver=secret_resolver,
+    ), "config"

@@ -3,7 +3,11 @@ import asyncio
 import pytest
 
 from src.models.errors import RateLimitError, ServiceUnavailableError
-from src.services.limit_counter import LimitCounter, ParallelLimitCheck, _parallel_lease_key
+from src.services.admission.limit_counter import (
+    LimitCounter,
+    ParallelLimitCheck,
+    _parallel_lease_key,
+)
 
 from tests import test_selector_capacity_redis as fixtures
 
@@ -43,7 +47,7 @@ async def test_renewal_uses_server_clock(capacity_redis, monkeypatch):
     first, _, identity = capacity_redis
     limiter = LimitCounter(first, degraded_mode="fail_closed")
     leases = await limiter.acquire_parallel_leases([ParallelLimitCheck("rt", identity, 1)])
-    monkeypatch.setattr("src.services.limit_counter.time.time", lambda: 1)
+    monkeypatch.setattr("src.services.admission.limit_counter.time.time", lambda: 1)
     await limiter.refresh_parallel_leases(list(leases), ttl_seconds=30, require_owned=True)
     assert 28 <= await first.ttl(_parallel_lease_key("rt", identity)) <= 30
 
@@ -104,7 +108,7 @@ async def test_all_owned_lease_writers_use_server_time(capacity_redis, monkeypat
     first, _, identity = capacity_redis
     limiter = LimitCounter(first, degraded_mode="fail_closed")
     check = ParallelLimitCheck("rt_clock", identity, 2)
-    monkeypatch.setattr("src.services.limit_counter.time.time", lambda: 1)
+    monkeypatch.setattr("src.services.admission.limit_counter.time.time", lambda: 1)
     leases = await _acquire(limiter, check, 30, writer)
     if writer in {"refresh", "strict_refresh"}:
         await limiter.refresh_parallel_leases(

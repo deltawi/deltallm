@@ -58,7 +58,7 @@ from src.routers.routing_decision import (
     resolve_failure_target,
     update_served_route_decision,
 )
-from src.services.audit_service import (
+from src.services.audit.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
     AuditService,

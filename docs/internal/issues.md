@@ -29,7 +29,7 @@
 ### AUTH-003: Missing Token Binding to Prevent Session Hijacking
 - **Severity**: MEDIUM
 - **Status**: OPEN
-- **File**: `src/middleware/platform_auth.py:14-30`, `src/services/platform_identity_service.py:197-270`
+- **File**: `src/middleware/platform_auth.py:14-30`, `src/services/identity/platform_identity_service.py:197-270`
 - **Description**: Session tokens are stored in cookies but not bound to any client characteristics (IP, User-Agent). If a session token is stolen (e.g., via XSS), it can be used from any client without detection.
 - **Recommendation**: Consider implementing token binding or additional validation during session lookup to detect anomalies.
 - **Phase**: Phase 1: Core API & Authentication
@@ -118,7 +118,7 @@
 ### AUTH-010: Default Salt Value in PlatformIdentityService
 - **Severity**: MEDIUM
 - **Status**: OPEN
-- **File**: `src/services/platform_identity_service.py:25-28`
+- **File**: `src/services/identity/platform_identity_service.py:25-28`
 - **Description**: The salt defaults to `"change-me"` if not provided. While the production config should set this, a weak default could lead to security issues if overlooked.
 - **Current Code**:
   ```python
@@ -600,7 +600,7 @@ except RuntimeError:
 In `limit_counter.py`, the `_fallback_counters` dictionary accumulates entries for every scope/entity/window combination but never cleans up expired entries. In a multi-tenant system with many organizations/teams/users, this could lead to unbounded memory growth.
 
 **Files Impacted**:
-- `src/services/limit_counter.py` (lines 24, 164-170)
+- `src/services/admission/limit_counter.py` (lines 24, 164-170)
 
 **Suggested Fix**:
 Add periodic cleanup of expired entries, or use a bounded cache like `functools.lru_cache` or a TTL-aware dictionary.
@@ -620,13 +620,13 @@ Add periodic cleanup of expired entries, or use a bounded cache like `functools.
 When Redis fails, `check_rate_limits_fallback()` falls back to individual non-atomic checks (lines 154-157). This creates a race condition where multiple concurrent requests could each pass the limit check individually but collectively exceed the limit when incremented.
 
 **Files Impacted**:
-- `src/services/limit_counter.py` (lines 154-157)
+- `src/services/admission/limit_counter.py` (lines 154-157)
 
 **Suggested Fix**:
 Use the `_fallback_lock` to make the entire batch check-and-increment operation atomic, similar to the Redis Lua script approach.
 
 **Actual Fix**:
-- Confirmed issue is valid: fallback path in `src/services/limit_counter.py` performed per-scope checks/increments separately, so multi-scope checks were not atomic under Redis-degraded mode.
+- Confirmed issue is valid: fallback path in `src/services/admission/limit_counter.py` performed per-scope checks/increments separately, so multi-scope checks were not atomic under Redis-degraded mode.
 - Updated `_check_rate_limits_fallback()` to perform a single lock-protected two-phase operation in memory: validate all scopes first, then commit all increments only if every scope passes.
 - Added regression test `test_atomic_fallback_rate_limit_does_not_partially_increment` in `tests/test_limit_counter_atomic.py`.
 

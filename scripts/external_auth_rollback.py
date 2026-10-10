@@ -15,12 +15,12 @@ from prisma import Prisma
 from redis.asyncio import Redis
 from src.db.identity.external.external_auth_rollback import ExternalAuthRollbackRepository
 from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
-from src.services.key_auth_cache import KeyAuthCache
+from src.services.identity.keys.key_auth_cache import KeyAuthCache
 from src.config import AppConfig, Settings, resolve_external_auth_database_settings
 from src.audit.actions import AuditAction
 from src.db.audit.repository import AuditRepository
-from src.services.audit_service import AuditIngestionConfig, AuditService
-from src.services.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit
+from src.services.audit.audit_service import AuditIngestionConfig, AuditService
+from src.services.identity.external.external_auth_audit import ExternalAuditEvent, ExternalAuthAudit
 
 
 async def main(apply: bool, approval_reference: str | None) -> None:

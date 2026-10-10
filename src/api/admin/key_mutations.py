@@ -8,7 +8,7 @@ from src.api.admin.key_access_policy import _resolve_key_access_mode, _resolve_k
 from src.auth.roles import Permission
 from src.db.identity.key_access import KeyAccessRepository
 from src.db.identity.platform_accounts import PlatformAccountDatabase
-from src.services.key_notifications import KeyNotificationRecord
+from src.services.identity.keys.key_notifications import KeyNotificationRecord
 from src.api.admin.organization_mutations import require_active_organization_mutation
 
 logger = logging.getLogger(__name__)

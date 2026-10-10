@@ -1,4 +1,5 @@
 """Admin MCP migration routes."""
+
 from __future__ import annotations
 
 from time import perf_counter
@@ -10,7 +11,7 @@ from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_s
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
-from src.services.mcp_migration import (
+from src.services.access.mcp_migration import (
     apply_mcp_migration_backfill,
     build_mcp_migration_report,
 )
@@ -26,7 +27,10 @@ from src.api.admin.endpoints.mcp.validators import _validate_mcp_migration_rollo
 router = APIRouter(tags=["Admin MCP"])
 
 
-@router.get("/ui/api/mcp-migration/report", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.get(
+    "/ui/api/mcp-migration/report",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def get_mcp_migration_report(
     request: Request,
     organization_id: str | None = Query(default=None),
@@ -41,7 +45,10 @@ async def get_mcp_migration_report(
     )
 
 
-@router.post("/ui/api/mcp-migration/backfill", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post(
+    "/ui/api/mcp-migration/backfill",
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
 async def backfill_mcp_migration(
     request: Request,
     payload: dict[str, Any] | None = None,
@@ -49,13 +56,17 @@ async def backfill_mcp_migration(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.PLATFORM_ADMIN)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.PLATFORM_ADMIN
+    )
     body = payload or {}
     response = await apply_mcp_migration_backfill(
         db=_db_or_503(request),
         repository=_repository_or_503(request),
         policy_repository=_scope_policy_repository_or_503(request),
-        organization_id=str(body.get("organization_id")).strip() if body.get("organization_id") is not None else None,
+        organization_id=str(body.get("organization_id")).strip()
+        if body.get("organization_id") is not None
+        else None,
         rollout_states=_validate_mcp_migration_rollout_states(body.get("rollout_states")),
     )
     await _reload_runtime_governance(request)

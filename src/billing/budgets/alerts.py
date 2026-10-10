@@ -7,7 +7,7 @@ from typing import Any
 from src.audit.actions import AuditAction
 from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.types import NotificationMessage
-from src.services.notification_recipients import (
+from src.services.email.notification_recipients import (
     NotificationRecipientResolver,
     NotificationRecipients,
 )

@@ -20,14 +20,14 @@ from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.db.catalog.admin_asset_lists import ListDirection, PromptSortKey
 from src.api.admin.list_contracts import AdminListResponse, PromptListItem
 from src.middleware.admin import require_admin_permission, require_authenticated
-from src.services.asset_ownership import (
+from src.services.access.asset_ownership import (
     apply_owner_scope_to_metadata,
     normalize_owner_scope_type,
     public_metadata_without_owner_scope,
 )
-from src.services.asset_scopes import normalize_scope_type
-from src.services.creator_prompt_access import refresh_creator_prompt_access_for_app
-from src.services.managed_asset_access import (
+from src.services.access.asset_scopes import normalize_scope_type
+from src.services.access.creator_prompt_access import refresh_creator_prompt_access_for_app
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,
@@ -39,12 +39,12 @@ from src.services.managed_asset_access import (
     validate_grant_subject_for_principal,
     namespace_creator_callable_key,
 )
-from src.services.model_identity import (
+from src.services.models.model_identity import (
     creator_prompt_template_key,
     generate_compact_asset_code,
 )
-from src.services.prompt_registry import PromptRegistryService, normalize_route_preferences
-from src.services.prompt_rendering import detect_secret_like_content
+from src.services.prompts.prompt_registry import PromptRegistryService, normalize_route_preferences
+from src.services.prompts.prompt_rendering import detect_secret_like_content
 
 router = APIRouter(tags=["Admin Prompt Registry"])
 

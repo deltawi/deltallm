@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 
 from src.notifications.types import ChannelResult, NotificationMessage
-from src.services.email_outbox_service import EmailOutboxService, enqueue_succeeded
-from src.services.notification_recipients import NotificationRecipients
+from src.services.email.email_outbox_service import EmailOutboxService, enqueue_succeeded
+from src.services.email.notification_recipients import NotificationRecipients
 
 logger = logging.getLogger(__name__)
 

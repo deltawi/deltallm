@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.route_group_refresh import refresh_route_group_runtime
+from src.services.routing.route_group_refresh import refresh_route_group_runtime
 
 
 class _Cache:

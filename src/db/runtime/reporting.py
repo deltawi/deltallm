@@ -8,7 +8,7 @@ from datetime import timedelta
 from time import monotonic
 from typing import Protocol, TypeVar
 
-from src.services.spend_reporting_cache import (
+from src.services.reporting.spend_reporting_cache import (
     ReportingQueryTimedOut,
     ReportingRefreshBusy,
     SpendReportingCache,

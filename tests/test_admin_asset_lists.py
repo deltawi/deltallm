@@ -14,12 +14,12 @@ from src.db.catalog.logical_models import LogicalModelRecord
 from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.router.health_state import DeploymentHealthRef
 from src.router.state import RedisStateBackend
-from src.services.admin_list_health import (
+from src.services.reporting.admin_list_health import (
     AdminHealthReader,
     ListHealthSnapshot,
     list_health_snapshot,
 )
-from src.services.model_admin_listing import ModelSortKey, SortDirection, model_list_page
+from src.services.models.model_admin_listing import ModelSortKey, SortDirection, model_list_page
 
 
 def model_rows() -> list[dict[str, object]]:

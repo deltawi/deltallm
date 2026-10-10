@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from src.services.notification_recipients import NotificationRecipients
+from src.services.email.notification_recipients import NotificationRecipients
 
 ChannelOutcome = Literal["queued", "no_recipients", "undeliverable", "error"]
 

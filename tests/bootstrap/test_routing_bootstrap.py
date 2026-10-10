@@ -7,7 +7,7 @@ import pytest
 
 from src.bootstrap.routing import init_routing_runtime, shutdown_routing_runtime
 from src.db.routing.route_groups import RouteGroupRuntimeSnapshot
-from src.services.route_groups import RouteGroupSnapshotLoadResult
+from src.services.routing.route_groups import RouteGroupSnapshotLoadResult
 
 
 def _routing_config(*, bootstrap_models: bool, health_checks: bool) -> SimpleNamespace:

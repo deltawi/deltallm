@@ -9,7 +9,7 @@ from src.db.tiers.tier_records import (
     json_param,
     to_assignment_record,
 )
-from src.services.tiers import positive_weight, validate_effective_window
+from src.services.tiers.tiers import positive_weight, validate_effective_window
 
 
 class TierAssignmentRepositoryMixin:

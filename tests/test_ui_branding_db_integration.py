@@ -15,7 +15,7 @@ from src.config_runtime.dynamic import (
     DynamicConfigPostCommitApplyError,
 )
 from src.db.catalog.ui_branding_assets import UIBrandingAssetRepository
-from src.services.ui_branding_assets import UIBrandingAssetService, validate_branding_asset
+from src.services.ui.ui_branding_assets import UIBrandingAssetService, validate_branding_asset
 
 try:
     from prisma import Prisma

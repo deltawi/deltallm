@@ -18,10 +18,13 @@ from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest, MCPToolDefinition
 from src.models.responses import UserAPIKeyAuth
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
-from src.services.tier_model_access import TierPolicyMode
-from src.services.tier_policy_service import TierPolicyService
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.model_visibility import (
+    CallableTargetPolicyMode,
+    ensure_batch_model_allowed,
+)
+from src.services.tiers.tier_model_access import TierPolicyMode
+from src.services.tiers.tier_policy_service import TierPolicyService
 
 
 @dataclass(frozen=True, slots=True)

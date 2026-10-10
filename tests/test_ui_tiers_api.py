@@ -30,8 +30,8 @@ from src.db.tiers.tiers import (
     TierVersionRecord,
 )
 from src.models.platform_auth import PlatformAuthContext
-from src.services.tier_capacity_fair_share import fair_share_boost_key
-from src.services.tier_policy_models import (
+from src.services.admission.tier_capacity_fair_share import fair_share_boost_key
+from src.services.tiers.tier_policy_models import (
     CompiledTierCapacityPoolMember,
     CompiledTierCapacityPoolPolicy,
     TierPolicySnapshot,

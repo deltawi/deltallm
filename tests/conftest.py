@@ -40,10 +40,10 @@ from src.router import (
     RoutingStrategy,
     build_deployment_registry,
 )
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.callable_targets import build_callable_target_catalog
-from src.services.key_service import KeyService
-from src.services.limit_counter import LimitCounter
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.callable_targets import build_callable_target_catalog
+from src.services.identity.keys.key_service import KeyService
+from src.services.admission.limit_counter import LimitCounter
 
 
 pytest_plugins = ("tests.dependency_lanes", "tests.app_lane_workers")

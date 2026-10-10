@@ -10,9 +10,13 @@ import pytest
 
 from src.models.errors import RateLimitError
 from src.models.responses import UserAPIKeyAuth
-from src.rate_limit_policy import acquire_rate_limit_controls, build_rate_limit_checks, release_rate_limit_controls
-from src.services.limit_counter import LimitCounter, ParallelLimitCheck, RateLimitCheck
-from src.services.tier_capacity_fair_share import (
+from src.rate_limit_policy import (
+    acquire_rate_limit_controls,
+    build_rate_limit_checks,
+    release_rate_limit_controls,
+)
+from src.services.admission.limit_counter import LimitCounter, ParallelLimitCheck, RateLimitCheck
+from src.services.admission.tier_capacity_fair_share import (
     FAIR_SHARE_ACTIVE_CLEANUP_LIMIT,
     FAIR_SHARE_WINDOW_SECONDS,
     FAIR_SHARE_WEIGHT_SCALE,
@@ -34,8 +38,8 @@ from src.services.tier_capacity_fair_share import (
     fair_share_weight_key,
     upsert_temporary_capacity_boost,
 )
-from src.services.tier_fair_share_counter import TierFairShareCounter
-from src.services.tier_policy_models import (
+from src.services.admission.tier_fair_share_counter import TierFairShareCounter
+from src.services.tiers.tier_policy_models import (
     CompiledTierCapacityPoolPolicy,
     CompiledTierRateLimitDescriptor,
     TierPolicySnapshot,
@@ -277,7 +281,9 @@ async def test_weighted_fair_share_allows_borrowing_then_enforces_under_saturati
 @pytest.mark.asyncio
 async def test_fair_share_denial_does_not_increment_standard_rate_counters() -> None:
     redis = FakeRedis()
-    service = _TierFairShareService(pool_policy=_pool_policy(rpm_capacity=2, saturation_threshold=0.0))
+    service = _TierFairShareService(
+        pool_policy=_pool_policy(rpm_capacity=2, saturation_threshold=0.0)
+    )
     limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
 
     await acquire_rate_limit_controls(
@@ -585,7 +591,9 @@ async def test_redis_batch_denial_uses_staged_pool_counters_without_committing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixed_timestamp = 1_800_000_000.0
-    monkeypatch.setattr("src.services.tier_fair_share_counter.time.time", lambda: fixed_timestamp)
+    monkeypatch.setattr(
+        "src.services.admission.tier_fair_share_counter.time.time", lambda: fixed_timestamp
+    )
     window_id = math.floor(fixed_timestamp / FAIR_SHARE_WINDOW_SECONDS)
     redis = FakeRedis()
     counter = TierFairShareCounter(redis_client=redis)
@@ -601,20 +609,26 @@ async def test_redis_batch_denial_uses_staged_pool_counters_without_committing(
     decision = getattr(exc_info.value, "tier_fair_share_decision")
     assert exc_info.value.param == "tier_pool_fair_share_rpm"
     assert decision.reason == "pool_capacity_exceeded"
-    assert fair_share_pool_counter_key(
-        dimension="rpm",
-        pool_key="shared",
-        callable_key="gpt-4o-mini",
-        window_id=window_id,
-    ) not in redis.store
+    assert (
+        fair_share_pool_counter_key(
+            dimension="rpm",
+            pool_key="shared",
+            callable_key="gpt-4o-mini",
+            window_id=window_id,
+        )
+        not in redis.store
+    )
     assert fair_share_active_key("shared", "gpt-4o-mini") not in redis.zset_store
     assert fair_share_weight_key("shared", "gpt-4o-mini") not in redis.hash_store
     assert fair_share_active_count_key("shared", "gpt-4o-mini") not in redis.store
-    assert fair_share_usage_rank_key(
-        pool_key="shared",
-        callable_key="gpt-4o-mini",
-        window_id=window_id,
-    ) not in redis.zset_store
+    assert (
+        fair_share_usage_rank_key(
+            pool_key="shared",
+            callable_key="gpt-4o-mini",
+            window_id=window_id,
+        )
+        not in redis.zset_store
+    )
 
 
 @pytest.mark.asyncio
@@ -622,7 +636,9 @@ async def test_redis_batch_success_commits_staged_fair_share_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixed_timestamp = 1_800_000_000.0
-    monkeypatch.setattr("src.services.tier_fair_share_counter.time.time", lambda: fixed_timestamp)
+    monkeypatch.setattr(
+        "src.services.admission.tier_fair_share_counter.time.time", lambda: fixed_timestamp
+    )
     window_id = math.floor(fixed_timestamp / FAIR_SHARE_WINDOW_SECONDS)
     redis = FakeRedis()
     counter = TierFairShareCounter(redis_client=redis)
@@ -657,7 +673,9 @@ async def test_redis_batch_success_commits_staged_fair_share_state(
     usage_scores = {
         member: score
         for score, member in redis.zset_store[
-            fair_share_usage_rank_key(pool_key="shared", callable_key="gpt-4o-mini", window_id=window_id)
+            fair_share_usage_rank_key(
+                pool_key="shared", callable_key="gpt-4o-mini", window_id=window_id
+            )
         ]
     }
 
@@ -666,8 +684,14 @@ async def test_redis_batch_success_commits_staged_fair_share_state(
     assert int(redis.store[org_1_key]) == 1
     assert int(redis.store[org_2_key]) == 1
     assert int(redis.store[fair_share_active_count_key("shared", "gpt-4o-mini")]) == 2
-    assert int(redis.store[fair_share_total_weight_key("shared", "gpt-4o-mini")]) == 2 * FAIR_SHARE_WEIGHT_SCALE
-    assert sorted(member for _score, member in redis.zset_store[fair_share_active_key("shared", "gpt-4o-mini")]) == [
+    assert (
+        int(redis.store[fair_share_total_weight_key("shared", "gpt-4o-mini")])
+        == 2 * FAIR_SHARE_WEIGHT_SCALE
+    )
+    assert sorted(
+        member
+        for _score, member in redis.zset_store[fair_share_active_key("shared", "gpt-4o-mini")]
+    ) == [
         "org-1",
         "org-2",
     ]
@@ -679,8 +703,10 @@ async def test_combined_admission_fair_share_denial_does_not_commit_any_admissio
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixed_timestamp = 1_800_000_000.0
-    monkeypatch.setattr("src.services.limit_counter.time.time", lambda: fixed_timestamp)
-    monkeypatch.setattr("src.services.tier_fair_share_counter.time.time", lambda: fixed_timestamp)
+    monkeypatch.setattr("src.services.admission.limit_counter.time.time", lambda: fixed_timestamp)
+    monkeypatch.setattr(
+        "src.services.admission.tier_fair_share_counter.time.time", lambda: fixed_timestamp
+    )
     window_id = math.floor(fixed_timestamp / FAIR_SHARE_WINDOW_SECONDS)
     redis = FakeRedis()
     limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
@@ -694,7 +720,9 @@ async def test_combined_admission_fair_share_denial_does_not_commit_any_admissio
             ],
             legacy_parallel_check=ParallelLimitCheck(scope="key", entity_id="key-1", limit=1),
             parallel_checks=[
-                ParallelLimitCheck(scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1)
+                ParallelLimitCheck(
+                    scope="tier_pool_model_parallel", entity_id="shared:gpt-4o-mini", limit=1
+                )
             ],
         )
 
@@ -702,12 +730,15 @@ async def test_combined_admission_fair_share_denial_does_not_commit_any_admissio
     assert f"ratelimit:key_rpm:key-1:{window_id}" not in redis.store
     assert "parallel:key:key-1" not in redis.store
     assert not redis.zset_store.get("parallel_lease:tier_pool_model_parallel:shared:gpt-4o-mini")
-    assert fair_share_pool_counter_key(
-        dimension="rpm",
-        pool_key="shared",
-        callable_key="gpt-4o-mini",
-        window_id=window_id,
-    ) not in redis.store
+    assert (
+        fair_share_pool_counter_key(
+            dimension="rpm",
+            pool_key="shared",
+            callable_key="gpt-4o-mini",
+            window_id=window_id,
+        )
+        not in redis.store
+    )
     assert fair_share_active_key("shared", "gpt-4o-mini") not in redis.zset_store
 
 
@@ -757,9 +788,7 @@ async def test_fair_share_denial_records_heatmap_in_the_single_admission_operati
         )
 
     heatmap = redis.hash_store[fair_share_limit_hit_heatmap_key()]
-    assert heatmap[
-        "shared|gpt-4o-mini|org-1|tier_pool_fair_share_rpm|tier-org-1"
-    ] == "1"
+    assert heatmap["shared|gpt-4o-mini|org-1|tier_pool_fair_share_rpm|tier-org-1"] == "1"
     assert redis.eval_count == 1
     assert redis.pipeline_count == 0
 
@@ -984,15 +1013,21 @@ async def test_fair_share_active_cleanup_is_bounded_and_removes_weights() -> Non
         tier_capacity_fair_share_enabled=True,
     )
 
-    remaining_stale = [member for _score, member in redis.zset_store[active_key] if member.startswith("stale-")]
+    remaining_stale = [
+        member for _score, member in redis.zset_store[active_key] if member.startswith("stale-")
+    ]
     assert len(remaining_stale) == stale_count - FAIR_SHARE_ACTIVE_CLEANUP_LIMIT
-    assert len([member for member in redis.hash_store[weight_key] if member.startswith("stale-")]) == len(remaining_stale)
+    assert len(
+        [member for member in redis.hash_store[weight_key] if member.startswith("stale-")]
+    ) == len(remaining_stale)
 
 
 @pytest.mark.asyncio
 async def test_cleanup_lag_bypasses_weighted_share_but_keeps_pool_cap() -> None:
     redis = FakeRedis()
-    service = _TierFairShareService(pool_policy=_pool_policy(rpm_capacity=2, saturation_threshold=0.0))
+    service = _TierFairShareService(
+        pool_policy=_pool_policy(rpm_capacity=2, saturation_threshold=0.0)
+    )
     limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
     active_key = fair_share_active_key("shared", "gpt-4o-mini")
     weight_key = fair_share_weight_key("shared", "gpt-4o-mini")
@@ -1071,7 +1106,10 @@ async def test_capacity_dashboard_top_orgs_uses_ranked_top_n() -> None:
         top_org_limit=2,
     )
 
-    assert [row["organization_id"] for row in dashboard["pools"][0]["top_orgs"]] == ["org-a", "org-b"]
+    assert [row["organization_id"] for row in dashboard["pools"][0]["top_orgs"]] == [
+        "org-a",
+        "org-b",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1208,7 +1246,9 @@ async def test_capacity_dashboard_hydrates_details_only_for_visible_ranked_pools
     )
 
     assert dashboard["pools"][0]["pool_key"] == "hot"
-    usage_rank_calls = [key for key in redis.zrevrange_keys if key.startswith("tier_fair_share:usage:")]
+    usage_rank_calls = [
+        key for key in redis.zrevrange_keys if key.startswith("tier_fair_share:usage:")
+    ]
     assert usage_rank_calls == [
         fair_share_usage_rank_key(
             pool_key="hot",
@@ -1219,7 +1259,9 @@ async def test_capacity_dashboard_hydrates_details_only_for_visible_ranked_pools
 
 
 @pytest.mark.asyncio
-async def test_capacity_dashboard_reads_ranked_heatmap_without_full_hash_scan(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_capacity_dashboard_reads_ranked_heatmap_without_full_hash_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _HeatmapTrackingRedis(FakeRedis):
         def __init__(self) -> None:
             super().__init__()
@@ -1230,7 +1272,9 @@ async def test_capacity_dashboard_reads_ranked_heatmap_without_full_hash_scan(mo
             return await super().hgetall(key)
 
     fixed_timestamp = 1_800_000_000.0
-    monkeypatch.setattr("src.services.tier_fair_share_counter.time.time", lambda: fixed_timestamp)
+    monkeypatch.setattr(
+        "src.services.admission.tier_fair_share_counter.time.time", lambda: fixed_timestamp
+    )
     redis = _HeatmapTrackingRedis()
     counter = TierFairShareCounter(redis_client=redis)
     for _ in range(3):

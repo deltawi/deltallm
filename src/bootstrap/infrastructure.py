@@ -56,14 +56,14 @@ from src.providers.chat_profiles import CHAT_PROVIDER_PROFILES
 from src.providers.profiled_chat import ProfiledChatAdapter
 from src.providers.registry import ProviderErrorMapperRegistry
 from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
-from src.services.route_groups import RouteGroupRuntimeCache
-from src.services.creator_mcp_access import CreatorMCPAccessService
-from src.services.creator_model_access import CreatorModelAccessService
-from src.services.creator_prompt_access import CreatorPromptAccessService
-from src.services.creator_route_group_access import CreatorRouteGroupAccessService
-from src.services.managed_asset_reconciliation import ManagedAssetReconciliationService
-from src.services.ui_branding_assets import UIBrandingAssetService
-from src.services.route_group_mutations import RouteGroupMutationService
+from src.services.routing.route_groups import RouteGroupRuntimeCache
+from src.services.access.creator_mcp_access import CreatorMCPAccessService
+from src.services.access.creator_model_access import CreatorModelAccessService
+from src.services.access.creator_prompt_access import CreatorPromptAccessService
+from src.services.access.creator_route_group_access import CreatorRouteGroupAccessService
+from src.services.access.managed_asset_reconciliation import ManagedAssetReconciliationService
+from src.services.ui.ui_branding_assets import UIBrandingAssetService
+from src.services.routing.route_group_mutations import RouteGroupMutationService
 from src.upstream_http import (
     build_control_http_client,
     build_control_http_transport,

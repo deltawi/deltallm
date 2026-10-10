@@ -23,9 +23,9 @@ from src.api.admin.endpoints.tier_schemas import (
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
-from src.services.tier_policy_invalidation import reload_tier_policy
+from src.services.tiers.tier_policy_invalidation import reload_tier_policy
 from src.middleware.platform_auth import get_platform_auth_context
-from src.services.tier_admin import (
+from src.services.tiers.tier_admin import (
     TierAdminConflictError,
     TierAdminError,
     TierAdminNotFoundError,

@@ -11,7 +11,7 @@ from src.db.catalog.logical_models import LogicalModelRecord
 from src.db.catalog.named_credentials import NamedCredentialRecord
 from src.db.catalog.model_deployments import ModelDeploymentRecord
 from src.models.platform_auth import PlatformAuthContext
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
     AssetGrant,

@@ -229,7 +229,7 @@ async def test_mcp_governance_service_resolves_org_ceiling_with_team_restrict() 
     await service.reload()
 
     from src.models.responses import UserAPIKeyAuth
-    from src.services.runtime_scopes import annotate_auth_metadata
+    from src.services.access.runtime_scopes import annotate_auth_metadata
 
     auth = annotate_auth_metadata(
         UserAPIKeyAuth(api_key="key-1", team_id="team-1", organization_id="org-1"),

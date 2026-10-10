@@ -8,7 +8,7 @@ from src.api.admin.route_group_dependencies import resolve_route_group_id
 from src.api.admin.route_group_dependencies import route_group_repository
 from src.middleware.admin import require_authenticated
 from src.router.runtime_generation import require_routing_runtime_generation
-from src.services.selector_inventory import SelectorOptionsPage, selector_options
+from src.services.routing.selector_inventory import SelectorOptionsPage, selector_options
 
 router = APIRouter(tags=["Admin Route Groups"])
 

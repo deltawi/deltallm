@@ -8,7 +8,7 @@ from redis.exceptions import OutOfMemoryError
 from src.config import GeneralSettings, Settings
 from src.models.errors import ServiceUnavailableError
 from src.redis_runtime import build_redis_client
-from src.services.limit_counter import LimitCounter
+from src.services.admission.limit_counter import LimitCounter
 
 pytestmark = pytest.mark.redis
 

@@ -14,7 +14,7 @@ from src.batch.worker_types import BatchRoutingRuntime
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.batch.accounting_checkpoint import BatchAccountingUnavailable
 from src.callbacks import CallbackManager
-from src.services.output_admission import prepare_output_policy
+from src.services.admission.output_admission import prepare_output_policy
 from src.models.requests import ChatCompletionRequest
 from src.rate_limit_policy import (
     RateLimitLease,
@@ -32,7 +32,7 @@ from src.models.requests import EmbeddingRequest
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.responses import UserAPIKeyAuth
 from src.router.context_policy import estimate_embedding_context_input_tokens
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_capacity_fair_share_active_ttl_seconds_from_app,

@@ -13,7 +13,7 @@ from src.db.catalog.managed_assets import (
     ManagedAssetPolicyConflictError,
 )
 from src.middleware.admin import require_authenticated
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessRole,
     AssetAccessPolicy,
     AssetGrant,
@@ -29,10 +29,10 @@ from src.services.managed_asset_access import (
     validate_model_credential_audience,
     binding_requires_audience_coverage,
 )
-from src.services.creator_model_access import refresh_creator_model_access_for_app
-from src.services.creator_mcp_access import refresh_creator_mcp_access_for_app
-from src.services.creator_prompt_access import refresh_creator_prompt_access_for_app
-from src.services.creator_route_group_access import (
+from src.services.access.creator_model_access import refresh_creator_model_access_for_app
+from src.services.access.creator_mcp_access import refresh_creator_mcp_access_for_app
+from src.services.access.creator_prompt_access import refresh_creator_prompt_access_for_app
+from src.services.access.creator_route_group_access import (
     refresh_creator_route_group_access_for_app,
 )
 

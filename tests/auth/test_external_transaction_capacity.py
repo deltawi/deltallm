@@ -9,7 +9,7 @@ import pytest
 from src.auth.external_errors import ExternalAuthError, ExternalAuthUnavailable
 from src.db.identity.external.external_auth_transactions import ExternalAuthTransactions
 from src.metrics.external_auth import external_auth_denials
-from src.services.external_auth_runtime import ExternalAuthRuntime
+from src.services.identity.external.external_auth_runtime import ExternalAuthRuntime
 
 
 class Database:

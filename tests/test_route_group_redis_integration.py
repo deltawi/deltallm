@@ -12,8 +12,8 @@ from src.config import AppConfig
 from src.db.routing.route_groups import RouteGroupRuntimeSnapshot
 from src.router.redis_keys import RouteGroupRuntimeRedisKeyspace
 from src.router.selection.policy import RouteSelectorActivationState
-from src.services.governance_invalidation import GovernanceInvalidationService
-from src.services.route_groups import (
+from src.services.invalidation.governance_invalidation import GovernanceInvalidationService
+from src.services.routing.route_groups import (
     ROUTE_GROUP_RUNTIME_CACHE_SCHEMA_VERSION,
     RouteGroupRuntimeCache,
     load_route_groups,

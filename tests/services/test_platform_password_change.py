@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.db.identity.platform_passwords import PlatformPasswordRecord
-from src.services.platform_password_change import PlatformPasswordChangeService
+from src.services.identity.platform_password_change import PlatformPasswordChangeService
 
 
 class Passwords:

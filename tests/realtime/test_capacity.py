@@ -8,8 +8,8 @@ from src.realtime.capacity import RealtimeCapacity
 from src.realtime.config import RealtimeSettings
 from src.realtime.errors import RealtimeError
 from src.router.router import Deployment
-from src.services.limit_counter import LimitCounter
-from src.services.tier_policy_service import TierPolicyService
+from src.services.admission.limit_counter import LimitCounter
+from src.services.tiers.tier_policy_service import TierPolicyService
 
 
 @pytest.mark.parametrize(

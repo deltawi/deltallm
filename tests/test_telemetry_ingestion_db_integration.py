@@ -14,8 +14,8 @@ from src.db.email.email import EmailOutboxRecord, EmailOutboxRepository
 from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.db.audit.repository import AuditEventRecord, AuditPayloadRecord, AuditRepository
 from src.db.billing.spend_ingestion import SpendIngestionRepository
-from src.services.audit_service import AuditService
-from src.services.telemetry_replay import (
+from src.services.audit.audit_service import AuditService
+from src.services.audit.telemetry_replay import (
     TelemetryReplayService,
     TelemetryReplayUnavailableError,
 )

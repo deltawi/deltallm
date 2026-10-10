@@ -12,7 +12,7 @@ from src.db.organizations.deletion.organization_deletion_records import (
     OrganizationDeletionJobRecord,
     OrganizationDeletionPlanRecord,
 )
-from src.services.organization_deletion import (
+from src.services.organizations.deletion.organization_deletion import (
     OrganizationDeletionConflictError,
     OrganizationDeletionRequestsDisabledError,
     OrganizationDeletionService,
@@ -296,11 +296,11 @@ def deletion_service(monkeypatch):  # noqa: ANN001, ANN201
     repository = _FakeRepository()
     cache = _FakeCacheInvalidationService()
     monkeypatch.setattr(
-        "src.services.organization_deletion.CacheInvalidationOutboxRepository",
+        "src.services.organizations.deletion.organization_deletion.CacheInvalidationOutboxRepository",
         _FakeOutboxRepository,
     )
     monkeypatch.setattr(
-        "src.services.organization_deletion_request.CacheInvalidationOutboxRepository",
+        "src.services.organizations.deletion.organization_deletion_request.CacheInvalidationOutboxRepository",
         _FakeOutboxRepository,
     )
 
@@ -312,15 +312,15 @@ def deletion_service(monkeypatch):  # noqa: ANN001, ANN201
         repository.expedite_audits.append(dict(kwargs))
 
     monkeypatch.setattr(
-        "src.services.organization_deletion.record_lifecycle_mutation_audit",
+        "src.services.organizations.deletion.organization_deletion.record_lifecycle_mutation_audit",
         _record_audit,
     )
     monkeypatch.setattr(
-        "src.services.organization_deletion_request.record_lifecycle_mutation_audit",
+        "src.services.organizations.deletion.organization_deletion_request.record_lifecycle_mutation_audit",
         _record_audit,
     )
     monkeypatch.setattr(
-        "src.services.organization_deletion.record_deletion_expedite_audit",
+        "src.services.organizations.deletion.organization_deletion.record_deletion_expedite_audit",
         _record_expedite_audit,
     )
     return (
@@ -803,7 +803,7 @@ async def test_expedite_audit_failure_rolls_back_deadlines(
         raise RuntimeError("audit unavailable")
 
     monkeypatch.setattr(
-        "src.services.organization_deletion.record_deletion_expedite_audit",
+        "src.services.organizations.deletion.organization_deletion.record_deletion_expedite_audit",
         _fail_audit,
     )
 

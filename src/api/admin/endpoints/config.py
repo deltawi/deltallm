@@ -43,8 +43,8 @@ from src.config_runtime.dynamic import (
 from src.db.catalog.ui_branding_assets import BrandingAssetDatabase, UIBrandingAssetRepository
 from src.middleware.admin import require_admin_permission
 from src.providers.resolution import resolve_provider
-from src.services.audit_service import require_audit_service
-from src.services.ui_branding_assets import (
+from src.services.audit.audit_service import require_audit_service
+from src.services.ui.ui_branding_assets import (
     BRANDING_ASSET_MAX_BYTES,
     UIBrandingAssetService,
     branding_asset_config_field,

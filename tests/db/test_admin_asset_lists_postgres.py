@@ -11,7 +11,7 @@ from src.db.catalog.logical_models import LogicalModelRepository
 from src.db.catalog.prompt_registry import PromptRegistryRepository
 from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.db.routing.route_groups import RouteGroupRepository
-from src.services.admin_list_health import ListHealthSnapshot
+from src.services.reporting.admin_list_health import ListHealthSnapshot
 
 pytestmark = pytest.mark.postgres
 

@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from src.db.identity.output_policy import read_organization_preview_limits
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
-from src.services.tier_admin_errors import TierAdminError, TierAdminNotFoundError
-from src.services.tier_assignment_admin import TierAssignmentAdminService
-from src.services.tier_policy_preview import (
+from src.services.tiers.tier_admin_errors import TierAdminError, TierAdminNotFoundError
+from src.services.tiers.tier_assignment_admin import TierAssignmentAdminService
+from src.services.tiers.tier_policy_preview import (
     TierPolicyPreviewError,
     TierPolicyPreviewUnavailableError,
     build_tier_policy_preview,

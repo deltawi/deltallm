@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 
 from src.auth.sso_identity import SSOIdentityOwnershipError
-from src.services.platform_identity_service import PlatformIdentityService
+from src.services.identity.platform_identity_service import PlatformIdentityService
 from tests.services.test_platform_identity_service import TransactionalFakePlatformIdentityDB
 
 
@@ -218,7 +218,7 @@ async def test_invalid_default_target_rolls_back_login(target: str) -> None:
     if target == "inactive_org":
         db.organizations["org"] = {"organization_id": "org", "lifecycle_state": "deleting"}
     service = PlatformIdentityService(db, salt="test-salt")
-    from src.services.organization_mutation_policy import OrganizationMutationError
+    from src.services.organizations.organization_mutation_policy import OrganizationMutationError
 
     with pytest.raises((ValueError, OrganizationMutationError)):
         await service.upsert_sso_account(

@@ -15,7 +15,10 @@ from src.auth.roles import (
     has_platform_permission,
 )
 from src.models.platform_auth import PlatformAuthContext
-from src.services.master_session_service import MASTER_SESSION_COOKIE_NAME, MasterSessionStatus
+from src.services.identity.master_session_service import (
+    MASTER_SESSION_COOKIE_NAME,
+    MasterSessionStatus,
+)
 
 SESSION_COOKIE_NAME = "deltallm_session"
 

@@ -13,7 +13,7 @@ from src.email.models import (
     PreparedEmail,
 )
 from src.email.providers import ResendEmailProvider, SMTPEmailProvider, SendGridEmailProvider
-from src.services.email_delivery_service import EmailDeliveryService
+from src.services.email.email_delivery_service import EmailDeliveryService
 
 
 def _config(**overrides):

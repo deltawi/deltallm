@@ -11,7 +11,7 @@ from fastapi import Request
 from src.chat.stream_validation import validate_first_downstream_stream_frame
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
-from src.services.output_token_context import OutputTokenContext
+from src.services.admission.output_token_context import OutputTokenContext
 from src.metrics import observe_request_phase
 from src.metrics.request_phases import track_request_phase
 from src.providers.base import ProviderAdapter, read_streaming_provider_error_details

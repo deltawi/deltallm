@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol, Sequence
 
 from src.notifications.types import NotificationChannel
-from src.services.notification_recipients import NotificationRecipients
+from src.services.email.notification_recipients import NotificationRecipients
 
 
 class NotificationPreferenceResolver(Protocol):

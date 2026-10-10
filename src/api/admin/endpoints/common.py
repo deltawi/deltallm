@@ -23,7 +23,7 @@ from src.guardrails.catalog import (
     serialize_guardrail_editor_config,
 )
 from src.providers.resolution import resolve_provider
-from src.services.named_credentials import redact_connection_config
+from src.services.models.named_credentials import redact_connection_config
 from src.upstream_auth import (
     DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_FORMAT,
     DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_NAME,

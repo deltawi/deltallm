@@ -30,7 +30,7 @@ from scripts.measure_gateway_load import (
 from tests.conftest import test_app as app_fixture
 from tests.performance.routing_cache_profile import queue_slope
 from tests.test_cache import _enable_cache
-from src.services.limit_counter import LimitCounter
+from src.services.admission.limit_counter import LimitCounter
 
 
 async def measure(args, case):
@@ -73,7 +73,7 @@ async def measure(args, case):
     if model_scopes:
         from types import SimpleNamespace
         from src.db.tiers.tiers import TierModelPolicyRecord, TierPolicyLoadResult
-        from src.services.tier_policy_service import TierPolicyService
+        from src.services.tiers.tier_policy_service import TierPolicyService
         from tests.services.test_tier_policy_compiler import _assignment
 
         record.model_output_tpm_limit = {"gpt-4o-mini": 1_000_000_000}

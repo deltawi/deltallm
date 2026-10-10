@@ -3,7 +3,7 @@ from uuid import UUID
 import pytest
 
 from src.models.platform_auth import PlatformAuthContext
-from src.services.managed_asset_access import AssetPrincipal
+from src.services.access.managed_asset_access import AssetPrincipal
 from tests.test_ui_route_group_addresses import BASE, HEADERS
 from tests import test_ui_route_group_addresses as addresses
 from tests.test_ui_route_groups import _publish_test_model_registry, _selector_policy_payload
@@ -160,9 +160,7 @@ async def test_selector_options_use_the_same_tier_scoped_model_catalog(
     )
 
     assert response.status_code == 200, response.text
-    assert [item["deployment_id"] for item in response.json()["data"]] == [
-        "visible-deployment"
-    ]
+    assert [item["deployment_id"] for item in response.json()["data"]] == ["visible-deployment"]
     assert response.json()["selected"] is None
 
     direct_reference = await client.post(

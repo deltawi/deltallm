@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from src.services.asset_binding_mirror import (
+from src.services.access.asset_binding_mirror import (
     callable_catalog,
     callable_target_access_group_binding_repository,
     callable_target_binding_repository,
@@ -32,17 +32,17 @@ from src.governance.access_groups import (
     normalize_access_group_key,
 )
 from src.middleware.admin import require_admin_permission
-from src.services.asset_scopes import strict_normalize_scope_type
-from src.services.callable_target_migration import (
+from src.services.access.asset_scopes import strict_normalize_scope_type
+from src.services.access.callable_target_migration import (
     ORGANIZATION_ROLLOUT_STATES,
     ROLLOUT_STATE_ALIASES,
     apply_callable_target_migration_backfill,
     build_callable_target_migration_report,
 )
-from src.services.organization_callable_target_sync import (
+from src.services.access.organization_callable_target_sync import (
     maybe_disable_organization_auto_follow_for_scope_mutation,
 )
-from src.services.callable_targets import CallableTarget
+from src.services.access.callable_targets import CallableTarget
 
 router = APIRouter(tags=["Admin Callable Targets"])
 

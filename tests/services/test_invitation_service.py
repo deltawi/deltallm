@@ -8,9 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from src.db.identity.invitations import PlatformInvitationRecord
-from src.services.invitation_service import InvitationService
-from src.services.organization_mutation_policy import OrganizationMutationInactiveError
-from src.services.platform_identity_service import LoginResult
+from src.services.identity.invitation_service import InvitationService
+from src.services.organizations.organization_mutation_policy import (
+    OrganizationMutationInactiveError,
+)
+from src.services.identity.platform_identity_service import LoginResult
 
 
 class FakeInvitationRepository:

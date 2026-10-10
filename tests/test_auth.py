@@ -9,16 +9,19 @@ from src.config import AppConfig
 from src.auth.sso_identity import SSOAccountMatch, SSOIdentityAssertion
 from src.models.platform_auth import PlatformAuthContext
 from src.models.errors import RateLimitError
-from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
-from src.services.organization_lifecycle import (
+from src.services.identity.platform_identity_service import (
+    AccountInactiveError,
+    LoginSessionCreationError,
+)
+from src.services.organizations.organization_lifecycle import (
     OrganizationInactive,
     OrganizationLifecycleUnavailable,
 )
-from src.services.master_session_service import (
+from src.services.identity.master_session_service import (
     MasterSessionStatus,
     MasterSessionStoreUnavailable,
 )
-from src.services.sso_state_store import SSOStateStore
+from src.services.identity.sso_state_store import SSOStateStore
 
 
 class _StubSSOHandler:

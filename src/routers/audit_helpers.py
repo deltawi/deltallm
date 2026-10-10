@@ -9,7 +9,7 @@ from src.audit.actions import AuditAction, normalize_audit_action
 from src.audit.delivery import AuditDeliveryClass
 from src.audit.errors import derive_audit_error_code
 from src.billing.accounting.accounting_protocol import AccountingOperationHandle
-from src.services.audit_service import (
+from src.services.audit.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
     AuditService,

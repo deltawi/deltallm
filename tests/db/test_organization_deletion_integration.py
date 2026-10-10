@@ -23,8 +23,8 @@ from src.db.organizations.deletion.organization_deletion_worker_repository impor
     OrganizationDeletionClaimLost,
     OrganizationDeletionWorkerRepository,
 )
-from src.services.organization_deletion import OrganizationDeletionService
-from src.services.organization_deletion_worker import (
+from src.services.organizations.deletion.organization_deletion import OrganizationDeletionService
+from src.services.organizations.deletion.organization_deletion_worker import (
     OrganizationDeletionWorker,
     OrganizationDeletionWorkerConfig,
 )

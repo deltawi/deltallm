@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.notification_recipients import NotificationRecipientResolver
+from src.services.email.notification_recipients import NotificationRecipientResolver
 
 
 class _RecipientDB:

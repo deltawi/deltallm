@@ -7,7 +7,7 @@ import pytest
 from src.api.admin.endpoints.common import AuthScope
 from src.audit.actions import AuditAction
 from src.db.email.email_feedback import EmailSuppressionRecord
-from src.services.email_feedback_service import EmailFeedbackError, EmailFeedbackOutcome
+from src.services.email.email_feedback_service import EmailFeedbackError, EmailFeedbackOutcome
 
 
 class _FakeEmailOutboxService:

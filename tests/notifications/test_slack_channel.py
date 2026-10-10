@@ -7,7 +7,7 @@ from src.notifications.channels import slack as slack_module
 from src.notifications.channels.slack import SlackChannel
 from src.notifications.types import NotificationMessage
 from src.notifications.webhook import WebhookResult
-from src.services.notification_recipients import NotificationRecipients
+from src.services.email.notification_recipients import NotificationRecipients
 
 
 def _budget_message() -> NotificationMessage:
@@ -26,7 +26,9 @@ def _budget_message() -> NotificationMessage:
 
 
 def test_supports_respects_allowlist() -> None:
-    channel = SlackChannel(webhook_url=SecretStr("https://x"), allowed_alert_types={"budget_threshold"})
+    channel = SlackChannel(
+        webhook_url=SecretStr("https://x"), allowed_alert_types={"budget_threshold"}
+    )
     assert channel.supports("budget_threshold") is True
     assert channel.supports("api_key_lifecycle") is False
 
@@ -40,7 +42,9 @@ async def test_send_posts_rendered_text(monkeypatch: pytest.MonkeyPatch) -> None
         return WebhookResult(ok=True, status_code=200)
 
     monkeypatch.setattr(slack_module, "post_webhook", fake_post)
-    channel = SlackChannel(webhook_url=SecretStr("https://x"), allowed_alert_types={"budget_threshold"})
+    channel = SlackChannel(
+        webhook_url=SecretStr("https://x"), allowed_alert_types={"budget_threshold"}
+    )
 
     result = await channel.send(
         message=_budget_message(),
@@ -59,7 +63,9 @@ async def test_send_reports_undeliverable_on_failure(monkeypatch: pytest.MonkeyP
         return WebhookResult(ok=False, status_code=500, error="http_500")
 
     monkeypatch.setattr(slack_module, "post_webhook", fake_post)
-    channel = SlackChannel(webhook_url=SecretStr("https://x"), allowed_alert_types={"budget_threshold"})
+    channel = SlackChannel(
+        webhook_url=SecretStr("https://x"), allowed_alert_types={"budget_threshold"}
+    )
 
     result = await channel.send(
         message=_budget_message(),

@@ -9,7 +9,7 @@ from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_s
 from src.api.admin.organization_mutations import organization_mutation_http_error
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission, validate_organization_role, validate_team_role
-from src.services.organization_mutation_policy import OrganizationMutationError
+from src.services.organizations.organization_mutation_policy import OrganizationMutationError
 
 router = APIRouter(tags=["Admin Invitations"])
 

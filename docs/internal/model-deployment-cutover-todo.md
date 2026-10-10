@@ -38,7 +38,7 @@ Finalize migration so deployed models are sourced from `deltallm_modeldeployment
 ### Validation Results
 - `uv run pytest tests/services/test_model_deployments.py tests/db/test_model_deployment_repository.py tests/config/test_dynamic.py::test_model_hot_reload_manager_updates_runtime_registries tests/config/test_dynamic.py::test_model_hot_reload_manager_model_crud_refreshes_runtime_registry -q`
 - Result: `9 passed`
-- `python -m py_compile src/config.py src/services/model_deployments.py src/main.py src/config_runtime/models.py tests/services/test_model_deployments.py`
+- `python -m py_compile src/config.py src/services/models/model_deployments.py src/main.py src/config_runtime/models.py tests/services/test_model_deployments.py`
 - Result: success
 
 ## Rollout Guidance

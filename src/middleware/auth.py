@@ -10,9 +10,9 @@ from src.config import Settings
 from src.models.errors import AuthenticationError
 from src.metrics.request_phases import measure_request_phase, request_route
 from src.models.responses import UserAPIKeyAuth
-from src.services.key_service import KeyService
-from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
-from src.services.organization_lifecycle import (
+from src.services.identity.keys.key_service import KeyService
+from src.services.access.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
+from src.services.organizations.organization_lifecycle import (
     OrganizationInactive,
     OrganizationLifecycleAuthorizer,
     OrganizationLifecycleUnavailable,

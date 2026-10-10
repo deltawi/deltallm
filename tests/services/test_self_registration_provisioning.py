@@ -10,11 +10,11 @@ from typing import Any
 import pytest
 
 from src.config import AppConfig, SelfRegistrationSettings
-from src.services.platform_identity_service import (
+from src.services.identity.platform_identity_service import (
     LoginSessionCreationError,
     PlatformIdentityService,
 )
-from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
+from src.services.identity.self_registration_provisioning import SelfRegistrationProvisioningService
 
 
 def _enabled_settings() -> SelfRegistrationSettings:

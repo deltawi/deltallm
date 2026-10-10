@@ -7,8 +7,12 @@ from uuid import uuid4
 import pytest
 from redis.asyncio import Redis
 
-from src.services.limit_counter import LimitCounter
-from src.services.output_limit_types import OutputAccountingEvent, OutputPolicy, OutputScope
+from src.services.admission.limit_counter import LimitCounter
+from src.services.admission.output_limit_types import (
+    OutputAccountingEvent,
+    OutputPolicy,
+    OutputScope,
+)
 from tests.batch import selector_fixtures
 from tests.batch.selector_fixtures import answer_calls
 

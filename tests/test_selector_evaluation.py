@@ -5,7 +5,7 @@ from time import perf_counter
 import pytest
 from pydantic import ValidationError
 
-from src.services.selector_evaluation import SelectorEvaluationRequest, evaluate_selector
+from src.services.routing.selector_evaluation import SelectorEvaluationRequest, evaluate_selector
 
 
 def fixture_payload():
@@ -144,7 +144,7 @@ def test_maximum_replay_is_deterministic_and_does_not_expose_prompt_or_output():
 
 
 def test_cli_has_bounded_read_and_sanitized_failures(tmp_path, capsys, monkeypatch):
-    from src.services.selector_evaluation_cli import main
+    from src.services.routing.selector_evaluation_cli import main
 
     path = tmp_path / "fixtures.json"
     path.write_text(json.dumps(fixture_payload()))

@@ -7,8 +7,8 @@ import pytest
 from src.db.identity.output_policy import OutputPolicyChange, persist_output_policy
 from src.config import AppConfig
 from src.db.identity.key_repository import KeyRepository
-from src.services.key_service import KeyService
-from src.services.output_policy_configuration import validate_output_policy_configuration
+from src.services.identity.keys.key_service import KeyService
+from src.services.admission.output_policy_configuration import validate_output_policy_configuration
 from tests.db.tier_migration_helpers import connect_prisma, seed_organization
 from tests.conftest import FakeRedis
 from src.api.admin.output_policy import (
@@ -16,7 +16,7 @@ from src.api.admin.output_policy import (
     invalidate_output_policy_now,
 )
 from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
-from src.services.cache_invalidation_worker import (
+from src.services.invalidation.cache_invalidation_worker import (
     CacheInvalidationWorker,
     CacheInvalidationWorkerConfig,
 )

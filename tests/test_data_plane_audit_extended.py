@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from src.services.prompt_registry import PromptProvenance, PromptRenderOutput
+from src.services.prompts.prompt_registry import PromptProvenance, PromptRenderOutput
 
 
 class _RecordingAuditService:

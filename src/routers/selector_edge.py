@@ -23,7 +23,7 @@ from src.router.selection.request_context import set_request_selector_state
 from src.router.selection.request_state import RequestSelectorState
 from src.router.selection.runtime import SelectorExecutionFactory
 from src.routers.routing_decision import attach_selector_decision
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_mode_from_app,

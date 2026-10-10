@@ -6,8 +6,8 @@ import hashlib
 import pytest
 
 from src.db.identity.platform_sessions import PlatformSessionRecord, SessionMFARecord
-from src.services.platform_identity_service import PlatformIdentityService
-from src.services.platform_session_service import PlatformSessionService
+from src.services.identity.platform_identity_service import PlatformIdentityService
+from src.services.identity.platform_session_service import PlatformSessionService
 from tests.services.test_platform_identity_service import TransactionalFakePlatformIdentityDB
 
 

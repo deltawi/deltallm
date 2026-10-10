@@ -9,7 +9,7 @@ from src.db.tiers.tiers import (
     TierPolicyAssignmentRecord,
     TierPolicyLoadResult,
 )
-from src.services.tier_policy_compiler import compile_tier_policy_snapshot
+from src.services.tiers.tier_policy_compiler import compile_tier_policy_snapshot
 
 
 def _assignment(

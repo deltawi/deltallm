@@ -6,15 +6,15 @@ import pytest
 
 from src.db.catalog.prompt_registry import PromptBindingRecord, PromptResolvedRecord
 from src.models.responses import UserAPIKeyAuth
-from src.services.callable_targets import CallableTarget
-from src.services.creator_prompt_access import CreatorPromptAccessSnapshot
-from src.services.prompt_registry import (
+from src.services.access.callable_targets import CallableTarget
+from src.services.access.creator_prompt_access import CreatorPromptAccessSnapshot
+from src.services.prompts.prompt_registry import (
     PromptProvenance,
     PromptReference,
     PromptRegistryService,
     PromptRenderOutput,
 )
-from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
+from src.services.access.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
 
 
 class _InjectingPromptService:

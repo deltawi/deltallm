@@ -42,10 +42,13 @@ from src.batch.webhooks import (
 )
 from src.models.responses import UserAPIKeyAuth
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
-from src.services.tier_model_access import TierPolicyMode
-from src.services.tier_policy_service import TierPolicyService
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.model_visibility import (
+    CallableTargetPolicyMode,
+    ensure_batch_model_allowed,
+)
+from src.services.tiers.tier_model_access import TierPolicyMode
+from src.services.tiers.tier_policy_service import TierPolicyService
 from src.metrics import increment_batch_artifact_failure, increment_batch_mixed_model_job
 
 logger = logging.getLogger(__name__)

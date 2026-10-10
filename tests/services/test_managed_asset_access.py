@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
     AssetGrant,

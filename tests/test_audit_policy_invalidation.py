@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Mapping
 
 import pytest
 
-from src.services.audit_policy_invalidation import AuditPolicyInvalidation
+from src.services.audit.audit_policy_invalidation import AuditPolicyInvalidation
 from src.telemetry.lifecycle import WorkerState
 
 

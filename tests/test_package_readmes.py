@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FOLDER_LINE = re.compile(r"^([ │├└─]*)([a-z_]+/)\s+#\s+(\S.*)$")
 
 
-@pytest.mark.parametrize("package", ["billing", "db"])
+@pytest.mark.parametrize("package", ["billing", "db", "services"])
 def test_package_readme_describes_every_subpackage(package):
     directory = ROOT / "src" / package
     readme = (directory / "README.md").read_text()

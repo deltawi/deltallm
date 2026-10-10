@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request
 
 from src.middleware.auth import require_api_key
 from src.router.runtime_generation import pin_routing_runtime_generation
-from src.services.model_visibility import (
+from src.services.access.model_visibility import (
     filter_visible_models,
     get_callable_target_policy_mode_from_app,
     get_tier_policy_missing_service_mode_from_app,

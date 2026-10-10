@@ -56,8 +56,8 @@ Persisted API-key authentication is the supported policy source. JWT currently c
 
 | Existing owner | Change |
 | --- | --- |
-| [Prisma schema](../prisma/schema.prisma), [KeyRepository](../src/db/identity/key_repository.py), [KeyService](../src/services/key_service.py), [auth DTO](../src/models/responses.py) | Four nullable fields, the same joined read, typed scope values, cache version, and existing invalidation. |
-| [Rate policy](../src/rate_limit_policy.py), [LimitCounter](../src/services/limit_counter.py), [unified admission Lua](../src/services/tier_fair_share_admission_lua.py) | Add output checks to both ordinary and unified admission. Existing tier and pool limits keep their current dimensions. |
+| [Prisma schema](../prisma/schema.prisma), [KeyRepository](../src/db/identity/key_repository.py), [KeyService](../src/services/identity/keys/key_service.py), [auth DTO](../src/models/responses.py) | Four nullable fields, the same joined read, typed scope values, cache version, and existing invalidation. |
+| [Rate policy](../src/rate_limit_policy.py), [LimitCounter](../src/services/admission/limit_counter.py), [unified admission Lua](../src/services/admission/tier_fair_share_admission_lua.py) | Add output checks to both ordinary and unified admission. Existing tier and pool limits keep their current dimensions. |
 | [Text preflight](../src/chat/preflight.py), [request DTOs](../src/models/requests.py) | Resolve a bounded output allowance after request mutation and before final admission. |
 | [Executor](../src/chat/executor.py), [provider resolution](../src/providers/resolution.py), [provider receipts](../src/providers/token_receipt.py) | Enforce the same cap after provider translation/defaults. Capture output evidence before normalization can fill missing values with zero. |
 | [Stream usage](../src/chat/stream_usage.py), [chat route](../src/routers/chat.py), [HTTP lease lifecycle](../src/middleware/rate_limit_lifecycle.py) | Use complete output evidence and one cleanup owner. Finish known settlement before the terminal event. |
@@ -119,7 +119,7 @@ Extend both existing admission entry points:
 
 Preacquired parallel leases remain under their existing owner and must be released on denial. Do not replace current preflight ordering. Deduplicate scope keys before validation. A backward clock value must not reset a bucket that contains a later minute.
 
-Use the existing [cached Lua runner](../src/services/redis_lua.py). Preload scripts during bootstrap, not on the first inference request. Keep script text constant and use arguments for values. Test `NOSCRIPT` recovery.
+Use the existing [cached Lua runner](../src/services/admission/redis_lua.py). Preload scripts during bootstrap, not on the first inference request. Keep script text constant and use arguments for values. Test `NOSCRIPT` recovery.
 
 An ambiguous transport result can retry only the same acquisition ID within the existing deadline. A Lua runtime error is an unavailable result, not a safe retry with a new ID. Lua does not roll back earlier writes after an error; validate before writes and keep any uncertain charge conservative. Dispatch only after a complete successful acquisition.
 

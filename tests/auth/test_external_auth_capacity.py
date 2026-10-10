@@ -13,7 +13,7 @@ from src.auth.external_errors import (
     InvalidExternalAssertion,
 )
 from src.auth.external_config import ExternalAuthSettings
-from src.services.external_auth_admission import ExternalAuthAdmission
+from src.services.identity.external.external_auth_admission import ExternalAuthAdmission
 from src.models.errors import RateLimitError, ServiceUnavailableError
 from tests.auth.test_external_assertions import NOW, valid_claims
 from src.auth.external_contracts import ExternalAssertionClaims, VerifiedExternalAssertion

@@ -27,9 +27,12 @@ from src.db.routing.callable_target_access_groups import CallableTargetAccessGro
 from src.db.routing.callable_target_policies import CallableTargetScopePolicyRepository
 from src.db.routing.callable_targets import CallableTargetBindingRepository
 from src.db.routing.route_groups import RouteGroupRepository
-from src.services.asset_binding_mirror import reload_callable_target_grants
-from src.services.asset_visibility_preview import build_asset_visibility_preview
-from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state
+from src.services.access.asset_binding_mirror import reload_callable_target_grants
+from src.services.access.asset_visibility_preview import build_asset_visibility_preview
+from src.services.access.scoped_asset_access import (
+    build_scope_asset_access,
+    sync_scope_asset_access_state,
+)
 
 router = APIRouter(tags=["Admin Users"])
 

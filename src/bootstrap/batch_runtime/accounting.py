@@ -11,7 +11,7 @@ from src.batch.repository import BatchRepository
 from src.billing.accounting.accounting_service import AccountingProtocolService
 from src.bootstrap.accounting_config import read_accounting_settings
 from src.config import GeneralSettings
-from src.services.tier_policy_service import TierPolicyService
+from src.services.tiers.tier_policy_service import TierPolicyService
 
 
 def build_native_batch_billing(

@@ -8,7 +8,7 @@ from src.config import AppConfig
 from src.config_runtime.secrets import SecretResolver
 from src.db.catalog.named_credentials import NamedCredentialRecord
 from src.db.catalog.model_deployments import ModelDeploymentRecord
-from src.services.model_deployments import (
+from src.services.models.model_deployments import (
     bootstrap_model_deployments_from_config,
     build_model_registry_from_config,
     load_model_registry,

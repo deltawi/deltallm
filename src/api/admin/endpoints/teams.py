@@ -41,10 +41,13 @@ from src.db.routing.callable_targets import CallableTargetBindingRepository
 from src.db.routing.route_groups import RouteGroupRepository
 from src.db.organizations.team_directory import TeamDirectoryRepository, TeamDirectoryScope
 from src.middleware.platform_auth import get_platform_auth_context, has_scoped_permission
-from src.services.asset_binding_mirror import reload_callable_target_grants
-from src.services.asset_visibility_preview import build_asset_visibility_preview
-from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state
-from src.services.ui_authorization import build_team_capabilities
+from src.services.access.asset_binding_mirror import reload_callable_target_grants
+from src.services.access.asset_visibility_preview import build_asset_visibility_preview
+from src.services.access.scoped_asset_access import (
+    build_scope_asset_access,
+    sync_scope_asset_access_state,
+)
+from src.services.ui.ui_authorization import build_team_capabilities
 
 router = APIRouter(tags=["Admin Teams"])
 

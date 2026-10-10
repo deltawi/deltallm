@@ -20,7 +20,7 @@ from src.db.catalog.named_credentials import NamedCredentialRecord, NamedCredent
 from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.middleware.admin import require_admin_permission, require_authenticated
 from src.middleware.platform_auth import get_platform_auth_context
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetKind,
     AssetPrincipal,
@@ -31,7 +31,7 @@ from src.services.managed_asset_access import (
     serialize_asset_access,
     validate_grant_subject_for_principal,
 )
-from src.services.named_credentials import (
+from src.services.models.named_credentials import (
     canonicalize_named_credential_provider,
     clear_connection_fields,
     connection_fingerprint,

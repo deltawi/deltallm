@@ -11,7 +11,7 @@ from src.db.organizations.deletion.organization_deletion_records import (
     OrganizationDeletionFinalizationResult,
     OrganizationDeletionJobRecord,
 )
-from src.services.organization_deletion_worker import (
+from src.services.organizations.deletion.organization_deletion_worker import (
     OrganizationDeletionWorker,
     OrganizationDeletionWorkerConfig,
 )

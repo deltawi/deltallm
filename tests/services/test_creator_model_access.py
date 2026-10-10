@@ -4,8 +4,11 @@ import pytest
 
 from src.db.catalog.logical_models import LogicalModelRecord
 from src.models.responses import UserAPIKeyAuth
-from src.services.creator_model_access import CreatorModelAccessService, CreatorModelAccessSnapshot
-from src.services.managed_asset_access import (
+from src.services.access.creator_model_access import (
+    CreatorModelAccessService,
+    CreatorModelAccessSnapshot,
+)
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
     AssetGrant,

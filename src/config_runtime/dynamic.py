@@ -363,7 +363,7 @@ class DynamicConfigManager:
     async def _validate_output_policy_config(
         self, db: OutputPolicyDatabase | None, candidate: AppConfig
     ) -> None:
-        from src.services.output_policy_configuration import (
+        from src.services.admission.output_policy_configuration import (
             output_policy_configuration_changed,
             validate_output_policy_configuration,
         )

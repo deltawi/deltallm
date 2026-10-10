@@ -53,17 +53,17 @@ from src.notifications.channels import EmailChannel, SlackChannel
 from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.types import NotificationChannel
 from src.notifications.webhook import close_shared_client
-from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.routing_authorization import RoutingAuthorizationReconciler
+from src.services.access.callable_target_grants import CallableTargetGrantService
+from src.services.access.routing_authorization import RoutingAuthorizationReconciler
 from src.router.runtime_generation import (
     RoutingRuntimeGenerationStore,
     with_authorization_snapshot,
 )
-from src.services.governance_invalidation import GovernanceInvalidationService
-from src.services.key_notifications import KeyNotificationService
-from src.services.notification_recipients import NotificationRecipientResolver
-from src.services.prompt_registry import PromptRegistryService
-from src.services.tier_policy_service import TierPolicyService
+from src.services.invalidation.governance_invalidation import GovernanceInvalidationService
+from src.services.identity.keys.key_notifications import KeyNotificationService
+from src.services.email.notification_recipients import NotificationRecipientResolver
+from src.services.prompts.prompt_registry import PromptRegistryService
+from src.services.tiers.tier_policy_service import TierPolicyService
 from src.runtime_settings import resolve_general_setting
 
 logger = logging.getLogger(__name__)

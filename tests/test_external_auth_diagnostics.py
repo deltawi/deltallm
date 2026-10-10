@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from src.concurrency import BoundedCapacityGate
-from src.services.external_auth_runtime import ExternalAuthRuntime
+from src.services.identity.external.external_auth_runtime import ExternalAuthRuntime
 
 
 async def test_operational_diagnostics_are_private_and_work_when_disabled(client, test_app):

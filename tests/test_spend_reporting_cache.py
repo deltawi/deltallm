@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from src.services.spend_reporting_cache import (
+from src.services.reporting.spend_reporting_cache import (
     ReportingQueryTimedOut,
     ReportingRefreshBusy,
     SpendReportingCache,
@@ -472,16 +472,20 @@ async def test_live_concurrency_reconfiguration_preserves_active_accounting() ->
         await release.wait()
         return {"request_count": 1}
 
-    first = asyncio.create_task(cache.get_or_load(
-        cache.key({"report": 1}),
-        60,
-        lambda: held_loader(first_started, release_first),
-    ))
-    second = asyncio.create_task(cache.get_or_load(
-        cache.key({"report": 2}),
-        60,
-        lambda: held_loader(second_started, release_second),
-    ))
+    first = asyncio.create_task(
+        cache.get_or_load(
+            cache.key({"report": 1}),
+            60,
+            lambda: held_loader(first_started, release_first),
+        )
+    )
+    second = asyncio.create_task(
+        cache.get_or_load(
+            cache.key({"report": 2}),
+            60,
+            lambda: held_loader(second_started, release_second),
+        )
+    )
     await asyncio.gather(first_started.wait(), second_started.wait())
     assert cache.load_limiter.active == 2
 
@@ -492,11 +496,13 @@ async def test_live_concurrency_reconfiguration_preserves_active_accounting() ->
         load_execution_timeout_seconds=1,
         redis_operation_timeout_seconds=0.5,
     )
-    third = asyncio.create_task(cache.get_or_load(
-        cache.key({"report": 3}),
-        60,
-        lambda: held_loader(third_started, release_third),
-    ))
+    third = asyncio.create_task(
+        cache.get_or_load(
+            cache.key({"report": 3}),
+            60,
+            lambda: held_loader(third_started, release_third),
+        )
+    )
     release_first.set()
     await first
     await asyncio.sleep(0.02)
@@ -541,16 +547,20 @@ async def test_raising_live_concurrency_limit_wakes_a_waiting_loader() -> None:
         await release.wait()
         return {"request_count": 1}
 
-    first = asyncio.create_task(cache.get_or_load(
-        cache.key({"report": 1}),
-        60,
-        lambda: held_loader(first_started),
-    ))
-    second = asyncio.create_task(cache.get_or_load(
-        cache.key({"report": 2}),
-        60,
-        lambda: held_loader(second_started),
-    ))
+    first = asyncio.create_task(
+        cache.get_or_load(
+            cache.key({"report": 1}),
+            60,
+            lambda: held_loader(first_started),
+        )
+    )
+    second = asyncio.create_task(
+        cache.get_or_load(
+            cache.key({"report": 2}),
+            60,
+            lambda: held_loader(second_started),
+        )
+    )
     await first_started.wait()
     await asyncio.sleep(0.02)
     assert not second_started.is_set()
@@ -603,7 +613,9 @@ async def test_active_reporting_load_keeps_an_immutable_execution_budget() -> No
 
 
 @pytest.mark.asyncio
-async def test_concurrent_forced_refresh_waits_for_new_envelope_even_when_value_is_identical() -> None:
+async def test_concurrent_forced_refresh_waits_for_new_envelope_even_when_value_is_identical() -> (
+    None
+):
     redis = _Redis()
     first_cache = SpendReportingCache(redis, wait_timeout_seconds=1, poll_interval_seconds=0.01)
     second_cache = SpendReportingCache(redis, wait_timeout_seconds=1, poll_interval_seconds=0.01)

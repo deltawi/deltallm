@@ -7,10 +7,14 @@ import pytest
 
 from src.models.errors import RateLimitError
 from src.models.responses import UserAPIKeyAuth
-from src.services.limit_counter import LimitCounter
-from src.services.output_admission import prepare_output_policy
-from src.services.output_limit_types import OutputAccountingEvent, OutputPolicy, OutputScope
-from src.services.output_limit_redis import OutputUsageUnknownError
+from src.services.admission.limit_counter import LimitCounter
+from src.services.admission.output_admission import prepare_output_policy
+from src.services.admission.output_limit_types import (
+    OutputAccountingEvent,
+    OutputPolicy,
+    OutputScope,
+)
+from src.services.admission.output_limit_redis import OutputUsageUnknownError
 from tests.test_output_model_policy import compiled, tier_service
 
 from tests.test_output_tpm_redis import redis_client as shared_redis_client

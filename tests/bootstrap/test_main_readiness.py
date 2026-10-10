@@ -5,7 +5,7 @@ import pytest
 from src.bootstrap.asset_readiness import AUTHORIZATION_OWNERS
 from src.bootstrap.readiness import collect_workers, worker_inventory
 from src.config import GeneralSettings
-from src.services.managed_asset_reconciliation import ManagedAssetReconciliationHealth
+from src.services.access.managed_asset_reconciliation import ManagedAssetReconciliationHealth
 from tests.bootstrap.test_readiness_inventory import base
 
 

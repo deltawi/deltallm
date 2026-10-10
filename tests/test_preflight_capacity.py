@@ -4,8 +4,11 @@ import pytest
 from starlette.requests import Request
 
 from src.models.errors import RateLimitError
-from src.services.limit_counter import LimitCounter
-from src.services.preflight_capacity import acquire_preflight_capacity, release_preflight_capacity
+from src.services.admission.limit_counter import LimitCounter
+from src.services.admission.preflight_capacity import (
+    acquire_preflight_capacity,
+    release_preflight_capacity,
+)
 
 
 def _request(limiter: LimitCounter, *, global_limit: int = 1, org_limit: int = 1) -> Request:

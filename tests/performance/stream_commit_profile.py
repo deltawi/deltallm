@@ -58,7 +58,7 @@ async def main():
     from tests.performance.realtime_selector_profile import measure
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("src.services.key_service").setLevel(logging.WARNING)
+    logging.getLogger("src.services.identity.keys.key_service").setLevel(logging.WARNING)
     for selector in (False, True):
         await measure(args.output_dir, selector=selector, streaming=True, independent=True)
 

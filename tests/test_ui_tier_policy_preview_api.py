@@ -13,7 +13,7 @@ from src.db.tiers.tiers import (
     TierPolicyAssignmentRecord,
     TierPolicyLoadResult,
 )
-from src.services.tier_policy_service import TierPolicyService
+from src.services.tiers.tier_policy_service import TierPolicyService
 
 
 class _TierPreviewRepository:

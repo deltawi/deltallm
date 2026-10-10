@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.organization_lifecycle import (
+from src.services.organizations.organization_lifecycle import (
     OrganizationInactive,
     OrganizationLifecycleAuthorizer,
     OrganizationLifecycleUnavailable,

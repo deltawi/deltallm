@@ -5,7 +5,7 @@ import pytest
 from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.preferences import NotificationPreferenceResolver
 from src.notifications.types import ChannelResult, NotificationMessage
-from src.services.notification_recipients import NotificationRecipients
+from src.services.email.notification_recipients import NotificationRecipients
 
 
 class _FakeRedis:
@@ -34,7 +34,9 @@ class _FakeAuditService:
 
 
 class _FakeChannel:
-    def __init__(self, name: str, *, outcome: str = "queued", supports_types=None, raises: bool = False) -> None:
+    def __init__(
+        self, name: str, *, outcome: str = "queued", supports_types=None, raises: bool = False
+    ) -> None:
         self.name = name
         self._outcome = outcome
         self._supports = supports_types
@@ -44,7 +46,9 @@ class _FakeChannel:
     def supports(self, alert_type: str) -> bool:
         return True if self._supports is None else alert_type in self._supports
 
-    async def send(self, *, message: NotificationMessage, recipients: NotificationRecipients) -> ChannelResult:
+    async def send(
+        self, *, message: NotificationMessage, recipients: NotificationRecipients
+    ) -> ChannelResult:
         self.calls.append(message)
         if self.raises:
             raise RuntimeError("boom")
@@ -52,7 +56,9 @@ class _FakeChannel:
 
 
 def _message() -> NotificationMessage:
-    return NotificationMessage(alert_type="budget_threshold", metric_kind="budget_threshold", payload={})
+    return NotificationMessage(
+        alert_type="budget_threshold", metric_kind="budget_threshold", payload={}
+    )
 
 
 def _recipients(emails: tuple[str, ...] = ("a@example.com",)) -> NotificationRecipients:

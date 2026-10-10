@@ -6,11 +6,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.api.admin.batch_access import require_operator_batch_access
-from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, get_auth_scope, to_json_value
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    get_auth_scope,
+    to_json_value,
+)
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.batch.create.admin_service import BatchCreateSessionAdminService
-from src.services.ui_authorization import build_batch_create_session_capabilities
+from src.services.ui.ui_authorization import build_batch_create_session_capabilities
 
 router = APIRouter(
     tags=["Admin Batch Create Sessions"], dependencies=[Depends(require_operator_batch_access)]
@@ -46,7 +51,9 @@ def _mask_api_key(raw_api_key: str | None) -> str:
     return api_key
 
 
-def _append_session_scope_clause(*, clauses: list[str], params: list[Any], scope, session_alias: str = "s.") -> bool:  # noqa: ANN001
+def _append_session_scope_clause(
+    *, clauses: list[str], params: list[Any], scope, session_alias: str = "s."
+) -> bool:  # noqa: ANN001
     if scope.is_platform_admin:
         return True
 
@@ -55,12 +62,16 @@ def _append_session_scope_clause(*, clauses: list[str], params: list[Any], scope
     scope_clauses: list[str] = []
 
     if scope.team_ids:
-        team_placeholders = ", ".join(f"${len(params) + index + 1}" for index in range(len(scope.team_ids)))
+        team_placeholders = ", ".join(
+            f"${len(params) + index + 1}" for index in range(len(scope.team_ids))
+        )
         params.extend(scope.team_ids)
         scope_clauses.append(f"{team_column} IN ({team_placeholders})")
 
     if scope.org_ids:
-        org_placeholders = ", ".join(f"${len(params) + index + 1}" for index in range(len(scope.org_ids)))
+        org_placeholders = ", ".join(
+            f"${len(params) + index + 1}" for index in range(len(scope.org_ids))
+        )
         params.extend(scope.org_ids)
         scope_clauses.append(
             f"({org_column} IN ({org_placeholders}) "
@@ -91,7 +102,9 @@ async def _load_session_scope_row(db: Any, session_id: str) -> dict[str, Any]:
         session_id,
     )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch create session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Batch create session not found"
+        )
     return dict(rows[0])
 
 
@@ -134,7 +147,8 @@ def _session_payload(
         "created_by_api_key": _mask_api_key(row.get("created_by_api_key")),
         "created_by_user_id": row.get("created_by_user_id"),
         "created_by_team_id": row.get("created_by_team_id"),
-        "created_by_organization_id": row.get("created_by_organization_id") or row.get("organization_id"),
+        "created_by_organization_id": row.get("created_by_organization_id")
+        or row.get("organization_id"),
         "team_alias": row.get("team_alias"),
         "last_error_code": row.get("last_error_code"),
         "last_error_message": row.get("last_error_message"),
@@ -165,14 +179,19 @@ async def list_batch_create_sessions(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
     admin_actions_enabled = _batch_create_session_admin_actions_enabled(request)
 
     clauses: list[str] = []
     params: list[Any] = []
     if not _append_session_scope_clause(clauses=clauses, params=params, scope=scope):
-        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+        return {
+            "data": [],
+            "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False},
+        }
 
     if search:
         params.append(f"%{search}%")
@@ -232,10 +251,18 @@ async def list_batch_create_sessions(
         *params,
     )
 
-    data = [_session_payload(dict(row), scope, admin_actions_enabled=admin_actions_enabled) for row in rows]
+    data = [
+        _session_payload(dict(row), scope, admin_actions_enabled=admin_actions_enabled)
+        for row in rows
+    ]
     return {
         "data": data,
-        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -246,7 +273,9 @@ async def get_batch_create_session(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_READ
+    )
     db = db_or_503(request)
     admin_actions_enabled = _batch_create_session_admin_actions_enabled(request)
 
@@ -282,7 +311,9 @@ async def get_batch_create_session(
         session_id,
     )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch create session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Batch create session not found"
+        )
     row = dict(rows[0])
     await _enforce_session_update_scope(db=db, scope=scope, session=row)
     return _session_payload(row, scope, admin_actions_enabled=admin_actions_enabled)
@@ -296,7 +327,9 @@ async def retry_batch_create_session(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
     service = _batch_create_session_admin_service_or_503(request)
     session = await _load_session_scope_row(db, session_id)
@@ -331,7 +364,9 @@ async def expire_batch_create_session(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(
+        request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE
+    )
     db = db_or_503(request)
     service = _batch_create_session_admin_service_or_503(request)
     session = await _load_session_scope_row(db, session_id)

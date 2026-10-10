@@ -26,7 +26,7 @@ from src.mcp import (
     MCPTransportError,
 )
 from src.routers.audit_helpers import emit_audit_event
-from src.services.audit_service import require_audit_service
+from src.services.audit.audit_service import require_audit_service
 
 router = APIRouter(tags=["mcp"])
 

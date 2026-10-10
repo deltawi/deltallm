@@ -18,9 +18,9 @@ from src.providers.chat_hop import (
 from src.providers.chat_upstream import ChatUpstream
 from src.providers.openai import OpenAIAdapter
 from src.router.router import Deployment
-from src.services.output_limit_types import OutputPolicy, OutputScope, OutputSnapshot
-from src.services.output_token_context import OutputTokenContext
-from src.services.rate_limit_lease import RateLimitState
+from src.services.admission.output_limit_types import OutputPolicy, OutputScope, OutputSnapshot
+from src.services.admission.output_token_context import OutputTokenContext
+from src.services.admission.rate_limit_lease import RateLimitState
 
 
 class _BusyConnection:

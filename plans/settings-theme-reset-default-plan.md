@@ -98,7 +98,7 @@ The TypeScript `DEFAULT_BRANDING` remains necessary for bootstrap/failure render
 
 ### 6.2 Asset deletion seam
 
-In `src/services/ui_branding_assets.py`:
+In `src/services/ui/ui_branding_assets.py`:
 
 1. Add `delete_all_in_transaction(db_client)` beside the existing single-asset deletion method.
 2. Delete only the allowlisted `BRANDING_ASSET_KINDS` in one parameterized SQL statement. Do not loop over three individual database calls.
@@ -288,7 +288,7 @@ No `.env.example`, Helm values/schema, or `config.example.yaml` change is requir
 Files:
 
 - `src/config.py`
-- `src/services/ui_branding_assets.py`
+- `src/services/ui/ui_branding_assets.py`
 - `src/api/admin/endpoints/config.py`
 - `src/audit/actions.py`
 - `tests/test_ui_branding.py`
@@ -348,8 +348,8 @@ Gate:
 Run focused checks first:
 
 ```bash
-uv run ruff check src/config.py src/services/ui_branding_assets.py src/api/admin/endpoints/config.py src/audit/actions.py tests/test_ui_branding.py
-uv run ruff format --check src/config.py src/services/ui_branding_assets.py src/api/admin/endpoints/config.py src/audit/actions.py tests/test_ui_branding.py
+uv run ruff check src/config.py src/services/ui/ui_branding_assets.py src/api/admin/endpoints/config.py src/audit/actions.py tests/test_ui_branding.py
+uv run ruff format --check src/config.py src/services/ui/ui_branding_assets.py src/api/admin/endpoints/config.py src/audit/actions.py tests/test_ui_branding.py
 uv run pytest tests/test_ui_branding.py tests/config/test_dynamic.py
 npm --prefix ui run test:unit
 ./ui/node_modules/.bin/eslint ui/src/lib/brandingApi.ts ui/src/lib/settingsTheme.ts ui/src/components/BrandingProvider.tsx ui/src/components/settings/ThemeSettingsPanel.tsx ui/src/pages/SettingsPage.tsx ui/tests/brandingApi.test.ts ui/tests/branding.test.ts ui/tests/settingsTheme.test.ts ui/tests/themeSettingsPanel.test.tsx ui/scripts/run-unit-tests.mjs

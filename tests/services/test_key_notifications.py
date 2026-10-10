@@ -7,7 +7,10 @@ import pytest
 
 from src.notifications.channels.email import EmailChannel
 from src.notifications.dispatcher import NotificationDispatcher
-from src.services.key_notifications import KeyNotificationRecord, KeyNotificationService
+from src.services.identity.keys.key_notifications import (
+    KeyNotificationRecord,
+    KeyNotificationService,
+)
 
 
 class _FakeOutboxService:

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from src.api.audit import emit_control_audit_event
-from src.services.audit_service import RequiredAuditPersistenceError
+from src.services.audit.audit_service import RequiredAuditPersistenceError
 
 
 class _RecordingAuditService:

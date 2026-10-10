@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.services.platform_identity_service import PlatformIdentityService
+from src.services.identity.platform_identity_service import PlatformIdentityService
 from tests.services.test_platform_identity_service import TransactionalFakePlatformIdentityDB
 from tests.test_auth import _self_registration_app_config, _start_sso_and_callback
 

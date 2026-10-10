@@ -171,7 +171,7 @@ Do not add another generalized metric family unless a real gap remains after usi
 
 Create-session actions depend on session status, not job status.
 
-PR 5 should add a dedicated capability builder in [src/services/ui_authorization.py](/tmp/deltallm-batch-create-session-pr5/src/services/ui_authorization.py) rather than overloading `build_batch_capabilities()`.
+PR 5 should add a dedicated capability builder in [src/services/ui/ui_authorization.py](/tmp/deltallm-batch-create-session-pr5/src/services/ui/ui_authorization.py) rather than overloading `build_batch_capabilities()`.
 
 ## Proposed Admin Contract
 
@@ -232,7 +232,7 @@ Implementation:
 - new dedicated admin endpoint module under `src/api/admin/endpoints/`
 - `src/api/admin/router.py`
 - `src/batch/create/admin_service.py`
-- `src/services/ui_authorization.py`
+- `src/services/ui/ui_authorization.py`
 - `src/audit/actions.py`
 - `src/metrics/batch.py`
 - `src/batch/create/promoter.py`
@@ -300,7 +300,7 @@ Implemented in this branch:
 1. Added a dedicated create-session admin endpoint module at `src/api/admin/endpoints/batch_create_sessions.py`.
 2. Added a small create-session admin service at `src/batch/create/admin_service.py` to own retry and expire semantics.
 3. Wired the session admin runtime through bootstrap and app state independently from the public create cutover flag.
-4. Added session-specific UI capability projection in `src/services/ui_authorization.py`, including runtime-aware retry and expire controls.
+4. Added session-specific UI capability projection in `src/services/ui/ui_authorization.py`, including runtime-aware retry and expire controls.
 5. Added audit actions for session retry and expire.
 6. Reused the existing create-session metrics family for operator actions instead of adding a new metric family.
 7. Added focused unit tests, admin endpoint tests, bootstrap wiring tests, and a DB-backed PR5 slice that skips when Postgres is unavailable.

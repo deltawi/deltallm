@@ -144,7 +144,7 @@ async def measure(output_dir, *, selector, streaming, independent=False):
 
 async def main(output_dir, *, independent=False):
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("src.services.key_service").setLevel(logging.WARNING)
+    logging.getLogger("src.services.identity.keys.key_service").setLevel(logging.WARNING)
     for streaming in (False, True):
         for selector in (False, True):
             await measure(

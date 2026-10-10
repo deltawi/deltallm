@@ -10,7 +10,7 @@ from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.db.routing.callable_targets import CallableTargetBindingRepository
 from src.db.routing.route_groups import RouteGroupRepository
 from src.db.routing.route_policy_lifecycle import RoutePolicyStateConflictError
-from src.services.route_group_mutations import RouteGroupMutationService
+from src.services.routing.route_group_mutations import RouteGroupMutationService
 from tests.db.tier_migration_helpers import connect_prisma, seed_organization
 
 

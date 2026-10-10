@@ -48,7 +48,7 @@ from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
 from src.providers.resolution import resolve_provider
 from src.router.router import Deployment
-from src.services.tier_policy_service import TierPolicyService
+from src.services.tiers.tier_policy_service import TierPolicyService
 from src.telemetry.provider_request_bounds import validated_provider_request_bounds
 
 

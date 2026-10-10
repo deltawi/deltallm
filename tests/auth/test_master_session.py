@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.services.master_session_service import (
+from src.services.identity.master_session_service import (
     MasterSessionService,
     MasterSessionStatus,
     MasterSessionStoreUnavailable,
@@ -79,12 +79,19 @@ async def test_master_session_is_opaque_key_bound_and_revocable() -> None:
     assert token.startswith("dms_")
     assert token not in repr(db.records)
     assert "mk-secret" not in repr(db.records)
-    assert await service.validate_session(token, master_key="mk-secret") == MasterSessionStatus.ACTIVE
-    assert await service.validate_session(token, master_key="mk-rotated") == MasterSessionStatus.INVALID
+    assert (
+        await service.validate_session(token, master_key="mk-secret") == MasterSessionStatus.ACTIVE
+    )
+    assert (
+        await service.validate_session(token, master_key="mk-rotated")
+        == MasterSessionStatus.INVALID
+    )
 
     await service.revoke_session(token)
 
-    assert await service.validate_session(token, master_key="mk-secret") == MasterSessionStatus.INVALID
+    assert (
+        await service.validate_session(token, master_key="mk-secret") == MasterSessionStatus.INVALID
+    )
 
 
 @pytest.mark.asyncio
@@ -92,26 +99,41 @@ async def test_master_session_rejects_missing_malformed_and_expired_tokens_witho
     db = _FakeMasterSessionDB()
     service = MasterSessionService(db_client=db, salt="installation-salt")
 
-    assert await service.validate_session(None, master_key="mk-secret") == MasterSessionStatus.MISSING
-    assert await service.validate_session("not-a-master-session", master_key="mk-secret") == MasterSessionStatus.INVALID
-    assert await service.validate_session(f"dms_{'x' * 300}", master_key="mk-secret") == MasterSessionStatus.INVALID
+    assert (
+        await service.validate_session(None, master_key="mk-secret") == MasterSessionStatus.MISSING
+    )
+    assert (
+        await service.validate_session("not-a-master-session", master_key="mk-secret")
+        == MasterSessionStatus.INVALID
+    )
+    assert (
+        await service.validate_session(f"dms_{'x' * 300}", master_key="mk-secret")
+        == MasterSessionStatus.INVALID
+    )
     assert db.read_calls == 0
 
     token = await service.create_session(master_key="mk-secret", ttl_seconds=60)
     record = next(iter(db.records.values()))
     record["expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
 
-    assert await service.validate_session(token, master_key="mk-secret") == MasterSessionStatus.INVALID
+    assert (
+        await service.validate_session(token, master_key="mk-secret") == MasterSessionStatus.INVALID
+    )
 
 
 @pytest.mark.asyncio
-async def test_master_session_store_failures_are_distinguishable_from_invalid_authentication() -> None:
+async def test_master_session_store_failures_are_distinguishable_from_invalid_authentication() -> (
+    None
+):
     db = _FakeMasterSessionDB()
     service = MasterSessionService(db_client=db, salt="installation-salt")
     token = await service.create_session(master_key="mk-secret", ttl_seconds=3600)
 
     db.fail_reads = True
-    assert await service.validate_session(token, master_key="mk-secret") == MasterSessionStatus.UNAVAILABLE
+    assert (
+        await service.validate_session(token, master_key="mk-secret")
+        == MasterSessionStatus.UNAVAILABLE
+    )
 
     db.fail_writes = True
     with pytest.raises(MasterSessionStoreUnavailable):

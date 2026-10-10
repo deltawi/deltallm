@@ -8,8 +8,8 @@ from typing import Any, TypeVar
 
 from src.db.mcp.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
-from src.services.creator_mcp_access import CreatorMCPAccessService
-from src.services.runtime_scopes import resolve_runtime_scope_context
+from src.services.access.creator_mcp_access import CreatorMCPAccessService
+from src.services.access.runtime_scopes import resolve_runtime_scope_context
 
 from .approvals import MCPApprovalService
 from .capabilities import NamespacedTool, parse_namespaced_tool_name

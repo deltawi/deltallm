@@ -13,7 +13,7 @@ from src.db.tiers.tiers import (
     TierPolicyRepositoryUnavailableError,
     TierRepository,
 )
-from src.services.tier_policy_service import (
+from src.services.tiers.tier_policy_service import (
     TierPolicyBackendUnavailableError,
     TierPolicyService,
     resolve_tier_policy_unavailable_decision,

@@ -4,7 +4,7 @@ import pytest
 
 from src.config_runtime.secrets import SecretResolver
 from src.db.catalog.named_credentials import NamedCredentialRecord
-from src.services.named_credentials import (
+from src.services.models.named_credentials import (
     resolve_named_credential_connection_config,
     resolve_named_credential_record,
 )

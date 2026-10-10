@@ -4,11 +4,11 @@ import pytest
 
 from src.db.catalog.prompt_registry import PromptTemplateRecord
 from src.models.responses import UserAPIKeyAuth
-from src.services.creator_prompt_access import (
+from src.services.access.creator_prompt_access import (
     CreatorPromptAccessService,
     CreatorPromptAccessSnapshot,
 )
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessPolicy,
     AssetAccessRole,
     AssetGrant,
@@ -17,7 +17,7 @@ from src.services.managed_asset_access import (
     GovernanceSource,
     ManagedAsset,
 )
-from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
+from src.services.access.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
 
 
 def _policy(

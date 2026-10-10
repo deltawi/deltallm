@@ -7,7 +7,7 @@ import pytest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.audit.actions import AuditAction
-from src.services.telemetry_replay import (
+from src.services.audit.telemetry_replay import (
     TelemetryReplayService,
     TelemetryReplayUnavailableError,
 )
@@ -179,7 +179,9 @@ async def test_replay_and_required_audit_commit_together(
     async def write_audit(repository) -> None:  # noqa: ANN001
         audit_transactions.append(repository.prisma)
 
-    monkeypatch.setattr("src.services.telemetry_replay.SpendIngestionRepository", FakeRepository)
+    monkeypatch.setattr(
+        "src.services.audit.telemetry_replay.SpendIngestionRepository", FakeRepository
+    )
     service = TelemetryReplayService(database, audit_service=object())
 
     replayed = await service.replay_blocked(
@@ -215,7 +217,7 @@ async def test_email_delivery_audit_replay_uses_same_transaction(
     async def write_audit(repository) -> None:  # noqa: ANN001
         audit_transactions.append(repository.prisma)
 
-    monkeypatch.setattr("src.services.telemetry_replay.EmailOutboxRepository", FakeRepository)
+    monkeypatch.setattr("src.services.audit.telemetry_replay.EmailOutboxRepository", FakeRepository)
     service = TelemetryReplayService(database, audit_service=object())
 
     assert await service.replay_blocked(
@@ -248,7 +250,7 @@ async def test_unknown_email_resolution_uses_same_transaction(
     async def write_audit(repository) -> None:  # noqa: ANN001
         audit_transactions.append(repository.prisma)
 
-    monkeypatch.setattr("src.services.telemetry_replay.EmailOutboxRepository", FakeRepository)
+    monkeypatch.setattr("src.services.audit.telemetry_replay.EmailOutboxRepository", FakeRepository)
     service = TelemetryReplayService(database, audit_service=object())
 
     assert await service.resolve_unknown_email_delivery(
@@ -278,7 +280,9 @@ async def test_required_audit_failure_rolls_back_replay(
     async def fail_audit(_repository) -> None:  # noqa: ANN001
         raise RuntimeError("audit insert failed")
 
-    monkeypatch.setattr("src.services.telemetry_replay.AuditIngestionRepository", FakeRepository)
+    monkeypatch.setattr(
+        "src.services.audit.telemetry_replay.AuditIngestionRepository", FakeRepository
+    )
     service = TelemetryReplayService(database, audit_service=object())
 
     with pytest.raises(TelemetryReplayUnavailableError):
@@ -310,7 +314,9 @@ async def test_replay_cancellation_rolls_back_and_propagates(
     async def cancel_audit(_repository) -> None:  # noqa: ANN001
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("src.services.telemetry_replay.SpendIngestionRepository", FakeRepository)
+    monkeypatch.setattr(
+        "src.services.audit.telemetry_replay.SpendIngestionRepository", FakeRepository
+    )
     service = TelemetryReplayService(database, audit_service=object())
 
     with pytest.raises(asyncio.CancelledError):

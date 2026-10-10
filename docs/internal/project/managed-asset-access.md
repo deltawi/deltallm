@@ -309,7 +309,7 @@ Owner. Account deletion must transfer or archive creator-governed assets before 
 row can be removed.
 
 `DeltaLLM_ManagedAsset` and `DeltaLLM_AssetGrant` are the durable policy source. The shared
-typed resolver in `src/services/managed_asset_access.py` is the only role-to-capability owner.
+typed resolver in `src/services/access/managed_asset_access.py` is the only role-to-capability owner.
 HTTP handlers will authenticate and pass a typed principal to an application service;
 repositories will apply the same account/team/organization scope in their query. UI gating
 is informative only.

@@ -7,7 +7,7 @@ import pytest
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
 from src.models.platform_auth import PlatformAuthContext
-from src.services.ui_authorization import (
+from src.services.ui.ui_authorization import (
     build_batch_create_session_capabilities,
     build_organization_capabilities,
     build_team_capabilities,

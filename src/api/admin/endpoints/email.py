@@ -11,8 +11,8 @@ from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, get_auth_scope
 from src.middleware.admin import require_admin_permission
 from src.db.audit.repository import AuditRepository
-from src.services.email_outbox_service import enqueue_succeeded
-from src.services.telemetry_replay import TelemetryReplayService
+from src.services.email.email_outbox_service import enqueue_succeeded
+from src.services.audit.telemetry_replay import TelemetryReplayService
 
 router = APIRouter(tags=["Admin Email"])
 

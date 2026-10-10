@@ -12,7 +12,7 @@ from src.audit.errors import derive_audit_error_code
 from src.auth.roles import Permission, has_platform_permission
 from src.db.audit.repository import AuditRepository
 from src.middleware.platform_auth import get_platform_auth_context
-from src.services.audit_service import (
+from src.services.audit.audit_service import (
     AuditEventInput,
     AuditPayloadInput,
     AuditService,

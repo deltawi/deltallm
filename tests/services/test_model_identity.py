@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.services.model_identity import (
+from src.services.models.model_identity import (
     creator_api_model_id,
     creator_prompt_template_key,
     creator_route_group_key,
@@ -28,9 +28,7 @@ def test_creator_namespace_is_readable_stable_and_unique_per_account() -> None:
 
 
 def test_single_label_and_missing_label_namespace_fallbacks() -> None:
-    assert suggested_creator_namespace("creator@example.com", "account-1").startswith(
-        "cre-tor-"
-    )
+    assert suggested_creator_namespace("creator@example.com", "account-1").startswith("cre-tor-")
     assert suggested_creator_namespace("@example.com", "account-1").startswith("usr-")
 
 
@@ -42,9 +40,7 @@ def test_model_slug_preserves_a_readable_id_without_auto_suffixing() -> None:
 
 
 def test_route_group_slug_is_derived_from_the_friendly_name() -> None:
-    assert suggested_route_group_slug("Customer Support — Arabic") == (
-        "customer-support-arabic"
-    )
+    assert suggested_route_group_slug("Customer Support — Arabic") == ("customer-support-arabic")
 
 
 def test_route_group_key_uses_compact_generated_code() -> None:

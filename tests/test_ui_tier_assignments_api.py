@@ -13,7 +13,7 @@ from src.audit.actions import AuditAction
 from src.auth.roles import OrganizationRole
 from src.db.tiers.tiers import OrganizationTierAssignmentRecord
 from src.models.platform_auth import PlatformAuthContext
-from src.services.cache_invalidation import CacheInvalidationService
+from src.services.invalidation.cache_invalidation import CacheInvalidationService
 
 
 class _RecordingAuditService:

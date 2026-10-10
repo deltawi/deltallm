@@ -25,7 +25,7 @@ from src.api.admin.organization_mutations import (
     require_active_organization_mutations,
 )
 from src.middleware.admin import require_admin_permission
-from src.services.access_provisioning_service import AccessProvisioningService
+from src.services.identity.access_provisioning_service import AccessProvisioningService
 
 router = APIRouter(tags=["Admin RBAC"])
 

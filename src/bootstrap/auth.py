@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from src.bootstrap.status import BootstrapStatus
 from src.bootstrap.external_auth import init_external_auth_runtime, external_auth_status
-from src.services.external_auth_runtime import ExternalAuthRuntime
+from src.services.identity.external.external_auth_runtime import ExternalAuthRuntime
 from src.db.runtime.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.db.identity.email_tokens import EmailTokenRepository
 from src.db.identity.invitations import InvitationRepository
@@ -25,31 +25,31 @@ from src.auth import (
     SSOProvider,
 )
 from src.db.identity.key_repository import KeyRepository
-from src.services.cache_invalidation import (
+from src.services.invalidation.cache_invalidation import (
     CacheInvalidationService,
     CacheInvalidationWorker,
     CacheInvalidationWorkerConfig,
 )
-from src.services.email_token_service import EmailTokenService
-from src.services.invitation_service import InvitationService
-from src.services.key_service import KeyService
-from src.services.auth_fallback import AuthFallbackLimits
+from src.services.email.email_token_service import EmailTokenService
+from src.services.identity.invitation_service import InvitationService
+from src.services.identity.keys.key_service import KeyService
+from src.services.identity.keys.auth_fallback import AuthFallbackLimits
 from src.config_startup import startup_field_values
-from src.services.limit_counter import LimitCounter
-from src.services.output_policy_configuration import validate_output_policy_configuration
-from src.services.output_limit_lua import OUTPUT_ACCOUNTING_LUA
-from src.services.rate_limit_admission_lua import RATE_LIMIT_OUTPUT_LUA
-from src.services.tier_fair_share_admission_lua import RATE_AND_FAIR_SHARE_OUTPUT_LUA
-from src.services.master_session_service import MasterSessionService
+from src.services.admission.limit_counter import LimitCounter
+from src.services.admission.output_policy_configuration import validate_output_policy_configuration
+from src.services.admission.output_limit_lua import OUTPUT_ACCOUNTING_LUA
+from src.services.admission.rate_limit_admission_lua import RATE_LIMIT_OUTPUT_LUA
+from src.services.admission.tier_fair_share_admission_lua import RATE_AND_FAIR_SHARE_OUTPUT_LUA
+from src.services.identity.master_session_service import MasterSessionService
 from src.bootstrap.organization_deletion import (
     initialize_organization_deletion_runtime,
     initialize_organization_lifecycle,
     require_organization_deletion_readiness,
     start_organization_deletion_tasks,
 )
-from src.services.platform_identity_service import PlatformIdentityService
-from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
-from src.services.sso_state_store import SSOStateStore
+from src.services.identity.platform_identity_service import PlatformIdentityService
+from src.services.identity.self_registration_provisioning import SelfRegistrationProvisioningService
+from src.services.identity.sso_state_store import SSOStateStore
 
 logger = logging.getLogger(__name__)
 _AUTH_BOOT_ID = uuid4().hex[:12]

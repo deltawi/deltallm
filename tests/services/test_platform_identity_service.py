@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.services.platform_identity_service import (
+from src.services.identity.platform_identity_service import (
     AccountInactiveError,
     LoginSessionCreationError,
     PlatformIdentityService,

@@ -8,8 +8,8 @@ import pytest
 from redis.asyncio import Redis
 
 from src.models.errors import RateLimitError
-from src.services.limit_counter import LimitCounter, RateLimitCheck
-from src.services.tier_capacity_fair_share import (
+from src.services.admission.limit_counter import LimitCounter, RateLimitCheck
+from src.services.admission.tier_capacity_fair_share import (
     TierFairShareCheck,
     fair_share_boost_key,
     fair_share_limit_hit_heatmap_key,

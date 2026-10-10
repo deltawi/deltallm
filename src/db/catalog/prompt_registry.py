@@ -7,8 +7,11 @@ from typing import Any
 
 from src.db.catalog.admin_asset_lists import ListDirection, PromptSortKey, list_asset_rows
 
-from src.services.asset_ownership import normalize_owner_scope_type, owner_scope_from_metadata
-from src.services.asset_scopes import normalize_scope_type, scope_lookup_candidates
+from src.services.access.asset_ownership import (
+    normalize_owner_scope_type,
+    owner_scope_from_metadata,
+)
+from src.services.access.asset_scopes import normalize_scope_type, scope_lookup_candidates
 
 
 def _parse_json_object(value: Any) -> dict[str, Any]:

@@ -15,7 +15,7 @@ from src.realtime.capacity import RealtimeCapacity
 from src.realtime.config import RealtimeSettings
 from src.realtime.routing import RealtimeRouting
 from src.realtime.runtime import RealtimeRuntime
-from src.services.limit_counter import LimitCounter
+from src.services.admission.limit_counter import LimitCounter
 from src.runtime_settings import resolve_general_setting
 
 

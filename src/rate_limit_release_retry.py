@@ -11,7 +11,7 @@ from typing import Any, Callable
 from src.rate_limit_policy import RateLimitLease, release_rate_limit_controls
 from src.shutdown import cleanup_deadline
 from src.telemetry.lifecycle import stop_tasks_before_deadline
-from src.services.limit_counter import LimitCounter
+from src.services.admission.limit_counter import LimitCounter
 
 logger = logging.getLogger(__name__)
 

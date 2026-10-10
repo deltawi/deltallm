@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from src.router import FallbackConfig
-from src.services.callable_targets import build_callable_target_catalog
+from src.services.access.callable_targets import build_callable_target_catalog
 from tests.test_routing_cache_identity import _enable_cache, _group, _publish
 
 

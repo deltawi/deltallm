@@ -6,7 +6,7 @@ import pytest
 from redis.asyncio import Redis
 
 from src.config_runtime.dynamic import DynamicConfigManager
-from src.services.governance_invalidation import GovernanceInvalidationService
+from src.services.invalidation.governance_invalidation import GovernanceInvalidationService
 from tests.config.test_dynamic import FakeDB
 
 pytestmark = [pytest.mark.redis, pytest.mark.asyncio]

@@ -14,7 +14,7 @@ from src.auth.external_config import ExternalAuthSettings
 from src.auth.external_errors import InvalidExternalAssertion, ExternalAuthError
 from src.concurrency import BoundedCapacityGate
 from src.models.external_auth import ExternalExchangeResponse
-from src.services.external_auth_runtime import ExternalAuthRuntime
+from src.services.identity.external.external_auth_runtime import ExternalAuthRuntime
 
 
 class Runtime(ExternalAuthRuntime):

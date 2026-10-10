@@ -7,7 +7,7 @@ from pydantic import SecretStr
 from src.email.rendering import render_email_template
 from src.notifications.types import ChannelResult, NotificationMessage
 from src.notifications.webhook import post_webhook
-from src.services.notification_recipients import NotificationRecipients
+from src.services.email.notification_recipients import NotificationRecipients
 
 logger = logging.getLogger(__name__)
 

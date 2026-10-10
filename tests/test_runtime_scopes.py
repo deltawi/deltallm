@@ -5,7 +5,7 @@ import pytest
 
 from src.middleware.auth import authenticate_request
 from src.models.responses import UserAPIKeyAuth
-from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
+from src.services.access.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
 
 
 def test_resolve_runtime_scope_context_for_api_key_auth() -> None:

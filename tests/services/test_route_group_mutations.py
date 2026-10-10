@@ -5,7 +5,7 @@ import pytest
 from src.db.routing.callable_targets import CallableTargetBindingRepository
 from src.db.catalog.model_deployments import ModelDeploymentRepository
 from src.db.routing.route_groups import RouteGroupRepository
-from src.services.route_group_mutations import RouteGroupMutationService
+from src.services.routing.route_group_mutations import RouteGroupMutationService
 
 
 class _TransactionContext:

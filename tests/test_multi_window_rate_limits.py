@@ -8,7 +8,7 @@ import pytest
 from src.models.errors import RateLimitError
 from src.models.responses import UserAPIKeyAuth
 from src.rate_limit_policy import build_rate_limit_checks
-from src.services.limit_counter import LimitCounter, RateLimitCheck, RateLimitResult
+from src.services.admission.limit_counter import LimitCounter, RateLimitCheck, RateLimitResult
 from tests.conftest import FakeRedis
 
 
@@ -109,7 +109,9 @@ class TestMultiWindowAtomicRedis:
     async def test_mixed_minute_hour_checks_pass(self, counter):
         checks = [
             RateLimitCheck(scope="key_rpm", entity_id="k1", limit=10, amount=1, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="k1", limit=100, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="k1", limit=100, amount=1, window_seconds=3600
+            ),
         ]
         result = await counter.check_rate_limits_atomic(checks)
         assert len(result.checks) == 2
@@ -121,13 +123,17 @@ class TestMultiWindowAtomicRedis:
     async def test_minute_limit_exceeded_hour_ok(self, counter):
         checks_fill = [
             RateLimitCheck(scope="key_rpm", entity_id="k2", limit=2, amount=2, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="k2", limit=100, amount=2, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="k2", limit=100, amount=2, window_seconds=3600
+            ),
         ]
         await counter.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
             RateLimitCheck(scope="key_rpm", entity_id="k2", limit=2, amount=1, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="k2", limit=100, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="k2", limit=100, amount=1, window_seconds=3600
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter.check_rate_limits_atomic(checks_exceed)
@@ -136,13 +142,17 @@ class TestMultiWindowAtomicRedis:
     @pytest.mark.asyncio
     async def test_hour_limit_exceeded_minute_ok(self, counter):
         checks_fill = [
-            RateLimitCheck(scope="key_rpm", entity_id="k3", limit=1000, amount=1, window_seconds=60),
+            RateLimitCheck(
+                scope="key_rpm", entity_id="k3", limit=1000, amount=1, window_seconds=60
+            ),
             RateLimitCheck(scope="key_rph", entity_id="k3", limit=2, amount=2, window_seconds=3600),
         ]
         await counter.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
-            RateLimitCheck(scope="key_rpm", entity_id="k3", limit=1000, amount=1, window_seconds=60),
+            RateLimitCheck(
+                scope="key_rpm", entity_id="k3", limit=1000, amount=1, window_seconds=60
+            ),
             RateLimitCheck(scope="key_rph", entity_id="k3", limit=2, amount=1, window_seconds=3600),
         ]
         with pytest.raises(RateLimitError) as exc_info:
@@ -152,12 +162,16 @@ class TestMultiWindowAtomicRedis:
     @pytest.mark.asyncio
     async def test_day_limit_exceeded(self, counter):
         checks_fill = [
-            RateLimitCheck(scope="key_rpd", entity_id="k4", limit=3, amount=3, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rpd", entity_id="k4", limit=3, amount=3, window_seconds=86400
+            ),
         ]
         await counter.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
-            RateLimitCheck(scope="key_rpd", entity_id="k4", limit=3, amount=1, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rpd", entity_id="k4", limit=3, amount=1, window_seconds=86400
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter.check_rate_limits_atomic(checks_exceed)
@@ -166,12 +180,16 @@ class TestMultiWindowAtomicRedis:
     @pytest.mark.asyncio
     async def test_tpd_limit_exceeded(self, counter):
         checks_fill = [
-            RateLimitCheck(scope="team_tpd", entity_id="t1", limit=500, amount=500, window_seconds=86400),
+            RateLimitCheck(
+                scope="team_tpd", entity_id="t1", limit=500, amount=500, window_seconds=86400
+            ),
         ]
         await counter.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
-            RateLimitCheck(scope="team_tpd", entity_id="t1", limit=500, amount=1, window_seconds=86400),
+            RateLimitCheck(
+                scope="team_tpd", entity_id="t1", limit=500, amount=1, window_seconds=86400
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter.check_rate_limits_atomic(checks_exceed)
@@ -181,8 +199,12 @@ class TestMultiWindowAtomicRedis:
     async def test_three_windows_all_pass(self, counter):
         checks = [
             RateLimitCheck(scope="key_rpm", entity_id="k5", limit=100, amount=1, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="k5", limit=1000, amount=1, window_seconds=3600),
-            RateLimitCheck(scope="key_rpd", entity_id="k5", limit=10000, amount=1, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rph", entity_id="k5", limit=1000, amount=1, window_seconds=3600
+            ),
+            RateLimitCheck(
+                scope="key_rpd", entity_id="k5", limit=10000, amount=1, window_seconds=86400
+            ),
         ]
         result = await counter.check_rate_limits_atomic(checks)
         assert len(result.current_values) == 3
@@ -193,7 +215,9 @@ class TestMultiWindowAtomicRedis:
     async def test_different_redis_keys_per_window(self, counter, fake_redis):
         checks = [
             RateLimitCheck(scope="key_rpm", entity_id="k6", limit=100, amount=1, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="k6", limit=100, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="k6", limit=100, amount=1, window_seconds=3600
+            ),
         ]
         await counter.check_rate_limits_atomic(checks)
 
@@ -211,7 +235,9 @@ class TestMultiWindowFallback:
     async def test_mixed_windows_fallback_pass(self, counter_no_redis):
         checks = [
             RateLimitCheck(scope="key_rpm", entity_id="f1", limit=10, amount=1, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="f1", limit=100, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="f1", limit=100, amount=1, window_seconds=3600
+            ),
         ]
         result = await counter_no_redis.check_rate_limits_atomic(checks)
         assert len(result.current_values) == 2
@@ -222,13 +248,17 @@ class TestMultiWindowFallback:
     async def test_fallback_minute_exceeded_hour_ok(self, counter_no_redis):
         checks_fill = [
             RateLimitCheck(scope="key_rpm", entity_id="f2", limit=2, amount=2, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="f2", limit=100, amount=2, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="f2", limit=100, amount=2, window_seconds=3600
+            ),
         ]
         await counter_no_redis.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
             RateLimitCheck(scope="key_rpm", entity_id="f2", limit=2, amount=1, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="f2", limit=100, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="f2", limit=100, amount=1, window_seconds=3600
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter_no_redis.check_rate_limits_atomic(checks_exceed)
@@ -237,12 +267,16 @@ class TestMultiWindowFallback:
     @pytest.mark.asyncio
     async def test_fallback_day_limit_exceeded(self, counter_no_redis):
         checks_fill = [
-            RateLimitCheck(scope="key_rpd", entity_id="f3", limit=5, amount=5, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rpd", entity_id="f3", limit=5, amount=5, window_seconds=86400
+            ),
         ]
         await counter_no_redis.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
-            RateLimitCheck(scope="key_rpd", entity_id="f3", limit=5, amount=1, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rpd", entity_id="f3", limit=5, amount=1, window_seconds=86400
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter_no_redis.check_rate_limits_atomic(checks_exceed)
@@ -266,10 +300,13 @@ class TestMultiWindowFallback:
 class TestMultiWindowHeaderClassification:
     def test_rph_scope_uses_hour_reset(self):
         from src.middleware.rate_limit import _compute_rate_limit_state
+
         now = time.time()
         hour_reset = int((math.floor(now / 3600) + 1) * 3600)
         checks = [
-            RateLimitCheck(scope="key_rph", entity_id="h1", limit=100, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="h1", limit=100, amount=1, window_seconds=3600
+            ),
         ]
         result = RateLimitResult(
             checks=checks,
@@ -285,12 +322,15 @@ class TestMultiWindowHeaderClassification:
 
     def test_mixed_minute_hour_uses_scope_specific_resets(self):
         from src.middleware.rate_limit import _compute_rate_limit_state
+
         now = time.time()
         minute_reset = int((math.floor(now / 60) + 1) * 60)
         hour_reset = int((math.floor(now / 3600) + 1) * 3600)
         checks = [
             RateLimitCheck(scope="key_rpm", entity_id="h5", limit=10, amount=1, window_seconds=60),
-            RateLimitCheck(scope="key_rph", entity_id="h5", limit=100, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="key_rph", entity_id="h5", limit=100, amount=1, window_seconds=3600
+            ),
         ]
         result = RateLimitResult(
             checks=checks,
@@ -304,10 +344,13 @@ class TestMultiWindowHeaderClassification:
 
     def test_rpd_scope_classified_as_rpm_for_headers(self):
         from src.middleware.rate_limit import _compute_rate_limit_state
+
         now = time.time()
         day_reset = int((math.floor(now / 86400) + 1) * 86400)
         checks = [
-            RateLimitCheck(scope="org_rpd", entity_id="h2", limit=1000, amount=1, window_seconds=86400),
+            RateLimitCheck(
+                scope="org_rpd", entity_id="h2", limit=1000, amount=1, window_seconds=86400
+            ),
         ]
         result = RateLimitResult(
             checks=checks,
@@ -323,10 +366,13 @@ class TestMultiWindowHeaderClassification:
 
     def test_tpd_scope_classified_as_tpm_for_headers(self):
         from src.middleware.rate_limit import _compute_rate_limit_state
+
         now = time.time()
         day_reset = int((math.floor(now / 86400) + 1) * 86400)
         checks = [
-            RateLimitCheck(scope="team_tpd", entity_id="h3", limit=10000, amount=500, window_seconds=86400),
+            RateLimitCheck(
+                scope="team_tpd", entity_id="h3", limit=10000, amount=500, window_seconds=86400
+            ),
         ]
         result = RateLimitResult(
             checks=checks,
@@ -342,11 +388,21 @@ class TestMultiWindowHeaderClassification:
 
     def test_429_state_rph_scope_uses_hour_reset(self):
         from src.middleware.rate_limit import _build_429_state
+
         checks = [
-            RateLimitCheck(scope="key_rph", entity_id="h4", limit=100, amount=1, window_seconds=3600),
-            RateLimitCheck(scope="key_tpd", entity_id="h4", limit=50000, amount=500, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rph", entity_id="h4", limit=100, amount=1, window_seconds=3600
+            ),
+            RateLimitCheck(
+                scope="key_tpd", entity_id="h4", limit=50000, amount=500, window_seconds=86400
+            ),
         ]
-        exc = RateLimitError(message="Rate limit exceeded", param="key_rph", code="key_rph_exceeded", retry_after=1800)
+        exc = RateLimitError(
+            message="Rate limit exceeded",
+            param="key_rph",
+            code="key_rph_exceeded",
+            retry_after=1800,
+        )
         state = _build_429_state(checks, exc, int(time.time()) + 3600)
         assert state.rpm_limit == 100
         assert state.rpm_remaining == 0
@@ -360,12 +416,16 @@ class TestRetryAfterDailyWindow:
     @pytest.mark.asyncio
     async def test_retry_after_daily_block(self, counter):
         checks_fill = [
-            RateLimitCheck(scope="key_rpd", entity_id="ra1", limit=5, amount=5, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rpd", entity_id="ra1", limit=5, amount=5, window_seconds=86400
+            ),
         ]
         await counter.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
-            RateLimitCheck(scope="key_rpd", entity_id="ra1", limit=5, amount=1, window_seconds=86400),
+            RateLimitCheck(
+                scope="key_rpd", entity_id="ra1", limit=5, amount=1, window_seconds=86400
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter.check_rate_limits_atomic(checks_exceed)
@@ -375,12 +435,16 @@ class TestRetryAfterDailyWindow:
     @pytest.mark.asyncio
     async def test_retry_after_hourly_block(self, counter):
         checks_fill = [
-            RateLimitCheck(scope="org_rph", entity_id="ra2", limit=3, amount=3, window_seconds=3600),
+            RateLimitCheck(
+                scope="org_rph", entity_id="ra2", limit=3, amount=3, window_seconds=3600
+            ),
         ]
         await counter.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
-            RateLimitCheck(scope="org_rph", entity_id="ra2", limit=3, amount=1, window_seconds=3600),
+            RateLimitCheck(
+                scope="org_rph", entity_id="ra2", limit=3, amount=1, window_seconds=3600
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter.check_rate_limits_atomic(checks_exceed)
@@ -390,12 +454,16 @@ class TestRetryAfterDailyWindow:
     @pytest.mark.asyncio
     async def test_retry_after_fallback_daily_block(self, counter_no_redis):
         checks_fill = [
-            RateLimitCheck(scope="team_tpd", entity_id="ra3", limit=100, amount=100, window_seconds=86400),
+            RateLimitCheck(
+                scope="team_tpd", entity_id="ra3", limit=100, amount=100, window_seconds=86400
+            ),
         ]
         await counter_no_redis.check_rate_limits_atomic(checks_fill)
 
         checks_exceed = [
-            RateLimitCheck(scope="team_tpd", entity_id="ra3", limit=100, amount=1, window_seconds=86400),
+            RateLimitCheck(
+                scope="team_tpd", entity_id="ra3", limit=100, amount=1, window_seconds=86400
+            ),
         ]
         with pytest.raises(RateLimitError) as exc_info:
             await counter_no_redis.check_rate_limits_atomic(checks_exceed)

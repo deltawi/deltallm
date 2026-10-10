@@ -9,7 +9,7 @@ from src.metrics import (
     record_tier_capacity_observation,
     set_tier_capacity_pool_saturation,
 )
-from src.services.tier_capacity_fair_share import TierFairShareDecision
+from src.services.admission.tier_capacity_fair_share import TierFairShareDecision
 
 
 def test_tier_capacity_observation_exports_aggregate_pool_and_tier_metrics() -> None:
@@ -52,11 +52,10 @@ def test_tier_capacity_observation_exports_aggregate_pool_and_tier_metrics() -> 
     assert 'model="gpt-4o-mini"' in request_line
     assert 'tier_key="enterprise"' in request_line
     assert 'outcome="denied"' in request_line
-    assert 'organization_id=' not in request_line
+    assert "organization_id=" not in request_line
     assert request_line.endswith(" 2.0")
     assert not any(
-        line.startswith("deltallm_tier_capacity_requests_total{")
-        and "organization_id=" in line
+        line.startswith("deltallm_tier_capacity_requests_total{") and "organization_id=" in line
         for line in lines
     )
 

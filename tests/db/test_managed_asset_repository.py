@@ -9,7 +9,7 @@ from src.db.catalog.managed_assets import (
     ManagedAssetAudienceNotFoundError,
     ManagedAssetSnapshotLimitError,
 )
-from src.services.managed_asset_access import (
+from src.services.access.managed_asset_access import (
     AssetAccessRole,
     AssetAccessPolicy,
     AssetGrant,

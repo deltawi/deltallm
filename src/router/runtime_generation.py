@@ -12,9 +12,9 @@ from src.router.failover import FallbackConfig, FailoverManager
 from src.router.registry import DeploymentRegistryStore
 from src.router.router import Router, RouterConfig, RoutingStrategy
 from src.router.runtime_authorization import CallableTargetGrantSnapshot
-from src.services.creator_model_access import CreatorModelAccessSnapshot
-from src.services.creator_prompt_access import CreatorPromptAccessSnapshot
-from src.services.creator_route_group_access import CreatorRouteGroupAccessSnapshot
+from src.services.access.creator_model_access import CreatorModelAccessSnapshot
+from src.services.access.creator_prompt_access import CreatorPromptAccessSnapshot
+from src.services.access.creator_route_group_access import CreatorRouteGroupAccessSnapshot
 from src.router.routing_identity import build_runtime_routing_fingerprints
 from src.router.selection.qualification import QualifiedSelector, qualify_selector_groups
 from src.router.selection.reachability import selector_reachable_groups

@@ -18,7 +18,7 @@ from src.metrics.batch import deltallm_batch_artifact_failures_metric
 from src.db.routing.callable_targets import CallableTargetBindingRecord
 from src.db.routing.callable_target_policies import CallableTargetScopePolicyRecord
 from src.models.responses import UserAPIKeyAuth
-from src.services.callable_target_grants import CallableTargetGrantService
+from src.services.access.callable_target_grants import CallableTargetGrantService
 
 
 class _DummyRepo:

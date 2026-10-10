@@ -11,11 +11,11 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.output_limits import validate_model_output_limits
 from src.models.responses import UserAPIKeyAuth
 from src.api.admin.endpoints.tier_schemas import TierModelPolicyBulkLimitsRequest
-from src.services.output_admission import prepare_output_policy
-from src.services.output_limit_types import OutputPolicy, OutputScope
-from src.services.output_policy_configuration import validate_output_policy_configuration
-from src.services.output_policy_preview import output_limit_projection
-from src.services.tier_policy_compiler import compile_tier_policy_snapshot
+from src.services.admission.output_admission import prepare_output_policy
+from src.services.admission.output_limit_types import OutputPolicy, OutputScope
+from src.services.admission.output_policy_configuration import validate_output_policy_configuration
+from src.services.admission.output_policy_preview import output_limit_projection
+from src.services.tiers.tier_policy_compiler import compile_tier_policy_snapshot
 from tests.services.test_tier_policy_compiler import _assignment
 
 
