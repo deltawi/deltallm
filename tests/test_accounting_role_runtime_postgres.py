@@ -2,6 +2,8 @@
 
 import asyncio
 from decimal import Decimal
+import logging
+from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -17,6 +19,8 @@ from src.bootstrap.accounting_role_builders import (
     build_accounting_request_runtime,
 )
 from src.db.accounting.accounting_calls import AccountingProtocolUnavailable
+from src.db.accounting.reporting.accounting_read_model_queries import CLAIM, INITIALIZE, PROGRESS
+from src.db.runtime.telemetry_acceptance import classify_acceptance_failure
 from src.lifecycle_settings import LifecycleSettings
 from src.outbound.network_policy import OutboundNetworkPolicy
 from src.process_lifecycle import ProcessLifecycle
@@ -35,6 +39,7 @@ from tests.test_accounting_protocol_postgres import (
 
 pytestmark = pytest.mark.postgres
 accounting_db = _accounting_db
+logger = logging.getLogger(__name__)
 
 
 class ProcessingClient(CountingClient):
@@ -44,7 +49,22 @@ class ProcessingClient(CountingClient):
         self.progress = asyncio.Event()
 
     async def query_raw(self, query, *parameters):
-        rows = await super().query_raw(query, *parameters)
+        started = perf_counter()
+        try:
+            rows = await super().query_raw(query, *parameters)
+        except BaseException as exc:
+            operation = {
+                CLAIM: "report_claim",
+                INITIALIZE: "report_initialize",
+                PROGRESS: "report_progress",
+            }.get(query, "other")
+            logger.warning(
+                "Role graph statement failed: operation=%s reason=%s seconds=%.3f",
+                operation,
+                classify_acceptance_failure(exc).value,
+                perf_counter() - started,
+            )
+            raise
         if "SELECT deltallm_accounting_reconcile_grants" in query and rows[0]["count"]:
             self.settled.set()
         if (
