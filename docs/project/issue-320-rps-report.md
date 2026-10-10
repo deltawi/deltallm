@@ -263,6 +263,60 @@ a host, network, or database cause. The next diagnostic samples live database
 waits at a bounded higher rate, only at 500 RPS, without a profiler or changed
 application limits. Retain both the passing and failed results.
 
+The first live-wait diagnostic stage passed on the same fixed image:
+300,000/300,000 requests, no errors or drops, p95 58.90 ms, p99 93.74 ms,
+and growth +0.006406/second. Exact charges matched all four scopes. Drain
+completed in 0.607 seconds with no pending or unsafe state. These latency
+numbers are better than the preceding 99.07/235.10-ms selected-tier result,
+but this is still a diagnostic, not a four-tier release certificate.
+The second stage on the same database failed: 299,115/300,000 successes,
+with 885 required-persistence 503 responses in one three-second interval.
+p95/p99 were 70.73/144.44 ms, and growth was +0.004364/second. Both latency
+and growth passed. Drain completed in 0.783 seconds with no pending or unsafe
+state. Successful charges matched all four scopes, but success and the official
+economic gate failed. Maintenance and native recovery did not run.
+
+The read-only samples observed append and claim calls waiting on WAL writes
+for more than 250 ms. Those waits occurred in a passing stage. They do not,
+by themselves, prove the cause of the earlier HTTP failures. Initial and
+retained reporting query plans show no JIT compilation. PostgreSQL data
+already uses a direct ext4 volume, not the container overlay. Do not claim
+that more CPU, another volume, or a JIT setting resolves the failure.
+
+### Cached reporting plans
+
+A separate real-database check reproduced a history scan in the reporting claim
+path. It collects statistics while the event table is
+empty, caches calls, then adds 40,000 retained rows without refreshing statistics.
+Automatic and generic plans then scan the table 64 times. Each scan rejects
+40,000 rows. Calls take about 400–500 ms without JIT. With custom plans, the
+same query uses indexed probes and takes about two ms. Two regression cases
+failed before the correction, including history from an earlier generation.
+
+Forward migration `20261010213000_accounting_reporting_cold_plans` moves the
+existing three queries to database functions with function-local custom plans.
+It preserves generation checks, leases, checkpoint fencing, page and byte limits,
+and the 250-ms call budget. Each method still makes one database call. No index,
+global database setting, financial rule, or network call is added. The caller's
+plan setting is restored after success and failure.
+
+The real-schema checks found a token-type error in the first draft. Checkpoint
+tokens are text, not the UUID type used by the old temporary test table. Forward
+migration `20261010214000_accounting_reporting_token_boundary` makes the UUID
+comparison with stored text explicit. The applied migration and token values
+remain unchanged. The fixture now uses the production text type.
+
+All 81 related database checks passed after that correction, including all 28
+cold-plan and failure-policy cases, startup, lost-reply recovery, and concurrent
+checkpoint claims. Fresh installation, v0.3.1 upgrade, shared-feature upgrade,
+and model-identity recovery migration checks passed. Install both migrations
+before the new image. An older image can use its original queries on the expanded
+database. Do not remove an applied migration to roll back the image.
+
+These checks prove the cached-plan defect and its correction. They do not prove
+that it caused every HTTP failure. Wider tests, final CI, a new fixed image,
+retained-history load, and all functional recovery checks remain required.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the
@@ -283,7 +337,7 @@ fix for the distinct persistence or latency failures.
 | Client request IDs, complete streams, and native reporting | 24 installed-image completions passed, including four complete streams and omitted or invalid headers; charges were exact and all seven processes were ready | Repeat after process loss and Helm rollout |
 | Installed authentication, input validation, model visibility, and UI delivery | All 16 checks passed across the four API processes | Repeat after process loss and Helm rollout |
 | Application behavior, including streaming and access checks | 1,696 application tests passed locally | Keep all final application CI checks passing |
-| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed; all five opt-in cases passed separately; both latest CI shards passed | Keep all final database CI checks passing |
+| Database behavior, budgets, permissions, and reporting | 1,148 PostgreSQL tests passed locally; all five opt-in cases passed separately; latest CI failed five reporting-startup cases | Resolve the startup cause and pass both final database CI shards |
 | Realtime clients | All four pinned official SDK cases passed locally | Keep final Realtime CI checks passing |
 | Redis limits and failure policies | 256 tests passed, including separate memory-pressure services | Keep all final Redis CI checks passing |
 | Install and upgrade migrations | Clean install, last-release upgrade, shared-feature upgrade, and model-identity recovery passed | Apply the forward reporting migration before the corrected image |
@@ -293,12 +347,14 @@ fix for the distinct persistence or latency failures.
 The full local database group in CI order passed: 504 passed and one opt-in case
 skipped. All 33 affected tests also passed with the smaller CI Prisma pool.
 Earlier CI reporting-startup failures did not reproduce in these checks. The
-latest complete CI run passed all required jobs, including capacity and recovery.
+complete CI run at `8aef2d04` passed all required jobs, including capacity and recovery.
 The cause of the earlier failures is not proved. Bounded test diagnostics remain
 in place. Full CI also passed for the stronger installed-image checks, the
-time-weighted measurement, and the warm-up change. Final CI for the declared
-database fixture and complete eight-CPU qualification are still required
-before release approval.
+time-weighted measurement, and the warm-up change. CI run `38084399149` at
+`25305952` then failed five reporting-startup cases. Claim calls reached the
+existing 250-ms limit; their cause is not proved. All other required jobs
+passed. Final CI and complete normal qualification are still required before
+release approval.
 
 Main's post-merge CI run `38070825615` has one failed routing-cost query-plan
 check. PostgreSQL selected a bitmap heap scan; the test requires a plain index

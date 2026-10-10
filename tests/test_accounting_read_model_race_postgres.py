@@ -23,6 +23,17 @@ class PausedClaimClient:
 
     async def query_raw(self, query, *parameters):
         assert query == CLAIM
+        rows = await self.db.query_raw(
+            "SELECT prosrc AS source FROM pg_proc WHERE "
+            "oid='deltallm_accounting_claim_read_model"
+            "(text,bigint,text,uuid,integer,integer)'::regprocedure"
+        )
+        source = rows[0]["source"]
+        assert isinstance(source, str) and len(source) <= 16000
+        prefix = "\n#variable_conflict use_column\nBEGIN\n RETURN QUERY\n"
+        suffix = ";\nEND;\n"
+        assert source.startswith(prefix) and source.endswith(suffix)
+        query = source[len(prefix) : -len(suffix)]
         # Pause after the candidate snapshot, before its checkpoint row lock.
         marker = "), candidate AS MATERIALIZED ("
         assert query.count(marker) == 1
