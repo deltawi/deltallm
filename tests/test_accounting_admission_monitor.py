@@ -50,6 +50,69 @@ async def started():
     return worker, observation
 
 
+@pytest.mark.parametrize("first_failure", ["negative", "database", "timeout"])
+async def test_start_waits_for_ready_within_the_existing_deadline(first_failure):
+    class InitialFailure(Observation):
+        async def observe_ready(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                if first_failure == "database":
+                    raise invalid_result()
+                if first_failure == "timeout":
+                    raise TimeoutError()
+                return False
+            return True
+
+    observation = InitialFailure()
+    worker = AccountingAdmissionMonitor(observation, poll_seconds=0.1, call_seconds=0.04)
+    try:
+        await worker.start(expires_at=deadline())
+        assert len(observation.calls) == 2
+        assert worker.worker_health.state is WorkerState.READY
+        assert worker.task is not None and not worker.task.done()
+    finally:
+        await worker.close(expires_at=deadline())
+
+
+async def test_start_deadline_does_not_accept_an_unready_dependency_or_leave_a_task():
+    observation = Observation()
+    observation.ready = False
+    worker = AccountingAdmissionMonitor(observation)
+    with pytest.raises(TimeoutError, match="startup deadline"):
+        await worker.start(expires_at=deadline(0.03))
+    assert len(observation.calls) == 1
+    assert worker.task is not None
+    await asyncio.gather(worker.task, return_exceptions=True)
+    assert worker.task.done()
+    assert worker.worker_health.state is WorkerState.STOPPING
+
+
+async def test_cancelled_start_closes_its_one_observation_task():
+    observation = Observation()
+    observation.resume = asyncio.Event()
+    worker = AccountingAdmissionMonitor(observation)
+    task = asyncio.create_task(worker.start(expires_at=deadline()))
+    await observation.entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert worker.task is not None
+    await asyncio.gather(worker.task, return_exceptions=True)
+    assert worker.task.done()
+    assert worker.worker_health.state is WorkerState.STOPPING
+
+
+async def test_start_preserves_an_unexpected_observation_error_and_stops_the_task():
+    observation = Observation()
+    observation.error = RuntimeError("observation failed")
+    worker = AccountingAdmissionMonitor(observation)
+    with pytest.raises(RuntimeError, match="observation failed"):
+        await worker.start(expires_at=deadline())
+    assert len(observation.calls) == 1
+    assert worker.task is not None and worker.task.done()
+    assert worker.worker_health.state is WorkerState.FAILED
+
+
 async def test_real_start_one_call_freshness_and_close_reject_restart():
     worker, observation = await started()
     try:

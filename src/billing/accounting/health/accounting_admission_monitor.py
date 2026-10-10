@@ -144,8 +144,11 @@ class AccountingAdmissionMonitor:
 
     async def _run(self) -> None:
         while not self._closed:
-            await self.refresh(expires_at=asyncio.get_running_loop().time() + self._call)
-            self._started.set()
+            ready = await self.refresh(expires_at=asyncio.get_running_loop().time() + self._call)
+            # Startup must observe readiness within its caller's deadline.
+            # A negative first poll is not a completed startup handshake.
+            if ready:
+                self._started.set()
             self._wake.clear()
             if self._closed:
                 return
