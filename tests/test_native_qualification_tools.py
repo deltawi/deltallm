@@ -95,6 +95,7 @@ def test_even_a_passing_selected_series_is_not_release_eligible(tmp_path, monkey
         monkeypatch.setattr(qualification, name, lambda *args: None)
     monkeypatch.setattr(qualification, "preload_images", lambda *args: "metrics:fixture")
     monkeypatch.setattr(qualification, "qualification_values", lambda *args: tmp_path / "values")
+    monkeypatch.setattr(qualification, "collect_native_logs", lambda *args: None)
     exercise = AsyncMock(return_value=[{"passed": True} for _ in rates])
     monkeypatch.setattr(qualification, "exercise", exercise)
     monkeypatch.setattr(
@@ -404,6 +405,11 @@ def test_native_database_fixture_has_explicit_resources_and_preserves_durability
 
     def kubectl(*arguments, **options):
         commands.append(arguments)
+        if "df" in arguments:
+            return SimpleNamespace(
+                stdout="Filesystem 1B-blocks Used Available Use% Mounted on\n"
+                "shm 268435456 0 268435456 0% /dev/shm\n"
+            )
         return SimpleNamespace(stdout=json.dumps(observed))
 
     base = []
@@ -419,12 +425,70 @@ def test_native_database_fixture_has_explicit_resources_and_preserves_durability
         qualification.install_native_dependencies(cluster, "image:sealed")
         saved = json.loads((tmp_path / "database-fixture.json").read_text())
         assert saved["observed"] == observed
+        assert saved["shared_memory_bytes"] == 256 * 1024 * 1024
     assert base == [(cluster, "image:sealed")]
-    patch = json.loads(commands[0][-1])["spec"]["template"]["spec"]["containers"][0]
+    pod = json.loads(commands[0][-1])["spec"]["template"]["spec"]
+    patch = pod["containers"][0]
     assert patch["resources"]["limits"] == {"cpu": "4", "memory": "4Gi"}
+    assert patch["volumeMounts"] == [{"name": "postgres-shm", "mountPath": "/dev/shm"}]
+    assert pod["volumes"] == [
+        {"name": "postgres-shm", "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}}
+    ]
     assert "max_connections=1000" in patch["args"]
     assert {"fsync=on", "synchronous_commit=on", "full_page_writes=on"}.issubset(patch["args"])
     assert commands[1] == ("rollout", "status", "deployment/postgres", "--timeout=180s")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_native_log_collection_is_bounded_and_does_not_replace_failures(tmp_path, failure):
+    commands = []
+
+    def kubectl(*arguments, **options):
+        commands.append((arguments, options))
+        if failure:
+            raise RuntimeError("private diagnostic detail")
+        return SimpleNamespace(stdout="x" * (3 * 1024 * 1024), stderr="")
+
+    qualification.collect_native_logs(SimpleNamespace(output=tmp_path, kubectl=kubectl))
+    assert len(commands) == 2
+    for arguments, options in commands:
+        assert "--tail=5000" in arguments
+        assert options == {"check": False, "timeout": 20}
+    for name in ("postgres", "gateway"):
+        saved = (tmp_path / f"native-final-{name}.log").read_text()
+        assert len(saved) <= 2 * 1024 * 1024
+        assert "private diagnostic detail" not in saved
+        if failure:
+            assert saved == "Log collection failed: RuntimeError\n"
+
+
+@pytest.mark.parametrize("capacity", [67108864, 536870912])
+def test_native_database_fixture_rejects_wrong_shared_memory_capacity(
+    tmp_path, monkeypatch, capacity
+):
+    observed = {
+        "shared_buffers": "512MB",
+        "max_wal_size": "4GB",
+        "max_connections": "1000",
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "autovacuum": "on",
+    }
+
+    def kubectl(*arguments, **options):
+        if "df" in arguments:
+            return SimpleNamespace(
+                stdout="Filesystem 1B-blocks Used Available Use% Mounted on\n"
+                f"shm {capacity} 0 {capacity} 0% /dev/shm\n"
+            )
+        return SimpleNamespace(stdout=json.dumps(observed))
+
+    monkeypatch.setattr(qualification, "install_capacity_dependencies", lambda *args: None)
+    cluster = SimpleNamespace(output=tmp_path, kubectl=kubectl, event=lambda *args, **options: None)
+    with pytest.raises(RuntimeError, match="shared-memory capacity does not match"):
+        qualification.install_native_dependencies(cluster, "image:sealed")
+    assert not (tmp_path / "database-fixture.json").exists()
 
 
 @pytest.mark.parametrize(
