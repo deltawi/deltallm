@@ -170,6 +170,16 @@ certificate. The next comparison keeps the image, database, request limits,
 deadlines, and gates unchanged and increases only VM CPU capacity from eight
 to twelve cores. It does not stop other workloads or establish a production minimum.
 
+The twelve-CPU check failed during its first 60-second preparation window:
+20,569/30,000 successes, 4,186 required-persistence 503 responses, and 5,245
+dropped arrivals. No measured stage ran. The subsequent drain passed with no
+pending or unsafe state. Successful charges and all four scope totals match.
+Database logs show journal materialization waiting for grant locks and journal
+append waiting for a foreign-key row lock. More CPU alone did not correct this
+failure. A read-only observer was then added to a separate diagnostic. Its
+preparation window passed 30,000/30,000 with exact accounting; no long lock wait
+or lock cycle was captured. The failure cause is not yet proved.
+
 ### Functional readiness
 
 RPS is only one release check. The fixed candidate must also preserve the
