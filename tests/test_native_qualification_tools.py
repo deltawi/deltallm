@@ -803,9 +803,14 @@ async def test_native_recovery_waits_for_restarts_and_requires_a_full_rollout(
         output = tmp_path
         rolled = False
         calls = []
+        completed_roles = set()
 
         def kubectl(self, *arguments, **options):
             self.calls.append(arguments)
+            if arguments[:2] == ("rollout", "status"):
+                assert options["timeout"] == 190
+                assert arguments[-1] == "--timeout=180s"
+                self.completed_roles.add(arguments[2])
             if arguments[0] != "get":
                 return SimpleNamespace(stdout="")
             role = arguments[3].split("component=", 1)[1]
@@ -823,6 +828,15 @@ async def test_native_recovery_waits_for_restarts_and_requires_a_full_rollout(
                 }
                 for index in range(recovery.ROLES[role])
             ]
+            deployment = "deployment/gateway-deltallm" + ("" if role == "api" else "-" + role)
+            if self.rolled and deployment not in self.completed_roles:
+                # Helm can return while the last old ready pod still exists.
+                items.append(
+                    {
+                        "metadata": {"name": role + "-retiring", "uid": role + "-old"},
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                    }
+                )
             return SimpleNamespace(stdout=json.dumps({"items": items}))
 
         def kill_container(self, name):
@@ -857,4 +871,41 @@ async def test_native_recovery_waits_for_restarts_and_requires_a_full_rollout(
     waits = [call for call in cluster.calls if call[0] == "wait"]
     assert len(waits) == 6
     assert sum("restartCount" in call[1] for call in waits) == 3
+    assert cluster.completed_roles == {
+        "deployment/gateway-deltallm",
+        "deployment/gateway-deltallm-accounting-request",
+        "deployment/gateway-deltallm-accounting-worker",
+    }
     assert len(overrides) == 6 and all("image" not in argument for argument in overrides)
+
+
+@pytest.mark.parametrize("failed_role", ["api", "accounting-request", "accounting-worker"])
+async def test_native_recovery_rejects_an_incomplete_rollout(tmp_path, monkeypatch, failed_role):
+    from tests.performance import native_recovery as recovery
+
+    pods = {
+        role: [
+            {
+                "metadata": {"name": role + "-pod", "uid": role + "-old"},
+                "status": {"containerStatuses": [{"restartCount": 0}]},
+            }
+        ]
+        for role in recovery.ROLES
+    }
+    failing_deployment = "deployment/gateway-deltallm" + (
+        "" if failed_role == "api" else "-" + failed_role
+    )
+
+    def kubectl(*arguments, **options):
+        if arguments[:3] == ("rollout", "status", failing_deployment):
+            raise TimeoutError("The fixture rollout did not complete")
+
+    cluster = SimpleNamespace(output=tmp_path, kubectl=kubectl, kill_container=lambda name: name)
+    check = AsyncMock()
+    monkeypatch.setattr(recovery, "role_pods", lambda owner: pods)
+    monkeypatch.setattr(recovery, "check_clients", check)
+    monkeypatch.setattr(recovery, "capacity_release", lambda *arguments: None)
+    with pytest.raises(TimeoutError, match="rollout did not complete"):
+        await recovery.verify_native_recovery(cluster, tmp_path / "values.yaml")
+    assert check.await_count == 1
+    assert not (tmp_path / "native-recovery.json").exists()
